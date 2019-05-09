@@ -55,6 +55,7 @@ MAN=	aac.4 \
 	${_apic.4} \
 	arcmsr.4 \
 	${_asmc.4} \
+	at45d.4 \
 	ata.4 \
 	ath.4 \
 	ath_ahb.4 \
@@ -306,6 +307,7 @@ MAN=	aac.4 \
 	mvs.4 \
 	mwl.4 \
 	mwlfw.4 \
+	mx25l.4 \
 	mxge.4 \
 	my.4 \
 	nand.4 \
@@ -891,7 +893,8 @@ _ccd.4=		ccd.4
 .endif
 
 .if ${MK_CDDL} != "no"
-_dtrace_provs=	dtrace_io.4 \
+_dtrace_provs=	dtrace_audit.4 \
+		dtrace_io.4 \
 		dtrace_ip.4 \
 		dtrace_lockstat.4 \
 		dtrace_proc.4 \
@@ -900,6 +903,8 @@ _dtrace_provs=	dtrace_io.4 \
 		dtrace_tcp.4 \
 		dtrace_udp.4 \
 		dtrace_udplite.4
+
+MLINKS+=	dtrace_audit.4 dtaudit.4
 .endif
 
 .if ${MK_EFI} != "no"

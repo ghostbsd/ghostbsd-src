@@ -488,10 +488,15 @@ SUBDIR+=	iscsi
 SUBDIR+=	iscsi_initiator
 .endif
 
+.if !empty(OPT_FDT)
+SUBDIR+=	fdt
+.endif
+
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
     ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	linprocfs
 SUBDIR+=	linsysfs
+_ena=		ena
 .endif
 
 .if ${MK_NAND} != "no" || defined(ALL_MODULES)
@@ -596,7 +601,6 @@ _drm2=		drm2
 .endif
 _ed=		ed
 _em=		em
-_ena=		ena
 _ep=		ep
 _et=		et
 _exca=		exca

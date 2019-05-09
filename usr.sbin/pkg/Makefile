@@ -1,6 +1,11 @@
 # $FreeBSD$
 
-CONFS=	FreeBSD.conf
+.if ${MACHINE} != "amd64" && ${MACHINE} != "i386"
+PKGCONFBRANCH?=	quarterly
+.endif
+PKGCONFBRANCH?=	latest
+CONFS=		FreeBSD.conf.${PKGCONFBRANCH}
+CONFSNAME=	FreeBSD.conf
 CONFSDIR=	/etc/pkg
 CONFSMODE=	644
 PROG=	pkg
