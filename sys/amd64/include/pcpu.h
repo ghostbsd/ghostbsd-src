@@ -36,6 +36,14 @@
 #endif
 
 #define	PC_PTI_STACK_SZ	16
+
+struct monitorbuf {
+	int idle_state;		/* Used by cpu_idle_mwait. */
+	int stop_state;		/* Used by cpustop_handler. */
+	char padding[128 - (2 * sizeof(int))];
+};
+_Static_assert(sizeof(struct monitorbuf) == 128, "2x cache line");
+
 /*
  * The SMP parts are setup in pmap.c and locore.s for the BSP, and
  * mp_machdep.c sets up the data for the AP's to "see" when they awake.
@@ -44,7 +52,7 @@
  * other processors"
  */
 #define	PCPU_MD_FIELDS							\
-	char	pc_monitorbuf[128] __aligned(128); /* cache line */	\
+	struct monitorbuf pc_monitorbuf __aligned(128);	/* cache line */\
 	struct	pcpu *pc_prvspace;	/* Self-reference */		\
 	struct	pmap *pc_curpmap;					\
 	struct	amd64tss *pc_tssp;	/* TSS segment active on CPU */	\
@@ -82,6 +90,9 @@
 #define	PC_DBREG_CMD_LOAD	1
 
 #ifdef _KERNEL
+
+#define MONITOR_STOPSTATE_RUNNING	0
+#define MONITOR_STOPSTATE_STOPPED	1
 
 #if defined(__GNUCLIKE_ASM) && defined(__GNUCLIKE___TYPEOF)
 

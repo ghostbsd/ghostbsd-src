@@ -18,14 +18,9 @@ BIN1=	\
 	group \
 	login.access \
 	rc.bsdextended \
-	rc.firewall \
 	termcap.small
 
 # NB: keep these sorted by MK_* knobs
-
-.if ${MK_SENDMAIL} != "no"
-BIN1+=	rc.sendmail
-.endif
 
 .if ${MK_SENDMAIL} == "no"
 ETCMAIL=mailer.conf aliases
@@ -63,10 +58,20 @@ distribution:
 	@echo "set DESTDIR before running \"make ${.TARGET}\""
 	@false
 .endif
+.if ${MK_SENDMAIL} != "no"
 	cd ${.CURDIR}; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
+	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 -T "tags=package=sendmail"\
+		rc.sendmail ${DESTDIR}/etc;
+.endif
+.if ${MK_IPFW} != "no"
+	cd ${.CURDIR}; \
+	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 -T "tags=package=ipfw"\
+		rc.firewall ${DESTDIR}/etc;
+.endif
+	cd ${.CURDIR}; \
+	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 -T "tags=package=runtime"\
 		${BIN1} ${DESTDIR}/etc; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 600 \
+	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 600 -T "tags=package=runtime"\
 		master.passwd ${DESTDIR}/etc;
 
 .if ${MK_TCSH} == "no"

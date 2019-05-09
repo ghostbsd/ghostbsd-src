@@ -219,7 +219,6 @@ struct pci_dev {
 	struct list_head	links;
 	struct pci_driver	*pdrv;
 	struct pci_bus		*bus;
-	uint64_t		dma_mask;
 	uint16_t		device;
 	uint16_t		vendor;
 	uint16_t		subsystem_vendor;
@@ -354,8 +353,6 @@ static inline void
 pci_disable_device(struct pci_dev *pdev)
 {
 
-	pci_disable_io(pdev->dev.bsddev, SYS_RES_IOPORT);
-	pci_disable_io(pdev->dev.bsddev, SYS_RES_MEMORY);
 	pci_disable_busmaster(pdev->dev.bsddev);
 }
 
@@ -617,7 +614,7 @@ static inline int
 pci_channel_offline(struct pci_dev *pdev)
 {
 
-	return (pci_get_vendor(pdev->dev.bsddev) == 0xffff);
+	return (pci_get_vendor(pdev->dev.bsddev) == PCIV_INVALID);
 }
 
 static inline int pci_enable_sriov(struct pci_dev *dev, int nr_virtfn)

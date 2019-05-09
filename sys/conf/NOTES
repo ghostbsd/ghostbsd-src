@@ -376,6 +376,9 @@ options 	COMPAT_FREEBSD10
 # Enable FreeBSD11 compatibility syscalls
 options 	COMPAT_FREEBSD11
 
+# Enable FreeBSD12 compatibility syscalls
+options 	COMPAT_FREEBSD12
+
 # Enable Linux Kernel Programming Interface
 options 	COMPAT_LINUXKPI
 
@@ -563,8 +566,10 @@ options 	KASSERT_PANIC_OPTIONAL
 
 #
 # The DIAGNOSTIC option is used to enable extra debugging information
-# from some parts of the kernel.  As this makes everything more noisy,
-# it is disabled by default.
+# and invariants checking.  The added checks are too expensive or noisy
+# for an INVARIANTS kernel and thus are disabled by default.  It is
+# expected that a kernel configured with DIAGNOSTIC will also have the
+# INVARIANTS option enabled.
 #
 options 	DIAGNOSTIC
 
@@ -893,11 +898,9 @@ device		epair
 #  which discards all packets sent and receives none.
 device		edsc
 
-#  The `tap' device is a pty-like virtual Ethernet interface
-device		tap
-
-#  The `tun' device implements (user-)ppp and nos-tun(8)
-device		tun
+#  The `tuntap' device implements (user-)ppp, nos-tun(8) and a pty-like virtual
+#  Ethernet interface
+device		tuntap
 
 #  The `gif' device implements IPv6 over IP4 tunneling,
 #  IPv4 over IPv6 tunneling, IPv4 over IPv4 tunneling and
@@ -1958,6 +1961,7 @@ device		xmphy		# XaQti XMAC II
 #	Yukon II Gigabit controllers, including 88E8021, 88E8022, 88E8061,
 #	88E8062, 88E8035, 88E8036, 88E8038, 88E8050, 88E8052, 88E8053,
 #	88E8055, 88E8056 and D-Link 560T/550SX.
+# mlxfw: Mellanox firmware update module.
 # mlx5:	Mellanox ConnectX-4 and ConnectX-4 LX IB and Eth shared code module.
 # mlx5en:Mellanox ConnectX-4 and ConnectX-4 LX PCIe Ethernet adapters.
 # my:	Myson Fast Ethernet (MTD80X, MTD89X)
@@ -2071,6 +2075,7 @@ device		gem		# Apple GMAC/Sun ERI/Sun GEM
 device		hme		# Sun HME (Happy Meal Ethernet)
 device		jme		# JMicron JMC250 Gigabit/JMC260 Fast Ethernet
 device		lge		# Level 1 LXT1001 gigabit Ethernet
+device		mlxfw		# Mellanox firmware update module
 device		mlx5		# Shared code module between IB and Ethernet
 device		mlx5en		# Mellanox ConnectX-4 and ConnectX-4 LX
 device		msk		# Marvell/SysKonnect Yukon II Gigabit Ethernet

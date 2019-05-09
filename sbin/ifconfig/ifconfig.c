@@ -130,6 +130,25 @@ struct ifa_order_elt {
 
 TAILQ_HEAD(ifa_queue, ifa_order_elt);
 
+static struct module_map_entry {
+	const char *ifname;
+	const char *kldname;
+} module_map[] = {
+	{
+		.ifname = "tun",
+		.kldname = "if_tuntap",
+	},
+	{
+		.ifname = "tap",
+		.kldname = "if_tuntap",
+	},
+	{
+		.ifname = "vmnet",
+		.kldname = "if_tuntap",
+	},
+};
+
+
 void
 opt_register(struct option *p)
 {
@@ -1413,9 +1432,10 @@ ifmaybeload(const char *name)
 {
 #define MOD_PREFIX_LEN		3	/* "if_" */
 	struct module_stat mstat;
-	int fileid, modid;
+	int i, fileid, modid;
 	char ifkind[IFNAMSIZ + MOD_PREFIX_LEN], ifname[IFNAMSIZ], *dp;
 	const char *cp;
+	struct module_map_entry *mme;
 
 	/* loading suppressed by the user */
 	if (noload)
@@ -1429,9 +1449,22 @@ ifmaybeload(const char *name)
 			break;
 		}
 
-	/* turn interface and unit into module name */
-	strlcpy(ifkind, "if_", sizeof(ifkind));
-	strlcat(ifkind, ifname, sizeof(ifkind));
+	/* Either derive it from the map or guess otherwise */
+	*ifkind = '\0';
+	for (i = 0; i < nitems(module_map); ++i) {
+		mme = &module_map[i];
+		if (strcmp(mme->ifname, ifname) == 0) {
+			strlcpy(ifkind, mme->kldname, sizeof(ifkind));
+			break;
+		}
+	}
+
+	/* We didn't have an alias for it... we'll guess. */
+	if (*ifkind == '\0') {
+	    /* turn interface and unit into module name */
+	    strlcpy(ifkind, "if_", sizeof(ifkind));
+	    strlcat(ifkind, ifname, sizeof(ifkind));
+	}
 
 	/* scan files in kernel */
 	mstat.version = sizeof(struct module_stat);

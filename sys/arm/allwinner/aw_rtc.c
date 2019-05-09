@@ -137,6 +137,7 @@ static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun7i-a20-rtc", (uintptr_t) &a20_conf },
 	{ "allwinner,sun6i-a31-rtc", (uintptr_t) &a31_conf },
 	{ "allwinner,sun8i-h3-rtc", (uintptr_t) &h3_conf },
+	{ "allwinner,sun50i-h5-rtc", (uintptr_t) &h3_conf },
 	{ NULL, 0 }
 };
 
@@ -185,6 +186,8 @@ static devclass_t aw_rtc_devclass;
 
 EARLY_DRIVER_MODULE(aw_rtc, simplebus, aw_rtc_driver, aw_rtc_devclass, 0, 0,
     BUS_PASS_BUS + BUS_PASS_ORDER_MIDDLE);
+MODULE_VERSION(aw_rtc, 1);
+SIMPLEBUS_PNP_INFO(compat_data);
 
 static int
 aw_rtc_probe(device_t dev)
