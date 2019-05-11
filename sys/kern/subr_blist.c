@@ -109,6 +109,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/types.h>
 #include <sys/malloc.h>
 #include <sys/sbuf.h>
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
@@ -120,10 +121,9 @@ __FBSDID("$FreeBSD$");
 #define malloc(a,b,c)	calloc(a, 1)
 #define free(a,b)	free(a)
 #define ummin(a,b)	((a) < (b) ? (a) : (b))
+#define KASSERT(a,b)	assert(a)
 
 #include <sys/blist.h>
-
-void panic(const char *ctl, ...);
 
 #endif
 
@@ -192,30 +192,40 @@ bitrange(int n, int count)
 
 
 /*
- * Use binary search, or a faster method, to find the 1 bit in a u_daddr_t.
- * Assumes that the argument has only one bit set.
+ * Find the first bit set in a u_daddr_t.
  */
+static inline int
+generic_bitpos(u_daddr_t mask)
+{
+	int hi, lo, mid;
+
+	lo = 0;
+	hi = BLIST_BMAP_RADIX;
+	while (lo + 1 < hi) {
+		mid = (lo + hi) >> 1;
+		if (mask & bitrange(0, mid))
+			hi = mid;
+		else
+			lo = mid;
+	}
+	return (lo);
+}
+
 static inline int
 bitpos(u_daddr_t mask)
 {
-	int hi, lo, mid;
 
 	switch (sizeof(mask)) {
 #ifdef HAVE_INLINE_FFSLL
 	case sizeof(long long):
 		return (ffsll(mask) - 1);
 #endif
+#ifdef HAVE_INLINE_FFS
+	case sizeof(int):
+		return (ffs(mask) - 1);
+#endif
 	default:
-		lo = 0;
-		hi = BLIST_BMAP_RADIX;
-		while (lo + 1 < hi) {
-			mid = (lo + hi) >> 1;
-			if ((mask >> mid) != 0)
-				lo = mid;
-			else
-				hi = mid;
-		}
-		return (lo);
+		return (generic_bitpos(mask));
 	}
 }
 
@@ -235,8 +245,7 @@ blist_create(daddr_t blocks, int flags)
 	blist_t bl;
 	u_daddr_t nodes, radix;
 
-	if (blocks == 0)
-		panic("invalid block count");
+	KASSERT(blocks > 0, ("invalid block count"));
 
 	/*
 	 * Calculate the radix and node count used for scanning.
@@ -288,8 +297,8 @@ blist_alloc(blist_t bl, daddr_t count)
 {
 	daddr_t blk, cursor;
 
-	if (count > BLIST_MAX_ALLOC)
-		panic("allocation too large");
+	KASSERT(count <= BLIST_MAX_ALLOC,
+	    ("allocation too large: %d", (int)count));
 
 	/*
 	 * This loop iterates at most twice.  An allocation failure in the
@@ -325,15 +334,15 @@ blist_avail(blist_t bl)
 
 /*
  * blist_free() -	free up space in the block bitmap.  Return the base
- *		     	of a contiguous region.  Panic if an inconsistancy is
- *			found.
+ *		     	of a contiguous region.
  */
 void
 blist_free(blist_t bl, daddr_t blkno, daddr_t count)
 {
 
-	if (blkno < 0 || blkno + count > bl->bl_blocks)
-		panic("freeing invalid range");
+	KASSERT(blkno >= 0 && blkno + count <= bl->bl_blocks,
+	    ("freeing invalid range: blkno %jx, count %d, blocks %jd",
+	    (uintmax_t)blkno, (int)count, (uintmax_t)bl->bl_blocks));
 	blst_meta_free(bl->bl_root, blkno, count, bl->bl_radix);
 	bl->bl_avail += count;
 }
@@ -349,8 +358,9 @@ blist_fill(blist_t bl, daddr_t blkno, daddr_t count)
 {
 	daddr_t filled;
 
-	if (blkno < 0 || blkno + count > bl->bl_blocks)
-		panic("filling invalid range");
+	KASSERT(blkno >= 0 && blkno + count <= bl->bl_blocks,
+	    ("filling invalid range: blkno %jx, count %d, blocks %jd",
+	    (uintmax_t)blkno, (int)count, (uintmax_t)bl->bl_blocks));
 	filled = blst_meta_fill(bl->bl_root, blkno, count, bl->bl_radix);
 	bl->bl_avail -= filled;
 	return (filled);
@@ -532,7 +542,8 @@ blist_stats(blist_t bl, struct sbuf *s)
 	struct gap_stats gstats;
 	struct gap_stats *stats = &gstats;
 	daddr_t i, nodes, radix;
-	u_daddr_t bit, diff, mask;
+	u_daddr_t diff, mask;
+	int digit;
 
 	init_gap_stats(stats);
 	nodes = 0;
@@ -570,9 +581,9 @@ blist_stats(blist_t bl, struct sbuf *s)
 			if (gap_stats_counting(stats))
 				diff ^= 1;
 			while (diff != 0) {
-				bit = diff & -diff;
-				update_gap_stats(stats, i + bitpos(bit));
-				diff ^= bit;
+				digit = bitpos(diff);
+				update_gap_stats(stats, i + digit);
+				diff ^= bitrange(digit, 1);
 			}
 		}
 		nodes += radix_to_skip(radix);
@@ -607,7 +618,6 @@ static int
 blst_next_leaf_alloc(blmeta_t *scan, daddr_t blk, int count)
 {
 	blmeta_t *next;
-	daddr_t skip;
 	u_daddr_t radix;
 	int digit;
 
@@ -632,14 +642,28 @@ blst_next_leaf_alloc(blmeta_t *scan, daddr_t blk, int count)
 	/*
 	 * Update bitmaps of next-ancestors, up to least common ancestor.
 	 */
-	skip = radix_to_skip(radix);
-	while (radix != BLIST_BMAP_RADIX && next->bm_bitmap == 0) {
-		(--next)->bm_bitmap ^= 1;
-		radix /= BLIST_META_RADIX;
-	}
-	if (next->bm_bitmap == 0)
-		scan[-digit * skip].bm_bitmap ^= (u_daddr_t)1 << digit;
+	while (next->bm_bitmap == 0) {
+		if (--next == scan) {
+			scan[-digit * radix_to_skip(radix)].bm_bitmap ^=
+			    (u_daddr_t)1 << digit;
+			break;
+		}
+		next->bm_bitmap ^= 1;
+ 	}
 	return (0);
+}
+
+/*
+ * Given a bitmask, flip all the bits from the least-significant 1-bit to the
+ * most significant bit.  If the result is non-zero, then the least-significant
+ * 1-bit of the result is in the same position as the least-signification 0-bit
+ * in mask that is followed by a 1-bit.
+ */
+static inline u_daddr_t
+flip_hibits(u_daddr_t mask)
+{
+
+	return (-mask & ~mask);
 }
 
 /*
@@ -659,7 +683,7 @@ blst_leaf_alloc(blmeta_t *scan, daddr_t blk, int count)
 	count1 = count - 1;
 	num_shifts = fls(count1);
 	mask = scan->bm_bitmap;
-	while ((-mask & ~mask) != 0 && num_shifts > 0) {
+	while (flip_hibits(mask) != 0 && num_shifts > 0) {
 		/*
 		 * If bit i is set in mask, then bits in [i, i+range1] are set
 		 * in scan->bm_bitmap.  The value of range1 is equal to count1
@@ -763,7 +787,7 @@ static daddr_t
 blst_meta_alloc(blmeta_t *scan, daddr_t cursor, daddr_t count, u_daddr_t radix)
 {
 	daddr_t blk, i, r, skip;
-	u_daddr_t bit, mask;
+	u_daddr_t mask;
 	bool scan_from_start;
 	int digit;
 
@@ -795,8 +819,7 @@ blst_meta_alloc(blmeta_t *scan, daddr_t cursor, daddr_t count, u_daddr_t radix)
 	 * Examine the nonempty subtree associated with each bit set in mask.
 	 */
 	do {
-		bit = mask & -mask;
-		digit = bitpos(bit);
+		digit = bitpos(mask);
 		i = 1 + digit * skip;
 		if (count <= scan[i].bm_bighint) {
 			/*
@@ -806,12 +829,12 @@ blst_meta_alloc(blmeta_t *scan, daddr_t cursor, daddr_t count, u_daddr_t radix)
 			    count, radix);
 			if (r != SWAPBLK_NONE) {
 				if (scan[i].bm_bitmap == 0)
-					scan->bm_bitmap ^= bit;
+					scan->bm_bitmap ^= bitrange(digit, 1);
 				return (r);
 			}
 		}
 		cursor = blk;
-	} while ((mask ^= bit) != 0);
+	} while ((mask ^= bitrange(digit, 1)) != 0);
 
 	/*
 	 * We couldn't allocate count in this subtree.  If the whole tree was
@@ -840,8 +863,9 @@ blst_leaf_free(blmeta_t *scan, daddr_t blk, int count)
 	 *		count   n
 	 */
 	mask = bitrange(blk & BLIST_BMAP_MASK, count);
-	if (scan->bm_bitmap & mask)
-		panic("freeing free block");
+	KASSERT((scan->bm_bitmap & mask) == 0,
+	    ("freeing free block: %jx, size %d, mask %jx",
+	    (uintmax_t)blk, count, (uintmax_t)scan->bm_bitmap & mask));
 	scan->bm_bitmap |= mask;
 }
 
@@ -1005,7 +1029,7 @@ static void
 blst_radix_print(blmeta_t *scan, daddr_t blk, daddr_t radix, int tab)
 {
 	daddr_t skip;
-	u_daddr_t bit, mask;
+	u_daddr_t mask;
 	int digit;
 
 	if (radix == BLIST_BMAP_RADIX) {
@@ -1037,11 +1061,10 @@ blst_radix_print(blmeta_t *scan, daddr_t blk, daddr_t radix, int tab)
 	mask = scan->bm_bitmap;
 	/* Examine the nonempty subtree associated with each bit set in mask */
 	do {
-		bit = mask & -mask;
-		digit = bitpos(bit);
+		digit = bitpos(mask);
 		blst_radix_print(&scan[1 + digit * skip], blk + digit * radix,
 		    radix, tab);
-	} while ((mask ^= bit) != 0);
+	} while ((mask ^= bitrange(digit, 1)) != 0);
 	tab -= 4;
 
 	printf(
@@ -1134,27 +1157,20 @@ main(int ac, char **av)
 			    "f %x %d    -free\n"
 			    "l %x %d    -fill\n"
 			    "r %d       -resize\n"
-			    "h/?        -help"
+			    "h/?        -help\n"
+			    "q          -quit"
 			);
+			break;
+		case 'q':
 			break;
 		default:
 			printf("?\n");
 			break;
 		}
+		if (buf[0] == 'q')
+			break;
 	}
-	return(0);
-}
-
-void
-panic(const char *ctl, ...)
-{
-	va_list va;
-
-	va_start(va, ctl);
-	vfprintf(stderr, ctl, va);
-	fprintf(stderr, "\n");
-	va_end(va);
-	exit(1);
+	return (0);
 }
 
 #endif
