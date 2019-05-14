@@ -286,8 +286,27 @@ case "$PARTMODE" in
 	;;
 esac
 
+PFLAVORS="\
+generic \"Default options and features\" \
+minimal \"Less userland features\" \
+zol \"Using sysutils/zol as the default ZFS\""
+
+exec 3>&1
+OSFLAVOR=`echo $PFLAVORS | xargs dialog --backtitle "FreeBSD Installer" \
+	--title "Install flavor" \
+	--menu "Which OS flavor would you like to install?" \
+	0 0 0 2>&1 1>&3` || exit 1
+exec 3>&-
+
+case "$OSFLAVOR" in
+generic|minimal|zol) ;;
+*)
+	error "Unknown OS flavor"
+	;;
+esac
+
 # Install base packages
-pkg -r $BSDINSTALL_CHROOT install -y os-generic-userland os-generic-kernel pkg ca_root_nss || error "Failed package base installation!"
+pkg -r $BSDINSTALL_CHROOT install -y os-${OSFLAVOR}-userland os-${OSFLAVOR}-kernel pkg ca_root_nss || error "Failed package base installation!"
 
 # Set up boot loader
 bsdinstall bootconfig || error "Failed to configure bootloader"
