@@ -237,6 +237,27 @@ if f_interactive; then
 	esac
 fi
 
+# Prompt for which flavor to install
+PFLAVORS="\
+generic \"Default options and features\" \
+minimal \"Less userland features\" \
+zol \"Using sysutils/zol as the default ZFS\""
+
+exec 3>&1
+OSFLAVOR=`echo $PFLAVORS | xargs dialog --backtitle "FreeBSD Installer" \
+	--title "Install flavor" \
+	--menu "Which OS flavor would you like to install?" \
+	0 0 0 2>&1 1>&3` || exit 1
+exec 3>&-
+
+case "$OSFLAVOR" in
+generic|minimal|zol) ;;
+*)
+	error "Unknown OS flavor"
+	;;
+esac
+export OSFLAVOR
+
 PMODES="\
 \"Auto (UFS)\" \"Guided Disk Setup\" \
 Manual \"Manual Disk Setup (experts)\" \
@@ -283,25 +304,6 @@ case "$PARTMODE" in
 	;;
 *)
 	error "Unknown partitioning mode"
-	;;
-esac
-
-PFLAVORS="\
-generic \"Default options and features\" \
-minimal \"Less userland features\" \
-zol \"Using sysutils/zol as the default ZFS\""
-
-exec 3>&1
-OSFLAVOR=`echo $PFLAVORS | xargs dialog --backtitle "FreeBSD Installer" \
-	--title "Install flavor" \
-	--menu "Which OS flavor would you like to install?" \
-	0 0 0 2>&1 1>&3` || exit 1
-exec 3>&-
-
-case "$OSFLAVOR" in
-generic|minimal|zol) ;;
-*)
-	error "Unknown OS flavor"
 	;;
 esac
 
