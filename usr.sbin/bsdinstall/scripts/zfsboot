@@ -183,6 +183,21 @@ f_isset ZFSBOOT_DATASETS || ZFSBOOT_DATASETS="
 FSTAB_FMT="%s\t\t%s\t%s\t%s\t\t%s\t%s\n"
 
 #
+# Check which version of ZFS to use
+#
+case $OSFLAVOR in
+	zol)
+		kldload /boot/modules/zfs.ko
+		ZFS="/usr/local/sbin/zfs"
+		ZPOOL="/usr/local/sbin/zpool"
+		;;
+	*)
+		ZFS="/sbin/zfs"
+		ZPOOL="/sbin/zpool"
+		;;
+esac
+
+#
 # Command strings for various tasks
 #
 COPY='cp "%s" "%s"'
@@ -220,17 +235,17 @@ SHELL_TRUNCATE=':> "%s"'
 SWAP_GMIRROR_LABEL='gmirror label swap %s'
 SYSCTL_ZFS_MIN_ASHIFT_12='sysctl vfs.zfs.min_auto_ashift=12'
 UMOUNT='umount "%s"'
-ZFS_CREATE_WITH_OPTIONS='zfs create %s "%s"'
-ZFS_MOUNT='zfs mount "%s"'
-ZFS_SET='zfs set "%s" "%s"'
-ZFS_UNMOUNT='zfs unmount "%s"'
-ZPOOL_CREATE_WITH_OPTIONS='zpool create %s "%s" %s %s'
-ZPOOL_DESTROY='zpool destroy "%s"'
-ZPOOL_EXPORT='zpool export "%s"'
-ZPOOL_EXPORT_F='zpool export -f "%s"'
-ZPOOL_IMPORT_WITH_OPTIONS='zpool import %s "%s"'
-ZPOOL_LABELCLEAR_F='zpool labelclear -f "%s"'
-ZPOOL_SET='zpool set %s "%s"'
+ZFS_CREATE_WITH_OPTIONS="${ZFS} create %s \"%s\""
+ZFS_MOUNT="${ZFS} mount \"%s\""
+ZFS_SET="${ZFS} set \"%s\" \"%s\""
+ZFS_UNMOUNT="${ZFS} unmount \"%s\""
+ZPOOL_CREATE_WITH_OPTIONS="${ZPOOL} create %s \"%s\" %s %s"
+ZPOOL_DESTROY="${ZPOOL} destroy \"%s\""
+ZPOOL_EXPORT="${ZPOOL} export \"%s\""
+ZPOOL_EXPORT_F="${ZPOOL} export -f \"%s\""
+ZPOOL_IMPORT_WITH_OPTIONS="${ZPOOL} import %s \"%s\""
+ZPOOL_LABELCLEAR_F="${ZPOOL} labelclear -f \"%s\""
+ZPOOL_SET="${ZPOOL} set %s \"%s\""
 
 #
 # Strings that should be moved to an i18n file and loaded with f_include_lang()
