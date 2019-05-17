@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+
+name="watchdogd"
+command="/usr/sbin/${name}"
+pidfile="/var/run/${name}.pid"
+
+depend() {
+	after syslogd
+	keyword -jail -shutdown
+}

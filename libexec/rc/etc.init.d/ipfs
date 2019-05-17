@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	keyword -jail -shutdown
+}
+
+name="ipfs"
+desc="Saves and restores information for NAT and state tables"
+
+start_pre()
+{
+	# Do not continue if either ipnat or ipfilter is not enabled or
+	# if the ipfilter module is not loaded.
+	#
+	if ! checkyesno ipfilter_enable -o ! checkyesno ipnat_enable ; then
+		eend 1 "${name} requires either ipfilter or ipnat enabled"
+	fi
+	if ! ${ipfilter_program:-/sbin/ipf} -V | grep -q 'Running: yes' >/dev/null 2>&1; then
+		eend 1 "ipfilter module is not loaded"
+	fi
+	return 0
+}
+
+start()
+{
+	if [ -r /var/db/ipf/ipstate.ipf -a -r /var/db/ipf/ipnat.ipf ]; then
+		${ipfs_program} -R ${rc_flags}
+		rm -f /var/db/ipf/ipstate.ipf /var/db/ipf/ipnat.ipf
+	fi
+}
+
+stop()
+{
+	if [ ! -d /var/db/ipf ]; then
+		mkdir /var/db/ipf
+		chmod 700 /var/db/ipf
+		chown root:wheel /var/db/ipf
+	fi
+	${ipfs_program} -W ${rc_flags}
+}

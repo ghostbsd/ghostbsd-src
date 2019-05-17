@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+
+name="yppasswdd"
+description="Server for updating NIS passwords"
+
+command="/usr/sbin/rpc.${name}"
+command_args="${nis_yppasswdd_flags}"
+
+depend()
+{
+	need localmount rpcbind
+	want ypserv ypset
+	keyword -shutdown -stop
+}
+
+start_pre()
+{
+	local _domain
+
+	_domain=`domainname`
+	if [ -z "$_domain" ]; then
+		ewarn "NIS domainname(1) is not set."
+		return 1
+	fi
+}

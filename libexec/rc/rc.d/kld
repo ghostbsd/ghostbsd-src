@@ -40,6 +40,15 @@ stop_cmd=':'
 
 kld_start()
 {
+	# Load dynamicly listed KLDs
+	for dynkld in `set | grep "^kldload_" | sed 's/kldload_.*=//g' | sed "s|'||g"`; do
+		if [ -n "$kld_list" ] ; then
+			kld_list="$kld_list $dynkld"
+		else
+			kld_list="$dynkld"
+		fi
+	done
+
 	[ -n "$kld_list" ] || return
 
 	local _kld

@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+
+name="nisdomain"
+description="Set NIS domain name"
+
+depend()
+{
+	need localmount rpcbind
+        use net logger
+	before ypset ypbind ypserv ypxfrd
+	keyword -shutdown -stop
+}
+
+start()
+{
+	# Set the domainname if we're using NIS
+	#
+	case ${nisdomainname} in
+	[Nn][Oo]|'')
+			return 0
+		;;
+	*)
+		ebegin "Starting $name"
+		domainname ${nisdomainname}
+		einfo "Setting NIS domain: `/bin/domainname`."
+		eend 0
+		;;
+	esac
+}

@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+name="ubthidhci"
+command="/usr/sbin/usbconfig"
+command_args="-u ${ubthidhci_busnum} -a ${ubthidhci_addr} do_request 0x40 0 0 0 0 > /dev/null 2>&1"
+
+depend() {
+	before bluetooth
+	keyword -jail -shutdown
+}
+
+start_pre()
+{
+
+	if [ -z ${ubthidhci_busnum} ]; then
+		warn ubthidhci_busnum is not set
+		return 1
+	fi
+	if [ -z ${ubthidhci_addr} ]; then
+		warn ubthidhci_addr is not set
+		return 1
+	fi
+}

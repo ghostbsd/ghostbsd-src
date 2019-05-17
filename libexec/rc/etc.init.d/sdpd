@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+###################################
+# OpenRC service file for the "sdpd" daemon
+# Written by Ken Moore <ken@ixsystems.com> 4/10/2018
+# Available under the 2-clause BSD license
+###################################
+#General Info/Settings
+name="sdpd"
+description="Bluetooth Service Discovery Protocol daemon "
+command="/usr/sbin/sdpd"
+required_modules="ng_btsocket"
+pidfile="/var/run/${name}.pid"
+command_background="true"
+output_log="/var/log/${name}.log"
+error_log="/var/log/${name}.log"
+
+depend(){
+  before bluetooth
+  keyword -jail -shutdown
+}
+
+#Respect config knobs
+control="${sdpd_control:-/var/run/sdp}"
+group="${sdpd_groupname:-nobody}"
+user="${sdpd_username:-nobody}"
+command_args="-d -c ${control} -g ${group} -u ${user}"
+
+#Make sure any kernel modules are loaded first
+start_pre(){
+  for i in ${required_modules}
+  do
+    kldload -n "${i}" >/dev/null 2>/dev/null
+    if [ $? -ne 0 ] ; then
+      eerror "Could not load required kernel module: ${i}"
+      return 1
+    fi
+  done
+  return 0
+}

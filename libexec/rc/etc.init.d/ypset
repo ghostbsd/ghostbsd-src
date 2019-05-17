@@ -1,0 +1,33 @@
+#!/sbin/openrc-run
+
+name="ypset"
+description="tell ypbind(8) which YP server process to use"
+
+command="/usr/sbin/${name}"
+command_args="${nis_ypset_flags}"
+
+depend()
+{
+	need localmount ypbind rpcbind 
+	keyword -shutdown -stop
+	after ypbind
+}
+
+start_pre()
+{
+	local _domain
+
+	_domain=`domainname`
+	if [ -z "$_domain" ]; then
+		ewarn "NIS domainname(1) is not set."
+		return 1
+	fi
+}
+# without a dedicated (even if empty!) start() block, ypset is reported as crashed.
+# This is most likely a bug in OpenRC, so this ugly workaround should be removed ASAP
+start()
+{
+	ebegin "starting ypset"
+	${command} ${command_args}
+	return 0
+}

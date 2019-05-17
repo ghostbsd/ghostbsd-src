@@ -1,0 +1,35 @@
+#!/sbin/openrc-run
+
+name="amd"
+
+depend()
+{
+	need localmount nfsclient rpcbind
+	use net logger
+}
+
+start_pre()
+{
+	case ${amd_map_program} in
+	[Nn][Oo] | '')
+		;;
+	*)
+		amd_flags="${amd_flags} `echo $(eval ${amd_map_program})`"
+		;;
+	esac
+
+	case "${amd_flags}" in
+	'')     if [ ! -r /etc/amd.conf ]; then
+			eend 1 'amd will not load without arguments'
+		fi
+		;;
+	*)
+		;;
+	esac
+}
+
+start()
+{
+	start-stop-daemon --start --exec /usr/sbin/amd \
+		--pidfile /var/run/amd.pid -b -m -- $amd_flags
+}

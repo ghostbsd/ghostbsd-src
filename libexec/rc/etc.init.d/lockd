@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+
+command=/usr/sbin/rpc.lockd
+command_args=$lockd_args
+name="lockd"
+
+depend()
+{
+	need localmount rpcbind statd
+	use net logger dns
+	before inetd xinetd
+}

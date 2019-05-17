@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	need kdc
+	keyword -shutdown
+}
+
+name=ipropd_slave
+command="/usr/libexec/ipropd-slave"
+required_files="$ipropd_slave_keytab"
+
+start_pre()
+{
+	if [ -z "$ipropd_slave_master" ]; then
+		warn "\$ipropd_slave_master is empty."
+		return 1
+	fi
+	command_args=" \
+	    $command_args \
+	    --keytab=\"$ipropd_slave_keytab\" \
+	    --detach \
+	    $ipropd_slave_master"
+}

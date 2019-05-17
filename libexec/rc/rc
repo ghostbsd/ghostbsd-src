@@ -28,6 +28,17 @@
 # $FreeBSD$
 #
 
+# Do we want to do a dynamic diskless setup?
+if [ -f /etc/dynamicdiskless ]; then
+	sh /etc/rc.dynamicdiskless
+fi
+
+# Are we using OpenRC instead of RC?
+if [ "$(/bin/kenv rc_system 2>/dev/null)" = "openrc" ]; then
+   sh /etc/openrc
+   exit $?
+fi
+
 # System startup script run by init on autoboot
 # or after single-user.
 # Output and error are redirected to console by init,

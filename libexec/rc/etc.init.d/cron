@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+name="cron"
+desc="Daemon to execute scheduled commands"
+command="/usr/sbin/${name}"
+command_args_foreground="-n -s"
+pidfile=/var/run/supervised-cron.pid
+supervisor=supervise-daemon
+
+depend() {
+        use clock logger
+        need localmount
+}

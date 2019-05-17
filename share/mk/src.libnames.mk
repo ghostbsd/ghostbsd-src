@@ -102,6 +102,7 @@ _LIBRARIES=	\
 		dtrace \
 		dwarf \
 		edit \
+		einfo \
 		efivar \
 		elf \
 		execinfo \
@@ -155,6 +156,7 @@ _LIBRARIES=	\
 		procstat \
 		pthread \
 		radius \
+		rc \
 		regex \
 		roken \
 		rpcsec_gss \
@@ -253,6 +255,7 @@ _DP_edit=	ncursesw
 .if ${MK_OPENSSL} != "no"
 _DP_bsnmp=	crypto
 .endif
+_DP_einfo=	kvm
 _DP_geom=	bsdxml sbuf
 _DP_cam=	sbuf
 _DP_kvm=	elf
@@ -269,6 +272,7 @@ _DP_pcap=	ibverbs mlx5
 .endif
 _DP_pjdlog=	util
 _DP_opie=	md
+_DP_rc=		kvm
 _DP_usb=	pthread
 _DP_unbound=	ssl crypto pthread
 _DP_rt=	pthread
@@ -607,6 +611,7 @@ LIBBSDXMLDIR=	${OBJTOP}/lib/libexpat
 LIBKVMDIR=	${OBJTOP}/lib/libkvm
 LIBPTHREADDIR=	${OBJTOP}/lib/libthr
 LIBMDIR=	${OBJTOP}/lib/msun
+LIBEINFODIR=	${OBJTOP}/lib/libeinfo
 LIBFORMDIR=	${OBJTOP}/lib/ncurses/form
 LIBFORMLIBWDIR=	${OBJTOP}/lib/ncurses/formw
 LIBMENUDIR=	${OBJTOP}/lib/ncurses/menu
@@ -616,6 +621,7 @@ LIBNCURSESWDIR=	${OBJTOP}/lib/ncurses/ncursesw
 LIBPANELDIR=	${OBJTOP}/lib/ncurses/panel
 LIBPANELWDIR=	${OBJTOP}/lib/ncurses/panelw
 LIBCRYPTODIR=	${OBJTOP}/secure/lib/libcrypto
+LIBRCDIR=	${OBJTOP}/lib/librc
 LIBSSHDIR=	${OBJTOP}/secure/lib/libssh
 LIBSSLDIR=	${OBJTOP}/secure/lib/libssl
 LIBTEKENDIR=	${OBJTOP}/sys/teken/libteken

@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+
+name=kfd
+
+depend()
+{
+	after network
+	keyword -shutdown
+}
+
+start()
+{
+	return 0
+}
+
+stop()
+{
+	return 0
+}

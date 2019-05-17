@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+
+name="bootmisc"
+desc="Dummy service for boot services"
+
+depend()
+{
+	need cleartmp cleanvar localmount ldconfig
+	before logger
+	after clock root sysctl
+	keyword -prefix -timeout
+}
+
+start()
+{
+	return 0
+}

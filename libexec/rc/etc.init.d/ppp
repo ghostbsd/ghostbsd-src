@@ -1,0 +1,98 @@
+#!/sbin/openrc-run
+name="ppp"
+description="Point to point protocol connections"
+
+depend()
+{
+    after localmount boot
+    keyword -jail
+}
+
+#Determine the system install prefix
+SERVICEDIR="/etc/init.d" #Base system service
+
+#Get the sub-service profile
+profile=${RC_SVCNAME##*.}
+if [ "${profile}" == "ppp" ] ; then
+  profile="" #invalid profile - make sure it is cleared
+fi
+
+if [ -n "${profile}" ] ; then
+  #only set these for the subservices (profiles)
+  #in_background="true"
+  #pidfile="/var/run/ppp-${profile}.pid"
+  command="/usr/sbin/ppp"
+  #determine the settings for this profile
+  mode=$(eval "echo \$ppp_${profile}_mode" )
+  if [ -z "${mode}" ] ; then
+    mode="${ppp_mode:-auto}" #default mode
+  fi
+  user=$(eval "echo \$ppp_${profile}_user" )
+  if [ -z "${user}" ] ; then
+    user="${ppp_user:-root}" #default user
+  fi
+  nat=$(eval "echo \$ppp_${profile}_nat" )
+  if [ -z "${nat}" ] ; then
+    nat="${ppp_nat:-yes}" #default nat type
+  fi
+  #now setup the commands for this profile based on the settings
+  if yesno "${nat}" ; then
+    command_args="-${mode} -nat ${profile}"
+  else
+    command_args="-${mode} ${profile}"
+  fi
+  command_user="${user}"
+  #ppp is weird in that it *always* backgrounds itself automatically
+  # - need to keep tabs on it by the full process name because the pidfiles are all the daemon process
+  #procname="${command} ${command_args}"
+fi
+
+cleanup_sessions() {
+  #Quick function for removing any of the subservice symlinks
+  for subservice in `ls ${SERVICEDIR}/ppp.* 2> /dev/null`
+  do
+    rm "${subservice}"
+  done
+  return 0
+}
+
+start_pre() {
+  if [ -z "${profile}" ] ; then
+    #Base service - need to create/start all the subservices
+    export OPENRC_SILENT=TRUE
+    cleanup_sessions #ensure things are cleaned up ahead of time
+    for _profile in ${ppp_profile}
+    do
+      if [ ! -f "${SERVICEDIR}/ppp.${_profile}" ] ; then
+        rm "${SERVICEDIR}/ppp.${_profile}" >/dev/null 2>/dev/null
+        cp "${SERVICEDIR}/ppp" "${SERVICEDIR}/ppp.${_profile}"
+      fi
+      if service_stopped ppp.${_profile} ; then
+        einfo "Starting ppp profile: ${_profile}"
+        /sbin/service ppp.${_profile} start -q
+      fi
+    done
+    exit 0 #ensure we stop here for the base service - no actual "start" for the meta-service
+  fi
+  einfo "Starting Profile with command: ${procname}"
+}
+
+stop() {
+  if [ -z "${profile}" ] ; then
+    for subservice in `ls ${SERVICEDIR}/ppp.* 2> /dev/null`
+    do
+        _profile=${subservice##*.}
+        if service_started ppp.${_profile} ; then
+          einfo "Stopping ppp profile: ${_profile}"
+          /sbin/service ppp.${_profile} stop -q
+        fi
+      rm ${subservice} #Now remove the subservice symlink
+    done
+  else
+    # ppp is weird in that it *always* backgrounds itself automatically
+    # - need to keep tabs on it by the full process name because the pidfiles are all the daemon process
+    p_name="${command} ${command_args}"
+    /bin/pkill -f "^${command}.*[[:space:]]${profile}\$"
+    return 0
+  fi
+}

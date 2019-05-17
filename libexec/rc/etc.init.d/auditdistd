@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+name="auditdistd"
+description="Audit trail files distribution daemon"
+command=/usr/sbin/auditdistd
+pidfile="/var/run/auditdistd.pid"
+required_files="/etc/security/auditdistd.conf"
+
+depend()
+{
+	need localmount
+	use logger
+	before inetd xinetd
+}

@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+#
+# $FreeBSD$
+#
+
+depend()
+{
+	need apm
+	keyword -jail -shutdown
+}
+
+name="apmd"
+desc="Advanced power management daemon"
+command="/usr/sbin/${name}"
+
+start_pre()
+{
+	case `${SYSCTL_N} hw.machine_arch` in
+	i386)
+		# Warn user about acpi apm compatibility support which
+		# does not work with apmd.
+		if [ ! -e /dev/apmctl ]; then
+			ewarn "/dev/apmctl not found; kernel is missing apm(4)"
+		fi
+		;;
+	*)
+		return 1
+		;;
+	esac
+}

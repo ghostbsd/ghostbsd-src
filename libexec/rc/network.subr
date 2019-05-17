@@ -27,6 +27,14 @@
 IFCONFIG_CMD="/sbin/ifconfig"
 : ${netif_ipexpand_max:=2048}
 
+# Set which rc system we are using
+if [ -z "$RC_SYSTEM" ] ; then
+	RC_SYSTEM="$(/bin/kenv rc_system 2>/dev/null)"
+	if [ -z "$RC_SYSTEM" ] ; then
+		RC_SYSTEM="rc"
+	fi
+fi
+
 #
 # Subroutines commonly used from network startup scripts.
 # Requires that rc.conf be loaded first.
@@ -122,7 +130,7 @@ ifn_vnet0()
 #
 ifconfig_up()
 {
-	local _cfg _ifconfig_descr _ipv6_opts ifconfig_args 
+	local _cfg _ifconfig_descr _ipv6_opts ifconfig_args
 	_cfg=1
 
 	# Make sure lo0 always comes up.
@@ -220,7 +228,11 @@ ifconfig_up()
 	fi
 
 	if wpaif $1; then
-		/etc/rc.d/wpa_supplicant start $1
+		if [ "$RC_SYSTEM" = "openrc" ] ; then
+			sh /etc/rc.devd wpa_supplicant.${1} start
+		else
+			/etc/rc.d/wpa_supplicant start $1
+		fi
 		_cfg=0		# XXX: not sure this should count
 	elif hostapif $1; then
 		/etc/rc.d/hostapd start $1
@@ -238,7 +250,11 @@ ifconfig_up()
 			${IFCONFIG_CMD} $1 up
 		fi
 		if syncdhcpif $1; then
-			/etc/rc.d/dhclient start $1
+			if [ "$RC_SYSTEM" = "openrc" ] ; then
+				sh /etc/rc.devd dhcpcd.${1} start
+			else
+				/etc/rc.d/dhclient start $1
+			fi
 		fi
 		_cfg=0
 	fi
@@ -256,13 +272,23 @@ ifconfig_down()
 	_cfg=1
 
 	if wpaif $1; then
-		/etc/rc.d/wpa_supplicant stop $1
+		if [ "$RC_SYSTEM" = "openrc" ] ; then
+			sh /etc/rc.devd wpa_supplicant.${1} stop
+		else
+			/etc/rc.d/wpa_supplicant stop $1
+		fi
 		_cfg=0
 	elif hostapif $1; then
 		/etc/rc.d/hostapd stop $1
 		_cfg=0
-	elif dhcpif $1; then
-		/etc/rc.d/dhclient stop $1
+	fi
+
+	if dhcpif $1; then
+		if [ "$RC_SYSTEM" = "openrc" ] ; then
+			sh /etc/rc.devd dhcpcd.${1} stop
+		else
+			/etc/rc.d/dhclient stop $1
+		fi
 		_cfg=0
 	fi
 
@@ -332,6 +358,9 @@ ifconfig_getargs()
 	for _arg in $_tmpargs; do
 		case $_arg:$_vnet in
 		[Dd][Hh][Cc][Pp]:0) ;;
+		[Aa][Ll][Ll]:0) ;;
+		[Ii][Pp][Vv][4]:0) ;;
+		[Ii][Pp][Vv][6]:0) ;;
 		[Nn][Oo][Aa][Uu][Tt][Oo]:0) ;;
 		[Nn][Oo][Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp]:0) ;;
 		[Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp]:0) ;;
@@ -391,6 +420,15 @@ dhcpif()
 		[Dd][Hh][Cc][Pp])
 			return 0
 			;;
+		[Aa][Ll][Ll])
+			return 0
+			;;
+		[Ii][Pp][Vv][4])
+			return 0
+			;;
+		[Ii][Pp][Vv][6])
+			return 0
+			;;
 		[Nn][Oo][Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp])
 			return 0
 			;;
@@ -421,6 +459,15 @@ syncdhcpif()
 			return 1
 			;;
 		[Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp])
+			return 0
+			;;
+		[Aa][Ll][Ll])
+			return 0
+			;;
+		[Ii][Pp][Vv][4])
+			return 0
+			;;
+		[Ii][Pp][Vv][6])
 			return 0
 			;;
 		esac
@@ -1285,9 +1332,8 @@ wlan_up()
 		done
 	done
 	if [ -n "${_list# }" ]; then
-		echo "Created wlan(4) interfaces: ${_list# }."
+		debug "Created wlan(4)s: ${_list# }"
 	fi
-	debug "Created wlan(4)s: ${_list# }"
 }
 
 # wlan_down
@@ -1770,4 +1816,33 @@ network6_getladdr()
 
 		return
 	done
+}
+
+
+# ltr str src dst [var]
+#	Change every $src in $str to $dst.
+#	Useful when /usr is not yet mounted and we cannot use tr(1), sed(1) nor
+#	awk(1). If var is non-NULL, set it to the result.
+ltr()
+{
+	local _str _src _dst _out _com _var
+	_str="$1"
+	_src="$2"
+	_dst="$3"
+	_var="$4"
+	_out=""
+
+	local IFS="${_src}"
+	for _com in ${_str}; do
+		if [ -z "${_out}" ]; then
+			_out="${_com}"
+		else
+			_out="${_out}${_dst}${_com}"
+		fi
+	done
+	if [ -n "${_var}" ]; then
+		setvar "${_var}" "${_out}"
+	else
+		echo "${_out}"
+	fi
 }

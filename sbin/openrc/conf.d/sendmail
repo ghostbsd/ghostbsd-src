@@ -1,0 +1,23 @@
+# sendmail config file, taken from old FreeBSD defaults/rc.conf
+#
+# Default of NO/YES/NO/NO starts up a localhost only MTA so
+# mail from cron gets to root
+#
+# run sendmail inbound daemon YES/NO
+sendmail_enable="NO"
+# start localhost only MTA for mail submission YES/NO
+sendmail_submit_enable="YES"
+# dequeue stuck mail YES/NO
+sendmail_outbound_enable="NO"
+# dequue stuck clientmail YES/NO
+sendmail_msp_queue_enable="NO"
+
+# Sendmail flags as a server
+sendmail_flags="-L sm-mta -bd -q30m" # Flags to sendmail (as a server)
+# Localhost MTA only flags
+sendmail_submit_flags="-L sm-mta -bd -q30m -ODaemonPortOptions=Addr=localhost"
+# Outbound only flags
+sendmail_outbound_flags="-L sm-queue -q30m" # Flags to sendmail (outbound only)
+# sendmail msp queue daemon flags
+sendmail_msp_queue_flags="-L sm-msp-queue -Ac -q30m"
+

@@ -1,0 +1,78 @@
+#!/sbin/openrc-run
+
+name="nsswitch"
+description="Name-service switch"
+
+depend()
+{
+	need localmount
+	before network
+	keyword -shutdown -stop
+}
+
+generate_host_conf()
+{
+    local _cont _sources
+
+    nsswitch_conf=$1; shift;
+    host_conf=$1; shift;
+
+    _cont=0
+    _sources=""
+    while read line; do
+	line=${line##[ 	]}
+	case $line in
+	hosts:*)
+		;;
+	*)
+		if [ $_cont -ne 1 ]; then
+			continue
+		fi
+		;;
+	esac
+	if [ "${line%\\}" = "${line}\\" ]; then
+		_cont=1
+	fi
+	line=${line#hosts:}
+	line=${line%\\}
+	line=${line%%#*}
+	_sources="${_sources}${_sources:+ }$line"
+    done < $nsswitch_conf
+
+    echo "# Auto-generated from nsswitch.conf" > $host_conf
+    for _s in ${_sources}; do
+	case $_s in
+	files)
+		echo "hosts" >> $host_conf
+		;;
+	dns)
+		echo "dns" >> $host_conf
+		;;
+	nis)
+		echo "nis" >> $host_conf
+		;;
+	cache | *=*)
+		;;
+	*)
+		echo "Warning: unrecognized source [$_s]" >&2
+		;;
+	esac
+    done
+}
+
+start()
+{
+	# Generate host.conf for compatibility
+	#
+	if [ ! -f "/etc/host.conf" -o \
+		"/etc/host.conf" -ot "/etc/nsswitch.conf" ]
+	then
+		ebegin "Starting $name"
+		einfo 'Generating host.conf.'
+		generate_host_conf /etc/nsswitch.conf /etc/host.conf
+		eend 0
+	else
+		mark_service_inactive
+		return 0
+	fi
+}

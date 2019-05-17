@@ -1,0 +1,45 @@
+#!/sbin/openrc-run
+#
+# $FreeBSD$
+#
+
+SYSCTL_N="sysctl -n"
+
+depend()
+{
+	keyword -jail
+}
+
+name="archdep"
+
+start()
+{
+	local _arch
+
+	_arch=`${SYSCTL_N} hw.machine_arch`
+	case $_arch in
+	i386)
+		# SCO binary emulation
+		#
+		if checkyesno ibcs2_enable; then
+			einfo -n 'Initial i386 initialization: ibcs2'
+			load_kld ibcs2
+			case ${ibcs2_loaders} in
+			[Nn][Oo])
+				;;
+			*)
+				for i in ${ibcs2_loaders}; do
+					load_kld ibcs2_$i
+				done
+				;;
+			esac
+			echo '.'
+		fi
+		;;
+	esac
+}
+
+stop()
+{
+	return 0
+}

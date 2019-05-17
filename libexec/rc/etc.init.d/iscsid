@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+
+depend()
+{
+        use net
+}
+
+name="iscsid"
+desc="iSCSI initiator daemon"
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/${name}"
+required_modules="iscsi"

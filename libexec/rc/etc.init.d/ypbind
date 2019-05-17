@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+
+name="ypbind"
+description="NIS domain binding daemon"
+
+command="/usr/sbin/$name"
+command_args="${nis_client_flags}"
+
+depend()
+{
+	after modules
+	need localmount net rpcbind
+	keyword -shutdown -stop
+}
+
+start_pre()
+{
+
+# wait for network to be available
+# Previously this check has been provided by the net-online service, which has
+# been removed in TrueOS-18.03.
+# To avoid breakage of NIS in the future, we perform this check directly here
+
+	local infinite
+
+	timeout=${timeout:-60}
+	ebegin "ypbind waiting for network to become available"
+	[ "$timeout" -eq 0 ] && infinite=true || infinite=false
+	while $infinite || [ "$timeout" -gt 0 ]; do
+		nc -uz 0.0.0.255 111 && break
+		sleep 1
+		: $((timeout -= 1))
+	done
+
+	local _domain
+
+	_domain=`domainname`
+	if [ -z "$_domain" ]; then
+		ewarn "NIS domainname(1) is not set."
+		return 1
+	fi
+}

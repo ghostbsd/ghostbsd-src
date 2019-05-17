@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	after mountcritremote
+	keyword -jail
+}
+
+name="dmesg"
+desc="Save kernel boot messages to disk"
+dmesg_file="/var/run/dmesg.boot"
+
+start()
+{
+	rm -f ${dmesg_file}
+	( umask 022 ; /sbin/dmesg $rc_flags > ${dmesg_file} )
+}
+
+stop()
+{
+	return 0
+}

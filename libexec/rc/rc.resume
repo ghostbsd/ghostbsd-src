@@ -24,7 +24,7 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
+# $FreeBSD: releng/9.1/etc/rc.resume 232083 2012-02-23 22:10:49Z jkim $
 #
 
 # sample run command file for APM Resume Event
@@ -54,6 +54,16 @@ fi
 
 /usr/bin/logger -t $subsystem resumed at `/bin/date +'%Y%m%d %H:%M:%S'`
 /bin/sync && /bin/sync && /bin/sync
+
+# Check if we need to resume wpa_supp
+ifconfig | grep -q 'wlan0:'
+if [ $? -eq 0 ] ; then
+  service wpa_supplicant restart
+fi
+
+# Restart moused to fix suspend
+service moused restart
+
 
 . /etc/rc.subr
 

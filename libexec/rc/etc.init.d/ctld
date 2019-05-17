@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	keyword -jail
+}
+
+name="ctld"
+desc="CAM Target Layer / iSCSI target daemon"
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/${name}"
+required_files="/etc/ctl.conf"
+required_modules="ctl"

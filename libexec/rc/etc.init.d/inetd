@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+name="inetd"
+description="Internet \"super-server\""
+command="/usr/sbin/${name}"
+pidfile="/var/run/${name}.pid"
+required_files="/etc/${name}.conf"
+
+depend()
+{
+	need localmount
+	use net logger
+	keyword -stop -shutdown
+}

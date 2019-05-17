@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+
+name="ldapd"
+rcvar="ldapd_enable"
+command="/usr/sbin/${name}"
+
+depend() {
+	need devfs
+	keyword -jail -shutdown
+}
