@@ -13,7 +13,8 @@ MAN=	cli.lua.8 \
 	screen.lua.8
 
 FILESDIR=	/boot/lua
-FILES=	cli.lua \
+FILES=	brand-trueos.lua \
+	cli.lua \
 	color.lua \
 	config.lua \
 	core.lua \
