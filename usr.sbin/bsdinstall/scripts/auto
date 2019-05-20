@@ -310,6 +310,7 @@ esac
 # Install base packages
 pkg -r $BSDINSTALL_CHROOT install -y os-${OSFLAVOR}-userland os-${OSFLAVOR}-kernel pkg ca_root_nss || error "Failed package base installation!"
 
+
 # Set up boot loader
 bsdinstall bootconfig || error "Failed to configure bootloader"
 
