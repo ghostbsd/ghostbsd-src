@@ -74,20 +74,21 @@ __FBSDID("$FreeBSD$");
 #include "opt_vm.h"
 
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/conf.h>
-#include <sys/kernel.h>
-#include <sys/priv.h>
-#include <sys/proc.h>
 #include <sys/bio.h>
+#include <sys/blist.h>
 #include <sys/buf.h>
+#include <sys/conf.h>
 #include <sys/disk.h>
+#include <sys/eventhandler.h>
 #include <sys/fcntl.h>
+#include <sys/lock.h>
+#include <sys/kernel.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
-#include <sys/vnode.h>
 #include <sys/malloc.h>
 #include <sys/pctrie.h>
+#include <sys/priv.h>
+#include <sys/proc.h>
 #include <sys/racct.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
@@ -95,10 +96,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/sbuf.h>
 #include <sys/sysctl.h>
 #include <sys/sysproto.h>
-#include <sys/blist.h>
-#include <sys/lock.h>
+#include <sys/systm.h>
 #include <sys/sx.h>
 #include <sys/vmmeter.h>
+#include <sys/vnode.h>
 
 #include <security/mac/mac_framework.h>
 
@@ -725,23 +726,24 @@ swp_pager_getswapspace(int *io_npages, int limit)
 {
 	daddr_t blk;
 	struct swdevt *sp;
-	int npages;
+	int mpages, npages;
 
 	blk = SWAPBLK_NONE;
-	npages = *io_npages;
+	npages = mpages = *io_npages;
 	mtx_lock(&sw_dev_mtx);
 	sp = swdevhd;
 	while (!TAILQ_EMPTY(&swtailq)) {
 		if (sp == NULL)
 			sp = TAILQ_FIRST(&swtailq);
 		if ((sp->sw_flags & SW_CLOSING) == 0)
-			blk = blist_alloc(sp->sw_blist, npages);
+			blk = blist_alloc(sp->sw_blist, &npages, mpages);
 		if (blk != SWAPBLK_NONE)
 			break;
 		sp = TAILQ_NEXT(sp, sw_list);
 		if (swdevhd == sp) {
 			if (npages <= limit)
 				break;
+			mpages = npages - 1;
 			npages >>= 1;
 		}
 	}

@@ -15,12 +15,16 @@ SUBDIR+=sendmail
 .endif
 
 BIN1=	\
-	group \
 	login.access \
 	rc.bsdextended \
+	rc.firewall \
 	termcap.small
 
 # NB: keep these sorted by MK_* knobs
+
+.if ${MK_SENDMAIL} != "no"
+BIN1+=	rc.sendmail
+.endif
 
 .if ${MK_SENDMAIL} == "no"
 ETCMAIL=mailer.conf aliases
@@ -58,33 +62,9 @@ distribution:
 	@echo "set DESTDIR before running \"make ${.TARGET}\""
 	@false
 .endif
-.if ${MK_SENDMAIL} != "no"
 	cd ${.CURDIR}; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 -T "tags=package=sendmail"\
-		rc.sendmail ${DESTDIR}/etc;
-.endif
-.if ${MK_IPFW} != "no"
-	cd ${.CURDIR}; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 -T "tags=package=ipfw"\
-		rc.firewall ${DESTDIR}/etc;
-.endif
-	cd ${.CURDIR}; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 -T "tags=package=runtime"\
-		${BIN1} ${DESTDIR}/etc; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 600 -T "tags=package=runtime"\
-		master.passwd ${DESTDIR}/etc;
-
-.if ${MK_TCSH} == "no"
-	sed -i "" -e 's;/bin/csh;/bin/sh;' ${DESTDIR}/etc/master.passwd
-.endif
-	pwd_mkdb -i -p -d ${DESTDIR}/etc ${DESTDIR}/etc/master.passwd
-.if defined(NO_ROOT)
-	( \
-		echo "./etc/passwd type=file mode=0644 uname=root gname=wheel"; \
-		echo "./etc/pwd.db type=file mode=0644 uname=root gname=wheel"; \
-		echo "./etc/spwd.db type=file mode=0600 uname=root gname=wheel"; \
-	) | ${METALOG.add}
-.endif
+	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
+		${BIN1} ${DESTDIR}/etc
 	${_+_}cd ${.CURDIR}/gss; ${MAKE} install
 	${_+_}cd ${.CURDIR}/mtree; ${MAKE} install
 	${_+_}cd ${SRCTOP}/share/termcap; ${MAKE} etc-termcap

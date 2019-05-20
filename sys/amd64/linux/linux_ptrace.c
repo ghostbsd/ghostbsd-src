@@ -34,8 +34,10 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/lock.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/sx.h>
 #include <sys/syscallsubr.h>
 
 #include <machine/pcb.h>
@@ -43,6 +45,8 @@ __FBSDID("$FreeBSD$");
 
 #include <amd64/linux/linux.h>
 #include <amd64/linux/linux_proto.h>
+#include <compat/linux/linux_emul.h>
+#include <compat/linux/linux_misc.h>
 #include <compat/linux/linux_signal.h>
 
 #define	LINUX_PTRACE_TRACEME		0
@@ -105,6 +109,37 @@ map_signum(int lsig, int *bsigp)
 
 	*bsigp = bsig;
 	return (0);
+}
+
+int
+linux_ptrace_status(struct thread *td, pid_t pid, int status)
+{
+	struct ptrace_lwpinfo lwpinfo;
+	struct linux_pemuldata *pem;
+	register_t saved_retval;
+	int error;
+
+	saved_retval = td->td_retval[0];
+	error = kern_ptrace(td, PT_LWPINFO, pid, &lwpinfo, sizeof(lwpinfo));
+	td->td_retval[0] = saved_retval;
+	if (error != 0) {
+		printf("%s: PT_LWPINFO failed with error %d\n", __func__, error);
+		return (status);
+	}
+
+	pem = pem_find(td->td_proc);
+	KASSERT(pem != NULL, ("%s: proc emuldata not found.\n", __func__));
+
+	LINUX_PEM_SLOCK(pem);
+	if ((pem->ptrace_flags & LINUX_PTRACE_O_TRACESYSGOOD) &&
+	    lwpinfo.pl_flags & PL_FLAG_SCE)
+		status |= (LINUX_SIGTRAP | 0x80) << 8;
+	if ((pem->ptrace_flags & LINUX_PTRACE_O_TRACESYSGOOD) &&
+	    lwpinfo.pl_flags & PL_FLAG_SCX)
+		status |= (LINUX_SIGTRAP | 0x80) << 8;
+	LINUX_PEM_SUNLOCK(pem);
+
+	return (status);
 }
 
 struct linux_pt_reg {
@@ -279,6 +314,7 @@ linux_ptrace_peek(struct thread *td, pid_t pid, void *addr, void *data)
 static int
 linux_ptrace_setoptions(struct thread *td, pid_t pid, l_ulong data)
 {
+	struct linux_pemuldata *pem;
 	int mask;
 
 	mask = 0;
@@ -290,15 +326,20 @@ linux_ptrace_setoptions(struct thread *td, pid_t pid, l_ulong data)
 		return (EINVAL);
 	}
 
+	pem = pem_find(td->td_proc);
+	KASSERT(pem != NULL, ("%s: proc emuldata not found.\n", __func__));
+
 	/*
 	 * PTRACE_O_EXITKILL is ignored, we do that by default.
 	 */
 
+	LINUX_PEM_XLOCK(pem);
 	if (data & LINUX_PTRACE_O_TRACESYSGOOD) {
-		printf("%s: PTRACE_O_TRACESYSGOOD not implemented; "
-		    "returning EINVAL\n", __func__);
-		return (EINVAL);
+		pem->ptrace_flags |= LINUX_PTRACE_O_TRACESYSGOOD;
+	} else {
+		pem->ptrace_flags &= ~LINUX_PTRACE_O_TRACESYSGOOD;
 	}
+	LINUX_PEM_XUNLOCK(pem);
 
 	if (data & LINUX_PTRACE_O_TRACEFORK)
 		mask |= PTRACE_FORK;
@@ -338,17 +379,26 @@ linux_ptrace_getregs(struct thread *td, pid_t pid, void *data)
 
 	map_regs_to_linux(&b_reg, &l_reg);
 
-	/*
-	 * The strace(1) utility depends on RAX being set to -ENOSYS
-	 * on syscall entry.
-	 */
 	error = kern_ptrace(td, PT_LWPINFO, pid, &lwpinfo, sizeof(lwpinfo));
 	if (error != 0) {
 		printf("%s: PT_LWPINFO failed with error %d\n", __func__, error);
 		return (error);
 	}
-	if (lwpinfo.pl_flags & PL_FLAG_SCE)
-		l_reg.rax = -38; // XXX: Don't hardcode?
+	if (lwpinfo.pl_flags & PL_FLAG_SCE) {
+		/*
+		 * The strace(1) utility depends on RAX being set to -ENOSYS
+		 * on syscall entry; otherwise it loops printing those:
+		 *
+		 * [ Process PID=928 runs in 64 bit mode. ]
+		 * [ Process PID=928 runs in x32 mode. ]
+		 */
+		l_reg.rax = -38; /* -ENOSYS */
+
+		/*
+		 * Undo the mangling done in exception.S:fast_syscall_common().
+		 */
+		l_reg.r10 = l_reg.rcx;
+	}
 
 	error = copyout(&l_reg, (void *)data, sizeof(l_reg));
 	return (error);
@@ -399,21 +449,27 @@ linux_ptrace_getregset_prstatus(struct thread *td, pid_t pid, l_ulong data)
 
 	map_regs_to_linux_regset(&b_reg, fsbase, gsbase, &l_regset);
 
-	/*
-	 * The strace(1) utility depends on RAX being set to -ENOSYS
-	 * on syscall entry; otherwise it loops printing those:
-	 *
-	 * [ Process PID=928 runs in 64 bit mode. ]
-	 * [ Process PID=928 runs in x32 mode. ]
-	 */
 	error = kern_ptrace(td, PT_LWPINFO, pid, &lwpinfo, sizeof(lwpinfo));
 	if (error != 0) {
 		printf("%s: PT_LWPINFO failed with error %d\n",
 		    __func__, error);
 		return (error);
 	}
-	if (lwpinfo.pl_flags & PL_FLAG_SCE)
-		l_regset.rax = -38; // XXX: Don't hardcode?
+	if (lwpinfo.pl_flags & PL_FLAG_SCE) {
+		/*
+		 * The strace(1) utility depends on RAX being set to -ENOSYS
+		 * on syscall entry; otherwise it loops printing those:
+		 *
+		 * [ Process PID=928 runs in 64 bit mode. ]
+		 * [ Process PID=928 runs in x32 mode. ]
+		 */
+		l_regset.rax = -38; /* -ENOSYS */
+
+		/*
+		 * Undo the mangling done in exception.S:fast_syscall_common().
+		 */
+		l_regset.r10 = l_regset.rcx;
+	}
 
 	len = MIN(iov.iov_len, sizeof(l_regset));
 	error = copyout(&l_regset, (void *)iov.iov_base, len);

@@ -25,6 +25,7 @@ static const char rcsid[] = "@(#)$Id$";
 # include "opt_random_ip_id.h"
 #endif
 #include <sys/param.h>
+#include <sys/eventhandler.h>
 #include <sys/conf.h>
 #include <sys/errno.h>
 #include <sys/types.h>
@@ -481,7 +482,7 @@ ipf_send_ip(fin, m)
 	default :
 		return EINVAL;
 	}
-#ifdef IPSEC
+#ifdef IPSEC_SUPPORT
 	m->m_pkthdr.rcvif = NULL;
 #endif
 
