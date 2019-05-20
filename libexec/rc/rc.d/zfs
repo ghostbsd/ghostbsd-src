@@ -9,6 +9,9 @@
 
 . /etc/rc.subr
 
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin:/usr/local/sbin
+export PATH
+
 name="zfs"
 desc="Mount and share ZFS datasets"
 rcvar="zfs_enable"
