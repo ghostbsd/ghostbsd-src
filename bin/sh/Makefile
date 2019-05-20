@@ -66,10 +66,10 @@ token.h: mktokens
 HAS_TESTS=
 SUBDIR.${MK_TESTS}+= tests
 
-beforeinstallconfig:
-	rm -f ${DESTDIR}/.profile
+#beforeinstallconfig:
+#	rm -f ${DESTDIR}/.profile
 
-afterinstallconfig:
-	${INSTALL_LINK} ${TAG_ARGS} ${DESTDIR}/root/.profile ${DESTDIR}/.profile
+#afterinstallconfig:
+#	${INSTALL_LINK} ${TAG_ARGS} ${DESTDIR}/root/.profile ${DESTDIR}/.profile
 
 .include <bsd.prog.mk>
