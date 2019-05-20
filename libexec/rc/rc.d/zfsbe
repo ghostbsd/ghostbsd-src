@@ -14,6 +14,9 @@
 
 . /etc/rc.subr
 
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin:/usr/local/sbin
+export PATH
+
 name="zfsbe"
 rcvar="zfs_enable"
 start_cmd="be_start"

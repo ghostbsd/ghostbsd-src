@@ -10,6 +10,9 @@
 
 . /etc/rc.subr
 
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin:/usr/local/sbin
+export PATH
+
 name="zvol"
 desc="Activate swap on ZVOLs"
 rcvar="zfs_enable"
