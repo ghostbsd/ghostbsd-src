@@ -320,7 +320,7 @@ CONFS+=		hostapd
 CONFS+=		wpa_supplicant
 .endif
 
-.if ${MK_ZFS} != "no"
+#.if ${MK_ZFS} != "no"
 CONFGROUPS+=	ZFS
 ZFS+=		zfs
 ZFS+=		zfsbe
@@ -330,7 +330,7 @@ ZFSPACKAGE=	zfs
 DIRS+=	ETC_ZFS
 ETC_ZFS=	/etc/zfs
 ETC_ZFSPACKAGE=	zfs
-.endif
+#.endif
 
 .for fg in ${CONFGROUPS}
 ${fg}MODE?=	${BINMODE}
