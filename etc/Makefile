@@ -14,17 +14,7 @@ UPDATE_DEPENDFILE=	no
 SUBDIR+=sendmail
 .endif
 
-BIN1=	\
-	login.access \
-	rc.bsdextended \
-	rc.firewall \
-	termcap.small
-
 # NB: keep these sorted by MK_* knobs
-
-.if ${MK_SENDMAIL} != "no"
-BIN1+=	rc.sendmail
-.endif
 
 .if ${MK_SENDMAIL} == "no"
 ETCMAIL=mailer.conf aliases
@@ -62,9 +52,6 @@ distribution:
 	@echo "set DESTDIR before running \"make ${.TARGET}\""
 	@false
 .endif
-	cd ${.CURDIR}; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
-		${BIN1} ${DESTDIR}/etc
 	${_+_}cd ${.CURDIR}/gss; ${MAKE} install
 	${_+_}cd ${.CURDIR}/mtree; ${MAKE} install
 	${_+_}cd ${SRCTOP}/share/termcap; ${MAKE} etc-termcap
@@ -173,11 +160,6 @@ distrib-dirs: ${MTREES:N/*} distrib-cleanup .PHONY
 	${INSTALL_SYMLINK} "${nls}" "${DESTDIR}${SHAREDIR}/nls/${alias}"
 .endfor
 .endif
-
-etc-examples: ${META_DEPS}
-	cd ${.CURDIR}; ${INSTALL} ${TAG_ARGS} -o ${BINOWN} -g ${BINGRP} -m 444 \
-	    ${BIN1} ${BIN2} \
-	    ${DESTDIR}${SHAREDIR}/examples/etc
 
 .include <bsd.prog.mk>
 

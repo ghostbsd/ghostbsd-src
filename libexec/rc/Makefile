@@ -1,9 +1,17 @@
 # $FreeBSD$
 
+.include <src.opts.mk>
+
 CONFGROUPS=	CONFETC CONFETCEXEC CONFETCDEFAULTS
 CONFETCDIR=	/etc
 CONFETC+=	network.subr openrc openrc.shutdown rc rc.dynamicdiskless
-CONFETC+=	rc.initdiskless rc.subr rc.shutdown
+CONFETC+=	rc.initdiskless rc.subr rc.shutdown rc.bsdextended
+.if ${MK_IPFW} != "no"
+CONFETC+=	rc.firewall
+.endif
+.if ${MK_SENDMAIL} != "no"
+CONFETC+=	rc.sendmail
+.endif
 CONFETCMODE=	644
 CONFETCEXEC=	netstart pccard_ether rc.devd rc.resume rc.suspend
 CONFETCEXECDIR=	/etc
