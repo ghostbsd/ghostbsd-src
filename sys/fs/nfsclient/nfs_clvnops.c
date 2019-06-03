@@ -1181,7 +1181,6 @@ nfs_lookup(struct vop_lookup_args *ap)
 		cache_purge_negative(dvp);
 	}
 
-	error = 0;
 	newvp = NULLVP;
 	NFSINCRGLOBAL(nfsstatsv1.lookupcache_misses);
 	error = nfsrpc_lookup(dvp, cnp->cn_nameptr, cnp->cn_namelen,
@@ -2940,10 +2939,7 @@ loop:
 		}
 		BO_UNLOCK(bo);
 		bremfree(bp);
-		if (passone || !commit)
-		    bp->b_flags |= B_ASYNC;
-		else
-		    bp->b_flags |= B_ASYNC;
+		bp->b_flags |= B_ASYNC;
 		bwrite(bp);
 		if (newnfs_sigintr(nmp, td)) {
 			error = EINTR;
