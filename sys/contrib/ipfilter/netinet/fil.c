@@ -2810,7 +2810,7 @@ ipf_check(ctx, ip, hlen, ifp, out
 	mb_t **mp;
 	ip_t *ip;
 	int hlen;
-	void *ifp;
+	struct ifnet *ifp;
 	int out;
 	void *ctx;
 {
@@ -2882,8 +2882,7 @@ ipf_check(ctx, ip, hlen, ifp, out
 	 */
 	m->m_flags &= ~M_CANFASTFWD;
 #  endif /* M_CANFASTFWD */
-#  if defined(CSUM_DELAY_DATA) && (!defined(__FreeBSD_version) || \
-				   (__FreeBSD_version < 501108))
+#  if defined(CSUM_DELAY_DATA) && !defined(__FreeBSD_version)
 	/*
 	 * disable delayed checksums.
 	 */
