@@ -241,7 +241,8 @@ fi
 PFLAVORS="\
 generic \"Default options and features\" \
 minimal \"Less userland features\" \
-zol \"Using sysutils/zol as the default ZFS\""
+nozfs \"World/Kernel built without ZFS\" \
+openzfs \"Use sysutils/openzfs as the default ZFS\""
 
 exec 3>&1
 OSFLAVOR=`echo $PFLAVORS | xargs dialog --backtitle "FreeBSD Installer" \
@@ -251,7 +252,10 @@ OSFLAVOR=`echo $PFLAVORS | xargs dialog --backtitle "FreeBSD Installer" \
 exec 3>&-
 
 case "$OSFLAVOR" in
-generic|minimal|zol) ;;
+generic|minimal|nozfs) ;;
+openzfs) OSFLAVOR="nozfs"
+	 EXTRAPKGS="openzfs"
+	;;
 *)
 	error "Unknown OS flavor"
 	;;
@@ -308,7 +312,7 @@ case "$PARTMODE" in
 esac
 
 # Install base packages
-pkg -r $BSDINSTALL_CHROOT install -y os-${OSFLAVOR}-userland os-${OSFLAVOR}-kernel pkg ca_root_nss || error "Failed package base installation!"
+pkg -r $BSDINSTALL_CHROOT install -y os-${OSFLAVOR}-userland os-${OSFLAVOR}-kernel pkg ca_root_nss ${EXTRAPKGS} || error "Failed package base installation!"
 
 
 # Set up boot loader

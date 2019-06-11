@@ -186,8 +186,8 @@ FSTAB_FMT="%s\t\t%s\t%s\t%s\t\t%s\t%s\n"
 # Check which version of ZFS to use
 #
 case $OSFLAVOR in
-	zol)
-		kldload /boot/modules/zfs.ko
+	nozfs)
+		kldload /boot/modules/openzfs.ko
 		ZFS="/usr/local/sbin/zfs"
 		ZPOOL="/usr/local/sbin/zpool"
 		;;
