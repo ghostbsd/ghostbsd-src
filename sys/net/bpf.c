@@ -2489,6 +2489,11 @@ catchpacket(struct bpf_d *d, u_char *pkt, u_int pktlen, u_int snaplen,
 	int tstype;
 
 	BPFD_LOCK_ASSERT(d);
+	if (d->bd_bif == NULL) {
+		/* Descriptor was detached in concurrent thread */
+		counter_u64_add(d->bd_dcount, 1);
+		return;
+	}
 
 	/*
 	 * Detect whether user space has released a buffer back to us, and if

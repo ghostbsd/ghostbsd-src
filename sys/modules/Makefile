@@ -324,6 +324,7 @@ SUBDIR=	\
 	sdhci \
 	${_sdhci_acpi} \
 	sdhci_pci \
+	sdio \
 	sem \
 	send \
 	${_sfxge} \
@@ -795,8 +796,8 @@ SUBDIR:= ${SUBDIR:N${reject}}
 .MAKEFLAGS+=	-DNO_XREF
 afterinstall: .PHONY
 	@if type kldxref >/dev/null 2>&1; then \
-		${ECHO} kldxref ${DESTDIR}${KMODDIR}; \
-		kldxref ${DESTDIR}${KMODDIR}; \
+		${ECHO} ${KLDXREF_CMD} ${DESTDIR}${KMODDIR}; \
+		${KLDXREF_CMD} ${DESTDIR}${KMODDIR}; \
 	fi
 .endif
 

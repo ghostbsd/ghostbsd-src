@@ -34,15 +34,15 @@ one_nomatch="$devd_args"
 
 start()
 {
-	local x
+	local x m list
 
 	if [ -n "$one_nomatch" ]; then
-		x=$(devmatch -p "${one_nomatch}")
+		list=$(devmatch -p "${one_nomatch}" | sort -u)
 	else
-		x=$(devmatch)
+		list=$(devmatch | sort -u)
 	fi
 
-	[ -n "$x" ] || return
+	[ -n "$list" ] || return
 
 	# While kldload can accept multiple modules
 	# on the line at once, we loop here in case
@@ -50,10 +50,18 @@ start()
 	# We also optimize against the false positives
 	# or drivers that have symbolic links that
 	# confuse devmatch by running it -n.
-	for m in ${x}; do
+	# Finally, we filter out all items in the
+	# devmactch_blacklist.
+	devctl freeze
+	x=$(echo ${devmatch_blacklist} | tr ' ' '#')
+	for m in ${list}; do
+		case "#${x}#" in
+		*"#${m}#"*) continue ;;
+		esac
 		einfo "Autoloading module: ${m}"
 		kldload -n ${m}
 	done
+	devctl thaw
 	return 0
 }
 
