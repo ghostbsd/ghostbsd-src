@@ -13,7 +13,9 @@ MAN=	cli.lua.8 \
 	screen.lua.8
 
 FILESDIR=	/boot/lua
-FILES=	brand-trueos.lua \
+
+FILES=	brand-trident.lua \
+  brand-trueos.lua \
 	cli.lua \
 	color.lua \
 	config.lua \
@@ -26,6 +28,7 @@ FILES=	brand-trueos.lua \
 	logo-fbsdbw.lua \
 	logo-orb.lua \
 	logo-orbbw.lua \
+	logo-trident.lua \
 	menu.lua \
 	password.lua \
 	screen.lua
