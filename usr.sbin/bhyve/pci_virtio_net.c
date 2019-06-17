@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/select.h>
 #include <sys/uio.h>
 #include <sys/ioctl.h>
-#include <machine/atomic.h>
 #include <net/ethernet.h>
 #ifndef NETMAP_WITH_LIBS
 #define NETMAP_WITH_LIBS
@@ -68,6 +67,7 @@ __FBSDID("$FreeBSD$");
 #include "pci_emul.h"
 #include "mevent.h"
 #include "virtio.h"
+#include "net_utils.h"
 
 #define VTNET_RINGSZ	1024
 
@@ -585,7 +585,7 @@ pci_vtnet_ping_rxq(void *vsc, struct vqueue_info *vq)
 	 */
 	if (sc->vsc_rx_ready == 0) {
 		sc->vsc_rx_ready = 1;
-		vq->vq_used->vu_flags |= VRING_USED_F_NO_NOTIFY;
+		vq_kick_disable(vq);
 	}
 }
 
@@ -631,7 +631,7 @@ pci_vtnet_ping_txq(void *vsc, struct vqueue_info *vq)
 
 	/* Signal the tx thread for processing */
 	pthread_mutex_lock(&sc->tx_mtx);
-	vq->vq_used->vu_flags |= VRING_USED_F_NO_NOTIFY;
+	vq_kick_disable(vq);
 	if (sc->tx_in_progress == 0)
 		pthread_cond_signal(&sc->tx_cond);
 	pthread_mutex_unlock(&sc->tx_mtx);
@@ -660,8 +660,7 @@ pci_vtnet_tx_thread(void *param)
 	for (;;) {
 		/* note - tx mutex is locked here */
 		while (sc->resetting || !vq_has_descs(vq)) {
-			vq->vq_used->vu_flags &= ~VRING_USED_F_NO_NOTIFY;
-			mb();
+			vq_kick_enable(vq);
 			if (!sc->resetting && vq_has_descs(vq))
 				break;
 
@@ -669,7 +668,7 @@ pci_vtnet_tx_thread(void *param)
 			error = pthread_cond_wait(&sc->tx_cond, &sc->tx_mtx);
 			assert(error == 0);
 		}
-		vq->vq_used->vu_flags |= VRING_USED_F_NO_NOTIFY;
+		vq_kick_disable(vq);
 		sc->tx_in_progress = 1;
 		pthread_mutex_unlock(&sc->tx_mtx);
 
@@ -699,29 +698,6 @@ pci_vtnet_ping_ctlq(void *vsc, struct vqueue_info *vq)
 	DPRINTF(("vtnet: control qnotify!\n\r"));
 }
 #endif
-
-static int
-pci_vtnet_parsemac(char *mac_str, uint8_t *mac_addr)
-{
-	struct ether_addr *ea;
-	char *tmpstr;
-	char zero_addr[ETHER_ADDR_LEN] = { 0, 0, 0, 0, 0, 0 };
-
-	tmpstr = strsep(&mac_str,"=");
-
-	if ((mac_str != NULL) && (!strcmp(tmpstr,"mac"))) {
-		ea = ether_aton(mac_str);
-
-		if (ea == NULL || ETHER_IS_MULTICAST(ea->octet) ||
-		    memcmp(ea->octet, zero_addr, ETHER_ADDR_LEN) == 0) {
-			fprintf(stderr, "Invalid MAC %s\n", mac_str);
-			return (EINVAL);
-		} else
-			memcpy(mac_addr, ea->octet, ETHER_ADDR_LEN);
-	}
-
-	return (0);
-}
 
 static void
 pci_vtnet_tap_setup(struct pci_vtnet_softc *sc, char *devname)
@@ -797,9 +773,6 @@ pci_vtnet_netmap_setup(struct pci_vtnet_softc *sc, char *ifname)
 static int
 pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 {
-	MD5_CTX mdctx;
-	unsigned char digest[16];
-	char nstr[80];
 	char tname[MAXCOMLEN + 1];
 	struct pci_vtnet_softc *sc;
 	char *devname;
@@ -836,7 +809,7 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		(void) strsep(&vtopts, ",");
 
 		if (vtopts != NULL) {
-			err = pci_vtnet_parsemac(vtopts, sc->vsc_config.mac);
+			err = net_parsemac(vtopts, sc->vsc_config.mac);
 			if (err != 0) {
 				free(devname);
 				return (err);
@@ -853,24 +826,8 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		free(devname);
 	}
 
-	/*
-	 * The default MAC address is the standard NetApp OUI of 00-a0-98,
-	 * followed by an MD5 of the PCI slot/func number and dev name
-	 */
 	if (!mac_provided) {
-		snprintf(nstr, sizeof(nstr), "%d-%d-%s", pi->pi_slot,
-		    pi->pi_func, vmname);
-
-		MD5Init(&mdctx);
-		MD5Update(&mdctx, nstr, strlen(nstr));
-		MD5Final(digest, &mdctx);
-
-		sc->vsc_config.mac[0] = 0x00;
-		sc->vsc_config.mac[1] = 0xa0;
-		sc->vsc_config.mac[2] = 0x98;
-		sc->vsc_config.mac[3] = digest[0];
-		sc->vsc_config.mac[4] = digest[1];
-		sc->vsc_config.mac[5] = digest[2];
+		net_genmac(pi, sc->vsc_config.mac);
 	}
 
 	/* initialize config space */
