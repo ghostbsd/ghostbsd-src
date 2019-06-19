@@ -39,7 +39,7 @@ f_include $BSDCFG_SHARE/variable.subr
 
 # VARIABLES:
 # PARTITIONS
-# DISTRIBUTIONS
+# PACKAGES
 # BSDINSTALL_DISTDIR
 
 #
@@ -91,7 +91,7 @@ mkdir $BSDINSTALL_TMPETC
 split -a 2 -p '^#!.*' "$SCRIPT" /tmp/bsdinstall-installscript-
 
 . /tmp/bsdinstall-installscript-aa
-: ${DISTRIBUTIONS="kernel.txz base.txz"}; export DISTRIBUTIONS
+: ${PACKAGES="os-generic-userland os-generic-kernel pkg ca_root_nss"}; export PACKAGES
 export BSDINSTALL_DISTDIR
 
 # Re-initialize a new log if preamble changed BSDINSTALL_LOG
@@ -112,16 +112,9 @@ else
 	bsdinstall mount
 fi
 
-# Unpack distributions
-bsdinstall checksum
-for set in $DISTRIBUTIONS; do
-	f_dprintf "Extracting $BSDINSTALL_DISTDIR/$set"
-	# XXX: this will fail if any mountpoints are FAT, due to inability to
-	# set ctime/mtime on the root of FAT partitions. tar has no option to
-	# ignore this. We probably need to switch back to distextract here
-	# to properly support EFI.
-	tar -xf "$BSDINSTALL_DISTDIR/$set" -C $BSDINSTALL_CHROOT
-done
+# install packages
+echo "Installing $PACKAGES"
+pkg -r $BSDINSTALL_CHROOT install -y $PACKAGES || error "Failed package base installation!"
 
 # Configure bootloader if needed
 bsdinstall bootconfig
