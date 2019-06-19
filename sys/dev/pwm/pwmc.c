@@ -71,18 +71,12 @@ pwm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	struct pwmc_softc *sc;
 	struct pwm_state state;
 	device_t bus;
-	u_int nchannel;
 	int rv = 0;
 
 	sc = dev->si_drv1;
 	bus = device_get_parent(sc->dev);
 
 	switch (cmd) {
-	case PWMMAXCHANNEL:
-		nchannel = 0;
-		rv = PWMBUS_CHANNEL_COUNT(bus, &nchannel);
-		bcopy(&nchannel, data, sizeof(nchannel));
-		break;
 	case PWMSETSTATE:
 		bcopy(data, &state, sizeof(state));
 		rv = PWMBUS_CHANNEL_CONFIG(bus, sc->chan,
@@ -114,33 +108,24 @@ static struct cdevsw pwm_cdevsw = {
 	.d_ioctl	= pwm_ioctl
 };
 
-#ifdef FDT
-
 static void
 pwmc_setup_label(struct pwmc_softc *sc)
 {
+	const char *hintlabel;
+#ifdef FDT
 	void *label;
 
 	if (OF_getprop_alloc(ofw_bus_get_node(sc->dev), "label", &label) > 0) {
 		make_dev_alias(sc->cdev, "pwm/%s", (char *)label);
 		OF_prop_free(label);
 	}
-}
-
-#else /* FDT */
-
-static void
-pwmc_setup_label(struct pwmc_softc *sc)
-{
-	const char *label;
+#endif
 
 	if (resource_string_value(device_get_name(sc->dev),
-	    device_get_unit(sc->dev), "label", &label) == 0) {
-		make_dev_alias(sc->cdev, "pwm/%s", label);
+	    device_get_unit(sc->dev), "label", &hintlabel) == 0) {
+		make_dev_alias(sc->cdev, "pwm/%s", hintlabel);
 	}
 }
-
-#endif /* FDT */
 
 static int
 pwmc_probe(device_t dev)
@@ -182,7 +167,7 @@ pwmc_attach(device_t dev)
 	args.mda_gid = GID_OPERATOR;
 	args.mda_mode = 0660;
 	args.mda_si_drv1 = sc;
-	error = make_dev_s(&args, &sc->cdev, "pwmc%d.%d",
+	error = make_dev_s(&args, &sc->cdev, "pwm/pwmc%d.%d",
 	    device_get_unit(device_get_parent(dev)), sc->chan);
 	if (error != 0) {
 		device_printf(dev, "Failed to make PWM device\n");
