@@ -2688,10 +2688,10 @@ iflib_get_ip_forwarding(struct lro_ctrl *lc, bool *v4, bool *v6)
 {
 	CURVNET_SET(lc->ifp->if_vnet);
 #if defined(INET6)
-	*v6 = VNET(ip6_forwarding);
+	*v6 = V_ip6_forwarding;
 #endif
 #if defined(INET)
-	*v4 = VNET(ipforwarding);
+	*v4 = V_ipforwarding;
 #endif
 	CURVNET_RESTORE();
 }
@@ -2705,18 +2705,16 @@ static bool
 iflib_check_lro_possible(struct mbuf *m, bool v4_forwarding, bool v6_forwarding)
 {
 	struct ether_header *eh;
-	uint16_t eh_type;
 
 	eh = mtod(m, struct ether_header *);
-	eh_type = ntohs(eh->ether_type);
-	switch (eh_type) {
+	switch (eh->ether_type) {
 #if defined(INET6)
-		case ETHERTYPE_IPV6:
-			return !v6_forwarding;
+		case htons(ETHERTYPE_IPV6):
+			return (!v6_forwarding);
 #endif
 #if defined (INET)
-		case ETHERTYPE_IP:
-			return !v4_forwarding;
+		case htons(ETHERTYPE_IP):
+			return (!v4_forwarding);
 #endif
 	}
 
