@@ -255,6 +255,7 @@ case "$OSFLAVOR" in
 generic|minimal|nozfs) ;;
 openzfs) OSFLAVOR="nozfs"
 	 EXTRAPKGS="openzfs"
+	 OPENZFS="YES"
 	;;
 *)
 	error "Unknown OS flavor"
@@ -314,6 +315,10 @@ esac
 # Install base packages
 pkg -r $BSDINSTALL_CHROOT install -y os-${OSFLAVOR}-userland os-${OSFLAVOR}-kernel pkg ca_root_nss ${EXTRAPKGS} || error "Failed package base installation!"
 
+# Do we need to load openzfs module
+if [ -n "${OPENZFS}" ] ; then
+	sysrc -f ${BSDINSTALL_CHROOT}/boot/loader.conf openzfs_load=YES
+fi
 
 # Set up boot loader
 bsdinstall bootconfig || error "Failed to configure bootloader"
