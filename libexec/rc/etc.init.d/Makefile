@@ -18,7 +18,7 @@ FILES+=          abi accounting adjkerntz amd apm apmd archdep auditd auditdistd
 		gbde gptboot growfs growzfs gssd \
 		hastd hcsecd hostid hostid_save hostname \
 		inetd iovctl ipfs ipropd_master ipropd_slave iscsictl iscsid ipfw ipfw_netflow ipsec \
-		jail kadmind kdc keyserv kfd kldxref kpasswdd ldapd \
+		jail kadmind kdc keyserv kfd kldxref kpasswdd \
 		ldconfig local localmount local_unbound lockd lpd hostapd \
 		mixer modules mountd mountlate moused motd \
 		natd netmount network newsyslog nfscbd nfsclient nfsd nfsuserd nisdomain nsswitch \
