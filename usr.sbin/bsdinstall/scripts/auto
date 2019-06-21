@@ -317,7 +317,7 @@ pkg -r $BSDINSTALL_CHROOT install -y os-${OSFLAVOR}-userland os-${OSFLAVOR}-kern
 
 # Do we need to load openzfs module
 if [ -n "${OPENZFS}" ] ; then
-	sysrc -f ${BSDINSTALL_CHROOT}/boot/loader.conf openzfs_load=YES
+	echo 'openzfs_load="YES"' >> $BSDINSTALL_TMPBOOT/loader.conf.openzfs
 fi
 
 # Set up boot loader
