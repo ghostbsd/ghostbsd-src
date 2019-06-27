@@ -27,7 +27,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd December 13, 2014
+.Dd June 26, 2019
 .Dt AUTOUNMOUNTD 8
 .Os
 .Sh NAME
@@ -56,6 +56,8 @@ attempts to unmount a filesystem, retrying after some time if necessary.
 .Pp
 These options are available:
 .Bl -tag -width ".Fl v"
+.It Fl D
+Do not daemonize.
 .It Fl d
 Debug mode: increase verbosity and do not daemonize.
 .It Fl r
