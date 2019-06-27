@@ -42,7 +42,7 @@ start()
 		list=$(devmatch | sort -u)
 	fi
 
-	[ -n "$list" ] || return
+	[ -n "$list" ] || return 0
 
 	# While kldload can accept multiple modules
 	# on the line at once, we loop here in case
