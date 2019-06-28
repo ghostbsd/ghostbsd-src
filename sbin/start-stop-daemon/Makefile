@@ -10,9 +10,10 @@ SDSRC=    ${SRCTOP}/contrib/openrc/src
 .PATH:  ${SDSRC}/rc
 
 SRCS=	start-stop-daemon.c \
-	rc-misc.c \
-	rc-schedules.c \
-	_usage.c
+		rc-misc.c \
+		rc-schedules.c \
+		rc-pipes.c \
+		_usage.c
 CFLAGS+=	-I${SDSRC}/rc \
 		-I${SDSRC}/libeinfo \
 		-I${SDSRC}/librc \
