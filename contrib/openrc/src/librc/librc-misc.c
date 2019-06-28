@@ -237,13 +237,9 @@ static void rc_config_set_value(RC_STRINGLIST *config, char *value)
 		if (token[i] == '\n')
 			token[i] = 0;
 
-		i = strlen(entry) + strlen(token) + 2;
-		newline = xmalloc(sizeof(char) * i);
-		snprintf(newline, i, "%s=%s", entry, token);
+		xasprintf(&newline, "%s=%s", entry, token);
 	} else {
-		i = strlen(entry) + 2;
-		newline = xmalloc(sizeof(char) * i);
-		snprintf(newline, i, "%s=", entry);
+		xasprintf(&newline, "%s=", entry);
 	}
 
 	replaced = false;
@@ -281,7 +277,6 @@ static RC_STRINGLIST *rc_config_kcl(RC_STRINGLIST *config)
 	char *tmp = NULL;
 	char *value = NULL;
 	size_t varlen = 0;
-	size_t len = 0;
 
 	overrides = rc_stringlist_new();
 
@@ -299,9 +294,7 @@ static RC_STRINGLIST *rc_config_kcl(RC_STRINGLIST *config)
 		}
 
 		if (value != NULL) {
-			len = varlen + strlen(value) + 2;
-			tmp = xmalloc(sizeof(char) * len);
-			snprintf(tmp, len, "%s=%s", override->value, value);
+			xasprintf(&tmp, "%s=%s", override->value, value);
 		}
 
 		/*
@@ -414,7 +407,6 @@ _free_rc_conf(void)
 char *
 rc_conf_value(const char *setting)
 {
-	RC_STRINGLIST *defaults;
 	RC_STRINGLIST *old;
 	RC_STRING *s;
 	char *p;
@@ -422,13 +414,6 @@ rc_conf_value(const char *setting)
 	if (! rc_conf) {
 		rc_conf = rc_config_load(RC_CONF);
 		atexit(_free_rc_conf);
-
-		/* Support defaults rc.conf */
-		if (exists(RC_CONF_DEFAULTS)) {
-			defaults = rc_config_load(RC_CONF_DEFAULTS);
-			TAILQ_CONCAT(rc_conf, defaults, entries);
-			free(defaults);
-		}
 
 		/* Support old configs. */
 		if (exists(RC_CONF_OLD)) {
@@ -438,7 +423,7 @@ rc_conf_value(const char *setting)
 		}
 
 		rc_conf = rc_config_directory(rc_conf);
-	rc_conf = rc_config_kcl(rc_conf);
+		rc_conf = rc_config_kcl(rc_conf);
 
 		/* Convert old uppercase to lowercase */
 		TAILQ_FOREACH(s, rc_conf, entries) {

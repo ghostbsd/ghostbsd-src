@@ -15,7 +15,7 @@
  *    except according to the terms contained in the LICENSE file.
  */
 
-static const char libeinfo_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
+const char libeinfo_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
 
 #include <sys/types.h>
 #include <sys/ioctl.h>
@@ -883,7 +883,7 @@ eindent(void)
 {
 	char *env = getenv("EINFO_INDENT");
 	int amount = 0;
-	char num[10];
+	char *num;
 
 	if (env) {
 		errno = 0;
@@ -894,8 +894,9 @@ eindent(void)
 	amount += INDENT_WIDTH;
 	if (amount > INDENT_MAX)
 		amount = INDENT_MAX;
-	snprintf(num, 10, "%08d", amount);
+	xasprintf(&num, "%08d", amount);
 	setenv("EINFO_INDENT", num, 1);
+	free(num);
 }
 hidden_def(eindent)
 
@@ -903,7 +904,7 @@ void eoutdent(void)
 {
 	char *env = getenv("EINFO_INDENT");
 	int amount = 0;
-	char num[10];
+	char *num = NULL;
 	int serrno = errno;
 
 	if (!env)
@@ -917,8 +918,9 @@ void eoutdent(void)
 	if (amount <= 0)
 		unsetenv("EINFO_INDENT");
 	else {
-		snprintf(num, 10, "%08d", amount);
+		xasprintf(&num, "%08d", amount);
 		setenv("EINFO_INDENT", num, 1);
+		free(num);
 	}
 	errno = serrno;
 }

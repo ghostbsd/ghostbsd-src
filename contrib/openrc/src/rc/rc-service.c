@@ -29,25 +29,35 @@
 
 const char *applet = NULL;
 const char *extraopts = NULL;
-const char *getoptstring = "ce:ilr:IN" getoptstring_COMMON;
+const char *getoptstring = "cdDe:ilr:INsSZ" getoptstring_COMMON;
 const struct option longopts[] = {
+	{ "debug",     0, NULL, 'd' },
+	{ "nodeps",     0, NULL, 'D' },
 	{ "exists",   1, NULL, 'e' },
 	{ "ifcrashed", 0, NULL, 'c' },
 	{ "ifexists", 0, NULL, 'i' },
 	{ "ifinactive", 0, NULL, 'I' },
 	{ "ifnotstarted", 0, NULL, 'N' },
+	{ "ifstarted", 0, NULL, 's' },
+	{ "ifstopped", 0, NULL, 'S' },
 	{ "list",     0, NULL, 'l' },
 	{ "resolve",  1, NULL, 'r' },
+	{ "dry-run",     0, NULL, 'Z' },
 	longopts_COMMON
 };
 const char * const longopts_help[] = {
+	"set xtrace when running the command",
+	"ignore dependencies",
 	"tests if the service exists or not",
-	"if the service is crashed then run the command",
-	"if the service exists then run the command",
-	"if the service is inactive then run the command",
-	"if the service is not started then run the command",
+	"if the service is crashed run the command",
+	"if the service exists run the command",
+	"if the service is inactive run the command",
+	"if the service is not started run the command",
+	"if the service is started run the command",
+	"if the service is stopped run the command",
 	"list all available services",
 	"resolve the service name to an init script",
+	"dry run (show what would happen)",
 	longopts_help_COMMON
 };
 const char *usagestring = ""							\
@@ -67,19 +77,23 @@ int main(int argc, char **argv)
 	bool if_exists = false;
 	bool if_inactive = false;
 	bool if_notstarted = false;
+	bool if_started = false;
+	bool if_stopped = false;
 
 	applet = basename_c(argv[0]);
 	/* Ensure that we are only quiet when explicitly told to be */
 	unsetenv("EINFO_QUIET");
 
-	// Check if openrc sysinit has run (fixes jails)
-	if(!exists("/libexec/rc/init.d/started"))
-		system("openrc sysinit");
-
 	while ((opt = getopt_long(argc, argv, getoptstring,
 		    longopts, (int *) 0)) != -1)
 	{
 		switch (opt) {
+		case 'd':
+			setenv("RC_DEBUG", "yes", 1);
+			break;
+		case 'D':
+			setenv("RC_NODEPS", "yes", 1);
+			break;
 		case 'e':
 			service = rc_service_resolve(optarg);
 			opt = service ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -116,6 +130,15 @@ int main(int argc, char **argv)
 			free(service);
 			return EXIT_SUCCESS;
 			/* NOTREACHED */
+		case 's':
+			if_started = true;
+			break;
+		case 'S':
+			if_stopped = true;
+			break;
+		case 'Z':
+			setenv("IN_DRYRUN", "yes", 1);
+			break;
 
 		case_RC_COMMON_GETOPT
 		}
@@ -136,6 +159,10 @@ int main(int argc, char **argv)
 	if (if_inactive && ! (state & RC_SERVICE_INACTIVE))
 		return 0;
 	if (if_notstarted && (state & RC_SERVICE_STARTED))
+		return 0;
+	if (if_started && ! (state & RC_SERVICE_STARTED))
+		return 0;
+	if (if_stopped && ! (state & RC_SERVICE_STOPPED))
 		return 0;
 	*argv = service;
 	execv(*argv, argv);

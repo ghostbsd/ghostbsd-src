@@ -51,7 +51,8 @@ rc_conf_yesno(const char *setting)
 
 static const char *const env_whitelist[] = {
 	"EERROR_QUIET", "EINFO_QUIET",
-	"IN_BACKGROUND", "IN_HOTPLUG",
+	"IN_BACKGROUND", "IN_DRYRUN", "IN_HOTPLUG",
+	"RC_DEBUG", "RC_NODEPS",
 	"LANG", "LC_MESSAGES", "TERM",
 	"EINFO_COLOR", "EINFO_VERBOSE",
 	NULL
@@ -410,34 +411,6 @@ RC_DEPTREE * _rc_deptree_load(int force, int *regen)
 	return rc_deptree_load();
 }
 
-bool _rc_can_find_pids(void)
-{
-	RC_PIDLIST *pids;
-	RC_PID *pid;
-	RC_PID *pid2;
-	bool retval = false;
-
-	if (geteuid() == 0)
-		return true;
-
-	/* If we cannot see process 1, then we don't test to see if
-	 * services crashed or not */
-	pids = rc_find_pids(NULL, NULL, 0, 1);
-	if (pids) {
-		pid = LIST_FIRST(pids);
-		if (pid) {
-			retval = true;
-			while (pid) {
-				pid2 = LIST_NEXT(pid, entries);
-				free(pid);
-				pid = pid2;
-			}
-		}
-		free(pids);
-	}
-	return retval;
-}
-
 static const struct {
 	const char * const name;
 	RC_SERVICE bit;
@@ -450,6 +423,7 @@ static const struct {
 	{ "service_hotplugged",  RC_SERVICE_HOTPLUGGED,  },
 	{ "service_wasinactive", RC_SERVICE_WASINACTIVE, },
 	{ "service_failed",      RC_SERVICE_FAILED,      },
+	{ "service_crashed",     RC_SERVICE_CRASHED,     },
 };
 
 RC_SERVICE lookup_service_state(const char *service)

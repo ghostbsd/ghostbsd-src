@@ -1,8 +1,8 @@
 DIR=	${LIBEXECDIR}/sh
 SRCS=	init.sh.in functions.sh.in gendepends.sh.in \
-	openrc-run.sh.in rc-functions.sh.in ${SRCS-${OS}}
+	openrc-run.sh.in ${SRCS-${OS}}
 INC=	rc-mount.sh functions.sh rc-functions.sh runit.sh s6.sh \
-		start-stop-daemon.sh supervise-daemon.sh
+		start-stop-daemon.sh supervise-daemon.sh ${INC-${OS}}
 BIN=	gendepends.sh init.sh openrc-run.sh ${BIN-${OS}}
 
 INSTALLAFTER=	_installafter
@@ -13,10 +13,9 @@ include ${MK}/os.mk
 SRCS-FreeBSD=
 BIN-FreeBSD=
 
-SRCS-Linux=	binfmt.sh.in cgroup-release-agent.sh.in init-early.sh.in \
-	migrate-to-run.sh.in rc-cgroup.sh.in
-BIN-Linux=	binfmt.sh cgroup-release-agent.sh init-early.sh migrate-to-run.sh \
-	rc-cgroup.sh
+SRCS-Linux=	binfmt.sh.in cgroup-release-agent.sh.in init-early.sh.in
+BIN-Linux=	binfmt.sh cgroup-release-agent.sh init-early.sh
+INC-Linux= rc-cgroup.sh
 
 SRCS-NetBSD=
 BIN-NetBSD=
@@ -32,4 +31,3 @@ _installafter:
 	ln -snf ${LIBEXECDIR}/sh/functions.sh ${DESTDIR}/${INITDIR} || exit $$?
 
 check test::
-	./runtests.sh

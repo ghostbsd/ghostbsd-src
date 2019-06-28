@@ -1,4 +1,4 @@
-#!@SHELL@
+#!/bin/sh
 # Copyright (c) 2007-2015 The OpenRC Authors.
 # See the Authors file at the top-level directory of this distribution and
 # https://github.com/OpenRC/openrc/blob/master/AUTHORS
@@ -32,6 +32,9 @@ else
 	termencoding="(K"
 	kmode="-a"
 fi
+
+# Set the SELinux label on console before everything so we dont lose output
+[ -x /sbin/restorecon ] && /sbin/restorecon -F /dev/console
 
 # Try and set a font and as early as we can
 if service_present "$RC_DEFAULTLEVEL" consolefont ||

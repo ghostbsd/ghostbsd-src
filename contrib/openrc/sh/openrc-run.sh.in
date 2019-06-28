@@ -133,11 +133,10 @@ _status()
 	elif service_inactive; then
 		ewarn "status: inactive"
 		return 16
+	elif service_crashed; then
+		eerror "status: crashed"
+		return 32
 	elif service_started; then
-		if service_crashed; then
-			eerror "status: crashed"
-			return 32
-		fi
 		einfo "status: started"
 		return 0
 	else
@@ -214,10 +213,6 @@ yesno $RC_DEBUG && set -x
 
 # Load configuration settings. First the global ones, then any
 # service-specific settings.
-sourcex -e "@SYSCONFDIR@/defaults/rc.conf"
-if [ -e "@SYSCONFDIR@/rc.conf.local" ]; then
-	sourcex -e "@SYSCONFDIR@/rc.conf.local"
-fi
 sourcex -e "@SYSCONFDIR@/rc.conf"
 if [ -d "@SYSCONFDIR@/rc.conf.d" ]; then
 	for _f in "@SYSCONFDIR@"/rc.conf.d/*.conf; do

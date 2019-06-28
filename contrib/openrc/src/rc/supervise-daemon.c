@@ -61,15 +61,18 @@ static struct pam_conv conv = { NULL, NULL};
 #include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
+#include "rc-plugin.h"
 #include "rc-schedules.h"
 #include "_usage.h"
 #include "helpers.h"
 
 const char *applet = NULL;
 const char *extraopts = NULL;
-const char *getoptstring = "D:d:e:g:I:Kk:m:N:p:R:r:Su:1:2:3" \
+const char *getoptstring = "A:a:D:d:e:g:H:I:Kk:m:N:p:R:r:s:Su:1:2:3" \
 	getoptstring_COMMON;
 const struct option longopts[] = {
+	{ "healthcheck-timer",        1, NULL, 'a'},
+	{ "healthcheck-delay",        1, NULL, 'A'},
 	{ "respawn-delay",        1, NULL, 'D'},
 	{ "chdir",        1, NULL, 'd'},
 	{ "env",          1, NULL, 'e'},
@@ -83,6 +86,7 @@ const struct option longopts[] = {
 	{ "respawn-period",        1, NULL, 'P'},
 	{ "retry",       1, NULL, 'R'},
 	{ "chroot",       1, NULL, 'r'},
+	{ "signal",       1, NULL, 's'},
 	{ "start",        0, NULL, 'S'},
 	{ "user",         1, NULL, 'u'},
 	{ "stdout",       1, NULL, '1'},
@@ -91,6 +95,8 @@ const struct option longopts[] = {
 	longopts_COMMON
 };
 const char * const longopts_help[] = {
+	"set an initial health check delay",
+	"set a health check timer",
 	"Set a respawn delay",
 	"Change the PWD",
 	"Set an environment string",
@@ -104,6 +110,7 @@ const char * const longopts_help[] = {
 	"Set respawn time period",
 	"Retry schedule to use when stopping",
 	"Chroot to this directory",
+	"Send a signal to the daemon",
 	"Start daemon",
 	"Change the process user",
 	"Redirect stdout to file",
@@ -113,6 +120,10 @@ const char * const longopts_help[] = {
 };
 const char *usagestring = NULL;
 
+static int healthcheckdelay = 0;
+static int healthchecktimer = 0;
+static volatile sig_atomic_t do_healthcheck = 0;
+static volatile sig_atomic_t exiting = 0;
 static int nicelevel = 0;
 static int ionicec = -1;
 static int ioniced = 0;
@@ -125,7 +136,6 @@ static int stdout_fd;
 static int stderr_fd;
 static char *redirect_stderr = NULL;
 static char *redirect_stdout = NULL;
-static bool exiting = false;
 #ifdef TIOCNOTTY
 static int tty_fd = -1;
 #endif
@@ -133,7 +143,9 @@ static pid_t child_pid;
 static int respawn_count = 0;
 static int respawn_delay = 0;
 static int respawn_max = 10;
-static int respawn_period = 5;
+static int respawn_period = 0;
+static char *fifopath = NULL;
+static int fifo_fd = 0;
 static char *pidfile = NULL;
 static char *svcname = NULL;
 
@@ -172,21 +184,37 @@ static void re_exec_supervisor(void)
 static void handle_signal(int sig)
 {
 	int serrno = errno;
+	pid_t pid;
 
-	syslog(LOG_WARNING, "caught signal %d", sig);
-
-	if (sig == SIGTERM)
-		exiting = true;
+	switch (sig) {
+	case SIGALRM:
+		do_healthcheck = 1;
+		break;
+	case SIGCHLD:
+		if (exiting)
+			while (waitpid((pid_t)(-1), NULL, WNOHANG) > 0) {}
+		else {
+			while ((pid = waitpid((pid_t)(-1), NULL, WNOHANG|WNOWAIT)) > 0) {
+				if (pid == child_pid)
+					break;
+				pid = waitpid(pid, NULL, WNOHANG);
+			}
+		}
+		break;
+	case SIGTERM:
+		exiting = 1;
+		break;
+	default:
+		syslog(LOG_WARNING, "caught signal %d", sig);
+		re_exec_supervisor();
+	}
 	/* Restore errno */
 	errno = serrno;
-	if (! exiting)
-		re_exec_supervisor();
 }
 
 static char * expand_home(const char *home, const char *path)
 {
 	char *opath, *ppath, *p, *nh;
-	size_t len;
 	struct passwd *pw;
 
 	if (!path || *path != '~')
@@ -209,7 +237,7 @@ static char * expand_home(const char *home, const char *path)
 		ppath++;
 
 	if (!home) {
-	free(opath);
+		free(opath);
 		return xstrdup(path);
 	}
 	if (!ppath) {
@@ -217,9 +245,7 @@ static char * expand_home(const char *home, const char *path)
 		return xstrdup(home);
 	}
 
-	len = strlen(ppath) + strlen(home) + 1;
-	nh = xmalloc(len);
-	snprintf(nh, len, "%s%s", home, ppath);
+	xasprintf(&nh, "%s%s", home, ppath);
 	free(opath);
 	return nh;
 }
@@ -232,13 +258,63 @@ static char *make_cmdline(char **argv)
 
 	for (c = argv; c && *c; c++)
 		len += (strlen(*c) + 1);
-	cmdline = xmalloc(len);
-	memset(cmdline, 0, len);
+	cmdline = xmalloc(len+1);
+	memset(cmdline, 0, len+1);
 	for (c = argv; c && *c; c++) {
 		strcat(cmdline, *c);
 		strcat(cmdline, " ");
 	}
 	return cmdline;
+}
+
+static pid_t exec_command(const char *cmd)
+{
+	char *file;
+	pid_t pid = -1;
+	sigset_t full;
+	sigset_t old;
+	struct sigaction sa;
+
+	file = rc_service_resolve(svcname);
+	if (!exists(file)) {
+		free(file);
+		return 0;
+	}
+
+	/* We need to block signals until we have forked */
+	memset(&sa, 0, sizeof (sa));
+	sa.sa_handler = SIG_DFL;
+	sigemptyset(&sa.sa_mask);
+	sigfillset(&full);
+	sigprocmask(SIG_SETMASK, &full, &old);
+
+	pid = fork();
+	if (pid == 0) {
+		/* Restore default handlers */
+		sigaction(SIGCHLD, &sa, NULL);
+		sigaction(SIGHUP, &sa, NULL);
+		sigaction(SIGINT, &sa, NULL);
+		sigaction(SIGQUIT, &sa, NULL);
+		sigaction(SIGTERM, &sa, NULL);
+		sigaction(SIGUSR1, &sa, NULL);
+		sigaction(SIGWINCH, &sa, NULL);
+
+		/* Unmask signals */
+		sigprocmask(SIG_SETMASK, &old, NULL);
+
+		/* Safe to run now */
+		execl(file, file, cmd, (char *) NULL);
+		syslog(LOG_ERR, "unable to exec `%s': %s\n",
+		    file, strerror(errno));
+		_exit(EXIT_FAILURE);
+	}
+
+	if (pid == -1)
+		syslog(LOG_ERR, "fork: %s\n",strerror (errno));
+
+	sigprocmask(SIG_SETMASK, &old, NULL);
+	free(file);
+	return pid;
 }
 
 static void child_process(char *exec, char **argv)
@@ -426,52 +502,40 @@ static void child_process(char *exec, char **argv)
 static void supervisor(char *exec, char **argv)
 {
 	FILE *fp;
+	char buf[2048];
+	char cmd[2048];
+	int count;
+	int failing;
+	int health_status;
+	int healthcheck_respawn;
 	int i;
 	int nkilled;
+	int sig_send;
+	pid_t health_pid;
+	pid_t wait_pid;
+	sigset_t old_signals;
+	sigset_t signals;
+	struct sigaction sa;
+	struct timespec ts;
 	time_t respawn_now= 0;
 	time_t first_spawn= 0;
 
-#ifndef RC_DEBUG
-	signal_setup_restart(SIGHUP, handle_signal);
-	signal_setup_restart(SIGINT, handle_signal);
-	signal_setup_restart(SIGQUIT, handle_signal);
-	signal_setup_restart(SIGILL, handle_signal);
-	signal_setup_restart(SIGABRT, handle_signal);
-	signal_setup_restart(SIGFPE, handle_signal);
-	signal_setup_restart(SIGSEGV, handle_signal);
-	signal_setup_restart(SIGPIPE, handle_signal);
-	signal_setup_restart(SIGALRM, handle_signal);
-	signal_setup(SIGTERM, handle_signal);
-	signal_setup_restart(SIGUSR1, handle_signal);
-	signal_setup_restart(SIGUSR2, handle_signal);
-	signal_setup_restart(SIGBUS, handle_signal);
-#ifdef SIGPOLL
-	signal_setup_restart(SIGPOLL, handle_signal);
-#endif
-	signal_setup_restart(SIGPROF, handle_signal);
-	signal_setup_restart(SIGSYS, handle_signal);
-	signal_setup_restart(SIGTRAP, handle_signal);
-	signal_setup_restart(SIGVTALRM, handle_signal);
-	signal_setup_restart(SIGXCPU, handle_signal);
-	signal_setup_restart(SIGXFSZ, handle_signal);
-#ifdef SIGEMT
-	signal_setup_restart(SIGEMT, handle_signal);
-#endif
-	signal_setup_restart(SIGIO, handle_signal);
-#ifdef SIGPWR
-	signal_setup_restart(SIGPWR, handle_signal);
-#endif
-#ifdef SIGUNUSED
-	signal_setup_restart(SIGUNUSED, handle_signal);
-#endif
-#ifdef SIGRTMIN
-	for (i = SIGRTMIN; i <= SIGRTMAX; i++)
-		signal_setup_restart(i, handle_signal);
-#endif
-#endif
+	/* block all signals we do not handle */
+	sigfillset(&signals);
+	sigdelset(&signals, SIGALRM);
+	sigdelset(&signals, SIGCHLD);
+	sigdelset(&signals, SIGTERM);
+	sigprocmask(SIG_SETMASK, &signals, &old_signals);
+
+	/* install signal  handler */
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handle_signal;
+	sigaction(SIGALRM, &sa, NULL);
+	sigaction(SIGCHLD, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
 
 	fp = fopen(pidfile, "w");
-	if (! fp)
+	if (!fp)
 		eerrorx("%s: fopen `%s': %s", applet, pidfile, strerror(errno));
 	fprintf(fp, "%d\n", getpid());
 	fclose(fp);
@@ -489,56 +553,131 @@ static void supervisor(char *exec, char **argv)
 	/*
 	 * Supervisor main loop
 	 */
-	i = 0;
+	if (healthcheckdelay)
+		alarm(healthcheckdelay);
+	else if (healthchecktimer)
+		alarm(healthchecktimer);
+	failing = 0;
 	while (!exiting) {
-		wait(&i);
+		healthcheck_respawn = 0;
+		fifo_fd = open(fifopath, O_RDONLY);
+		if (fifo_fd > 0) {
+			memset(buf, 0, sizeof(buf));
+			count = read(fifo_fd, buf, sizeof(buf) - 1);
+			close(fifo_fd);
+			if (count != -1)
+				buf[count] = 0;
+			if (count == 0)
+				continue;
+			syslog(LOG_DEBUG, "Received %s from fifo", buf);
+			if (strncasecmp(buf, "sig", 3) == 0) {
+				if ((sscanf(buf, "%s %d", cmd, &sig_send) == 2)
+						&& (sig_send >= 0 && sig_send < NSIG)) {
+					syslog(LOG_INFO, "Sending signal %d to %d", sig_send,
+							child_pid);
+					if (kill(child_pid, sig_send) == -1)
+						syslog(LOG_ERR, "Unable to send signal %d to %d",
+								sig_send, child_pid);
+				}
+			}
+			continue;
+		}
+		if (do_healthcheck) {
+			do_healthcheck = 0;
+			alarm(0);
+			syslog(LOG_DEBUG, "running health check for %s", svcname);
+			health_pid = exec_command("healthcheck");
+			health_status = rc_waitpid(health_pid);
+			if (WIFEXITED(health_status) && WEXITSTATUS(health_status) == 0)
+				alarm(healthchecktimer);
+			else {
+				syslog(LOG_WARNING, "health check for %s failed", svcname);
+				health_pid = exec_command("unhealthy");
+				rc_waitpid(health_pid);
+				syslog(LOG_INFO, "stopping %s, pid %d", exec, child_pid);
+				nkilled = run_stop_schedule(applet, NULL, NULL, child_pid, 0,
+						false, false, true);
+				if (nkilled < 0)
+					syslog(LOG_INFO, "Unable to kill %d: %s",
+							child_pid, strerror(errno));
+				else
+					healthcheck_respawn = 1;
+			}
+		}
 		if (exiting) {
-			signal_setup(SIGCHLD, SIG_IGN);
+			alarm(0);
 			syslog(LOG_INFO, "stopping %s, pid %d", exec, child_pid);
-			nkilled = run_stop_schedule(applet, exec, NULL, child_pid, 0,
+			nkilled = run_stop_schedule(applet, NULL, NULL, child_pid, 0,
 					false, false, true);
 			if (nkilled > 0)
 				syslog(LOG_INFO, "killed %d processes", nkilled);
-		} else {
-			sleep(respawn_delay);
-			if (respawn_max > 0 && respawn_period > 0) {
-				respawn_now = time(NULL);
-				if (first_spawn == 0)
-					first_spawn = respawn_now;
-				if (respawn_now - first_spawn > respawn_period) {
-					respawn_count = 0;
-					first_spawn = 0;
-				} else
-					respawn_count++;
-				if (respawn_count >= respawn_max) {
-					syslog(LOG_WARNING,
-							"respawned \"%s\" too many times, exiting", exec);
-					exiting = true;
-					continue;
-				}
-			}
+			continue;
+		}
+		wait_pid = waitpid(child_pid, &i, WNOHANG);
+		if (wait_pid == child_pid) {
 			if (WIFEXITED(i))
 				syslog(LOG_WARNING, "%s, pid %d, exited with return code %d",
 						exec, child_pid, WEXITSTATUS(i));
 			else if (WIFSIGNALED(i))
 				syslog(LOG_WARNING, "%s, pid %d, terminated by signal %d",
 						exec, child_pid, WTERMSIG(i));
+		}
+		if (wait_pid == child_pid || healthcheck_respawn) {
+			do_healthcheck = 0;
+			healthcheck_respawn = 0;
+			alarm(0);
+			respawn_now = time(NULL);
+			if (first_spawn == 0)
+				first_spawn = respawn_now;
+			if ((respawn_period > 0)
+					&& (respawn_now - first_spawn > respawn_period)) {
+				respawn_count = 0;
+				first_spawn = 0;
+			} else
+				respawn_count++;
+			if (respawn_max > 0 && respawn_count > respawn_max) {
+				syslog(LOG_WARNING, "respawned \"%s\" too many times, exiting",
+						exec);
+				exiting = 1;
+				failing = 1;
+				continue;
+			}
+			ts.tv_sec = respawn_delay;
+			ts.tv_nsec = 0;
+			nanosleep(&ts, NULL);
 			child_pid = fork();
-			if (child_pid == -1)
-				eerrorx("%s: fork: %s", applet, strerror(errno));
-			if (child_pid == 0)
+			if (child_pid == -1) {
+				syslog(LOG_ERR, "%s: fork: %s", applet, strerror(errno));
+				exit(EXIT_FAILURE);
+			}
+			if (child_pid == 0) {
+				sigprocmask(SIG_SETMASK, &old_signals, NULL);
+				memset(&sa, 0, sizeof(sa));
+				sa.sa_handler = SIG_DFL;
+				sigaction(SIGALRM, &sa, NULL);
+				sigaction(SIGCHLD, &sa, NULL);
+				sigaction(SIGTERM, &sa, NULL);
 				child_process(exec, argv);
+			}
+			if (healthcheckdelay)
+				alarm(healthcheckdelay);
+			else if (healthchecktimer)
+				alarm(healthchecktimer);
 		}
 	}
 
-	if (pidfile && exists(pidfile))
-		unlink(pidfile);
 	if (svcname) {
 		rc_service_daemon_set(svcname, exec, (const char *const *)argv,
 				pidfile, false);
-		rc_service_mark(svcname, RC_SERVICE_STOPPED);
 		rc_service_value_set(svcname, "child_pid", NULL);
+		rc_service_mark(svcname, RC_SERVICE_STOPPED);
+		if (failing)
+			rc_service_mark(svcname, RC_SERVICE_FAILED);
 	}
+	if (pidfile && exists(pidfile))
+		unlink(pidfile);
+	if (fifopath && exists(fifopath))
+		unlink(fifopath);
 	exit(EXIT_SUCCESS);
 }
 
@@ -550,6 +689,7 @@ int main(int argc, char **argv)
 	bool start = false;
 	bool stop = false;
 	bool reexec = false;
+	bool sendsig = false;
 	char *exec = NULL;
 	char *retry = NULL;
 	int sig = SIGTERM;
@@ -580,8 +720,9 @@ int main(int argc, char **argv)
 		eerrorx("%s: The RC_SVCNAME environment variable is not set", applet);
 	openlog(applet, LOG_PID, LOG_DAEMON);
 
-	if (argc >= 1 && svcname && strcmp(argv[1], svcname))
-		eerrorx("%s: the first argument must be %s", applet, svcname);
+	if (argc <= 1 || strcmp(argv[1], svcname))
+		eerrorx("%s: the first argument is %s and must be %s",
+				applet, argv[1], svcname);
 
 	if ((tmp = getenv("SSD_NICELEVEL")))
 		if (sscanf(tmp, "%d", &nicelevel) != 1)
@@ -611,6 +752,16 @@ int main(int argc, char **argv)
 	while ((opt = getopt_long(argc, argv, getoptstring, longopts,
 		    (int *) 0)) != -1)
 		switch (opt) {
+		case 'a':  /* --healthcheck-timer <time> */
+			if (sscanf(optarg, "%d", &healthchecktimer) != 1 || healthchecktimer < 1)
+				eerrorx("%s: invalid health check timer %s", applet, optarg);
+			break;
+
+		case 'A':  /* --healthcheck-delay <time> */
+			if (sscanf(optarg, "%d", &healthcheckdelay) != 1 || healthcheckdelay < 1)
+				eerrorx("%s: invalid health check delay %s", applet, optarg);
+			break;
+
 		case 'D':  /* --respawn-delay time */
 			n = sscanf(optarg, "%d", &respawn_delay);
 			if (n	!= 1 || respawn_delay < 1)
@@ -644,6 +795,10 @@ int main(int argc, char **argv)
 				eerrorx("Invalid respawn-period value '%s'", optarg);
 			break;
 
+		case 's':  /* --signal */
+			sig = parse_signal(applet, optarg);
+			sendsig = true;
+			break;
 		case 'S':  /* --start */
 			start = true;
 			break;
@@ -665,6 +820,11 @@ int main(int argc, char **argv)
 				eerrorx("%s: group `%s' not found",
 				    applet, optarg);
 			gid = gr->gr_gid;
+			break;
+
+		case 'H':  /* --healthcheck-timer <minutes> */
+			if (sscanf(optarg, "%d", &healthchecktimer) != 1 || healthchecktimer < 1)
+				eerrorx("%s: invalid health check timer %s", applet, optarg);
 			break;
 
 		case 'k':
@@ -744,8 +904,6 @@ int main(int argc, char **argv)
 		case_RC_COMMON_GETOPT
 		}
 
-	if (!pidfile && !reexec)
-		eerrorx("%s: --pidfile must be specified", applet);
 	endpwent();
 	argc -= optind;
 	argv += optind;
@@ -758,6 +916,12 @@ int main(int argc, char **argv)
 		ch_root = expand_home(home, ch_root);
 
 	umask(numask);
+	if (!pidfile)
+		xasprintf(&pidfile, "/var/run/supervise-%s.pid", svcname);
+	xasprintf(&fifopath, "%s/supervise-%s.ctl", RC_SVCDIR, svcname);
+	if (mkfifo(fifopath, 0600) == -1 && errno != EEXIST)
+		eerrorx("%s: unable to create control fifo: %s",
+				applet, strerror(errno));
 
 	if (reexec) {
 		str = rc_service_value_get(svcname, "argc");
@@ -832,9 +996,9 @@ int main(int argc, char **argv)
 						0, false, true) > 0)
 				eerrorx("%s: %s is already running", applet, exec);
 
-		if (respawn_delay * respawn_max > respawn_period)
+		if (respawn_period > 0 && respawn_delay * respawn_max > respawn_period)
 			ewarn("%s: Please increase the value of --respawn-period to more "
-				"than %d to avoid infinite respawning", applet, 
+				"than %d to avoid infinite respawning", applet,
 				respawn_delay * respawn_max);
 
 		if (retry) {
@@ -862,10 +1026,13 @@ int main(int argc, char **argv)
 		varbuf = NULL;
 		xasprintf(&varbuf, "%i", respawn_delay);
 		rc_service_value_set(svcname, "respawn_delay", varbuf);
+		free(varbuf);
 		xasprintf(&varbuf, "%i", respawn_max);
 		rc_service_value_set(svcname, "respawn_max", varbuf);
+		free(varbuf);
 		xasprintf(&varbuf, "%i", respawn_period);
 		rc_service_value_set(svcname, "respawn_period", varbuf);
+		free(varbuf);
 		child_pid = fork();
 		if (child_pid == -1)
 			eerrorx("%s: fork: %s", applet, strerror(errno));
@@ -876,6 +1043,9 @@ int main(int argc, char **argv)
 		tty_fd = open("/dev/tty", O_RDWR);
 #endif
 		devnull_fd = open("/dev/null", O_RDWR);
+		dup2(devnull_fd, STDIN_FILENO);
+		dup2(devnull_fd, STDOUT_FILENO);
+		dup2(devnull_fd, STDERR_FILENO);
 		child_pid = fork();
 		if (child_pid == -1)
 			eerrorx("%s: fork: %s", applet, strerror(errno));
@@ -892,7 +1062,8 @@ int main(int argc, char **argv)
 				c++;
 			}
 			xasprintf(&varbuf, "%d", x);
-				rc_service_value_set(svcname, "argc", varbuf);
+			rc_service_value_set(svcname, "argc", varbuf);
+			free(varbuf);
 			rc_service_value_set(svcname, "exec", exec);
 			supervisor(exec, argv);
 		} else
@@ -926,6 +1097,19 @@ int main(int argc, char **argv)
 			    pidfile, false);
 			rc_service_mark(svcname, RC_SERVICE_STOPPED);
 		}
+		exit(EXIT_SUCCESS);
+	} else if (sendsig) {
+		fifo_fd = open(fifopath, O_WRONLY |O_NONBLOCK);
+		if (fifo_fd < 0)
+			eerrorx("%s: unable to open control fifo %s", applet, strerror(errno));
+		xasprintf(&str, "sig %d", sig);
+		x = write(fifo_fd, str, strlen(str));
+		if (x == -1) {
+			free(tmp);
+			eerrorx("%s: error writing to control fifo: %s", applet,
+					strerror(errno));
+		}
+		free(tmp);
 		exit(EXIT_SUCCESS);
 	}
 }

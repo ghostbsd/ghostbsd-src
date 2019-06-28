@@ -1120,7 +1120,7 @@ int main(int argc, char **argv)
 	char *dir, *save = NULL, *saveLnk = NULL;
 	char *pidstr = NULL;
 	size_t l = 0, ll;
- 	const char *file;
+	const char *file;
 	struct stat stbuf;
 
 	/* Show help if insufficient args */
@@ -1152,7 +1152,7 @@ int main(int argc, char **argv)
 	}
 	lnk = xmalloc(4096);
 	memset(lnk, 0, 4096);
-	if (readlink(argv[1], lnk, 4096)) {
+	if (readlink(argv[1], lnk, 4096-1)) {
 		dir = dirname(path);
 		if (strchr(lnk, '/')) {
 			save = xstrdup(dir);
@@ -1223,7 +1223,6 @@ int main(int argc, char **argv)
 
 		/* Make our prefix string */
 		prefix = xmalloc(sizeof(char) * l + 1);
-		ll = strlen(applet);
 		memcpy(prefix, applet, ll);
 		memset(prefix + ll, ' ', l - ll);
 		memset(prefix + l, 0, 1);
@@ -1268,6 +1267,9 @@ int main(int argc, char **argv)
 		case_RC_COMMON_GETOPT
 		}
 
+	if (rc_yesno(getenv("RC_NODEPS")))
+		deps = false;
+
 	/* If we're changing runlevels and not called by rc then we cannot
 	   work with any dependencies */
 	if (deps && getenv("RC_PID") == NULL &&
@@ -1282,6 +1284,8 @@ int main(int argc, char **argv)
 		unsetenv("IN_BACKGROUND");
 	}
 
+	if (rc_yesno(getenv("IN_DRYRUN")))
+	dry_run = true;
 	if (rc_yesno(getenv("IN_HOTPLUG"))) {
 		if (!service_plugable())
 			eerrorx("%s: not allowed to be hotplugged", applet);
@@ -1363,7 +1367,7 @@ int main(int argc, char **argv)
 			printf ("\n");
 			rc_stringlist_free(services);
 			services = NULL;
-		} else if (strcmp (optarg, "status") == 0 || strcmp(optarg, "onestatus") == 0) {
+		} else if (strcmp (optarg, "status") == 0) {
 			save = prefix;
 			eprefix(NULL);
 			prefix = NULL;
@@ -1375,11 +1379,11 @@ int main(int argc, char **argv)
 				if (rc_service_state(service) &
 				    RC_SERVICE_STARTED)
 					svc_restart();
-			} else if (strcmp(optarg, "restart") == 0 || strcmp(optarg, "onerestart") == 0) {
+			} else if (strcmp(optarg, "restart") == 0) {
 				svc_restart();
-			} else if (strcmp(optarg, "start") == 0 || strcmp(optarg, "onestart") == 0) {
+			} else if (strcmp(optarg, "start") == 0) {
 				svc_start();
-			} else if (strcmp(optarg, "stop") == 0 || strcmp(optarg, "onestop") == 0 || strcmp(optarg, "pause") == 0) {
+			} else if (strcmp(optarg, "stop") == 0 || strcmp(optarg, "pause") == 0) {
 				if (strcmp(optarg, "pause") == 0) {
 					ewarn("WARNING: 'pause' is deprecated; please use '--nodeps stop'");
 					deps = false;

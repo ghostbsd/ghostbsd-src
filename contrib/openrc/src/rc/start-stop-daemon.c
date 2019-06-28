@@ -59,13 +59,14 @@ static struct pam_conv conv = { NULL, NULL};
 #include "queue.h"
 #include "rc.h"
 #include "rc-misc.h"
+#include "rc-pipes.h"
 #include "rc-schedules.h"
 #include "_usage.h"
 #include "helpers.h"
 
 const char *applet = NULL;
 const char *extraopts = NULL;
-const char *getoptstring = "I:KN:PR:Sa:bc:d:e:g:ik:mn:op:s:tu:r:w:x:1:2:" \
+const char *getoptstring = "I:KN:PR:Sa:bc:d:e:g:ik:mn:op:s:tu:r:w:x:1:2:3:4:" \
 	getoptstring_COMMON;
 const struct option longopts[] = {
 	{ "ionice",       1, NULL, 'I'},
@@ -93,6 +94,8 @@ const struct option longopts[] = {
 	{ "exec",         1, NULL, 'x'},
 	{ "stdout",       1, NULL, '1'},
 	{ "stderr",       1, NULL, '2'},
+	{ "stdout-logger",1, NULL, '3'},
+	{ "stderr-logger",1, NULL, '4'},
 	{ "progress",     0, NULL, 'P'},
 	longopts_COMMON
 };
@@ -122,6 +125,8 @@ const char * const longopts_help[] = {
 	"Binary to start/stop",
 	"Redirect stdout to file",
 	"Redirect stderr to file",
+	"Redirect stdout to process",
+	"Redirect stderr to process",
 	"Print dots each second while waiting",
 	longopts_help_COMMON
 };
@@ -162,20 +167,20 @@ handle_signal(int sig)
 {
 	int status;
 	int serrno = errno;
-	char signame[10] = { '\0' };
+	char *signame = NULL;
 
 	switch (sig) {
 	case SIGINT:
-		if (!signame[0])
-			snprintf(signame, sizeof(signame), "SIGINT");
+		if (!signame)
+			xasprintf(&signame, "SIGINT");
 		/* FALLTHROUGH */
 	case SIGTERM:
-		if (!signame[0])
-			snprintf(signame, sizeof(signame), "SIGTERM");
+		if (!signame)
+			xasprintf(&signame, "SIGTERM");
 		/* FALLTHROUGH */
 	case SIGQUIT:
-		if (!signame[0])
-			snprintf(signame, sizeof(signame), "SIGQUIT");
+		if (!signame)
+			xasprintf(&signame, "SIGQUIT");
 		eerrorx("%s: caught %s, aborting", applet, signame);
 		/* NOTREACHED */
 
@@ -194,6 +199,9 @@ handle_signal(int sig)
 		eerror("%s: caught unknown signal %d", applet, sig);
 	}
 
+	/* free signame */
+	free(signame);
+
 	/* Restore errno */
 	errno = serrno;
 }
@@ -202,7 +210,6 @@ static char *
 expand_home(const char *home, const char *path)
 {
 	char *opath, *ppath, *p, *nh;
-	size_t len;
 	struct passwd *pw;
 
 	if (!path || *path != '~')
@@ -233,9 +240,7 @@ expand_home(const char *home, const char *path)
 		return xstrdup(home);
 	}
 
-	len = strlen(ppath) + strlen(home) + 1;
-	nh = xmalloc(len);
-	snprintf(nh, len, "%s%s", home, ppath);
+	xasprintf(&nh, "%s%s", home, ppath);
 	free(opath);
 	return nh;
 }
@@ -276,6 +281,8 @@ int main(int argc, char **argv)
 	int tid = 0;
 	char *redirect_stderr = NULL;
 	char *redirect_stdout = NULL;
+	char *stderr_process = NULL;
+	char *stdout_process = NULL;
 	int stdin_fd;
 	int stdout_fd;
 	int stderr_fd;
@@ -379,6 +386,7 @@ int main(int argc, char **argv)
 		case 'c':  /* --chuid <username>|<uid> */
 			/* DEPRECATED */
 			ewarn("WARNING: -c/--chuid is deprecated and will be removed in the future, please use -u/--user instead");
+			/* falls through */
 		case 'u':  /* --user <username>|<uid> */
 		{
 			p = optarg;
@@ -484,7 +492,7 @@ int main(int argc, char **argv)
 			startas = optarg;
 			break;
 		case 'w':
-			if (sscanf(optarg, "%d", &start_wait) != 1)
+			if (sscanf(optarg, "%u", &start_wait) != 1)
 				eerrorx("%s: `%s' not a number",
 				    applet, optarg);
 			break;
@@ -498,6 +506,14 @@ int main(int argc, char **argv)
 
 		case '2':  /* --stderr /path/to/stderr.logfile */
 			redirect_stderr = optarg;
+			break;
+
+		case '3':   /* --stdout-logger "command to run for stdout logging" */
+			stdout_process = optarg;
+			break;
+
+		case '4':  /* --stderr-logger "command to run for stderr logging" */
+			stderr_process = optarg;
 			break;
 
 		case_RC_COMMON_GETOPT
@@ -531,7 +547,7 @@ int main(int argc, char **argv)
 	} else if (name) {
 		*--argv = name;
 		++argc;
-    } else if (exec) {
+	} else if (exec) {
 		*--argv = exec;
 		++argc;
 	};
@@ -551,6 +567,9 @@ int main(int argc, char **argv)
 		if (redirect_stdout || redirect_stderr)
 			eerrorx("%s: --stdout and --stderr are only relevant"
 			    " with --start", applet);
+		if (stdout_process || stderr_process)
+			eerrorx("%s: --stdout-logger and --stderr-logger are only relevant"
+			    " with --start", applet);
 		if (start_wait)
 			ewarn("using --wait with --stop has no effect,"
 			    " use --retry instead");
@@ -563,6 +582,15 @@ int main(int argc, char **argv)
 		if ((redirect_stdout || redirect_stderr) && !background)
 			eerrorx("%s: --stdout and --stderr are only relevant"
 			    " with --background", applet);
+		if ((stdout_process || stderr_process) && !background)
+			eerrorx("%s: --stdout-logger and --stderr-logger are only relevant"
+			    " with --background", applet);
+		if (redirect_stdout && stdout_process)
+			eerrorx("%s: do not use --stdout and --stdout-logger together",
+					applet);
+		if (redirect_stderr && stderr_process)
+			eerrorx("%s: do not use --stderr and --stderr-logger together",
+					applet);
 	}
 
 	/* Expand ~ */
@@ -603,7 +631,6 @@ int main(int argc, char **argv)
 		    *exec_file ? exec_file : exec);
 		free(exec_file);
 		exit(EXIT_FAILURE);
-
 	}
 	if (start && retry)
 		ewarn("using --retry with --start has no effect,"
@@ -642,7 +669,7 @@ int main(int argc, char **argv)
 					nav[len++] = p;
 				for (i = 0; i < opt; i++)
 					nav[i + len] = argv[i];
-				nav[i + len] = NULL;
+				nav[i + len] = '\0';
 			}
 		}
 	}
@@ -661,7 +688,7 @@ int main(int argc, char **argv)
 			parse_schedule(applet, NULL, sig);
 		if (pidfile) {
 			pid = get_pid(applet, pidfile);
-			if (pid == -1)
+			if (pid == -1 && errno != ENOENT)
 				exit(EXIT_FAILURE);
 		} else {
 			pid = 0;
@@ -886,6 +913,12 @@ int main(int argc, char **argv)
 				eerrorx("%s: unable to open the logfile"
 				    " for stdout `%s': %s",
 				    applet, redirect_stdout, strerror(errno));
+		}else if (stdout_process) {
+			stdout_fd = rc_pipe_command(stdout_process);
+			if (stdout_fd == -1)
+				eerrorx("%s: unable to open the logging process"
+				    " for stdout `%s': %s",
+				    applet, stdout_process, strerror(errno));
 		}
 		if (redirect_stderr) {
 			if ((stderr_fd = open(redirect_stderr,
@@ -894,13 +927,21 @@ int main(int argc, char **argv)
 				eerrorx("%s: unable to open the logfile"
 				    " for stderr `%s': %s",
 				    applet, redirect_stderr, strerror(errno));
+		}else if (stderr_process) {
+			stderr_fd = rc_pipe_command(stderr_process);
+			if (stderr_fd == -1)
+				eerrorx("%s: unable to open the logging process"
+				    " for stderr `%s': %s",
+				    applet, stderr_process, strerror(errno));
 		}
 
 		if (background)
 			dup2(stdin_fd, STDIN_FILENO);
-		if (background || redirect_stdout || rc_yesno(getenv("EINFO_QUIET")))
+		if (background || redirect_stdout || stdout_process
+				|| rc_yesno(getenv("EINFO_QUIET")))
 			dup2(stdout_fd, STDOUT_FILENO);
-		if (background || redirect_stderr || rc_yesno(getenv("EINFO_QUIET")))
+		if (background || redirect_stderr || stderr_process
+				|| rc_yesno(getenv("EINFO_QUIET")))
 			dup2(stderr_fd, STDERR_FILENO);
 
 		for (i = getdtablesize() - 1; i >= 3; --i)
@@ -955,9 +996,7 @@ int main(int argc, char **argv)
 		ts.tv_sec = start_wait / 1000;
 		ts.tv_nsec = (start_wait % 1000) * ONE_MS;
 		if (nanosleep(&ts, NULL) == -1) {
-			if (errno == EINTR)
-				eerror("%s: caught an interrupt", applet);
-			else {
+			if (errno != EINTR) {
 				eerror("%s: nanosleep: %s",
 				    applet, strerror(errno));
 				return 0;

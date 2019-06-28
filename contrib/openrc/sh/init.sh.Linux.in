@@ -1,4 +1,4 @@
-#!@SHELL@
+#!/bin/sh
 # Copyright (c) 1999-2007 Gentoo Foundation
 # Copyright (c) 2007-2009 Roy Marples <roy@marples.name>
 # Released under the 2-clause BSD license.
@@ -83,6 +83,7 @@ elif ! mountinfo -q /run; then
 	fi
 fi
 
+[ -x /sbin/restorecon ] && /sbin/restorecon -rF /run
 checkpath -d $RC_SVCDIR
 checkpath -d -m 0775 -o root:uucp /run/lock
 

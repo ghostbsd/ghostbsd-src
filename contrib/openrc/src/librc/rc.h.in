@@ -44,7 +44,6 @@ extern "C" {
 #define RC_SYS_WHITELIST   RC_LIBEXECDIR "/conf.d/env_whitelist"
 #define RC_USR_WHITELIST   RC_SYSCONFDIR "/conf.d/env_whitelist"
 #define RC_CONF         RC_SYSCONFDIR "/rc.conf"
-#define RC_CONF_DEFAULTS	RC_SYSCONFDIR "/defaults/rc.conf"
 #define RC_CONF_D         RC_SYSCONFDIR "/rc.conf.d"
 #define RC_CONF_OLD     RC_SYSCONFDIR "/conf.d/rc"
 
@@ -61,13 +60,11 @@ extern "C" {
 
 /* LOCAL_PREFIX is for user written stuff, which the base OS and package
  * manger don't touch. */
-/* Disable on FreeBSD
 #define RC_LOCAL_PREFIX		"@LOCAL_PREFIX@"
 #ifdef RC_LOCAL_PREFIX
 #  define RC_LOCAL_INITDIR      RC_LOCAL_PREFIX "/etc/init.d"
 #  define RC_LOCAL_CONFDIR      RC_LOCAL_PREFIX "/etc/conf.d"
 #endif
-*/
 
 #ifndef _SYS_QUEUE_H_
 
@@ -191,7 +188,8 @@ typedef enum
 	/* Optional states service could also be in */
 	RC_SERVICE_FAILED      = 0x0200,
 	RC_SERVICE_SCHEDULED   = 0x0400,
-	RC_SERVICE_WASINACTIVE = 0x0800
+	RC_SERVICE_WASINACTIVE = 0x0800,
+	RC_SERVICE_CRASHED     = 0x1000,
 } RC_SERVICE;
 
 /*! Add the service to the runlevel

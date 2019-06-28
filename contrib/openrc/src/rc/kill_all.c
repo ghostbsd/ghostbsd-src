@@ -58,14 +58,14 @@ static int mount_proc(void)
 	if (exists("/proc/version"))
 		return 0;
 	pid = fork();
-	switch(pid) {
+	switch (pid) {
 		case -1:
 			syslog(LOG_ERR, "Unable to fork");
 			return -1;
 			break;
 		case 0:
 			/* attempt to mount /proc */
-			execl("mount", "mount", "-t", "proc", "proc", "/proc", NULL);
+			execlp("mount", "mount", "-t", "proc", "proc", "/proc", NULL);
 			syslog(LOG_ERR, "Unable to execute mount");
 			exit(1);
 			break;
@@ -248,7 +248,7 @@ int main(int argc, char **argv)
 		usage(EXIT_FAILURE);
 	}
 	}
-	
+
 	openlog(applet, LOG_CONS|LOG_PID, LOG_DAEMON);
 	if (mount_proc() != 0) {
 		rc_stringlist_free(omits);

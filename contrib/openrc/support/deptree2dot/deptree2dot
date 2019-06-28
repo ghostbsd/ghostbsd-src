@@ -1,4 +1,4 @@
-#!/usr/local/bin/perl -w
+#!/usr/bin/perl -w
 # -*- cperl -*-
 # Copyright © 2012 Diego Elio Pettenò <flameeyes@flameeyes.eu>
 # Released under the 2-clause BSD license.

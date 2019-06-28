@@ -15,7 +15,7 @@
  *    except according to the terms contained in the LICENSE file.
  */
 
-static const char librc_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
+const char librc_copyright[] = "Copyright (c) 2007-2008 Roy Marples";
 
 #include "queue.h"
 #include "librc.h"
@@ -50,6 +50,7 @@ static const rc_service_state_name_t rc_service_state_names[] = {
 	{ RC_SERVICE_HOTPLUGGED,  "hotplugged" },
 	{ RC_SERVICE_FAILED,      "failed" },
 	{ RC_SERVICE_SCHEDULED,   "scheduled"},
+	{ RC_SERVICE_CRASHED,     "crashed"},
 	{ 0, NULL}
 };
 
@@ -557,7 +558,7 @@ rc_service_resolve(const char *service)
 
 	if (*file) {
 		memset(buffer, 0, sizeof(buffer));
-		r = readlink(file, buffer, sizeof(buffer));
+		r = readlink(file, buffer, sizeof(buffer)-1);
 		if (r > 0)
 			return xstrdup(buffer);
 	}
@@ -848,6 +849,10 @@ rc_service_state(const char *service)
 		}
 	}
 
+	if (state & RC_SERVICE_STARTED) {
+		if (rc_service_daemons_crashed(service) && errno != EACCES)
+			state |= RC_SERVICE_CRASHED;
+	}
 	if (state & RC_SERVICE_STOPPED) {
 		dirs = ls_dir(RC_SVCDIR "/scheduled", 0);
 		TAILQ_FOREACH(dir, dirs, entries) {
@@ -1042,7 +1047,6 @@ rc_service_add(const char *runlevel, const char *service)
 	char *init;
 	char file[PATH_MAX];
 	char path[MAXPATHLEN] = { '\0' };
-	char *p = NULL;
 	char binit[PATH_MAX];
 	char *i;
 
@@ -1063,8 +1067,7 @@ rc_service_add(const char *runlevel, const char *service)
 	/* We need to ensure that only things in /etc/init.d are added
 	 * to the boot runlevel */
 	if (strcmp(runlevel, RC_LEVEL_BOOT) == 0) {
-		p = realpath(dirname(init), path);
-		if (!*p) {
+		if (realpath(dirname(init), path) == NULL) {
 			free(init);
 			return false;
 		}

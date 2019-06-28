@@ -84,10 +84,11 @@ static RC_DEPINFO *
 get_depinfo(const RC_DEPTREE *deptree, const char *service)
 {
 	RC_DEPINFO *di;
-
-	TAILQ_FOREACH(di, deptree, entries)
-		if (strcmp(di->service, service) == 0)
-			return di;
+	if (deptree) {
+		TAILQ_FOREACH(di, deptree, entries)
+			if (strcmp(di->service, service) == 0)
+				return di;
+	}
 	return NULL;
 }
 
@@ -96,9 +97,11 @@ get_deptype(const RC_DEPINFO *depinfo, const char *type)
 {
 	RC_DEPTYPE *dt;
 
-	TAILQ_FOREACH(dt, &depinfo->depends, entries)
-		if (strcmp(dt->type, type) == 0)
-			return dt;
+	if (depinfo) {
+		TAILQ_FOREACH(dt, &depinfo->depends, entries)
+			if (strcmp(dt->type, type) == 0)
+				return dt;
+	}
 	return NULL;
 }
 
@@ -616,11 +619,11 @@ mtime_check(const char *source, const char *target, bool newer,
 		return false;
 	mtime = buf.st_mtime;
 
-    retval = deep_mtime_check(target,newer,&mtime,file);
-    if (rel) {
-        *rel = mtime;
-    }
-    return retval;
+	retval = deep_mtime_check(target,newer,&mtime,file);
+	if (rel) {
+		*rel = mtime;
+	}
+	return retval;
 }
 
 bool
@@ -718,7 +721,6 @@ rc_deptree_update_needed(time_t *newest, char *file)
     newer |= !deep_mtime_check(RC_LOCAL_CONFDIR,true,&mtime,file);
 #endif
     newer |= !deep_mtime_check(RC_CONF,true,&mtime,file);
-    newer |= !deep_mtime_check(RC_CONF_DEFAULTS,true,&mtime,file);
 
 	/* Some init scripts dependencies change depending on config files
 	 * outside of baselayout, like syslog-ng, so we check those too. */
