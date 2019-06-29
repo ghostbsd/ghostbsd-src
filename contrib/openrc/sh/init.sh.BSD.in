@@ -37,7 +37,7 @@ if [ -d "@SYSCONFDIR@/rc.conf.d" ]; then
 fi
 
 # Disable devd until we need it
-if [ -z "$RC_SYS" -a "$RC_UNAME" = "FreeBSD" ]; then
+if [ -z "$RC_SYS" -a "$RC_UNAME" = "TrueOS" ]; then
 	sysctl hw.bus.devctl_disable=1 >/dev/null
 fi
 
