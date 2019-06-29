@@ -1367,7 +1367,7 @@ int main(int argc, char **argv)
 			printf ("\n");
 			rc_stringlist_free(services);
 			services = NULL;
-		} else if (strcmp (optarg, "status") == 0) {
+		} else if (strcmp (optarg, "status") == 0 || strcmp(optarg, "onestatus") == 0) {
 			save = prefix;
 			eprefix(NULL);
 			prefix = NULL;
@@ -1379,11 +1379,11 @@ int main(int argc, char **argv)
 				if (rc_service_state(service) &
 				    RC_SERVICE_STARTED)
 					svc_restart();
-			} else if (strcmp(optarg, "restart") == 0) {
+			} else if (strcmp(optarg, "restart") == 0 || strcmp(optarg, "onerestart") == 0) {
 				svc_restart();
-			} else if (strcmp(optarg, "start") == 0) {
+			} else if (strcmp(optarg, "start") == 0 || strcmp(optarg, "onestart") == 0) {
 				svc_start();
-			} else if (strcmp(optarg, "stop") == 0 || strcmp(optarg, "pause") == 0) {
+			} else if (strcmp(optarg, "stop") == 0 || strcmp(optarg, "onestop") == 0 || strcmp(optarg,"pause") == 0) {
 				if (strcmp(optarg, "pause") == 0) {
 					ewarn("WARNING: 'pause' is deprecated; please use '--nodeps stop'");
 					deps = false;
