@@ -1,4 +1,4 @@
-#!/bin/sh
+#!@SHELL@
 
 shutdown_arg=
 while getopts :akrhPHfFnct: opt; do

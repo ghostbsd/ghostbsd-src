@@ -27,6 +27,12 @@ eoutdent()
 	return 0
 }
 
+checkyesno()
+{
+	yesno $1
+	return $?
+}
+
 yesno()
 {
 	[ -z "$1" ] && return 1

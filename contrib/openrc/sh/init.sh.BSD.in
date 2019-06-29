@@ -1,4 +1,4 @@
-#!/bin/sh
+#!@SHELL@
 # Copyright (c) 2007-2015 The OpenRC Authors.
 # See the Authors file at the top-level directory of this distribution and
 # https://github.com/OpenRC/openrc/blob/master/AUTHORS
@@ -37,9 +37,9 @@ if [ -d "@SYSCONFDIR@/rc.conf.d" ]; then
 fi
 
 # Disable devd until we need it
-if [ -z "$RC_SYS" -a "$RC_UNAME" = "TrueOS" ]; then
-	sysctl hw.bus.devctl_disable=1 >/dev/null
-fi
+#if [ -z "$RC_SYS" -a "$RC_UNAME" = "FreeBSD" ]; then
+#	sysctl hw.bus.devctl_disable=1 >/dev/null
+#fi
 
 # mount $RC_SVCDIR as something we can write to if it's not rw
 # On vservers, / is always rw at this point, so we need to clean out

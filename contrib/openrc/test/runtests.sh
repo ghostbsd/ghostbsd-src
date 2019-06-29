@@ -1,4 +1,4 @@
-#!/bin/sh
+#!@SHELL@
 
 top_srcdir=${top_srcdir:-..}
 . ${top_srcdir}/test/setup_env.sh

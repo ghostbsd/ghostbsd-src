@@ -1,4 +1,4 @@
-#!/bin/sh
+#!@SHELL@
 
 if [ -z "${top_srcdir}" ] ; then
 	echo "You must set top_srcdir before sourcing this file" 1>&2
