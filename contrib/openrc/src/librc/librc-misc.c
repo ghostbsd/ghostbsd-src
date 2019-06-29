@@ -407,6 +407,7 @@ _free_rc_conf(void)
 char *
 rc_conf_value(const char *setting)
 {
+	RC_STRINGLIST *defaults;
 	RC_STRINGLIST *old;
 	RC_STRING *s;
 	char *p;
@@ -414,6 +415,13 @@ rc_conf_value(const char *setting)
 	if (! rc_conf) {
 		rc_conf = rc_config_load(RC_CONF);
 		atexit(_free_rc_conf);
+
+		/* Support defaults rc.conf */
+		if (exists(RC_CONF_DEFAULTS)) {
+			defaults = rc_config_load(RC_CONF_DEFAULTS);
+			TAILQ_CONCAT(rc_conf, defaults, entries);
+			free(defaults);
+		}
 
 		/* Support old configs. */
 		if (exists(RC_CONF_OLD)) {
