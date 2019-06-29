@@ -721,6 +721,7 @@ rc_deptree_update_needed(time_t *newest, char *file)
     newer |= !deep_mtime_check(RC_LOCAL_CONFDIR,true,&mtime,file);
 #endif
     newer |= !deep_mtime_check(RC_CONF,true,&mtime,file);
+	newer |= !deep_mtime_check(RC_CONF_DEFAULTS,true,&mtime,file);
 
 	/* Some init scripts dependencies change depending on config files
 	 * outside of baselayout, like syslog-ng, so we check those too. */
