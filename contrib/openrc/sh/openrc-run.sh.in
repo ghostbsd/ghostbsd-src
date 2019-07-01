@@ -198,7 +198,19 @@ start()
 	default_start
 }
 
+# Shim for FreeBSD service command
+onestart()
+{
+	default_start
+}
+
 stop()
+{
+	default_stop
+}
+
+# Shim for FreeBSD service command
+onestop()
 {
 	default_stop
 }
@@ -213,6 +225,7 @@ yesno $RC_DEBUG && set -x
 
 # Load configuration settings. First the global ones, then any
 # service-specific settings.
+sourcex -e "@SYSCONFDIR@/defaults/rc.conf"
 sourcex -e "@SYSCONFDIR@/rc.conf"
 if [ -e "@SYSCONFDIR@/rc.conf.local" ]; then
 	sourcex -e "@SYSCONFDIR@/rc.conf.local"
