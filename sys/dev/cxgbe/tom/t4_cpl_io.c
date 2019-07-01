@@ -74,7 +74,7 @@ __FBSDID("$FreeBSD$");
 #include "tom/t4_tom.h"
 
 static void	t4_aiotx_cancel(struct kaiocb *job);
-static void	t4_aiotx_queue_toep(struct toepcb *toep);
+static void	t4_aiotx_queue_toep(struct socket *so, struct toepcb *toep);
 
 static size_t
 aiotx_mbuf_pgoff(struct mbuf *m)
@@ -327,31 +327,33 @@ send_reset(struct adapter *sc, struct toepcb *toep, uint32_t snd_nxt)
  * reported by HW to FreeBSD's native format.
  */
 static void
-assign_rxopt(struct tcpcb *tp, unsigned int opt)
+assign_rxopt(struct tcpcb *tp, uint16_t opt)
 {
 	struct toepcb *toep = tp->t_toe;
 	struct inpcb *inp = tp->t_inpcb;
 	struct adapter *sc = td_adapter(toep->td);
-	int n;
 
 	INP_LOCK_ASSERT(inp);
 
+	toep->tcp_opt = opt;
+	toep->mtu_idx = G_TCPOPT_MSS(opt);
+	tp->t_maxseg = sc->params.mtus[toep->mtu_idx];
 	if (inp->inp_inc.inc_flags & INC_ISIPV6)
-		n = sizeof(struct ip6_hdr) + sizeof(struct tcphdr);
+		tp->t_maxseg -= sizeof(struct ip6_hdr) + sizeof(struct tcphdr);
 	else
-		n = sizeof(struct ip) + sizeof(struct tcphdr);
-	tp->t_maxseg = sc->params.mtus[G_TCPOPT_MSS(opt)] - n;
+		tp->t_maxseg -= sizeof(struct ip) + sizeof(struct tcphdr);
 
+	toep->emss = tp->t_maxseg;
 	if (G_TCPOPT_TSTAMP(opt)) {
 		tp->t_flags |= TF_RCVD_TSTMP;	/* timestamps ok */
 		tp->ts_recent = 0;		/* hmmm */
 		tp->ts_recent_age = tcp_ts_getticks();
-		tp->t_maxseg -= TCPOLEN_TSTAMP_APPA;
+		toep->emss -= TCPOLEN_TSTAMP_APPA;
 	}
 
-	CTR5(KTR_CXGBE, "%s: tid %d, mtu_idx %u (%u), mss %u", __func__,
-	    toep->tid, G_TCPOPT_MSS(opt), sc->params.mtus[G_TCPOPT_MSS(opt)],
-	    tp->t_maxseg);
+	CTR6(KTR_CXGBE, "%s: tid %d, mtu_idx %u (%u), t_maxseg %u, emss %u",
+	    __func__, toep->tid, toep->mtu_idx,
+	    sc->params.mtus[G_TCPOPT_MSS(opt)], tp->t_maxseg, toep->emss);
 
 	if (G_TCPOPT_SACK(opt))
 		tp->t_flags |= TF_SACK_PERMIT;	/* should already be set */
@@ -399,7 +401,7 @@ make_established(struct toepcb *toep, uint32_t iss, uint32_t irs, uint16_t opt)
 
 	tp->irs = irs;
 	tcp_rcvseqinit(tp);
-	tp->rcv_wnd = toep->opt0_rcv_bufsize << 10;
+	tp->rcv_wnd = (u_int)toep->opt0_rcv_bufsize << 10;
 	tp->rcv_adv += tp->rcv_wnd;
 	tp->last_ack_sent = tp->rcv_nxt;
 
@@ -421,7 +423,7 @@ make_established(struct toepcb *toep, uint32_t iss, uint32_t irs, uint16_t opt)
 	ftxp.snd_nxt = tp->snd_nxt;
 	ftxp.rcv_nxt = tp->rcv_nxt;
 	ftxp.snd_space = bufsize;
-	ftxp.mss = tp->t_maxseg;
+	ftxp.mss = toep->emss;
 	send_flowc_wr(toep, &ftxp);
 
 	soisconnected(so);
@@ -613,7 +615,7 @@ write_tx_wr(void *dst, struct toepcb *toep, unsigned int immdlen,
 	if (txalign > 0) {
 		struct tcpcb *tp = intotcpcb(toep->inp);
 
-		if (plen < 2 * tp->t_maxseg)
+		if (plen < 2 * toep->emss)
 			txwr->lsodisable_to_flags |=
 			    htobe32(F_FW_OFLD_TX_DATA_WR_LSODISABLE);
 		else
@@ -648,6 +650,8 @@ write_tx_sgl(void *dst, struct mbuf *start, struct mbuf *stop, int nsegs, int n)
 		if (IS_AIOTX_MBUF(m))
 			rc = sglist_append_vmpages(&sg, aiotx_mbuf_pages(m),
 			    aiotx_mbuf_pgoff(m), m->m_len);
+		else if (m->m_flags & M_NOMAP)
+			rc = sglist_append_mb_ext_pgs(&sg, m);
 		else
 			rc = sglist_append(&sg, mtod(m, void *), m->m_len);
 		if (__predict_false(rc != 0))
@@ -722,8 +726,8 @@ t4_push_frames(struct adapter *sc, struct toepcb *toep, int drop)
 	    ("%s: ulp_mode %u for toep %p", __func__, toep->ulp_mode, toep));
 
 #ifdef VERBOSE_TRACES
-	CTR4(KTR_CXGBE, "%s: tid %d toep flags %#x tp flags %#x drop %d",
-	    __func__, toep->tid, toep->flags, tp->t_flags);
+	CTR5(KTR_CXGBE, "%s: tid %d toep flags %#x tp flags %#x drop %d",
+	    __func__, toep->tid, toep->flags, tp->t_flags, drop);
 #endif
 	if (__predict_false(toep->flags & TPF_ABORT_SHUTDOWN))
 		return;
@@ -769,6 +773,8 @@ t4_push_frames(struct adapter *sc, struct toepcb *toep, int drop)
 			if (IS_AIOTX_MBUF(m))
 				n = sglist_count_vmpages(aiotx_mbuf_pages(m),
 				    aiotx_mbuf_pgoff(m), m->m_len);
+			else if (m->m_flags & M_NOMAP)
+				n = sglist_count_mb_ext_pgs(m);
 			else
 				n = sglist_count(mtod(m, void *), m->m_len);
 
@@ -785,7 +791,7 @@ t4_push_frames(struct adapter *sc, struct toepcb *toep, int drop)
 					if (sowwakeup) {
 						if (!TAILQ_EMPTY(
 						    &toep->aiotx_jobq))
-							t4_aiotx_queue_toep(
+							t4_aiotx_queue_toep(so,
 							    toep);
 						sowwakeup_locked(so);
 					} else
@@ -829,7 +835,7 @@ t4_push_frames(struct adapter *sc, struct toepcb *toep, int drop)
 		}
 		if (sowwakeup) {
 			if (!TAILQ_EMPTY(&toep->aiotx_jobq))
-				t4_aiotx_queue_toep(toep);
+				t4_aiotx_queue_toep(so, toep);
 			sowwakeup_locked(so);
 		} else
 			SOCKBUF_UNLOCK(sb);
@@ -1242,8 +1248,10 @@ do_peer_close(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	INP_WLOCK(inp);
 	tp = intotcpcb(inp);
 
-	CTR5(KTR_CXGBE, "%s: tid %u (%s), toep_flags 0x%x, inp %p", __func__,
-	    tid, tp ? tcpstates[tp->t_state] : "no tp", toep->flags, inp);
+	CTR6(KTR_CXGBE,
+	    "%s: tid %u (%s), toep_flags 0x%x, ddp_flags 0x%x, inp %p",
+	    __func__, tid, tp ? tcpstates[tp->t_state] : "no tp", toep->flags,
+	    toep->ddp.flags, inp);
 
 	if (toep->flags & TPF_ABORT_SHUTDOWN)
 		goto done;
@@ -1251,6 +1259,7 @@ do_peer_close(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	tp->rcv_nxt++;	/* FIN */
 
 	so = inp->inp_socket;
+	socantrcvmore(so);
 	if (toep->ulp_mode == ULP_MODE_TCPDDP) {
 		DDP_LOCK(toep);
 		if (__predict_false(toep->ddp.flags &
@@ -1258,7 +1267,6 @@ do_peer_close(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 			handle_ddp_close(toep, tp, cpl->rcv_nxt);
 		DDP_UNLOCK(toep);
 	}
-	socantrcvmore(so);
 
 	if (toep->ulp_mode != ULP_MODE_RDMA) {
 		KASSERT(tp->rcv_nxt == be32toh(cpl->rcv_nxt),
@@ -1821,7 +1829,7 @@ do_fw4_ack(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 				tls_ofld->sb_off -= plen;
 			}
 			if (!TAILQ_EMPTY(&toep->aiotx_jobq))
-				t4_aiotx_queue_toep(toep);
+				t4_aiotx_queue_toep(so, toep);
 			sowwakeup_locked(so);	/* unlocks so_snd */
 		}
 		SOCKBUF_UNLOCK_ASSERT(sb);
@@ -2195,10 +2203,10 @@ static void
 t4_aiotx_task(void *context, int pending)
 {
 	struct toepcb *toep = context;
-	struct inpcb *inp = toep->inp;
-	struct socket *so = inp->inp_socket;
+	struct socket *so;
 	struct kaiocb *job;
 
+	so = toep->aiotx_so;
 	CURVNET_SET(toep->vnet);
 	SOCKBUF_LOCK(&so->so_snd);
 	while (!TAILQ_EMPTY(&toep->aiotx_jobq) && sowriteable(so)) {
@@ -2209,25 +2217,28 @@ t4_aiotx_task(void *context, int pending)
 
 		t4_aiotx_process_job(toep, so, job);
 	}
-	toep->aiotx_task_active = false;
+	toep->aiotx_so = NULL;
 	SOCKBUF_UNLOCK(&so->so_snd);
 	CURVNET_RESTORE();
 
 	free_toepcb(toep);
+	SOCK_LOCK(so);
+	sorele(so);
 }
 
 static void
-t4_aiotx_queue_toep(struct toepcb *toep)
+t4_aiotx_queue_toep(struct socket *so, struct toepcb *toep)
 {
 
 	SOCKBUF_LOCK_ASSERT(&toep->inp->inp_socket->so_snd);
 #ifdef VERBOSE_TRACES
 	CTR3(KTR_CXGBE, "%s: queueing aiotx task for tid %d, active = %s",
-	    __func__, toep->tid, toep->aiotx_task_active ? "true" : "false");
+	    __func__, toep->tid, toep->aiotx_so != NULL ? "true" : "false");
 #endif
-	if (toep->aiotx_task_active)
+	if (toep->aiotx_so != NULL)
 		return;
-	toep->aiotx_task_active = true;
+	soref(so);
+	toep->aiotx_so = so;
 	hold_toepcb(toep);
 	soaio_enqueue(&toep->aiotx_task);
 }
@@ -2278,13 +2289,13 @@ t4_aio_queue_aiotx(struct socket *so, struct kaiocb *job)
 
 	SOCKBUF_LOCK(&so->so_snd);
 #ifdef VERBOSE_TRACES
-	CTR2(KTR_CXGBE, "%s: queueing %p", __func__, job);
+	CTR3(KTR_CXGBE, "%s: queueing %p for tid %u", __func__, job, toep->tid);
 #endif
 	if (!aio_set_cancel_function(job, t4_aiotx_cancel))
 		panic("new job was cancelled");
 	TAILQ_INSERT_TAIL(&toep->aiotx_jobq, job, list);
 	if (sowriteable(so))
-		t4_aiotx_queue_toep(toep);
+		t4_aiotx_queue_toep(so, toep);
 	SOCKBUF_UNLOCK(&so->so_snd);
 	return (0);
 }
