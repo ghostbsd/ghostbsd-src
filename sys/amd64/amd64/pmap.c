@@ -4998,6 +4998,7 @@ pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 
 	pmap_delayed_invl_start();
 	PMAP_LOCK(pmap);
+	pmap_pkru_on_remove(pmap, sva, eva);
 
 	/*
 	 * special handling of removing one page.  a very
@@ -5091,7 +5092,6 @@ pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 out:
 	if (anyvalid)
 		pmap_invalidate_all(pmap);
-	pmap_pkru_on_remove(pmap, sva, eva);
 	PMAP_UNLOCK(pmap);
 	pmap_delayed_invl_finish();
 	vm_page_free_pages_toq(&free, true);
@@ -5202,8 +5202,7 @@ static boolean_t
 pmap_protect_pde(pmap_t pmap, pd_entry_t *pde, vm_offset_t sva, vm_prot_t prot)
 {
 	pd_entry_t newpde, oldpde;
-	vm_offset_t eva, va;
-	vm_page_t m;
+	vm_page_t m, mt;
 	boolean_t anychanged;
 	pt_entry_t PG_G, PG_M, PG_RW;
 
@@ -5217,15 +5216,15 @@ pmap_protect_pde(pmap_t pmap, pd_entry_t *pde, vm_offset_t sva, vm_prot_t prot)
 	anychanged = FALSE;
 retry:
 	oldpde = newpde = *pde;
-	if ((oldpde & (PG_MANAGED | PG_M | PG_RW)) ==
-	    (PG_MANAGED | PG_M | PG_RW)) {
-		eva = sva + NBPDR;
-		for (va = sva, m = PHYS_TO_VM_PAGE(oldpde & PG_PS_FRAME);
-		    va < eva; va += PAGE_SIZE, m++)
-			vm_page_dirty(m);
-	}
-	if ((prot & VM_PROT_WRITE) == 0)
+	if ((prot & VM_PROT_WRITE) == 0) {
+		if ((oldpde & (PG_MANAGED | PG_M | PG_RW)) ==
+		    (PG_MANAGED | PG_M | PG_RW)) {
+			m = PHYS_TO_VM_PAGE(oldpde & PG_PS_FRAME);
+			for (mt = m; mt < &m[NBPDR / PAGE_SIZE]; mt++)
+				vm_page_dirty(mt);
+		}
 		newpde &= ~(PG_RW | PG_M);
+	}
 	if ((prot & VM_PROT_EXECUTE) == 0)
 		newpde |= pg_nx;
 	if (newpde != oldpde) {
