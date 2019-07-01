@@ -237,13 +237,9 @@ static void rc_config_set_value(RC_STRINGLIST *config, char *value)
 		if (token[i] == '\n')
 			token[i] = 0;
 
-		i = strlen(entry) + strlen(token) + 2;
-		newline = xmalloc(sizeof(char) * i);
-		snprintf(newline, i, "%s=%s", entry, token);
+		xasprintf(&newline, "%s=%s", entry, token);
 	} else {
-		i = strlen(entry) + 2;
-		newline = xmalloc(sizeof(char) * i);
-		snprintf(newline, i, "%s=", entry);
+		xasprintf(&newline, "%s=", entry);
 	}
 
 	replaced = false;
@@ -281,7 +277,6 @@ static RC_STRINGLIST *rc_config_kcl(RC_STRINGLIST *config)
 	char *tmp = NULL;
 	char *value = NULL;
 	size_t varlen = 0;
-	size_t len = 0;
 
 	overrides = rc_stringlist_new();
 
@@ -299,9 +294,7 @@ static RC_STRINGLIST *rc_config_kcl(RC_STRINGLIST *config)
 		}
 
 		if (value != NULL) {
-			len = varlen + strlen(value) + 2;
-			tmp = xmalloc(sizeof(char) * len);
-			snprintf(tmp, len, "%s=%s", override->value, value);
+			xasprintf(&tmp, "%s=%s", override->value, value);
 		}
 
 		/*
@@ -438,7 +431,7 @@ rc_conf_value(const char *setting)
 		}
 
 		rc_conf = rc_config_directory(rc_conf);
-	rc_conf = rc_config_kcl(rc_conf);
+		rc_conf = rc_config_kcl(rc_conf);
 
 		/* Convert old uppercase to lowercase */
 		TAILQ_FOREACH(s, rc_conf, entries) {

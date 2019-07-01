@@ -9,13 +9,18 @@
 .\"    except according to the terms contained in the LICENSE file.
 .\"
 .Dd April 27, 2016
-.Dt supervise-DAEMON 8 SMM
+.Dt SUPERVISE-DAEMON 8 SMM
 .Os OpenRC
 .Sh NAME
 .Nm supervise-daemon
 .Nd starts a daemon and restarts it if it crashes
 .Sh SYNOPSIS
 .Nm
+servicename
+.Fl a , -healthcheck-timer
+.Ar seconds
+.Fl A , -healthcheck-delay
+.Ar seconds
 .Fl D , -respawn-delay
 .Ar seconds
 .Fl d , -chdir
@@ -32,8 +37,6 @@
 .Ar count
 .Fl N , -nicelevel
 .Ar level
-.Fl p , -pidfile
-.Ar pidfile
 .Fl P , -respawn-period
 .Ar seconds
 .Fl R , -retry
@@ -51,10 +54,15 @@
 .Op Fl -
 .Op Ar arguments
 .Nm
+servicename
 .Fl K , -stop
 .Ar daemon
-.Fl p , -pidfile
-.Ar pidfile
+.Fl r , -chroot
+.Ar chrootpath
+.Nm
+servicename
+.Fl s , -signal
+.Ar signal
 .Fl r , -chroot
 .Ar chrootpath
 .Sh DESCRIPTION
@@ -62,22 +70,15 @@
 provides a consistent method of starting, stopping and restarting
 daemons. If
 .Fl K , -stop
+or
+.Fl s , -signal
 is not provided, then we assume we are starting the daemon.
 .Nm
-only works with daemons which do not fork. Also, it uses its own pid
-file, so the daemon should not write a pid file, or the pid file passed
-to 
-.Nm
-should not be the one the daemon writes.
+only works with daemons which do not fork. If your daemon has options to
+tell it not to fork, it should be configured to not fork.
 .Pp
 Here are the options to specify the daemon and how it should start or stop:
 .Bl -tag -width indent
-.It Fl p , -pidfile Ar pidfile
-When starting, we write a
-.Ar pidfile
-so we know which supervisor to stop.  When stopping we only stop the pid(s)
-listed in the
-.Ar pidfile .
 .It Fl u , -user Ar user Ns Op : Ns Ar group
 Start the daemon as the
 .Ar user
@@ -87,11 +88,17 @@ owned by the user. You can optionally append a
 name here also.
 .It Fl v , -verbose
 Print the action(s) that are taken just before doing them.
+.El
 .Pp
 The options are as follows:
 .Bl -tag -width indent
+.It Fl a , -healthcheck-timer Ar seconds
+Run the healthcheck() command, possibly followed by the unhealthy()
+command every time this number of seconds passes.
+.It Fl A , -healthcheck-delay Ar seconds
+Wait this long before the first health check.
 .It Fl D , -respawn-delay Ar seconds
-wait this number of seconds before restarting a daemon after it crashes.
+Wait this number of seconds before restarting a daemon after it crashes.
 The default is 0.
 .It Fl d , -chdir Ar path
 chdir to this directory before starting the daemon.
@@ -106,23 +113,31 @@ Data can be from 0 to 7 inclusive.
 .It Fl k , -umask Ar mode
 Set the umask of the daemon.
 .It Fl m , -respawn-max Ar count
-Sets the maximum number of times a daemon will be respawned during a
-respawn period. If a daemon dies more than this number of times during a
-respawn period,
+Sets the maximum number of times a daemon will be respawned. If a daemon
+crashes more than this number of times,
 .Nm
-will give up trying to respawn it and exit. The default is 10, and 0
-means unlimited.
+will give up and exit. The default is 10 and 0 means unlimited.
+.Pp
+If respawn-period is also set, more than respawn-max crashes must occur
+during respawn-period seconds to cause
+.Nm
+to give up and exit.
 .It Fl N , -nicelevel Ar level
 Modifies the scheduling priority of the daemon.
 .It Fl P , -respawn-period Ar seconds
-Sets the length of a respawn period. The default is 10 seconds. See the
+Sets the length of a respawn period. See the
 description of --respawn-max for more information.
 .It Fl R , -retry Ar timeout | Ar signal Ns / Ns Ar timeout
 The retry specification can be either a timeout in seconds or multiple
 signal/timeout pairs (like SIGTERM/5).
+If this option is not given, the default is SIGTERM/5.
 .It Fl r , -chroot Ar path
 chroot to this directory before starting the daemon. All other paths, such
-as the path to the daemon, chdir and pidfile, should be relative to the chroot.
+as the path to the daemon and chdir should be relative to the chroot.
+.It Fl  , -signal Ar signal
+Instruct a supervisor to signal the process it is supervising. The
+process to communicate with is determined by the name of the service
+taken from the RC_SVCNAME environment variable.
 .It Fl u , -user Ar user
 Start the daemon as the specified user.
 .It Fl 1 , -stdout Ar logfile
@@ -134,7 +149,6 @@ The logfile can also be a named pipe.
 The same thing as
 .Fl 1 , -stdout
 but with the standard error output.
-.El
 .El
 .Sh ENVIRONMENT
 .Va SSD_NICELEVEL
@@ -157,15 +171,16 @@ make sure the settings mmake sense. For example, a respawn period of 5
 seconds with a respawn max of 10 and a respawn delay of 1 second leads
 to infinite respawning since there can never be 10 respawns within 5
 seconds.
+.Sh NOTE
+Invoking supervise-daemon requires both the RC_SVCNAME  environment
+variable to be set and the name of the service as the first argument on
+the command line, so it is best to invoke it inside a service script
+rather than manually.
 .Sh SEE ALSO
 .Xr chdir 2 ,
 .Xr chroot 2 ,
 .Xr getopt 3 ,
 .Xr nice 2 ,
-.Xr rc_find_pids 3
-.Sh BUGS
-.Nm
-cannot stop an interpreted daemon that no longer exists without a pidfile.
 .Sh HISTORY
 .Nm
 first appeared in Debian.

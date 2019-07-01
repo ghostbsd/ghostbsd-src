@@ -4,6 +4,82 @@ OpenRC NEWS
 This file will contain a list of notable changes for each release. Note
 the information in this file is in reverse order.
 
+## OpenRC 0.41.
+
+This version adds the ability to format the output of rc-status when
+showing the status of services in a runlevel so that it may be parsed.
+Currently, the -f switch only accepts ini as an argument which
+causes the output to be in the .ini format.
+
+This version adds an experimental build time switch to allow setting the
+default shell to use for service scripts.
+By default, this is set to /bin/sh if it is changed, the new shell must
+be able to understand posix-compatible syntax.
+
+## OpenRC 0.40
+
+In this version, the keymaps and termencoding services on Linux needed
+to be modified so they do not write to the root file system. This was
+done so they can run earlier in the boot sequence. AS a result, you will
+need to add save-termencoding and save-keymaps to your boot runlevel.
+This can be done as follows:
+
+```
+# rc-update add save-keymaps boot
+# rc-update add save-termencoding boot
+```
+
+## OpenRC 0.39
+
+This version removes the support for addons.
+The only place I know that this was used was Gentoo Baselayout 1.x, so
+it shouldn't affect anyone since baselayout-1 has been dead for a few
+years.
+
+Since all supported Linux kernel versions now make efivarfs immutable
+and all of the tools that access efivarfs are aware of this, we no
+longer mount efivarfs read-only. See the following github issue for more
+information:
+
+https://github.com/openrc/openrc/issues/238
+
+This version adds timed shutdown and cancelation of shutdown to
+openrc-shutdown. Shutdowns can now be delayed for a certain amount of
+time or scheduled for an exact time.
+
+supervise-daemon supports health checks, which are a periodic way to make sure a
+service is healthy. For more information on setting this up, please see
+supervise-daemon-guide.md.
+
+The --first-time switch has been added to all modprobe commands in the
+modules service. This means that, on Linux, you will see failures if a
+module was loaded by an initramfs or device manager before this service
+runs. These messages are harmless, but to clean them up, you should adjust your
+modules autoload configuration.
+
+## OpenRC 0.37
+
+start-stop-daemon now supports logging stdout and stderr of daemons to
+processes instead of files. These processes are defined by the
+output_logger and error_logger variables in standard service scripts, or
+by the  -3/--output-logger or -4/--error-logger switches if you use
+start-stop-daemon directly. For more information on this, see the
+start-stop-daemon man page.
+
+## OpenRC 0.36
+
+In this release, the modules-load service has been combined into the
+modules service since there is no reason I know of to keep them
+separate. However, modules also provides modules-load in case you were
+using modules-load in  your dependencies.
+
+The consolefont, keymaps, numlock and procfs service scripts no longer
+have a dependency on localmount.
+If you are a linux user and are still separaating / from /usr,
+you will need to add the following line to the appropriate conf.d files:
+
+rc_need="localmount"
+
 ## OpenRC 0.35
 
 In this version, the cgroups mounting logic has been moved from the

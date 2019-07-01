@@ -1,6 +1,6 @@
 # $FreeBSD$
 #
-GITVER="0.35"
+GITVER="0.41.2"
 PACKAGE=lib${LIB}
 LIB=		rc
 SHLIBDIR?=	/lib

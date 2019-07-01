@@ -1,4 +1,4 @@
-#!/bin/sh
+#!@SHELL@
 # Detect AC power or not in a portable way
 # Exit 0 if on AC power, 1 if not and 255 if we don't know how to work it out
 

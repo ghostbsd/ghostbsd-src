@@ -17,6 +17,7 @@
 .Sh SYNOPSIS
 .Nm
 .Op Fl aclsuC
+.Op Fl f Ar ini
 .Op Ar runlevel
 .Sh DESCRIPTION
 .Nm
@@ -37,12 +38,17 @@ The options are as follows:
 Show all runlevels and their services.
 .It Fl c , -crashed
 List all services that have crashed.
+.It Fl f , -format
+Select a format for the output. Currently, the only one that can be
+specified is ini, which outputs in *.ini format.
 .It Fl l , -list
 List all defined runlevels.
 .It Fl m , -manual
 Show all manually started services.
 .It Fl r , -runlevel
 Print the current runlevel name.
+.It Fl S , -supervised
+Show all supervised services.
 .It Fl s , -servicelist
 Show all services.
 .It Fl u , -unused
