@@ -35,7 +35,11 @@ fi
 
 # Are we using OpenRC instead of RC?
 if [ "$(/bin/kenv rc_system 2>/dev/null)" = "openrc" ]; then
-   sh /etc/openrc
+   if [ "$(/bin/kenv openrc_quiet 2>/dev/null)" = "YES" ]; then
+     sh /etc/openrc --quiet
+   else
+     sh /etc/openrc
+   fi
    exit $?
 fi
 
