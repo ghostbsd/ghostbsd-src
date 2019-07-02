@@ -84,6 +84,10 @@ int main(int argc, char **argv)
 	/* Ensure that we are only quiet when explicitly told to be */
 	unsetenv("EINFO_QUIET");
 
+// Check if openrc sysinit has run (fixes jails)
+	if(!exists("/libexec/rc/init.d/started"))
+		system("openrc sysinit");
+
 	while ((opt = getopt_long(argc, argv, getoptstring,
 		    longopts, (int *) 0)) != -1)
 	{
