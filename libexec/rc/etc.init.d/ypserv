@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+
+name="ypserv"
+description="NIS database server"
+
+command="/usr/sbin/${name}"
+command_args="${nis_server_flags}"
+
+depend()
+{
+	need localmount rpcbind
+	keyword -shutdown -stop
+}
+
+start_pre()
+{
+	local _domain
+
+	_domain=`domainname`
+	if [ -z "$_domain" ]; then
+		ewarn "NIS domainname(1) is not set."
+		return 1
+	fi
+	if [ ! -d /var/yp/$_domain/. ]; then
+		ewarn "/var/yp/$_domain is not a directory."
+		return 1
+	fi
+}

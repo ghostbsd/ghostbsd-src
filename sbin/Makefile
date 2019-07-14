@@ -12,6 +12,7 @@ SUBDIR=adjkerntz \
 	devfs \
 	devmatch \
 	dhclient \
+	dhcpcd \
 	dmesg \
 	dump \
 	dumpfs \
@@ -52,6 +53,8 @@ SUBDIR=adjkerntz \
 	newfs_msdos \
 	nfsiod \
 	nos-tun \
+	openrc \
+	openrc-run \
 	ping \
 	rcorder \
 	reboot \
@@ -63,6 +66,8 @@ SUBDIR=adjkerntz \
 	setkey \
 	shutdown \
 	spppcontrol \
+	start-stop-daemon \
+	supervise-daemon \
 	swapon \
 	sysctl \
 	tunefs \

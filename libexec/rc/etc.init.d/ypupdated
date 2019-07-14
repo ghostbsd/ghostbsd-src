@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+name="ypupdated"
+
+command="/usr/sbin/rpc.${name}"
+
+depend()
+{
+	need localmount ypserv rpcbind 
+	keyword -shutdown -stop
+}
+
+start_pre()
+{
+	local _domain
+
+	_domain=`domainname`
+	if [ -z "$_domain" ]; then
+		ewarn "NIS domainname(1) is not set."
+		return 1
+	fi
+}

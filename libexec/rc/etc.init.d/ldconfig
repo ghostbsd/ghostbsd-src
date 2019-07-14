@@ -1,0 +1,115 @@
+#!/sbin/openrc-run
+name="ldconfig"
+command=/sbin/ldconfig
+
+depend() {
+  need localmount
+  after bootmisc
+  keyword -jail -prefix -stop
+}
+
+
+start()
+{
+  local retval=0
+	case "${ldconfig_insecure}" in
+		[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1)
+			_ins="-i"
+			;;
+		[Nn][Oo]|[Ff][Aa][Ll][Ss][Ee]|[Oo][Ff][Ff]|0)
+			_ins=
+			;;
+		*)
+			ewarn "Insecure mode should be yes or no"
+			return 1
+			;;
+	esac
+
+	ebegin "Setting up ldconfig paths"
+	eindent
+		if [ -x "${command}" ]; then
+		_LDC="/lib /usr/lib"
+		for i in ${ldconfig_local_dirs}; do
+			if [ -d "${i}" ]; then
+				_files=`find ${i} -type f`
+				if [ -n "${_files}" ]; then
+					ldconfig_paths="${ldconfig_paths} `cat ${_files} | sort -u`"
+				fi
+			fi
+		done
+		for i in ${ldconfig_paths} /etc/ld-elf.so.conf; do
+			if [ -r "${i}" ]; then
+				_LDC="${_LDC} ${i}"
+			fi
+		done
+		ebegin "ELF ldconfig path: ${_LDC}"
+		${command} -elf ${_ins} ${_LDC}
+
+		case `sysctl -n hw.machine_arch` in
+		amd64)
+			for i in ${ldconfig_local32_dirs}; do
+				if [ -d "${i}" ]; then
+					_files=`find ${i} -type f`
+					if [ -n "${_files}" ]; then
+						ldconfig32_paths="${ldconfig32_paths} `cat ${_files} | sort -u`"
+					fi
+				fi
+			done
+			_LDC=""
+			for i in ${ldconfig32_paths}; do
+				if [ -r "${i}" ]; then
+					_LDC="${_LDC} ${i}"
+				fi
+			done
+			    ebegin "32-bit compatibility ldconfig path: ${_LDC}"
+			${command} -32 -m ${_ins} ${_LDC}
+			;;
+		esac
+
+case `sysctl -n hw.machine_arch` in
+		armv6)
+			for i in ${ldconfig_localsoft_dirs}; do
+				if [ -d "${i}" ]; then
+					_files=`find ${i} -type f`
+					if [ -n "${_files}" ]; then
+						ldconfigsoft_paths="${ldconfigsoft_paths} `cat ${_files} | sort -u`"
+					fi
+				fi
+			done
+			_LDC=""
+			for i in ${ldconfigsoft_paths}; do
+				if [ -r "${i}" ]; then
+					_LDC="${_LDC} ${i}"
+				fi
+			done
+			check_startmsgs &&
+			    ebegin 'Soft Float compatibility ldconfig path:' ${_LDC}
+			${command} -soft -m ${_ins} ${_LDC}
+			;;
+		esac
+
+		# Legacy aout support for i386 only
+		case `sysctl -n hw.machine_arch` in
+		i386)
+			# Default the a.out ldconfig path.
+			: ${ldconfig_paths_aout=${ldconfig_paths}}
+			_LDC=""
+			for i in /usr/lib/aout ${ldconfig_paths_aout} /etc/ld.so.conf; do
+				if [ -r "${i}" ]; then
+					_LDC="${_LDC} ${i}"
+				fi
+			done
+			ebegin 'a.out ldconfig path:' ${_LDC}
+			${lcommand} -aout ${_ins} ${_LDC}
+			;;
+		esac
+	fi
+	eoutdent
+	eend $retval "Some errors were encountered"
+}
+
+stop()
+{
+	# Fake function so we always shutdown correctly.
+	return 0
+}

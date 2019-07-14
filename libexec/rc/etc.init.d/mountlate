@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	keyword -jail
+}
+
+name="mountlate"
+desc="Mount filesystems with \"late\" option from /etc/fstab"
+
+start()
+{
+	local err latefs
+
+	# Mount "late" filesystems.
+	#
+	err=0
+	mount -a -L
+	err=$?
+
+	case ${err} in
+	0)
+		;;
+	*)
+		ewarn 'Mounting /etc/fstab filesystems failed,' \
+		    ' startup aborted'
+		stop_boot true
+		;;
+	esac
+
+	# If we booted a special kernel remove the record
+	# so we will boot the default kernel next time.
+	if [ -x /sbin/nextboot ]; then
+		/sbin/nextboot -D
+	fi
+}

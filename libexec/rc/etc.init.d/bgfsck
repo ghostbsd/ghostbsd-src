@@ -1,0 +1,50 @@
+#!/sbin/openrc-run
+#
+# $FreeBSD$
+#
+
+depend()
+{
+	need devfs cron syslogd
+	keyword -jail
+}
+
+name="background_fsck"
+desc="Run fsck in background"
+
+start_pre()
+{
+	if [ $(id -u) != 0 ]; then
+		ewarn "Must be root."
+		return 1
+	fi
+}
+
+start()
+{
+	: ${background_fsck_delay=0}
+	if [ -n "${rc_force}" ]; then
+		background_fsck_delay=0
+	fi
+	if [ ${background_fsck_delay} -lt 0 ]; then
+		warn "Background file system checks delayed indefinitely"
+		return 0
+	fi
+
+	bgfsck_msg='Starting background file system checks'
+	if [ "${background_fsck_delay}" -gt 0 ]; then
+		bgfsck_msg="${bgfsck_msg} in ${background_fsck_delay} seconds"
+	fi
+	if [ -z "${rc_force}" ]; then
+		einfo "${bgfsck_msg}."
+	fi
+
+	(sleep ${background_fsck_delay}; nice -4 fsck -B -p) 2>&1 | \
+	    logger -p daemon.notice -t fsck &
+	return 0
+}
+
+stop()
+{
+	return 0
+}

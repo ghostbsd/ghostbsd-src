@@ -1,0 +1,34 @@
+#!/sbin/openrc-run
+#
+# $FreeBSD$
+#
+
+depend()
+{
+	need sysctl
+}
+
+name="iovctl"
+command="/usr/sbin/iovctl"
+
+run_iovctl()
+{
+	local _f flag
+
+	flag=$1
+	for _f in ${iovctl_files} ; do
+		if [ -r ${_f} ]; then
+			${command} ${flag} -f ${_f} > /dev/null
+		fi
+	done
+}
+
+start()
+{
+	run_iovctl -C
+}
+
+stop()
+{
+	run_iovctl -D
+}

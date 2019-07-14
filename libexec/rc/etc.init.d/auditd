@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+command=/usr/sbin/auditd
+command_args=$auditd_flags
+name="auditd"
+description="Audit daemon"
+required_files="/etc/security/audit_class /etc/security/audit_control /etc/security/audit_event /etc/security/audit_user /etc/security/audit_warn"
+
+depend()
+{
+	need localmount
+	use logger
+	before inetd xinetd
+}
+
+stop()
+{
+
+	ebegin "Stopping auditd"
+	/usr/sbin/audit -t
+	eend $?
+}

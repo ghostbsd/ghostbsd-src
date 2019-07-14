@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+
+name="timed"
+desc="Time server daemon"
+command="/usr/sbin/${name}"
+
+depend() {
+	before login
+	keyword -jail -shutdown
+}

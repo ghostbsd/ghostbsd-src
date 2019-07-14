@@ -1,0 +1,64 @@
+#!/sbin/openrc-run
+# Copyright (c) 2007-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+# except according to the terms contained in the LICENSE file.
+
+description="Mounts disks and swap according to /etc/fstab."
+
+depend()
+{
+	need fsck
+	use modules mtab
+	after modules
+	keyword -jail -prefix
+}
+
+start()
+{
+	# Mount local filesystems in /etc/fstab.
+	local critical= types="noproc" x= no_netdev= rc=
+	for x in $net_fs_list $extra_net_fs_list; do
+		types="${types},${x}"
+	done
+
+	if [ "$RC_UNAME" = Linux ]; then
+		no_netdev="-O no_netdev"
+		if mountinfo -q /usr; then
+			touch "$RC_SVCDIR"/usr_premounted
+		fi
+	fi
+	ebegin "Mounting local filesystems"
+	mount -at "$types" $no_netdev
+	eend $? "Some local filesystem failed to mount"
+	rc=$?
+	if [ -z "$critical_mounts" ]; then
+		rc=0
+	else
+		for x in ${critical_mounts}; do
+		fstabinfo -q $x || continue
+		if ! mountinfo -q $x; then
+			critical=x
+			eerror "Failed to mount $x"
+		fi
+		done
+		[ -z "$critical" ] && rc=0
+	fi
+	return $rc
+}
+
+stop()
+{
+	yesno $RC_GOINGDOWN || return 0
+	# We never unmount / or /dev or $RC_SVCDIR
+
+	# Flush all pending disk writes now
+	sync
+
+	return 0
+}

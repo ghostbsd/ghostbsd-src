@@ -1,0 +1,71 @@
+#!/sbin/openrc-run
+#
+# Copyright 2019 Kris Moore
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+#
+
+depend()
+{
+	before sysctl
+}
+
+# This script will dynamically resize the ZFS boot pool at startup
+
+name="growzfs"
+desc="Grow root zfs pool"
+
+start()
+{
+	# If flag exists, skip the growfs run
+	if [ -e "/var/.growzfs-firstrun" ] ; then
+		return 0
+	fi
+
+	einfo "Growing ZFS partition to fill device"
+	rootpool=$(mount | grep 'on / (zfs' | cut -d " " -f 1 | cut -d "/" -f 1)
+	zpart=$(zpool status ${rootpool} | grep -v "state:" | grep -v "${rootpool}" | grep ONLINE | awk '{print $1}')
+	if [ ! -e "/dev/${zpart}" ] ; then
+		eerror "Failed locating ZFS root device"
+		return 1
+	fi
+	zroot=$(echo $zpart | sed 's|p[0-9]||g')
+	zpartnum=$(gpart show $zroot | grep freebsd-zfs | awk '{print $3}')
+
+	# Recover the existing geom
+	gpart recover $zroot
+
+	# Resize the partition
+	gpart resize -i $zpartnum $zroot
+
+	# Expand the ZFS pool
+	zpool set autoexpand=on $rootpool
+	zpool online -e $rootpool $zpart
+
+	touch /var/.growzfs-firstrun
+}
+
+stop()
+{
+	return 0
+}

@@ -1,0 +1,50 @@
+#!/sbin/openrc-run
+
+command=/usr/sbin/rpc.statd
+command_args=$lockd_args
+name="nfsclient"
+
+depend()
+{
+	need localmount rpcbind
+	use net logger dns
+	before inetd xinetd
+	keyword -stop -shutdown
+}
+
+nfsclient_start()
+{
+	#
+	# Set some nfs client related sysctls
+	#
+
+	if [ -n "${nfs_access_cache}" ]; then
+		if ! sysctl vfs.nfs.access_cache_timeout=${nfs_access_cache} >/dev/null; then
+			ewarn "failed to set access cache timeout"
+		fi
+	fi
+	if [ -n "${nfs_bufpackets}" ]; then
+		if ! sysctl vfs.nfs.bufpackets=${nfs_bufpackets} > /dev/null; then
+			ewarn "failed to set vfs.nfs.bufpackets"
+		fi
+	fi
+
+	unmount_all
+}
+
+unmount_all()
+{
+	# If /var/db/mounttab exists, some nfs-server has not been
+	# successfully notified about a previous client shutdown.
+	# If there is no /var/db/mounttab, we do nothing.
+	if [ -f /var/db/mounttab ]; then
+		rpc.umntall -k
+	fi
+}
+
+start()
+{
+	ebegin "Starting ${name}"
+	nfsclient_start
+	eend $?
+}

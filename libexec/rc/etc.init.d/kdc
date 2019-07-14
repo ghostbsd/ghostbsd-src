@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+name=kdc
+
+depend() {
+	after network
+	before login
+	keyword -shutdown
+}
+
+start_pre()
+{
+	command_args="$command_args --detach"
+}
+
+start() {
+	return 0
+}
+
+stop() {
+	return 0
+}
