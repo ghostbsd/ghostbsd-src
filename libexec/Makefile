@@ -8,6 +8,8 @@ SUBDIR=	${_atf} \
 	${_blacklistd-helper} \
 	${_comsat} \
 	${_dma} \
+	dhcpcd-hooks \
+	dhcpcd-run-hooks \
 	getty \
 	${_mail.local} \
 	${_makewhatis.local} \

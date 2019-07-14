@@ -1,0 +1,40 @@
+#!/sbin/openrc-run
+###################################
+# OpenRC service file for the "hcsecd" daemon
+# Written by Ken Moore <ken@ixsystems.com> 4/10/2018
+# Available under the 2-clause BSD license
+# 
+###################################
+#General Info/Settings
+name="bthidd"
+description="Bluetooth HID daemon"
+command="/usr/sbin/${name}"
+pidfile="/var/run/${name}.pid"
+command_background="true"
+output_file="/var/log/${name}"
+error_file="/var/log/${name}"
+
+config="${bthidd_config:-/etc/bluetooth/${name}.conf}"
+hids="${bthidd_hids:-/var/db/${name}.hids}"
+command_args="-d -c ${config} -H ${hids} -p ${pidfile}"
+required_modules="kbdmux vkbd ng_btsocket"
+
+depend(){
+  before bluetooth
+  keyword -jail -shutdown
+}
+
+start_pre(){
+  for i in ${required_modules}
+  do
+    kldload -n "${i}" >/dev/null 2>/dev/null
+    if [ $? -ne 0 ] ; then
+      eerror "Could not load required kernel module: ${i}"
+      return 1
+    fi
+  done
+  if [ ! -e "${config}" ] ; then
+    touch "${config}"
+  fi
+  return 0
+}

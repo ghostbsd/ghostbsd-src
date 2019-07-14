@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+
+command=/usr/sbin/autounmountd
+command_args="-D $autounmountd_args ${autounmountd_flags}"
+name="autounmountd"
+pidfile="/var/run/autounmountdaemond.pid"
+supervisor=supervise-daemon
+supervise_daemon_args="-1 /var/log/autounmountdaemond.log -2 /var/log/autounmountdaemond.log"
+
+depend()
+{
+        need localmount
+        use net logger dns
+        before inetd xinetd
+}

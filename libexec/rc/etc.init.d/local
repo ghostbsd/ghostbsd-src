@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+
+name="local"
+desc="Run /etc/rc.local and /etc/shutdown.local"
+
+depend()
+{
+	after *
+	keyword -timeout
+}
+
+start()
+{
+	if [ -f /etc/rc.local ]; then
+		ebegin 'Starting local daemons:'
+		. /etc/rc.local
+		eend $?
+	fi
+}
+
+stop()
+{
+	if [ -f /etc/rc.shutdown.local ]; then
+		ebegin 'Shutting down local daemons:'
+		. /etc/rc.shutdown.local
+		eend $?
+	fi
+}

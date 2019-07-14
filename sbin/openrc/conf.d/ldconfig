@@ -1,0 +1,14 @@
+## Set to YES to disable ldconfig security checks
+ldconfig_insecure="NO"
+
+## ldconfig paths and directories
+ldconfig_paths="/usr/lib/compat /usr/local/lib /usr/local/lib/compat/pkg"
+ldconfig32_paths="/usr/lib32 /usr/lib32/compat"
+ldconfigsoft_paths="/usr/libsoft /usr/libsoft/compat /usr/local/libsoft"
+ldconfig_paths_aout="/usr/lib/compat/aout /usr/local/lib/aout"
+
+## ldconfig directories
+ldconfig_local_dirs="/usr/libdata/ldconfig /usr/local/libdata/ldconfig"
+ldconfig_local32_dirs="/usr/local/libdata/ldconfig32"
+ldconfig_localsoft_dirs="/usr/local/libdata/ldconfigsoft"
+

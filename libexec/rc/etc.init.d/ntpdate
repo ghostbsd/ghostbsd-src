@@ -1,0 +1,32 @@
+#!/sbin/openrc-run
+
+name="ntpdate"
+desc="Set the date and time via NTP"
+
+depend()
+{
+	use net logger
+	keyword -stop -jail
+}
+
+start()
+{
+	if [ -z "$ntpdate_hosts" -a -f "$ntpdate_config" ]; then
+		ntpdate_hosts=`awk '
+			/^server[ \t]*127.127/      {next}
+			/^(server|peer|pool)/       {
+			    if ($2 ~/^-/)           {print $3}
+			    else                    {print $2}}
+		' < "$ntpdate_config"`
+	fi
+	if [ -n "$ntpdate_hosts" -o -n "$rc_flags" ]; then
+		einfo "Setting date via ntp."
+		${ntpdate_program:-ntpdate} $rc_flags $ntpdate_hosts
+	fi
+	return 0
+}
+
+stop()
+{
+	return 0
+}

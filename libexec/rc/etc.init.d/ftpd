@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+command=/usr/libexec/ftpd
+command_args="-D $ftpd_args"
+pidfile=/var/run/ftpd.pid
+name="Internet File Transfer Protocol daemon"
+
+depend()
+{
+	need localmount
+	use net logger
+	keyword -stop
+}

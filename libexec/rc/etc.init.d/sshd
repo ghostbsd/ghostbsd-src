@@ -1,0 +1,75 @@
+#!/sbin/openrc-run
+
+name="sshd"
+command=/usr/sbin/sshd
+command_args=$sshd_args
+pidfile=/var/run/sshd.pid
+required_files=/etc/ssh/sshd_config
+extra_commands="keygen configtest"
+
+: ${sshd_rsa1_enable:="no"}
+: ${sshd_rsa_enable:="yes"}
+: ${sshd_dsa_enable:="no"}
+: ${sshd_ecdsa_enable:="yes"}
+: ${sshd_ed25519_enable:="yes"}
+
+
+depend()
+{
+	use logger dns net
+}
+
+sshd_keygen_alg()
+{
+	local alg=$1
+	local ALG="$(echo $alg | tr a-z A-Z)"
+	local keyfile
+
+	if ! yesno "sshd_${alg}_enable" ; then
+		return 0
+	fi
+
+	case $alg in
+	rsa1)
+		keyfile="/etc/ssh/ssh_host_key"
+		;;
+	rsa|dsa|ecdsa|ed25519)
+		keyfile="/etc/ssh/ssh_host_${alg}_key"
+		;;
+	*)
+		return 1
+		;;
+	esac
+
+	if [ ! -x /usr/bin/ssh-keygen ] ; then
+		ewarn "/usr/bin/ssh-keygen does not exist."
+		return 1
+	fi
+
+	if [ ! -f "${keyfile}" ] ; then
+		einfo "Generating $ALG host key."
+		/usr/bin/ssh-keygen -q -t $alg -f "$keyfile" -N ""
+		/usr/bin/ssh-keygen -l -f "$keyfile.pub"
+	fi
+}
+
+keygen()
+{
+	sshd_keygen_alg rsa1
+	sshd_keygen_alg rsa
+	sshd_keygen_alg dsa
+	sshd_keygen_alg ecdsa
+	sshd_keygen_alg ed25519
+}
+
+configtest()
+{
+	einfo "Performing sanity check on ${name} configuration."
+	eval ${command} ${command_args} -t
+}
+
+start_pre()
+{
+	keygen
+	configtest
+}

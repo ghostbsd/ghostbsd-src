@@ -1,0 +1,66 @@
+#!/sbin/openrc-run
+#
+# $FreeBSD$
+#
+
+. /etc/rc.subr
+
+name="cleanvar"
+desc="Purge /var directory"
+
+depend()
+{
+        need localmount var
+        before logger
+        after clock root sysctl
+        keyword -prefix -timeout
+}
+
+purgedir()
+{
+	local dir file
+
+	if [ $# -eq 0 ]; then
+		purgedir .
+	else
+		for dir
+		do
+		(
+			cd "$dir" && for file in .* *
+			do
+				# Skip over logging sockets
+				[ -S "$file" -a "$file" = "log" ] && continue
+				[ -S "$file" -a "$file" = "logpriv" ] && continue
+				[ ."$file" = .. -o ."$file" = ... ] && continue
+				if [ -d "$file" -a ! -L "$file" ]
+				then
+					purgedir "$file"
+				else
+					rm -f -- "$file"
+				fi
+			done
+		)
+		done
+	fi
+}
+
+start_pre()
+{
+        # These files must be removed only the first time this script is run
+        # on boot.
+        #
+        rm -f /var/run/clean_var /var/spool/lock/clean_var
+}
+
+start()
+{
+	local dirlist="/var/run /var/spool/lock /var/tmp"
+	for _dir in ${dirlist}
+	do
+        	if [ -d ${_dir} -a ! -f ${_dir}/clean_var ]; then
+                	purgedir ${_dir}
+                	>${_dir}/clean_var
+        	fi	
+	done
+        rm -rf /var/spool/uucp/.Temp/*
+}
