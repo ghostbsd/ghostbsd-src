@@ -28,6 +28,12 @@
 #  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 #  SUCH DAMAGE.
 
+# Are we using OpenRC instead of RC?
+if [ "$(/bin/kenv rc_system 2>/dev/null)" = "openrc" ]; then
+   /sbin/rc-service ${@}
+   exit $?
+fi
+
 . /etc/rc.subr
 load_rc_config 'XXX'
 
