@@ -1,7 +1,7 @@
 #!/sbin/openrc-run
 
 command=/usr/sbin/autounmountd
-command_args="-D $autounmountd_args ${autounmountd_flags}"
+command_args="-d $autounmountd_args ${autounmountd_flags}"
 name="autounmountd"
 pidfile="/var/run/autounmountdaemond.pid"
 supervisor=supervise-daemon
