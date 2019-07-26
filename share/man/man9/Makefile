@@ -2,8 +2,6 @@
 
 .include <src.opts.mk>
 
-PACKAGE=runtime-manuals
-
 MAN=	accept_filter.9 \
 	accf_data.9 \
 	accf_dns.9 \
@@ -399,6 +397,7 @@ MAN=	accept_filter.9 \
 	VOP_ATTRIB.9 \
 	VOP_BMAP.9 \
 	VOP_BWRITE.9 \
+	VOP_COPY_FILE_RANGE.9 \
 	VOP_CREATE.9 \
 	VOP_FSYNC.9 \
 	VOP_GETACL.9 \
