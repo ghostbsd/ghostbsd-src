@@ -162,6 +162,7 @@ device  	smc		# SMSC LAN91C111
 device		vnic		# Cavium ThunderX NIC
 device		al_eth		# Annapurna Alpine Ethernet NIC
 device		dwc_rk		# Rockchip Designware
+device		dwc_socfpga	# Altera SOCFPGA Ethernet MAC
 
 # Etherswitch devices
 device		etherswitch	# Enable etherswitch support
@@ -188,6 +189,7 @@ device		aw_mmc			# Allwinner SD/MMC controller
 device		mmc			# mmc/sd bus
 device		mmcsd			# mmc/sd flash cards
 device		dwmmc
+device		dwmmc_altera
 device		rk_emmcphy
 
 # Serial (COM) ports

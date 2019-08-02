@@ -243,6 +243,9 @@ print_log_error(const struct nvme_controller_data *cdata __unused, void *buf, ui
 		printf(" LBA:                  %ju\n", entry->lba);
 		printf(" Namespace ID:         %u\n", entry->nsid);
 		printf(" Vendor specific info: %u\n", entry->vendor_specific);
+		printf(" Transport type:       %u\n", entry->trtype);
+		printf(" Command specific info:%ju\n", entry->csi);
+		printf(" Transport specific:   %u\n", entry->ttsi);
 	}
 }
 
@@ -315,6 +318,10 @@ print_log_health(const struct nvme_controller_data *cdata __unused, void *buf, u
 		printf("Temperature Sensor %d:           ", i + 1);
 		print_temp(health->temp_sensor[i]);
 	}
+	printf("Temperature 1 Transition Count: %d\n", health->tmt1tc);
+	printf("Temperature 2 Transition Count: %d\n", health->tmt2tc);
+	printf("Total Time For Temperature 1:   %d\n", health->ttftmt1);
+	printf("Total Time For Temperature 2:   %d\n", health->ttftmt2);
 }
 
 static void
@@ -399,8 +406,7 @@ static void
 logpage(const struct cmd *f, int argc, char *argv[])
 {
 	int				fd;
-	bool				ns_specified;
-	char				cname[64];
+	char				*path;
 	uint32_t			nsid, size;
 	void				*buf;
 	const struct logpage_function	*lpf;
@@ -421,15 +427,15 @@ logpage(const struct cmd *f, int argc, char *argv[])
 		fprintf(stderr, "Missing page_id (-p).\n");
 		arg_help(argc, argv, f);
 	}
-	if (strstr(opt.dev, NVME_NS_PREFIX) != NULL) {
-		ns_specified = true;
-		parse_ns_str(opt.dev, cname, &nsid);
-		open_dev(cname, &fd, 1, 1);
-	} else {
-		ns_specified = false;
+	open_dev(opt.dev, &fd, 1, 1);
+	get_nsid(fd, &path, &nsid);
+	if (nsid == 0) {
 		nsid = NVME_GLOBAL_NAMESPACE_TAG;
-		open_dev(opt.dev, &fd, 1, 1);
+	} else {
+		close(fd);
+		open_dev(path, &fd, 1, 1);
 	}
+	free(path);
 
 	read_controller_data(fd, &cdata);
 
@@ -441,7 +447,7 @@ logpage(const struct cmd *f, int argc, char *argv[])
 	 * supports the SMART/Health information log page on a per
 	 * namespace basis.
 	 */
-	if (ns_specified) {
+	if (nsid != NVME_GLOBAL_NAMESPACE_TAG) {
 		if (opt.page != NVME_LOG_HEALTH_INFORMATION)
 			errx(1, "log page %d valid only at controller level",
 			    opt.page);
