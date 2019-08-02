@@ -168,9 +168,9 @@ static int vm_page_reclaim_run(int req_class, int domain, u_long npages,
     vm_page_t m_run, vm_paddr_t high);
 static int vm_domain_alloc_fail(struct vm_domain *vmd, vm_object_t object,
     int req);
-static int vm_page_import(void *arg, void **store, int cnt, int domain,
+static int vm_page_zone_import(void *arg, void **store, int cnt, int domain,
     int flags);
-static void vm_page_release(void *arg, void **store, int cnt);
+static void vm_page_zone_release(void *arg, void **store, int cnt);
 
 SYSINIT(vm_page, SI_SUB_VM, SI_ORDER_SECOND, vm_page_init, NULL);
 
@@ -192,20 +192,28 @@ static void
 vm_page_init_cache_zones(void *dummy __unused)
 {
 	struct vm_domain *vmd;
-	int i;
+	struct vm_pgcache *pgcache;
+	int domain, pool;
 
-	for (i = 0; i < vm_ndomains; i++) {
-		vmd = VM_DOMAIN(i);
+	for (domain = 0; domain < vm_ndomains; domain++) {
+		vmd = VM_DOMAIN(domain);
+
 		/*
-		 * Don't allow the page cache to take up more than .25% of
+		 * Don't allow the page caches to take up more than .25% of
 		 * memory.
 		 */
-		if (vmd->vmd_page_count / 400 < 256 * mp_ncpus)
+		if (vmd->vmd_page_count / 400 < 256 * mp_ncpus * VM_NFREEPOOL)
 			continue;
-		vmd->vmd_pgcache = uma_zcache_create("vm pgcache",
-		    sizeof(struct vm_page), NULL, NULL, NULL, NULL,
-		    vm_page_import, vm_page_release, vmd,
-		    UMA_ZONE_NOBUCKETCACHE | UMA_ZONE_MAXBUCKET | UMA_ZONE_VM);
+		for (pool = 0; pool < VM_NFREEPOOL; pool++) {
+			pgcache = &vmd->vmd_pgcache[pool];
+			pgcache->domain = domain;
+			pgcache->pool = pool;
+			pgcache->zone = uma_zcache_create("vm pgcache",
+			    sizeof(struct vm_page), NULL, NULL, NULL, NULL,
+			    vm_page_zone_import, vm_page_zone_release, pgcache,
+			    UMA_ZONE_NOBUCKETCACHE | UMA_ZONE_MAXBUCKET |
+			    UMA_ZONE_VM);
+		}
 	}
 }
 SYSINIT(vm_page2, SI_SUB_VM_CONF, SI_ORDER_ANY, vm_page_init_cache_zones, NULL);
@@ -1793,7 +1801,7 @@ vm_page_alloc_domain_after(vm_object_t object, vm_pindex_t pindex, int domain,
 {
 	struct vm_domain *vmd;
 	vm_page_t m;
-	int flags;
+	int flags, pool;
 
 	KASSERT((object != NULL) == ((req & VM_ALLOC_NOOBJ) == 0) &&
 	    (object != NULL || (req & VM_ALLOC_SBUSY) == 0) &&
@@ -1810,6 +1818,7 @@ vm_page_alloc_domain_after(vm_object_t object, vm_pindex_t pindex, int domain,
 
 	flags = 0;
 	m = NULL;
+	pool = object != NULL ? VM_FREEPOOL_DEFAULT : VM_FREEPOOL_DIRECT;
 again:
 #if VM_NRESERVLEVEL > 0
 	/*
@@ -1824,8 +1833,8 @@ again:
 	}
 #endif
 	vmd = VM_DOMAIN(domain);
-	if (object != NULL && vmd->vmd_pgcache != NULL) {
-		m = uma_zalloc(vmd->vmd_pgcache, M_NOWAIT);
+	if (vmd->vmd_pgcache[pool].zone != NULL) {
+		m = uma_zalloc(vmd->vmd_pgcache[pool].zone, M_NOWAIT);
 		if (m != NULL) {
 			flags |= PG_PCPU_CACHE;
 			goto found;
@@ -1836,8 +1845,7 @@ again:
 		 * If not, allocate it from the free page queues.
 		 */
 		vm_domain_free_lock(vmd);
-		m = vm_phys_alloc_pages(domain, object != NULL ?
-		    VM_FREEPOOL_DEFAULT : VM_FREEPOOL_DIRECT, 0);
+		m = vm_phys_alloc_pages(domain, pool, 0);
 		vm_domain_free_unlock(vmd);
 		if (m == NULL) {
 			vm_domain_freecnt_inc(vmd, 1);
@@ -2226,18 +2234,20 @@ again:
 }
 
 static int
-vm_page_import(void *arg, void **store, int cnt, int domain, int flags)
+vm_page_zone_import(void *arg, void **store, int cnt, int domain, int flags)
 {
 	struct vm_domain *vmd;
+	struct vm_pgcache *pgcache;
 	int i;
 
-	vmd = arg;
+	pgcache = arg;
+	vmd = VM_DOMAIN(pgcache->domain);
 	/* Only import if we can bring in a full bucket. */
 	if (cnt == 1 || !vm_domain_allocate(vmd, VM_ALLOC_NORMAL, cnt))
 		return (0);
 	domain = vmd->vmd_domain;
 	vm_domain_free_lock(vmd);
-	i = vm_phys_alloc_npages(domain, VM_FREEPOOL_DEFAULT, cnt,
+	i = vm_phys_alloc_npages(domain, pgcache->pool, cnt,
 	    (vm_page_t *)store);
 	vm_domain_free_unlock(vmd);
 	if (cnt != i)
@@ -2247,13 +2257,15 @@ vm_page_import(void *arg, void **store, int cnt, int domain, int flags)
 }
 
 static void
-vm_page_release(void *arg, void **store, int cnt)
+vm_page_zone_release(void *arg, void **store, int cnt)
 {
 	struct vm_domain *vmd;
+	struct vm_pgcache *pgcache;
 	vm_page_t m;
 	int i;
 
-	vmd = arg;
+	pgcache = arg;
+	vmd = VM_DOMAIN(pgcache->domain);
 	vm_domain_free_lock(vmd);
 	for (i = 0; i < cnt; i++) {
 		m = (vm_page_t)store[i];
@@ -3449,7 +3461,12 @@ vm_page_free_prep(vm_page_t m)
 		pmap_page_set_memattr(m, VM_MEMATTR_DEFAULT);
 
 #if VM_NRESERVLEVEL > 0
-	if (vm_reserv_free_page(m))
+	/*
+	 * Determine whether the page belongs to a reservation.  If the page was
+	 * allocated from a per-CPU cache, it cannot belong to a reservation, so
+	 * as an optimization, we avoid the check in that case.
+	 */
+	if ((m->flags & PG_PCPU_CACHE) == 0 && vm_reserv_free_page(m))
 		return (false);
 #endif
 
@@ -3469,13 +3486,15 @@ void
 vm_page_free_toq(vm_page_t m)
 {
 	struct vm_domain *vmd;
+	uma_zone_t zone;
 
 	if (!vm_page_free_prep(m))
 		return;
 
 	vmd = vm_pagequeue_domain(m);
-	if ((m->flags & PG_PCPU_CACHE) != 0 && vmd->vmd_pgcache != NULL) {
-		uma_zfree(vmd->vmd_pgcache, m);
+	zone = vmd->vmd_pgcache[m->pool].zone;
+	if ((m->flags & PG_PCPU_CACHE) != 0 && zone != NULL) {
+		uma_zfree(zone, m);
 		return;
 	}
 	vm_domain_free_lock(vmd);
