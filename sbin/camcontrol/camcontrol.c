@@ -221,7 +221,7 @@ static struct camcontrol_opts option_table[] = {
 	{"devlist", CAM_CMD_DEVTREE, CAM_ARG_NONE, "-b"},
 	{"devtype", CAM_CMD_DEVTYPE, CAM_ARG_NONE, ""},
 	{"periphlist", CAM_CMD_DEVLIST, CAM_ARG_NONE, NULL},
-	{"modepage", CAM_CMD_MODE_PAGE, CAM_ARG_NONE, "bdelm:P:"},
+	{"modepage", CAM_CMD_MODE_PAGE, CAM_ARG_NONE, "6bdelm:P:"},
 	{"tags", CAM_CMD_TAG, CAM_ARG_NONE, "N:q"},
 	{"negotiate", CAM_CMD_RATE, CAM_ARG_NONE, negotiate_opts},
 	{"rate", CAM_CMD_RATE, CAM_ARG_NONE, negotiate_opts},
@@ -1521,6 +1521,7 @@ atacapprint(struct ata_params *parm)
 		printf("WWN                   %04x%04x%04x%04x\n",
 		    parm->wwn[0], parm->wwn[1], parm->wwn[2], parm->wwn[3]);
 	}
+	printf("additional product id %.8s\n", parm->product_id);
 	if (parm->enabled.extension & ATA_SUPPORT_MEDIASN) {
 		printf("media serial number   %.30s\n",
 		    parm->media_serial);
@@ -1650,35 +1651,39 @@ atacapprint(struct ata_params *parm)
 		} else
 			printf("\n");
 	printf("Native Command Queuing (NCQ)   ");
-	if (parm->satacapabilities != 0xffff &&
-	    (parm->satacapabilities & ATA_SUPPORT_NCQ)) {
+	if (atasata(parm) && (parm->satacapabilities & ATA_SUPPORT_NCQ)) {
 		printf("yes		%d tags\n",
 		    ATA_QUEUE_LEN(parm->queue) + 1);
+		printf("NCQ Priority Information       %s\n",
+		    parm->satacapabilities & ATA_SUPPORT_NCQ_PRIO ?
+		    "yes" : "no");
+		printf("NCQ Non-Data Command           %s\n",
+		    parm->satacapabilities2 & ATA_SUPPORT_NCQ_NON_DATA ?
+		    "yes" : "no");
+		printf("NCQ Streaming                  %s\n",
+		    parm->satacapabilities2 & ATA_SUPPORT_NCQ_STREAM ?
+		    "yes" : "no");
+		printf("Receive & Send FPDMA Queued    %s\n",
+		    parm->satacapabilities2 & ATA_SUPPORT_RCVSND_FPDMA_QUEUED ?
+		    "yes" : "no");
+		printf("NCQ Autosense                  %s\n",
+		    parm->satasupport & ATA_SUPPORT_NCQ_AUTOSENSE ?
+		    "yes" : "no");
 	} else
 		printf("no\n");
-
-	printf("NCQ Queue Management           %s\n", atasata(parm) &&
-		parm->satacapabilities2 & ATA_SUPPORT_NCQ_QMANAGEMENT ?
-		"yes" : "no");
-	printf("NCQ Streaming                  %s\n", atasata(parm) &&
-		parm->satacapabilities2 & ATA_SUPPORT_NCQ_STREAM ?
-		"yes" : "no");
-	printf("Receive & Send FPDMA Queued    %s\n", atasata(parm) &&
-		parm->satacapabilities2 & ATA_SUPPORT_RCVSND_FPDMA_QUEUED ?
-		"yes" : "no");
 
 	printf("SMART                          %s	%s\n",
 		parm->support.command1 & ATA_SUPPORT_SMART ? "yes" : "no",
 		parm->enabled.command1 & ATA_SUPPORT_SMART ? "yes" : "no");
-	printf("microcode download             %s	%s\n",
-		parm->support.command2 & ATA_SUPPORT_MICROCODE ? "yes" : "no",
-		parm->enabled.command2 & ATA_SUPPORT_MICROCODE ? "yes" : "no");
 	printf("security                       %s	%s\n",
 		parm->support.command1 & ATA_SUPPORT_SECURITY ? "yes" : "no",
 		parm->enabled.command1 & ATA_SUPPORT_SECURITY ? "yes" : "no");
 	printf("power management               %s	%s\n",
 		parm->support.command1 & ATA_SUPPORT_POWERMGT ? "yes" : "no",
 		parm->enabled.command1 & ATA_SUPPORT_POWERMGT ? "yes" : "no");
+	printf("microcode download             %s	%s\n",
+		parm->support.command2 & ATA_SUPPORT_MICROCODE ? "yes" : "no",
+		parm->enabled.command2 & ATA_SUPPORT_MICROCODE ? "yes" : "no");
 	printf("advanced power management      %s	%s",
 		parm->support.command2 & ATA_SUPPORT_APM ? "yes" : "no",
 		parm->enabled.command2 & ATA_SUPPORT_APM ? "yes" : "no");
@@ -1721,6 +1726,15 @@ atacapprint(struct ata_params *parm)
 	printf("free-fall                      %s	%s\n",
 		parm->support2 & ATA_SUPPORT_FREEFALL ? "yes" : "no",
 		parm->enabled2 & ATA_SUPPORT_FREEFALL ? "yes" : "no");
+	printf("sense data reporting           %s	%s\n",
+		parm->support2 & ATA_SUPPORT_SENSE_REPORT ? "yes" : "no",
+		parm->enabled2 & ATA_SUPPORT_SENSE_REPORT ? "yes" : "no");
+	printf("extended power conditions      %s	%s\n",
+		parm->support2 & ATA_SUPPORT_EPC ? "yes" : "no",
+		parm->enabled2 & ATA_SUPPORT_EPC ? "yes" : "no");
+	printf("device statistics notification %s	%s\n",
+		parm->support2 & ATA_SUPPORT_DSN ? "yes" : "no",
+		parm->enabled2 & ATA_SUPPORT_DSN ? "yes" : "no");
 	printf("Data Set Management (DSM/TRIM) ");
 	if (parm->support_dsm & ATA_SUPPORT_DSM_TRIM) {
 		printf("yes\n");
@@ -1743,6 +1757,8 @@ atacapprint(struct ata_params *parm)
 	} else {
 		printf("no\n");
 	}
+	printf("encrypts all user data         %s\n",
+		parm->support3 & ATA_ENCRYPTS_ALL_USER_DATA ? "yes" : "no");
 	printf("Sanitize                       ");
 	if (parm->multi & ATA_SUPPORT_SANITIZE) {
 		printf("yes\t\t%s%s%s\n",
@@ -4570,17 +4586,24 @@ reassignblocks(struct cam_device *device, u_int32_t *blocks, int num_blocks)
 #endif
 
 void
-mode_sense(struct cam_device *device, int dbd, int pc, int page, int subpage,
-	   int task_attr, int retry_count, int timeout, u_int8_t *data,
-	   int datalen)
+mode_sense(struct cam_device *device, int *cdb_len, int dbd, int pc, int page,
+    int subpage, int task_attr, int retry_count, int timeout, u_int8_t *data,
+    int datalen)
 {
 	union ccb *ccb;
-	int retval;
+	int error_code, sense_key, asc, ascq;
 
 	ccb = cam_getccb(device);
-
 	if (ccb == NULL)
 		errx(1, "mode_sense: couldn't allocate CCB");
+
+retry:
+	/*
+	 * MODE SENSE(6) can't handle more then 255 bytes.  If there are more,
+	 * device must return error, so we should not get trucated data.
+	 */
+	if (*cdb_len == 6 && datalen > 255)
+		datalen = 255;
 
 	CCB_CLEAR_ALL_EXCEPT_HDR(&ccb->csio);
 
@@ -4594,9 +4617,12 @@ mode_sense(struct cam_device *device, int dbd, int pc, int page, int subpage,
 			/* subpage */ subpage,
 			/* param_buf */ data,
 			/* param_len */ datalen,
-			/* minimum_cmd_size */ 0,
+			/* minimum_cmd_size */ *cdb_len,
 			/* sense_len */ SSD_FULL_SIZE,
 			/* timeout */ timeout ? timeout : 5000);
+
+	/* Record what CDB size the above function really set. */
+	*cdb_len = ccb->csio.cdb_len;
 
 	if (arglist & CAM_ARG_ERR_RECOVER)
 		ccb->ccb_h.flags |= CAM_PASS_ERR_RECOVER;
@@ -4604,26 +4630,34 @@ mode_sense(struct cam_device *device, int dbd, int pc, int page, int subpage,
 	/* Disable freezing the device queue */
 	ccb->ccb_h.flags |= CAM_DEV_QFRZDIS;
 
-	if (((retval = cam_send_ccb(device, ccb)) < 0)
-	 || ((ccb->ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP)) {
+	if (cam_send_ccb(device, ccb) < 0)
+		err(1, "error sending mode sense command");
+
+	/* In case of ILLEGEL REQUEST try to fall back to 6-byte command. */
+	if (*cdb_len != 6 &&
+	    ((ccb->ccb_h.status & CAM_STATUS_MASK) == CAM_REQ_INVALID ||
+	     (scsi_extract_sense_ccb(ccb, &error_code, &sense_key, &asc, &ascq)
+	      && sense_key == SSD_KEY_ILLEGAL_REQUEST))) {
+		*cdb_len = 6;
+		goto retry;
+	}
+
+	if ((ccb->ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP) {
 		if (arglist & CAM_ARG_VERBOSE) {
 			cam_error_print(device, ccb, CAM_ESF_ALL,
 					CAM_EPF_ALL, stderr);
 		}
 		cam_freeccb(ccb);
 		cam_close_device(device);
-		if (retval < 0)
-			err(1, "error sending mode sense command");
-		else
-			errx(1, "error sending mode sense command");
+		errx(1, "mode sense command returned error");
 	}
 
 	cam_freeccb(ccb);
 }
 
 void
-mode_select(struct cam_device *device, int save_pages, int task_attr,
-	    int retry_count, int timeout, u_int8_t *data, int datalen)
+mode_select(struct cam_device *device, int cdb_len, int save_pages,
+    int task_attr, int retry_count, int timeout, u_int8_t *data, int datalen)
 {
 	union ccb *ccb;
 	int retval;
@@ -4635,7 +4669,7 @@ mode_select(struct cam_device *device, int save_pages, int task_attr,
 
 	CCB_CLEAR_ALL_EXCEPT_HDR(&ccb->csio);
 
-	scsi_mode_select(&ccb->csio,
+	scsi_mode_select_len(&ccb->csio,
 			 /* retries */ retry_count,
 			 /* cbfcnp */ NULL,
 			 /* tag_action */ task_attr,
@@ -4643,6 +4677,7 @@ mode_select(struct cam_device *device, int save_pages, int task_attr,
 			 /* save_pages */ save_pages,
 			 /* param_buf */ data,
 			 /* param_len */ datalen,
+			 /* minimum_cmd_size */ cdb_len,
 			 /* sense_len */ SSD_FULL_SIZE,
 			 /* timeout */ timeout ? timeout : 5000);
 
@@ -4677,10 +4712,13 @@ modepage(struct cam_device *device, int argc, char **argv, char *combinedopt,
 {
 	char *str_subpage;
 	int c, page = -1, subpage = -1, pc = 0;
-	int binary = 0, dbd = 0, edit = 0, list = 0;
+	int binary = 0, cdb_len = 10, dbd = 0, edit = 0, list = 0;
 
 	while ((c = getopt(argc, argv, combinedopt)) != -1) {
 		switch(c) {
+		case '6':
+			cdb_len = 6;
+			break;
 		case 'b':
 			binary = 1;
 			break;
@@ -4720,11 +4758,11 @@ modepage(struct cam_device *device, int argc, char **argv, char *combinedopt,
 		errx(1, "you must specify a mode page!");
 
 	if (list != 0) {
-		mode_list(device, dbd, pc, list > 1, task_attr, retry_count,
-			  timeout);
+		mode_list(device, cdb_len, dbd, pc, list > 1, task_attr,
+		    retry_count, timeout);
 	} else {
-		mode_edit(device, dbd, pc, page, subpage, edit, binary,
-		    task_attr, retry_count, timeout);
+		mode_edit(device, cdb_len, dbd, pc, page, subpage, edit,
+		    binary, task_attr, retry_count, timeout);
 	}
 }
 
