@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2012-2013 Intel Corporation
  * All rights reserved.
+ * Copyright (C) 2018-2019 Alexander Motin <mav@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -44,17 +45,21 @@ __FBSDID("$FreeBSD$");
 #include "nvmecontrol.h"
 #include "nvmecontrol_ext.h"
 
+#define NONE 0xfffffffeu
+
 static struct options {
 	bool		hex;
 	bool		verbose;
 	const char	*dev;
+	uint32_t	nsid;
 } opt = {
 	.hex = false,
 	.verbose = false,
 	.dev = NULL,
+	.nsid = NONE,
 };
 
-static void
+void
 print_namespace(struct nvme_namespace_data *nsdata)
 {
 	uint32_t	i;
@@ -168,12 +173,11 @@ print_namespace(struct nvme_namespace_data *nsdata)
 }
 
 static void
-identify_ctrlr(const struct cmd *f, int argc, char *argv[])
+identify_ctrlr(int fd)
 {
 	struct nvme_controller_data	cdata;
-	int				fd, hexlength;
+	int				hexlength;
 
-	open_dev(opt.dev, &fd, 1, 1);
 	read_controller_data(fd, &cdata);
 	close(fd);
 
@@ -187,39 +191,16 @@ identify_ctrlr(const struct cmd *f, int argc, char *argv[])
 		exit(0);
 	}
 
-	if (opt.verbose) {
-		fprintf(stderr, "-v not currently supported without -x\n");
-		arg_help(argc, argv, f);
-	}
-
 	nvme_print_controller(&cdata);
 	exit(0);
 }
 
 static void
-identify_ns(const struct cmd *f, int argc, char *argv[])
+identify_ns(int fd, uint32_t nsid)
 {
 	struct nvme_namespace_data	nsdata;
-	char				path[64];
-	int				fd, hexlength;
-	uint32_t			nsid;
+	int				hexlength;
 
-	/*
-	 * Check if the specified device node exists before continuing.
-	 *  This is a cleaner check for cases where the correct controller
-	 *  is specified, but an invalid namespace on that controller.
-	 */
-	open_dev(opt.dev, &fd, 1, 1);
-	close(fd);
-
-	/*
-	 * We send IDENTIFY commands to the controller, not the namespace,
-	 *  since it is an admin cmd.  The namespace ID will be specified in
-	 *  the IDENTIFY command itself.  So parse the namespace's device node
-	 *  string to get the controller substring and namespace ID.
-	 */
-	parse_ns_str(opt.dev, path, &nsid);
-	open_dev(path, &fd, 1, 1);
 	read_namespace_data(fd, nsid, &nsdata);
 	close(fd);
 
@@ -233,11 +214,6 @@ identify_ns(const struct cmd *f, int argc, char *argv[])
 		exit(0);
 	}
 
-	if (opt.verbose) {
-		fprintf(stderr, "-v not currently supported without -x\n");
-		arg_help(argc, argv, f);
-	}
-
 	print_namespace(&nsdata);
 	exit(0);
 }
@@ -245,16 +221,32 @@ identify_ns(const struct cmd *f, int argc, char *argv[])
 static void
 identify(const struct cmd *f, int argc, char *argv[])
 {
+	char		*path;
+	int		fd;
+	uint32_t	nsid;
+
 	arg_parse(argc, argv, f);
 
-	/*
-	 * If device node contains "ns", we consider it a namespace,
-	 *  otherwise, consider it a controller.
-	 */
-	if (strstr(opt.dev, NVME_NS_PREFIX) == NULL)
-		identify_ctrlr(f, argc, argv);
+	open_dev(opt.dev, &fd, 1, 1);
+	get_nsid(fd, &path, &nsid);
+	if (nsid != 0) {
+		/*
+		 * We got namespace device, but we need to send IDENTIFY
+		 * commands to the controller, not the namespace, since it
+		 * is an admin cmd.  The namespace ID will be specified in
+		 * the IDENTIFY command itself.
+		 */
+		close(fd);
+		open_dev(path, &fd, 1, 1);
+	}
+	free(path);
+	if (opt.nsid != NONE)
+		nsid = opt.nsid;
+
+	if (nsid == 0)
+		identify_ctrlr(fd);
 	else
-		identify_ns(f, argc, argv);
+		identify_ns(fd, nsid);
 }
 
 static const struct opts identify_opts[] = {
@@ -263,6 +255,8 @@ static const struct opts identify_opts[] = {
 	    "Print identiy information in hex"),
 	OPT("verbose", 'v', arg_none, opt, verbose,
 	    "More verbosity: print entire identify table"),
+	OPT("nsid", 'n', arg_uint32, opt, nsid,
+	    "Namespace ID to use if not in device name"),
 	{ NULL, 0, arg_none, NULL, NULL }
 };
 #undef OPT
@@ -275,7 +269,7 @@ static const struct args identify_args[] = {
 static struct cmd identify_cmd = {
 	.name = "identify",
 	.fn = identify,
-	.descr = "Print a human-readable summary of the IDENTIFY information",
+	.descr = "Print summary of the IDENTIFY information",
 	.ctx_size = sizeof(opt),
 	.opts = identify_opts,
 	.args = identify_args,
