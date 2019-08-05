@@ -14,8 +14,9 @@ MAN=	cli.lua.8 \
 
 FILESDIR=	/boot/lua
 
-FILES=	brand-trident.lua \
-  brand-trueos.lua \
+FILES=	brand-ghostbsd.lua \
+	brand-trident.lua \
+	brand-trueos.lua \
 	cli.lua \
 	color.lua \
 	config.lua \
@@ -26,6 +27,7 @@ FILES=	brand-trident.lua \
 	logo-beastie.lua \
 	logo-beastiebw.lua \
 	logo-fbsdbw.lua \
+	logo-ghostbsd.lua \
 	logo-orb.lua \
 	logo-orbbw.lua \
 	logo-trident.lua \
