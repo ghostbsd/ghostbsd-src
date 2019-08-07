@@ -2845,7 +2845,7 @@ sctp_inpcb_bind(struct socket *so, struct sockaddr *addr,
 				struct sockaddr_in *sin;
 
 				/* IPV6_V6ONLY socket? */
-				if (SCTP_IPV6_V6ONLY(ip_inp)) {
+				if (SCTP_IPV6_V6ONLY(inp)) {
 					SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_PCB, EINVAL);
 					return (EINVAL);
 				}
@@ -3644,10 +3644,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 
 #ifdef INET6
 	if (ip_pcb->inp_vflag & INP_IPV6) {
-		struct in6pcb *in6p;
-
-		in6p = (struct in6pcb *)inp;
-		ip6_freepcbopts(in6p->in6p_outputopts);
+		ip6_freepcbopts(ip_pcb->in6p_outputopts);
 	}
 #endif				/* INET6 */
 	ip_pcb->inp_vflag = 0;

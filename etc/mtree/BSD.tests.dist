@@ -731,6 +731,8 @@
         file
         ..
         fs
+            fusefs
+            ..
             tmpfs
             ..
         ..
@@ -793,6 +795,8 @@
     netmap
     ..
         netpfil
+            common
+            ..
             pf
                 ioctl
                 ..

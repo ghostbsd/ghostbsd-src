@@ -748,8 +748,8 @@ __elfN(load_file)(struct proc *p, const char *file, u_long *addr,
 	imgp->object = NULL;
 	imgp->execlabel = NULL;
 
-	NDINIT(nd, LOOKUP, FOLLOW | LOCKSHARED | LOCKLEAF, UIO_SYSSPACE, file,
-	    curthread);
+	NDINIT(nd, LOOKUP, ISOPEN | FOLLOW | LOCKSHARED | LOCKLEAF,
+	    UIO_SYSSPACE, file, curthread);
 	if ((error = namei(nd)) != 0) {
 		nd->ni_vp = NULL;
 		goto fail;
@@ -2741,7 +2741,6 @@ __elfN(stackgap)(struct image_params *imgp, u_long *stack_base)
 	if (pct > 50)
 		pct = 50;
 	range = imgp->eff_stack_sz * pct / 100;
-	range *= pct;
 	arc4rand(&rbase, sizeof(rbase), 0);
 	gap = rbase % range;
 	gap &= ~(sizeof(u_long) - 1);
