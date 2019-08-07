@@ -81,12 +81,20 @@
 
 #define NVME_CAP_HI_REG_DSTRD_SHIFT			(0)
 #define NVME_CAP_HI_REG_DSTRD_MASK			(0xF)
+#define NVME_CAP_HI_REG_NSSRS_SHIFT			(4)
+#define NVME_CAP_HI_REG_NSSRS_MASK			(0x1)
 #define NVME_CAP_HI_REG_CSS_NVM_SHIFT			(5)
 #define NVME_CAP_HI_REG_CSS_NVM_MASK			(0x1)
+#define NVME_CAP_HI_REG_BPS_SHIFT			(13)
+#define NVME_CAP_HI_REG_BPS_MASK			(0x1)
 #define NVME_CAP_HI_REG_MPSMIN_SHIFT			(16)
 #define NVME_CAP_HI_REG_MPSMIN_MASK			(0xF)
 #define NVME_CAP_HI_REG_MPSMAX_SHIFT			(20)
 #define NVME_CAP_HI_REG_MPSMAX_MASK			(0xF)
+#define NVME_CAP_HI_REG_PMRS_SHIFT			(24)
+#define NVME_CAP_HI_REG_PMRS_MASK			(0x1)
+#define NVME_CAP_HI_REG_CMBS_SHIFT			(25)
+#define NVME_CAP_HI_REG_CMBS_MASK			(0x1)
 #define NVME_CAP_HI_DSTRD(x) \
 	(((x) >> NVME_CAP_HI_REG_DSTRD_SHIFT) & NVME_CAP_HI_REG_DSTRD_MASK)
 #define NVME_CAP_HI_CSS_NVM(x) \
@@ -117,6 +125,10 @@
 #define NVME_CSTS_REG_CFS_MASK				(0x1)
 #define NVME_CSTS_REG_SHST_SHIFT			(2)
 #define NVME_CSTS_REG_SHST_MASK				(0x3)
+#define NVME_CSTS_REG_NVSRO_SHIFT			(4)
+#define NVME_CSTS_REG_NVSRO_MASK			(0x1)
+#define NVME_CSTS_REG_PP_SHIFT				(5)
+#define NVME_CSTS_REG_PP_MASK				(0x1)
 
 #define NVME_CSTS_GET_SHST(csts)			(((csts) >> NVME_CSTS_REG_SHST_SHIFT) & NVME_CSTS_REG_SHST_MASK)
 
@@ -136,6 +148,8 @@
 #define NVME_STATUS_SC_MASK				(0xFF)
 #define NVME_STATUS_SCT_SHIFT				(9)
 #define NVME_STATUS_SCT_MASK				(0x7)
+#define NVME_STATUS_CRD_SHIFT				(12)
+#define NVME_STATUS_CRD_MASK				(0x3)
 #define NVME_STATUS_M_SHIFT				(14)
 #define NVME_STATUS_M_MASK				(0x1)
 #define NVME_STATUS_DNR_SHIFT				(15)
@@ -445,6 +459,35 @@ enum nvme_critical_warning_state {
 #define NVME_FIRMWARE_PAGE_AFI_SLOT_SHIFT		(0)
 #define NVME_FIRMWARE_PAGE_AFI_SLOT_MASK		(0x7)
 
+/* Commands Supported and Effects */
+#define	NVME_CE_PAGE_CSUP_SHIFT				(0)
+#define	NVME_CE_PAGE_CSUP_MASK				(0x1)
+#define	NVME_CE_PAGE_LBCC_SHIFT				(1)
+#define	NVME_CE_PAGE_LBCC_MASK				(0x1)
+#define	NVME_CE_PAGE_NCC_SHIFT				(2)
+#define	NVME_CE_PAGE_NCC_MASK				(0x1)
+#define	NVME_CE_PAGE_NIC_SHIFT				(3)
+#define	NVME_CE_PAGE_NIC_MASK				(0x1)
+#define	NVME_CE_PAGE_CCC_SHIFT				(4)
+#define	NVME_CE_PAGE_CCC_MASK				(0x1)
+#define	NVME_CE_PAGE_CSE_SHIFT				(16)
+#define	NVME_CE_PAGE_CSE_MASK				(0x7)
+#define	NVME_CE_PAGE_UUID_SHIFT				(19)
+#define	NVME_CE_PAGE_UUID_MASK				(0x1)
+
+/* Sanitize Status */
+#define	NVME_SS_PAGE_SSTAT_STATUS_SHIFT			(0)
+#define	NVME_SS_PAGE_SSTAT_STATUS_MASK			(0x7)
+#define	NVME_SS_PAGE_SSTAT_STATUS_NEVER			(0)
+#define	NVME_SS_PAGE_SSTAT_STATUS_COMPLETED		(1)
+#define	NVME_SS_PAGE_SSTAT_STATUS_INPROG		(2)
+#define	NVME_SS_PAGE_SSTAT_STATUS_FAILED		(3)
+#define	NVME_SS_PAGE_SSTAT_STATUS_COMPLETEDWD		(4)
+#define	NVME_SS_PAGE_SSTAT_PASSES_SHIFT			(3)
+#define	NVME_SS_PAGE_SSTAT_PASSES_MASK			(0x1f)
+#define	NVME_SS_PAGE_SSTAT_GDE_SHIFT			(8)
+#define	NVME_SS_PAGE_SSTAT_GDE_MASK			(0x1)
+
 /* CC register SHN field values */
 enum shn_value {
 	NVME_SHN_NORMAL		= 0x1,
@@ -460,34 +503,37 @@ enum shst_value {
 
 struct nvme_registers
 {
-	/** controller capabilities */
-	uint32_t		cap_lo;
-	uint32_t		cap_hi;
-
-	uint32_t		vs;	/* version */
-	uint32_t		intms;	/* interrupt mask set */
-	uint32_t		intmc;	/* interrupt mask clear */
-
-	/** controller configuration */
-	uint32_t		cc;
-
-	uint32_t		reserved1;
-
-	/** controller status */
-	uint32_t		csts;
-
-	uint32_t		reserved2;
-
-	/** admin queue attributes */
-	uint32_t		aqa;
-
-	uint64_t		asq;	/* admin submission queue base addr */
-	uint64_t		acq;	/* admin completion queue base addr */
-	uint32_t		reserved3[0x3f2];
-
+	uint32_t	cap_lo; /* controller capabilities */
+	uint32_t	cap_hi;
+	uint32_t	vs;	/* version */
+	uint32_t	intms;	/* interrupt mask set */
+	uint32_t	intmc;	/* interrupt mask clear */
+	uint32_t	cc;	/* controller configuration */
+	uint32_t	reserved1;
+	uint32_t	csts;	/* controller status */
+	uint32_t	nssr;	/* NVM Subsystem Reset */
+	uint32_t	aqa;	/* admin queue attributes */
+	uint64_t	asq;	/* admin submission queue base addr */
+	uint64_t	acq;	/* admin completion queue base addr */
+	uint32_t	cmbloc;	/* Controller Memory Buffer Location */
+	uint32_t	cmbsz;	/* Controller Memory Buffer Size */
+	uint32_t	bpinfo;	/* Boot Partition Information */
+	uint32_t	bprsel;	/* Boot Partition Read Select */
+	uint64_t	bpmbl;	/* Boot Partition Memory Buffer Location */
+	uint64_t	cmbmsc;	/* Controller Memory Buffer Memory Space Control */
+	uint32_t	cmbsts;	/* Controller Memory Buffer Status */
+	uint8_t		reserved3[3492]; /* 5Ch - DFFh */
+	uint32_t	pmrcap;	/* Persistent Memory Capabilities */
+	uint32_t	pmrctl;	/* Persistent Memory Region Control */
+	uint32_t	pmrsts;	/* Persistent Memory Region Status */
+	uint32_t	pmrebs;	/* Persistent Memory Region Elasticity Buffer Size */
+	uint32_t	pmrswtp; /* Persistent Memory Region Sustained Write Throughput */
+	uint32_t	pmrmsc_lo; /* Persistent Memory Region Controller Memory Space Control */
+	uint32_t	pmrmsc_hi;
+	uint8_t		reserved4[484]; /* E1Ch - FFFh */
 	struct {
-	    uint32_t		sq_tdbl; /* submission queue tail doorbell */
-	    uint32_t		cq_hdbl; /* completion queue head doorbell */
+	    uint32_t	sq_tdbl; /* submission queue tail doorbell */
+	    uint32_t	cq_hdbl; /* completion queue head doorbell */
 	} doorbell[1] __packed;
 } __packed;
 
@@ -562,6 +608,7 @@ enum nvme_status_code_type {
 	NVME_SCT_GENERIC		= 0x0,
 	NVME_SCT_COMMAND_SPECIFIC	= 0x1,
 	NVME_SCT_MEDIA_ERROR		= 0x2,
+	NVME_SCT_PATH_RELATED		= 0x3,
 	/* 0x3-0x6 - reserved */
 	NVME_SCT_VENDOR_SPECIFIC	= 0x7,
 };
@@ -667,6 +714,17 @@ enum nvme_media_error_status_code {
 	NVME_SC_COMPARE_FAILURE			= 0x85,
 	NVME_SC_ACCESS_DENIED			= 0x86,
 	NVME_SC_DEALLOCATED_OR_UNWRITTEN	= 0x87,
+};
+
+/* path related status codes */
+enum nvme_path_related_status_code {
+	NVME_SC_INTERNAL_PATH_ERROR		= 0x00,
+	NVME_SC_ASYMMETRIC_ACCESS_PERSISTENT_LOSS = 0x01,
+	NVME_SC_ASYMMETRIC_ACCESS_INACCESSIBLE	= 0x02,
+	NVME_SC_ASYMMETRIC_ACCESS_TRANSITION	= 0x03,
+	NVME_SC_CONTROLLER_PATHING_ERROR	= 0x60,
+	NVME_SC_HOST_PATHING_ERROR		= 0x70,
+	NVME_SC_COMMAND_ABOTHED_BY_HOST		= 0x71,
 };
 
 /* admin opcodes */
@@ -1291,6 +1349,43 @@ struct nvme_ns_list {
 
 _Static_assert(sizeof(struct nvme_ns_list) == 4096, "bad size for nvme_ns_list");
 
+struct nvme_command_effects_page {
+	uint32_t		acs[256];
+	uint32_t		iocs[256];
+	uint8_t			reserved[2048];
+} __packed __aligned(4);
+
+_Static_assert(sizeof(struct nvme_command_effects_page) == 4096,
+    "bad size for nvme_command_effects_page");
+
+struct nvme_res_notification_page {
+	uint64_t		log_page_count;
+	uint8_t			log_page_type;
+	uint8_t			available_log_pages;
+	uint8_t			reserved2;
+	uint32_t		nsid;
+	uint8_t			reserved[48];
+} __packed __aligned(4);
+
+_Static_assert(sizeof(struct nvme_res_notification_page) == 64,
+    "bad size for nvme_res_notification_page");
+
+struct nvme_sanitize_status_page {
+	uint16_t		sprog;
+	uint16_t		sstat;
+	uint32_t		scdw10;
+	uint32_t		etfo;
+	uint32_t		etfbe;
+	uint32_t		etfce;
+	uint32_t		etfownd;
+	uint32_t		etfbewnd;
+	uint32_t		etfcewnd;
+	uint8_t			reserved[480];
+} __packed __aligned(4);
+
+_Static_assert(sizeof(struct nvme_sanitize_status_page) == 512,
+    "bad size for nvme_sanitize_status_page");
+
 struct intel_log_temp_stats
 {
 	uint64_t	current;
@@ -1305,6 +1400,56 @@ struct intel_log_temp_stats
 } __packed __aligned(4);
 
 _Static_assert(sizeof(struct intel_log_temp_stats) == 13 * 8, "bad size for intel_log_temp_stats");
+
+struct nvme_resv_reg_ctrlr
+{
+	uint16_t		ctrlr_id;	/* Controller ID */
+	uint8_t			rcsts;		/* Reservation Status */
+	uint8_t			reserved3[5];
+	uint64_t		hostid;		/* Host Identifier */
+	uint64_t		rkey;		/* Reservation Key */
+} __packed __aligned(4);
+
+_Static_assert(sizeof(struct nvme_resv_reg_ctrlr) == 24, "bad size for nvme_resv_reg_ctrlr");
+
+struct nvme_resv_reg_ctrlr_ext
+{
+	uint16_t		ctrlr_id;	/* Controller ID */
+	uint8_t			rcsts;		/* Reservation Status */
+	uint8_t			reserved3[5];
+	uint64_t		rkey;		/* Reservation Key */
+	uint64_t		hostid[2];	/* Host Identifier */
+	uint8_t			reserved32[32];
+} __packed __aligned(4);
+
+_Static_assert(sizeof(struct nvme_resv_reg_ctrlr_ext) == 64, "bad size for nvme_resv_reg_ctrlr_ext");
+
+struct nvme_resv_status
+{
+	uint32_t		gen;		/* Generation */
+	uint8_t			rtype;		/* Reservation Type */
+	uint8_t			regctl[2];	/* Number of Registered Controllers */
+	uint8_t			reserved7[2];
+	uint8_t			ptpls;		/* Persist Through Power Loss State */
+	uint8_t			reserved10[14];
+	struct nvme_resv_reg_ctrlr	ctrlr[0];
+} __packed __aligned(4);
+
+_Static_assert(sizeof(struct nvme_resv_status) == 24, "bad size for nvme_resv_status");
+
+struct nvme_resv_status_ext
+{
+	uint32_t		gen;		/* Generation */
+	uint8_t			rtype;		/* Reservation Type */
+	uint8_t			regctl[2];	/* Number of Registered Controllers */
+	uint8_t			reserved7[2];
+	uint8_t			ptpls;		/* Persist Through Power Loss State */
+	uint8_t			reserved10[14];
+	uint8_t			reserved24[40];
+	struct nvme_resv_reg_ctrlr_ext	ctrlr[0];
+} __packed __aligned(4);
+
+_Static_assert(sizeof(struct nvme_resv_status_ext) == 64, "bad size for nvme_resv_status_ext");
 
 #define NVME_TEST_MAX_THREADS	128
 
@@ -1720,6 +1865,38 @@ void	nvme_ns_list_swapbytes(struct nvme_ns_list *s)
 }
 
 static inline
+void	nvme_command_effects_page_swapbytes(struct nvme_command_effects_page *s)
+{
+	int i;
+
+	for (i = 0; i < 256; i++)
+		s->acs[i] = le32toh(s->acs[i]);
+	for (i = 0; i < 256; i++)
+		s->iocs[i] = le32toh(s->iocs[i]);
+}
+
+static inline
+void	nvme_res_notification_page_swapbytes(struct nvme_res_notification_page *s)
+{
+	s->log_page_count = le64toh(s->log_page_count);
+	s->nsid = le32toh(s->nsid);
+}
+
+static inline
+void	nvme_sanitize_status_page_swapbytes(struct nvme_sanitize_status_page *s)
+{
+	s->sprog = le16toh(s->sprog);
+	s->sstat = le16toh(s->sstat);
+	s->scdw10 = le32toh(s->scdw10);
+	s->etfo = le32toh(s->etfo);
+	s->etfbe = le32toh(s->etfbe);
+	s->etfce = le32toh(s->etfce);
+	s->etfownd = le32toh(s->etfownd);
+	s->etfbewnd = le32toh(s->etfbewnd);
+	s->etfcewnd = le32toh(s->etfcewnd);
+}
+
+static inline
 void	intel_log_temp_stats_swapbytes(struct intel_log_temp_stats *s)
 {
 
@@ -1732,6 +1909,36 @@ void	intel_log_temp_stats_swapbytes(struct intel_log_temp_stats *s)
 	s->max_oper_temp = le64toh(s->max_oper_temp);
 	s->min_oper_temp = le64toh(s->min_oper_temp);
 	s->est_offset = le64toh(s->est_offset);
+}
+
+static inline
+void	nvme_resv_status_swapbytes(struct nvme_resv_status *s, size_t size)
+{
+	u_int i, n;
+
+	s->gen = le32toh(s->gen);
+	n = (s->regctl[1] << 8) | s->regctl[0];
+	n = MIN(n, (size - sizeof(s)) / sizeof(s->ctrlr[0]));
+	for (i = 0; i < n; i++) {
+		s->ctrlr[i].ctrlr_id = le16toh(s->ctrlr[i].ctrlr_id);
+		s->ctrlr[i].hostid = le64toh(s->ctrlr[i].hostid);
+		s->ctrlr[i].rkey = le64toh(s->ctrlr[i].rkey);
+	}
+}
+
+static inline
+void	nvme_resv_status_ext_swapbytes(struct nvme_resv_status_ext *s, size_t size)
+{
+	u_int i, n;
+
+	s->gen = le32toh(s->gen);
+	n = (s->regctl[1] << 8) | s->regctl[0];
+	n = MIN(n, (size - sizeof(s)) / sizeof(s->ctrlr[0]));
+	for (i = 0; i < n; i++) {
+		s->ctrlr[i].ctrlr_id = le16toh(s->ctrlr[i].ctrlr_id);
+		s->ctrlr[i].rkey = le64toh(s->ctrlr[i].rkey);
+		nvme_le128toh((void *)s->ctrlr[i].hostid);
+	}
 }
 
 #endif /* __NVME_H__ */
