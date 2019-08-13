@@ -3,6 +3,10 @@
 #
 # $FreeBSD$
 #
+
+# common files stuff between i386 and amd64
+include 	"conf/files.x86"
+
 # The long compile-with and dependency lines are required because of
 # limitations in config: backslash-newline doesn't work in strings, and
 # dependency lines other than the first are silently ignored.
@@ -77,11 +81,6 @@ atkbdmap.h			optional	atkbd_dflt_keymap	\
 	compile-with	"kbdcontrol -P ${S:S/sys$/share/}/vt/keymaps -P ${S:S/sys$/share/}/syscons/keymaps -L ${ATKBD_DFLT_KEYMAP} | sed -e 's/^static keymap_t.* = /static keymap_t key_map = /' -e 's/^static accentmap_t.* = /static accentmap_t accent_map = /' > atkbdmap.h"			\
 	no-obj no-implicit-rule before-depend				\
 	clean		"atkbdmap.h"
-#
-ukbdmap.h			optional	ukbd_dflt_keymap	\
-	compile-with	"kbdcontrol -P ${S:S/sys$/share/}/vt/keymaps -P ${S:S/sys$/share/}/syscons/keymaps -L ${UKBD_DFLT_KEYMAP} | sed -e 's/^static keymap_t.* = /static keymap_t key_map = /' -e 's/^static accentmap_t.* = /static accentmap_t accent_map = /' > ukbdmap.h"			\
-	no-obj no-implicit-rule before-depend				\
-	clean		"ukbdmap.h"
 #
 hpt27xx_lib.o			optional	hpt27xx			\
 	dependency	"$S/dev/hpt27xx/amd64-elf.hpt27xx_lib.o.uu"	\
@@ -237,12 +236,6 @@ dev/bxe/57712_init_values.c     optional	bxe pci
 dev/coretemp/coretemp.c		optional	coretemp
 dev/cpuctl/cpuctl.c		optional	cpuctl
 dev/dpms/dpms.c			optional	dpms
-# There are no systems with isa slots, so all ed isa entries should go..
-dev/ed/if_ed_3c503.c		optional	ed isa ed_3c503
-dev/ed/if_ed_isa.c		optional	ed isa
-dev/ed/if_ed_wd80x3.c		optional	ed isa
-dev/ed/if_ed_hpp.c		optional	ed isa ed_hpp
-dev/ed/if_ed_sic.c		optional	ed isa ed_sic
 dev/fb/fb.c			optional	fb | vga
 dev/fb/s3_pci.c			optional	s3pci
 dev/fb/vesa.c			optional	vga vesa
@@ -298,10 +291,6 @@ dev/ixl/i40e_adminq.c		optional	ixl pci | iavf pci \
 	compile-with "${NORMAL_C} -I$S/dev/ixl"
 dev/ixl/i40e_dcb.c		optional	ixl pci \
 	compile-with "${NORMAL_C} -I$S/dev/ixl"
-dev/fdc/fdc.c			optional	fdc
-dev/fdc/fdc_acpi.c		optional	fdc
-dev/fdc/fdc_isa.c		optional	fdc isa
-dev/fdc/fdc_pccard.c		optional	fdc pccard
 dev/gpio/bytgpio.c		optional	bytgpio
 dev/gpio/chvgpio.c		optional	chvgpio
 dev/hpt27xx/hpt27xx_os_bsd.c	optional	hpt27xx
@@ -357,17 +346,6 @@ dev/ntb/ntb_if.m		optional	ntb | ntb_transport | if_ntb | ntb_hw_amd | ntb_hw_in
 dev/ntb/ntb_hw/ntb_hw_amd.c	optional	ntb_hw_amd | ntb_hw
 dev/ntb/ntb_hw/ntb_hw_intel.c	optional	ntb_hw_intel | ntb_hw
 dev/ntb/ntb_hw/ntb_hw_plx.c	optional	ntb_hw_plx | ntb_hw
-dev/nvd/nvd.c			optional	nvd nvme
-dev/nvme/nvme.c			optional	nvme
-dev/nvme/nvme_ctrlr.c		optional	nvme
-dev/nvme/nvme_ctrlr_cmd.c	optional	nvme
-dev/nvme/nvme_ns.c		optional	nvme
-dev/nvme/nvme_ns_cmd.c		optional	nvme
-dev/nvme/nvme_qpair.c		optional	nvme
-dev/nvme/nvme_sim.c		optional	nvme scbus
-dev/nvme/nvme_sysctl.c		optional	nvme
-dev/nvme/nvme_test.c		optional	nvme
-dev/nvme/nvme_util.c		optional	nvme
 dev/nvram/nvram.c		optional	nvram isa
 dev/random/ivy.c		optional	rdrand_rng !random_loadable
 dev/random/nehemiah.c		optional	padlock_rng !random_loadable

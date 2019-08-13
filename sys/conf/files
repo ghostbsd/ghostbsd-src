@@ -58,6 +58,10 @@ teken_state.h		optional sc | vt				   \
 	compile-with	"${AWK} -f $S/teken/gensequences $S/teken/sequences > teken_state.h" \
 	no-obj no-implicit-rule before-depend				   \
 	clean		"teken_state.h"
+ukbdmap.h			optional	ukbd_dflt_keymap	\
+	compile-with	"kbdcontrol -P ${S:S/sys$/share/}/vt/keymaps -P ${S:S/sys$/share/}/syscons/keymaps -L ${UKBD_DFLT_KEYMAP} | sed -e 's/^static keymap_t.* = /static keymap_t key_map = /' -e 's/^static accentmap_t.* = /static accentmap_t accent_map = /' > ukbdmap.h"			\
+	no-obj no-implicit-rule before-depend				\
+	clean		"ukbdmap.h"
 usbdevs.h			optional usb				   \
 	dependency	"$S/tools/usbdevs2h.awk $S/dev/usb/usbdevs" \
 	compile-with	"${AWK} -f $S/tools/usbdevs2h.awk $S/dev/usb/usbdevs -h" \
@@ -648,6 +652,8 @@ contrib/zstd/lib/common/entropy_common.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/common/error_private.c		optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/common/xxhash.c		optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/zstd_compress.c	optional zstdio compile-with ${ZSTD_C}
+contrib/zstd/lib/compress/zstd_compress_literals.c	optional zstdio compile-with ${ZSTD_C}
+contrib/zstd/lib/compress/zstd_compress_sequences.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/fse_compress.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/hist.c		optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/huf_compress.c	optional zstdio compile-with ${ZSTD_C}
@@ -658,7 +664,9 @@ contrib/zstd/lib/compress/zstd_ldm.c		optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/zstd_opt.c		optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/decompress/zstd_ddict.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/decompress/zstd_decompress.c	optional zstdio compile-with ${ZSTD_C}
-contrib/zstd/lib/decompress/zstd_decompress_block.c	optional zstdio compile-with ${ZSTD_C}
+# See comment in sys/conf/kern.pre.mk
+contrib/zstd/lib/decompress/zstd_decompress_block.c	optional zstdio \
+	compile-with "${ZSTD_C} ${ZSTD_DECOMPRESS_BLOCK_FLAGS}"
 contrib/zstd/lib/decompress/huf_decompress.c	optional zstdio compile-with ${ZSTD_C}
 # Blake 2
 contrib/libb2/blake2b-ref.c	optional crypto | ipsec | ipsec_support \
@@ -3231,6 +3239,7 @@ dev/usb/net/if_aue.c		optional aue
 dev/usb/net/if_axe.c		optional axe
 dev/usb/net/if_axge.c		optional axge
 dev/usb/net/if_cdce.c		optional cdce
+dev/usb/net/if_cdceem.c		optional cdceem
 dev/usb/net/if_cue.c		optional cue
 dev/usb/net/if_ipheth.c		optional ipheth
 dev/usb/net/if_kue.c		optional kue
@@ -3244,8 +3253,8 @@ dev/usb/net/if_usie.c		optional usie
 dev/usb/net/if_urndis.c		optional urndis
 dev/usb/net/ruephy.c		optional rue
 dev/usb/net/usb_ethernet.c	optional uether | aue | axe | axge | cdce | \
-					 cue | ipheth | kue | mos | rue | \
-					 smsc | udav | ure | urndis | muge
+					 cdceem | cue | ipheth | kue | mos | \
+					 rue | smsc | udav | ure | urndis | muge
 dev/usb/net/uhso.c		optional uhso
 #
 # USB WLAN drivers
@@ -3350,6 +3359,7 @@ dev/usb/template/usb_template_phone.c	optional usb_template
 dev/usb/template/usb_template_serialnet.c	optional usb_template
 dev/usb/template/usb_template_midi.c	optional usb_template
 dev/usb/template/usb_template_multi.c	optional usb_template
+dev/usb/template/usb_template_cdceem.c	optional usb_template
 #
 # USB video drivers
 #
