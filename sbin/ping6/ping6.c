@@ -198,7 +198,7 @@ struct tv32 {
 #define F_DONTFRAG	0x1000000
 #define F_NOUSERDATA	(F_NODEADDR | F_FQDN | F_FQDNOLD | F_SUPTYPES)
 #define	F_WAITTIME	0x2000000
-u_int options;
+static u_int options;
 
 #define IN6LEN		sizeof(struct in6_addr)
 #define SA6LEN		sizeof(struct sockaddr_in6)
@@ -279,7 +279,7 @@ static void	 pr_suptypes(struct icmp6_nodeinfo *, size_t);
 static void	 pr_nodeaddr(struct icmp6_nodeinfo *, int);
 static int	 myechoreply(const struct icmp6_hdr *);
 static int	 mynireply(const struct icmp6_nodeinfo *);
-static char *dnsdecode(const u_char **, const u_char *, const u_char *,
+static char *dnsdecode(const u_char *, const u_char *, const u_char *,
     char *, size_t);
 static void	 pr_pack(u_char *, int, struct msghdr *);
 static void	 pr_exthdrs(struct msghdr *);
@@ -659,6 +659,12 @@ main(int argc, char *argv[])
 		err(1, "socket srecv");
 	freeaddrinfo(res);
 
+	/* revoke root privilege */
+	if (seteuid(getuid()) != 0)
+		err(1, "seteuid() failed");
+	if (setuid(getuid()) != 0)
+		err(1, "setuid() failed");
+
 	/* set the source address if specified. */
 	if ((options & F_SRCADDR) != 0) {
 		/* properly fill sin6_scope_id */
@@ -728,12 +734,6 @@ main(int argc, char *argv[])
 			err(1, "setsockopt(IPV6_RECVRTHDRDSTOPTS)");
 #endif
 	}
-
-	/* revoke root privilege */
-	if (seteuid(getuid()) != 0)
-		err(1, "seteuid() failed");
-	if (setuid(getuid()) != 0)
-		err(1, "setuid() failed");
 
 	if ((options & F_FLOOD) && (options & F_INTERVAL))
 		errx(1, "-f and -i incompatible options");
@@ -1431,7 +1431,7 @@ mynireply(const struct icmp6_nodeinfo *nip)
 }
 
 static char *
-dnsdecode(const u_char **sp, const u_char *ep, const u_char *base, char *buf,
+dnsdecode(const u_char *sp, const u_char *ep, const u_char *base, char *buf,
 	size_t bufsiz)
 	/*base for compressed name*/
 {
@@ -1441,14 +1441,14 @@ dnsdecode(const u_char **sp, const u_char *ep, const u_char *base, char *buf,
 	const u_char *comp;
 	int l;
 
-	cp = *sp;
+	cp = sp;
 	*buf = '\0';
 
 	if (cp >= ep)
 		return NULL;
 	while (cp < ep) {
 		i = *cp;
-		if (i == 0 || cp != *sp) {
+		if (i == 0 || cp != sp) {
 			if (strlcat((char *)buf, ".", bufsiz) >= bufsiz)
 				return NULL;	/*result overrun*/
 		}
@@ -1462,7 +1462,7 @@ dnsdecode(const u_char **sp, const u_char *ep, const u_char *base, char *buf,
 				return NULL;
 
 			comp = base + (i & 0x3f);
-			if (dnsdecode(&comp, cp, base, cresult,
+			if (dnsdecode(comp, cp, base, cresult,
 			    sizeof(cresult)) == NULL)
 				return NULL;
 			if (strlcat(buf, cresult, bufsiz) >= bufsiz)
@@ -1486,7 +1486,7 @@ dnsdecode(const u_char **sp, const u_char *ep, const u_char *base, char *buf,
 	if (i != 0)
 		return NULL;	/*not terminated*/
 	cp++;
-	*sp = cp;
+	sp = cp;
 	return buf;
 }
 
@@ -1679,7 +1679,7 @@ pr_pack(u_char *buf, int cc, struct msghdr *mhdr)
 			} else {
 				i = 0;
 				while (cp < end) {
-					if (dnsdecode((const u_char **)&cp, end,
+					if (dnsdecode((const u_char *)cp, end,
 					    (const u_char *)(ni + 1), dnsname,
 					    sizeof(dnsname)) == NULL) {
 						printf("???");
@@ -2461,7 +2461,7 @@ pr_icmph(struct icmp6_hdr *icp, u_char *end)
 				}
 				printf(", subject=%s", niqcode[ni->ni_code]);
 				cp = (const u_char *)(ni + 1);
-				if (dnsdecode(&cp, end, NULL, dnsname,
+				if (dnsdecode(cp, end, NULL, dnsname,
 				    sizeof(dnsname)) != NULL)
 					printf("(%s)", dnsname);
 				else
