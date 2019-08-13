@@ -1004,6 +1004,7 @@ MLINKS+=g_bio.9 g_alloc_bio.9 \
 	g_bio.9 g_clone_bio.9 \
 	g_bio.9 g_destroy_bio.9 \
 	g_bio.9 g_duplicate_bio.9 \
+	g_bio.9 g_format_bio.9 \
 	g_bio.9 g_new_bio.9 \
 	g_bio.9 g_print_bio.9 \
 	g_bio.9 g_reset_bio.9
@@ -1789,6 +1790,7 @@ MLINKS+=sbuf.9 sbuf_bcat.9 \
 	sbuf.9 sbuf_new.9 \
 	sbuf.9 sbuf_new_auto.9 \
 	sbuf.9 sbuf_new_for_sysctl.9 \
+	sbuf.9 sbuf_nl_terminate.9 \
 	sbuf.9 sbuf_printf.9 \
 	sbuf.9 sbuf_printf_drain.9 \
 	sbuf.9 sbuf_putbuf.9 \
