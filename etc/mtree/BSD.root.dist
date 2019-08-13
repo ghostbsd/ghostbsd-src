@@ -112,6 +112,8 @@
         ..
         geom
         ..
+        nvmecontrol
+        ..
     ..
     libexec
 	dhcpcd-hooks
