@@ -1698,7 +1698,7 @@ insmntque1(struct vnode *vp, struct mount *mp,
 	 */
 	MNT_ILOCK(mp);
 	VI_LOCK(vp);
-	if (((mp->mnt_kern_flag & MNTK_NOINSMNTQ) != 0 &&
+	if (((mp->mnt_kern_flag & MNTK_UNMOUNT) != 0 &&
 	    ((mp->mnt_kern_flag & MNTK_UNMOUNTF) != 0 ||
 	    mp->mnt_nvnodelistsize == 0)) &&
 	    (vp->v_vflag & VV_FORCEINSMQ) == 0) {
@@ -1786,13 +1786,9 @@ bufobj_invalbuf(struct bufobj *bo, int flags, int slpflag, int slptimeo)
 	 */
 	do {
 		bufobj_wwait(bo, 0, 0);
-		if ((flags & V_VMIO) == 0) {
+		if ((flags & V_VMIO) == 0 && bo->bo_object != NULL) {
 			BO_UNLOCK(bo);
-			if (bo->bo_object != NULL) {
-				VM_OBJECT_WLOCK(bo->bo_object);
-				vm_object_pip_wait(bo->bo_object, "bovlbx");
-				VM_OBJECT_WUNLOCK(bo->bo_object);
-			}
+			vm_object_pip_wait_unlocked(bo->bo_object, "bovlbx");
 			BO_LOCK(bo);
 		}
 	} while (bo->bo_numoutput > 0);
@@ -3022,6 +3018,19 @@ _vhold(struct vnode *vp, bool locked)
 		VI_UNLOCK(vp);
 }
 
+void
+vholdnz(struct vnode *vp)
+{
+
+	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
+#ifdef INVARIANTS
+	int old = atomic_fetchadd_int(&vp->v_holdcnt, 1);
+	VNASSERT(old > 0, vp, ("%s: wrong hold count", __func__));
+#else
+	atomic_add_int(&vp->v_holdcnt, 1);
+#endif
+}
+
 /*
  * Drop the hold count of the vnode.  If this is the last reference to
  * the vnode we place it on the free list unless it has been vgone'd
@@ -3822,7 +3831,6 @@ DB_SHOW_COMMAND(mount, db_show_mount)
 	MNT_KERN_FLAG(MNTK_UNMOUNTF);
 	MNT_KERN_FLAG(MNTK_ASYNC);
 	MNT_KERN_FLAG(MNTK_SOFTDEP);
-	MNT_KERN_FLAG(MNTK_NOINSMNTQ);
 	MNT_KERN_FLAG(MNTK_DRAINING);
 	MNT_KERN_FLAG(MNTK_REFEXPIRE);
 	MNT_KERN_FLAG(MNTK_EXTENDED_SHARED);

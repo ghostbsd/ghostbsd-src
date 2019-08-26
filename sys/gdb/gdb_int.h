@@ -31,6 +31,10 @@
 #ifndef _GDB_GDB_INT_H_
 #define	_GDB_GDB_INT_H_
 
+#ifndef EOF
+#define EOF	(-1)
+#endif
+
 extern struct gdb_dbgport *gdb_cur;
 
 extern int gdb_listening;
@@ -54,7 +58,7 @@ gdb_rx_char(void)
 		c = *gdb_rxp++;
 		gdb_rxsz--;
 	} else
-		c = -1;
+		c = EOF;
 	return (c);
 }
 
@@ -62,6 +66,7 @@ void gdb_tx_begin(char);
 int gdb_tx_end(void);
 int gdb_tx_mem(const unsigned char *, size_t);
 void gdb_tx_reg(int);
+bool gdb_txbuf_has_capacity(size_t);
 int gdb_rx_bindata(unsigned char *data, size_t datalen, size_t *amt);
 int gdb_search_mem(const unsigned char *addr, size_t size,
     const unsigned char *pat, size_t patlen, const unsigned char **found);

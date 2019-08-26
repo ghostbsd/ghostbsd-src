@@ -994,7 +994,7 @@ t4opt_to_tcpopt(const struct tcp_options *t4opt, struct tcpopt *to)
 		to->to_mss = be16toh(t4opt->mss);
 	}
 
-	if (t4opt->wsf) {
+	if (t4opt->wsf > 0 && t4opt->wsf < 15) {
 		to->to_flags |= TOF_SCALE;
 		to->to_wscale = t4opt->wsf;
 	}
@@ -1145,7 +1145,7 @@ get_l2te_for_nexthop(struct port_info *pi, struct ifnet *ifp,
 	struct l2t_entry *e;
 	struct sockaddr_in6 sin6;
 	struct sockaddr *dst = (void *)&sin6;
- 
+
 	if (inc->inc_flags & INC_ISIPV6) {
 		struct nhop6_basic nh6;
 

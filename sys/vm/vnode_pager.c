@@ -200,6 +200,21 @@ vnode_destroy_vobject(struct vnode *vp)
 		 * don't double-terminate the object
 		 */
 		if ((obj->flags & OBJ_DEAD) == 0) {
+			vm_object_set_flag(obj, OBJ_DEAD);
+
+			/*
+			 * Clean pages and flush buffers.
+			 */
+			vm_object_page_clean(obj, 0, 0, OBJPC_SYNC);
+			VM_OBJECT_WUNLOCK(obj);
+
+			vinvalbuf(vp, V_SAVE, 0, 0);
+
+			BO_LOCK(&vp->v_bufobj);
+			vp->v_bufobj.bo_flag |= BO_DEAD;
+			BO_UNLOCK(&vp->v_bufobj);
+
+			VM_OBJECT_WLOCK(obj);
 			vm_object_terminate(obj);
 		} else {
 			/*
@@ -355,13 +370,14 @@ vnode_pager_haspage(vm_object_t object, vm_pindex_t pindex, int *before,
 {
 	struct vnode *vp = object->handle;
 	daddr_t bn;
+	uintptr_t lockstate;
 	int err;
 	daddr_t reqblock;
 	int poff;
 	int bsize;
 	int pagesperblock, blocksperpage;
 
-	VM_OBJECT_ASSERT_WLOCKED(object);
+	VM_OBJECT_ASSERT_LOCKED(object);
 	/*
 	 * If no vp or vp is doomed or marked transparent to VM, we do not
 	 * have the page.
@@ -384,9 +400,9 @@ vnode_pager_haspage(vm_object_t object, vm_pindex_t pindex, int *before,
 		blocksperpage = (PAGE_SIZE / bsize);
 		reqblock = pindex * blocksperpage;
 	}
-	VM_OBJECT_WUNLOCK(object);
+	lockstate = VM_OBJECT_DROP(object);
 	err = VOP_BMAP(vp, reqblock, NULL, &bn, after, before);
-	VM_OBJECT_WLOCK(object);
+	VM_OBJECT_PICKUP(object, lockstate);
 	if (err)
 		return TRUE;
 	if (bn == -1)

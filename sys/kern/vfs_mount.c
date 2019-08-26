@@ -1387,14 +1387,13 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 		dounmount_cleanup(mp, coveredvp, 0);
 		return (EBUSY);
 	}
-	mp->mnt_kern_flag |= MNTK_UNMOUNT | MNTK_NOINSMNTQ;
+	mp->mnt_kern_flag |= MNTK_UNMOUNT;
 	if (flags & MNT_NONBUSY) {
 		MNT_IUNLOCK(mp);
 		error = vfs_check_usecounts(mp);
 		MNT_ILOCK(mp);
 		if (error != 0) {
-			dounmount_cleanup(mp, coveredvp, MNTK_UNMOUNT |
-			    MNTK_NOINSMNTQ);
+			dounmount_cleanup(mp, coveredvp, MNTK_UNMOUNT);
 			return (error);
 		}
 	}
@@ -1456,7 +1455,6 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 	 */
 	if (error && error != ENXIO) {
 		MNT_ILOCK(mp);
-		mp->mnt_kern_flag &= ~MNTK_NOINSMNTQ;
 		if ((mp->mnt_flag & MNT_RDONLY) == 0) {
 			MNT_IUNLOCK(mp);
 			vfs_allocate_syncvnode(mp);
@@ -1831,12 +1829,21 @@ vfs_copyopt(struct vfsoptlist *opts, const char *name, void *dest, int len)
 int
 __vfs_statfs(struct mount *mp, struct statfs *sbp)
 {
-	int error;
 
-	error = mp->mnt_op->vfs_statfs(mp, &mp->mnt_stat);
-	if (sbp != &mp->mnt_stat)
-		*sbp = mp->mnt_stat;
-	return (error);
+	/*
+	 * Filesystems only fill in part of the structure for updates, we
+	 * have to read the entirety first to get all content.
+	 */
+	memcpy(sbp, &mp->mnt_stat, sizeof(*sbp));
+
+	/*
+	 * Set these in case the underlying filesystem fails to do so.
+	 */
+	sbp->f_version = STATFS_VERSION;
+	sbp->f_namemax = NAME_MAX;
+	sbp->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
+
+	return (mp->mnt_op->vfs_statfs(mp, sbp));
 }
 
 void

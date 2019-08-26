@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 struct _sem;
@@ -41,6 +43,8 @@ inline void nap()
 {
 	usleep(NAP_NS / 1000);
 }
+
+bool is_unsafe_aio_enabled(void);
 
 extern const uint32_t libfuse_max_write;
 extern const uint32_t default_max_write;
