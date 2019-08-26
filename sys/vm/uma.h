@@ -294,6 +294,8 @@ uma_zone_t uma_zcache_create(char *name, int size, uma_ctor ctor, uma_dtor dtor,
 #define UMA_ALIGN_CACHE	(0 - 1)			/* Cache line size align */
 #define	UMA_ALIGNOF(type) (_Alignof(type) - 1)	/* Alignment fit for 'type' */
 
+#define	UMA_ANYDOMAIN	-1	/* Special value for domain search. */
+
 /*
  * Destroys an empty uma zone.  If the zone is not empty uma complains loudly.
  *
@@ -650,7 +652,6 @@ int uma_zone_exhausted_nolock(uma_zone_t zone);
  * Common UMA_ZONE_PCPU zones.
  */
 extern uma_zone_t pcpu_zone_64;
-extern uma_zone_t pcpu_zone_ptr;
 
 /*
  * Exported statistics structures to be used by user space monitoring tools.

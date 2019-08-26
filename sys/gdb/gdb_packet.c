@@ -197,7 +197,7 @@ gdb_rx_varhex(uintmax_t *vp)
 		v += C2N(c);
 		c = gdb_rx_char();
 	} while (isxdigit(c));
-	if (c != -1) {
+	if (c != EOF) {
 		gdb_rxp--;
 		gdb_rxsz++;
 	}
@@ -327,6 +327,12 @@ gdb_tx_reg(int regnum)
 		gdb_tx_mem(regp, regsz);
 }
 
+bool
+gdb_txbuf_has_capacity(size_t req)
+{
+	return (((char *)gdb_txbuf + sizeof(gdb_txbuf) - gdb_txp) >= req);
+}
+
 /* Read binary data up until the end of the packet or until we have datalen decoded bytes */
 int
 gdb_rx_bindata(unsigned char *data, size_t datalen, size_t *amt)
@@ -337,13 +343,12 @@ gdb_rx_bindata(unsigned char *data, size_t datalen, size_t *amt)
 
 	while (*amt < datalen) {
 		c = gdb_rx_char();
-		/* End of packet? */
-		if (c == -1)
+		if (c == EOF)
 			break;
 		/* Escaped character up next */
 		if (c == '}') {
-			/* Truncated packet? Bail out */
-			if ((c = gdb_rx_char()) == -1)
+			/* Malformed packet. */
+			if ((c = gdb_rx_char()) == EOF)
 				return (1);
 			c ^= 0x20;
 		}

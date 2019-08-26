@@ -41,18 +41,16 @@
 #include <sys/limits.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
+#include <net/ifq.h>
 #include <net/bpf.h>
 #include <net/ethernet.h>
 
-#include "miibus_if.h"
-
-#include <dev/mii/mii.h>
-#include <dev/mii/miivar.h>
-
+struct mii_data;
 struct usb_ether;
 struct usb_device_request;
 
