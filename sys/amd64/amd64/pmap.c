@@ -383,6 +383,9 @@ static u_int64_t	DMPDphys;	/* phys addr of direct mapped level 2 */
 static u_int64_t	DMPDPphys;	/* phys addr of direct mapped level 3 */
 static int		ndmpdpphys;	/* number of DMPDPphys pages */
 
+static uint64_t		PAPDPphys;	/* phys addr of page array level 3 */
+static int		npapdpphys;	/* number of PAPDPphys pages */
+
 static vm_paddr_t	KERNend;	/* phys addr of end of bootstrap data */
 
 /*
@@ -439,6 +442,10 @@ static vm_object_t pti_obj;
 static pml4_entry_t *pti_pml4;
 static vm_pindex_t pti_pg_idx;
 static bool pti_finalized;
+
+extern struct pcpu *__pcpu;
+extern struct pcpu temp_bsp_pcpu;
+extern pt_entry_t *pcpu_pte;
 
 struct pmap_pkru_range {
 	struct rs_el	pkru_rs_el;
@@ -1427,6 +1434,16 @@ create_pagetables(vm_paddr_t *firstaddr)
 	pml4_entry_t *p4_p;
 	uint64_t DMPDkernphys;
 
+	npapdpphys = howmany(ptoa(Maxmem) / sizeof(struct vm_page), NBPML4);
+	if (npapdpphys > NPAPML4E) {
+		printf("NDMPML4E limits system to %lu GB\n",
+		    (NDMPML4E * 512) * (PAGE_SIZE / sizeof(struct vm_page)));
+		npapdpphys = NPAPML4E;
+		Maxmem = atop(NPAPML4E * NBPML4 *
+		    (PAGE_SIZE / sizeof(struct vm_page)));
+	}
+	PAPDPphys = allocpages(firstaddr, npapdpphys);
+
 	/* Allocate page table pages for the direct map */
 	ndmpdp = howmany(ptoa(Maxmem), NBPDP);
 	if (ndmpdp < 4)		/* Minimum 4GB of dirmap */
@@ -1573,6 +1590,12 @@ create_pagetables(vm_paddr_t *firstaddr)
 		p4_p[KPML4BASE + i] = KPDPphys + ptoa(i);
 		p4_p[KPML4BASE + i] |= X86_PG_RW | X86_PG_V;
 	}
+
+	/* Connect the page array slots up to the pml4. */
+	for (i = 0; i < npapdpphys; i++) {
+		p4_p[PAPML4I + i] = PAPDPphys + ptoa(i);
+		p4_p[PAPML4I + i] |= X86_PG_RW | X86_PG_V | pg_nx;
+	}
 }
 
 /*
@@ -1589,8 +1612,8 @@ void
 pmap_bootstrap(vm_paddr_t *firstaddr)
 {
 	vm_offset_t va;
-	pt_entry_t *pte;
-	uint64_t cr4;
+	pt_entry_t *pte, *pcpu_pte;
+	uint64_t cr4, pcpu_phys;
 	u_long res;
 	int i;
 
@@ -1604,6 +1627,8 @@ pmap_bootstrap(vm_paddr_t *firstaddr)
 	 * Create an initial set of page tables to run the kernel in.
 	 */
 	create_pagetables(firstaddr);
+
+	pcpu_phys = allocpages(firstaddr, MAXCPU);
 
 	/*
 	 * Add a physical memory segment (vm_phys_seg) corresponding to the
@@ -1672,7 +1697,20 @@ pmap_bootstrap(vm_paddr_t *firstaddr)
 	SYSMAP(caddr_t, CMAP1, crashdumpmap, MAXDUMPPGS)
 	CADDR1 = crashdumpmap;
 
+	SYSMAP(struct pcpu *, pcpu_pte, __pcpu, MAXCPU);
 	virtual_avail = va;
+
+	for (i = 0; i < MAXCPU; i++) {
+		pcpu_pte[i] = (pcpu_phys + ptoa(i)) | X86_PG_V | X86_PG_RW |
+		    pg_g | pg_nx | X86_PG_M | X86_PG_A;
+	}
+	STAILQ_INIT(&cpuhead);
+	wrmsr(MSR_GSBASE, (uint64_t)&__pcpu[0]);
+	pcpu_init(&__pcpu[0], 0, sizeof(struct pcpu));
+	amd64_bsp_pcpu_init1(&__pcpu[0]);
+	amd64_bsp_ist_init(&__pcpu[0]);
+	__pcpu[0].pc_dynamic = temp_bsp_pcpu.pc_dynamic;
+	__pcpu[0].pc_acpi_id = temp_bsp_pcpu.pc_acpi_id;
 
 	/*
 	 * Initialize the PAT MSR.
@@ -3387,6 +3425,11 @@ pmap_pinit_pml4(vm_page_t pml4pg)
 		    X86_PG_V;
 	}
 
+	for (i = 0; i < npapdpphys; i++) {
+		pm_pml4[PAPML4I + i] = (PAPDPphys + ptoa(i)) | X86_PG_RW |
+		    X86_PG_V;
+	}
+
 	/* install self-referential address mapping entry(s) */
 	pm_pml4[PML4PML4I] = VM_PAGE_TO_PHYS(pml4pg) | X86_PG_V | X86_PG_RW |
 	    X86_PG_A | X86_PG_M;
@@ -3743,6 +3786,8 @@ pmap_release(pmap_t pmap)
 		pmap->pm_pml4[KPML4BASE + i] = 0;
 	for (i = 0; i < ndmpdpphys; i++)/* Direct Map */
 		pmap->pm_pml4[DMPML4I + i] = 0;
+	for (i = 0; i < npapdpphys; i++)
+		pmap->pm_pml4[PAPML4I + i] = 0;
 	pmap->pm_pml4[PML4PML4I] = 0;	/* Recursive Mapping */
 	for (i = 0; i < lm_ents; i++)	/* Large Map */
 		pmap->pm_pml4[LMSPML4I + i] = 0;
@@ -3779,6 +3824,44 @@ kvm_free(SYSCTL_HANDLER_ARGS)
 }
 SYSCTL_PROC(_vm, OID_AUTO, kvm_free, CTLTYPE_LONG|CTLFLAG_RD, 
     0, 0, kvm_free, "LU", "Amount of KVM free");
+
+void
+pmap_page_array_startup(long pages)
+{
+	pdp_entry_t *pdpe;
+	pd_entry_t *pde, newpdir;
+	vm_offset_t va, start, end;
+	vm_paddr_t pa;
+	long pfn;
+	int domain, i;
+
+	vm_page_array_size = pages;
+
+	start = va = PA_MIN_ADDRESS;
+	end = va + (pages * sizeof(struct vm_page));
+	while (va < end) {
+		pfn = first_page + ((va - start) / sizeof(struct vm_page));
+		domain = _vm_phys_domain(ctob(pfn));
+		pdpe = pmap_pdpe(kernel_pmap, va);
+		if ((*pdpe & X86_PG_V) == 0) {
+			pa = vm_phys_early_alloc(domain, PAGE_SIZE);
+			bzero((void *)PHYS_TO_DMAP(pa), PAGE_SIZE);
+			*pdpe = (pdp_entry_t)(pa | X86_PG_V | X86_PG_RW |
+			    X86_PG_A | X86_PG_M);
+			continue; /* try again */
+		}
+		pde = pmap_pdpe_to_pde(pdpe, va);
+		if ((*pde & X86_PG_V) != 0)
+			panic("Unexpected pde");
+		pa = vm_phys_early_alloc(domain, NBPDR);
+		for (i = 0; i < NPDEPG; i++)
+			dump_add_page(pa + (i * PAGE_SIZE));
+		newpdir = (pd_entry_t)(pa | X86_PG_V | X86_PG_RW | X86_PG_A |
+		    X86_PG_M | PG_PS | pg_g | pg_nx);
+		pde_store(pde, newpdir);
+		va += NBPDR;
+	}
+}
 
 /*
  * grow the number of kernel page table entries, if needed

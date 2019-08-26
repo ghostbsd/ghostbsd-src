@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/buf.h>
 #include <sys/conf.h>
 #include <sys/event.h>
+#include <sys/filio.h>
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
@@ -86,6 +87,7 @@ static int vop_stdadd_writecount(struct vop_add_writecount_args *ap);
 static int vop_stdcopy_file_range(struct vop_copy_file_range_args *ap);
 static int vop_stdfdatasync(struct vop_fdatasync_args *ap);
 static int vop_stdgetpages_async(struct vop_getpages_async_args *ap);
+static int vop_stdioctl(struct vop_ioctl_args *ap);
 
 /*
  * This vnode table stores what we want to do if the filesystem doesn't
@@ -118,7 +120,7 @@ struct vop_vector default_vnodeops = {
 	.vop_getpages_async =	vop_stdgetpages_async,
 	.vop_getwritemount = 	vop_stdgetwritemount,
 	.vop_inactive =		VOP_NULL,
-	.vop_ioctl =		VOP_ENOTTY,
+	.vop_ioctl =		vop_stdioctl,
 	.vop_kqfilter =		vop_stdkqfilter,
 	.vop_islocked =		vop_stdislocked,
 	.vop_lock1 =		vop_stdlock,
@@ -1082,6 +1084,7 @@ int
 vop_stdset_text(struct vop_set_text_args *ap)
 {
 	struct vnode *vp;
+	struct mount *mp;
 	int error;
 
 	vp = ap->a_vp;
@@ -1089,6 +1092,17 @@ vop_stdset_text(struct vop_set_text_args *ap)
 	if (vp->v_writecount > 0) {
 		error = ETXTBSY;
 	} else {
+		/*
+		 * If requested by fs, keep a use reference to the
+		 * vnode until the last text reference is released.
+		 */
+		mp = vp->v_mount;
+		if (mp != NULL && (mp->mnt_kern_flag & MNTK_TEXT_REFS) != 0 &&
+		    vp->v_writecount == 0) {
+			vp->v_iflag |= VI_TEXT_REF;
+			vrefl(vp);
+		}
+
 		vp->v_writecount--;
 		error = 0;
 	}
@@ -1101,16 +1115,25 @@ vop_stdunset_text(struct vop_unset_text_args *ap)
 {
 	struct vnode *vp;
 	int error;
+	bool last;
 
 	vp = ap->a_vp;
+	last = false;
 	VI_LOCK(vp);
 	if (vp->v_writecount < 0) {
+		if ((vp->v_iflag & VI_TEXT_REF) != 0 &&
+		    vp->v_writecount == -1) {
+			last = true;
+			vp->v_iflag &= ~VI_TEXT_REF;
+		}
 		vp->v_writecount++;
 		error = 0;
 	} else {
 		error = EINVAL;
 	}
 	VI_UNLOCK(vp);
+	if (last)
+		vunref(vp);
 	return (error);
 }
 
@@ -1131,6 +1154,41 @@ vop_stdadd_writecount(struct vop_add_writecount_args *ap)
 		error = 0;
 	}
 	VI_UNLOCK(vp);
+	return (error);
+}
+
+static int
+vop_stdioctl(struct vop_ioctl_args *ap)
+{
+	struct vnode *vp;
+	struct vattr va;
+	off_t *offp;
+	int error;
+
+	switch (ap->a_command) {
+	case FIOSEEKDATA:
+	case FIOSEEKHOLE:
+		vp = ap->a_vp;
+		error = vn_lock(vp, LK_SHARED);
+		if (error != 0)
+			return (EBADF);
+		if (vp->v_type == VREG)
+			error = VOP_GETATTR(vp, &va, ap->a_cred);
+		else
+			error = ENOTTY;
+		if (error == 0) {
+			offp = ap->a_data;
+			if (*offp < 0 || *offp >= va.va_size)
+				error = ENXIO;
+			else if (ap->a_command == FIOSEEKHOLE)
+				*offp = va.va_size;
+		}
+		VOP_UNLOCK(vp, 0);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
 	return (error);
 }
 

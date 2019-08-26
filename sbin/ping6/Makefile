@@ -7,7 +7,6 @@ PROG=	ping6
 MAN=	ping6.8
 
 CFLAGS+=-DIPSEC -DKAME_SCOPEID
-WARNS?=	3
 
 BINOWN=	root
 BINMODE=4555
@@ -21,5 +20,8 @@ LIBADD+=	casper
 LIBADD+=	cap_dns
 CFLAGS+=-DWITH_CASPER
 .endif
+
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

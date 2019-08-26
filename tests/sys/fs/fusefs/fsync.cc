@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -80,8 +82,17 @@ void expect_write(uint64_t ino, uint64_t size, const void *contents)
 
 };
 
+class AioFsync: public Fsync {
+virtual void SetUp() {
+	if (!is_unsafe_aio_enabled())
+		GTEST_SKIP() <<
+			"vfs.aio.enable_unsafe must be set for this test";
+	FuseTest::SetUp();
+}
+};
+
 /* https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=236379 */
-TEST_F(Fsync, aio_fsync)
+TEST_F(AioFsync, aio_fsync)
 {
 	const char FULLPATH[] = "mountpoint/some_file.txt";
 	const char RELPATH[] = "some_file.txt";
