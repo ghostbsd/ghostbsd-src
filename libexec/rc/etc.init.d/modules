@@ -17,6 +17,10 @@ depend()
 	keyword -jail -prefix
 }
 
+load_kld(){
+	kldload -nq $1
+}
+
 FreeBSD_modules()
 {
 	local cnt=0 x
