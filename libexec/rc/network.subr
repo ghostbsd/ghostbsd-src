@@ -235,7 +235,11 @@ ifconfig_up()
 		fi
 		_cfg=0		# XXX: not sure this should count
 	elif hostapif $1; then
-		/etc/rc.d/hostapd start $1
+		if [ "$RC_SYSTEM" = "openrc" ] ; then
+			sh /etc/rc.devd hostapd.${1} start
+		else
+			/etc/rc.d/hostapd start $1
+		fi
 		_cfg=0
 	elif [ ${_cfg} -eq 0 ]; then
 		${IFCONFIG_CMD} $1 up
@@ -279,7 +283,11 @@ ifconfig_down()
 		fi
 		_cfg=0
 	elif hostapif $1; then
-		/etc/rc.d/hostapd stop $1
+		if [ "$RC_SYSTEM" = "openrc" ] ; then
+			sh /etc/rc.devd hostapd.${1} stop
+		else
+			/etc/rc.d/hostapd stop $1
+		fi
 		_cfg=0
 	fi
 

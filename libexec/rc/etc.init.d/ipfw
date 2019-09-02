@@ -5,13 +5,16 @@ description="Firewall, traffic shaper, packet scheduler, in-kernel NAT"
 firewall_coscripts="natd ${firewall_coscripts}"
 SYSCTL="/sbin/sysctl"
 
-. /etc/rc.subr
 . /etc/network.subr
 
 depend() {
 	before net
 	provide firewall
 	keyword -jail -stop -shutdown
+}
+
+load_kld(){
+	kldload -nq $1
 }
 
 start_pre()
