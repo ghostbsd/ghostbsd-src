@@ -143,7 +143,7 @@ check_dhcpcd()
 
 	# Is this device been enabled for DHCP?
 	if [ "$have_ipv4" != "true" -a "$have_ipv6" != "true" ] ; then
-		mark_service_inactive
+		mark_service_stopped
 		return 1
 	fi
 
@@ -163,7 +163,7 @@ start()
 	if [ -n "$dhcpcd_device" ] ; then
 		is_cable_attached "${dhcpcd_device}"
 		if [ $? -ne 0 ] ; then
-			mark_service_inactive
+			einfo "$dhcpcd_device : No carrier"
 			return 0
 		fi
 		check_dhcpcd "$dhcpcd_device"

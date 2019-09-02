@@ -33,8 +33,8 @@ if [ "${base}" = "network" ]; then
 	[ -n "$(getmedia ${1#*.})" ] || exit 1
 	base="network.lo0"
 fi
-if [ -e /etc/init.d/"${base}" -a "${base}" != "$1" ]; then
-	if [ ! -e "/etc/init.d/${1}" ] ; then
+if [ -e /etc/init.d/"${base}" -a "${base}" != "$1" ] ; then
+	if [ ! -e "/etc/init.d/${1}" ] || [ "$2" = "start" ] ; then
 		ln -f /etc/init.d/"${base}" /etc/init.d/"$1"
 	fi
 	# Symlinks Broken in OpenRC 0.35
@@ -49,7 +49,7 @@ if [ -e "/usr/local/etc/init.d/${base}" -a "${base}" != "$1" ]; then
 		ln -f /usr/local/etc/init.d/"${base}" /usr/local/etc/init.d/"$1"
 	fi
 	# Symlinks Broken in OpenRC 0.35
-	if [ -h "/usr/local/etc/init.d/${1}" ] ; then
+	if [ -h "/usr/local/etc/init.d/${1}" ] || [ "$2" = "start" ] ; then
 		rm /usr/local/etc/init.d/"$1"
 		ln /usr/local/etc/init.d/"${base}" /usr/local/etc/init.d/"$1"
 	fi
