@@ -50,7 +50,7 @@ reverse()
 
 sys_interfaces()
 {
-	ifconfig -l$1
+	ifconfig -l ether
 }
 
 auto_interfaces()
@@ -69,6 +69,15 @@ auto_interfaces()
 interfaces()
 {
 	uniqify $(sys_interfaces "$@") $interfaces $(auto_interfaces)
+}
+
+is_cable_attached(){
+	ifconfig $1 | grep -q "no carrier"
+	if [ $? -eq 0 ] ; then
+		return 1
+	else
+		return 0
+	fi
 }
 
 stop_pre()
@@ -151,8 +160,12 @@ check_dhcpcd()
 start()
 {
 	if [ ! -e /etc/rc.conf ] ; then return 1 ; fi
-
 	if [ -n "$dhcpcd_device" ] ; then
+		is_cable_attached "${dhcpcd_device}"
+		if [ $? -ne 0 ] ; then
+			mark_service_inactive
+			return 0
+		fi
 		check_dhcpcd "$dhcpcd_device"
 		if [ $? -ne 0 ] ; then return 0; fi
 		if [ -z "$OPENRC_SILENT" ] ; then
