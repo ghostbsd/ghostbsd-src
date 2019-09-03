@@ -124,6 +124,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/rangeset.h>
 #include <sys/rwlock.h>
+#include <sys/sbuf.h>
 #include <sys/sx.h>
 #include <sys/turnstile.h>
 #include <sys/vmem.h>
@@ -383,9 +384,6 @@ static u_int64_t	DMPDphys;	/* phys addr of direct mapped level 2 */
 static u_int64_t	DMPDPphys;	/* phys addr of direct mapped level 3 */
 static int		ndmpdpphys;	/* number of DMPDPphys pages */
 
-static uint64_t		PAPDPphys;	/* phys addr of page array level 3 */
-static int		npapdpphys;	/* number of PAPDPphys pages */
-
 static vm_paddr_t	KERNend;	/* phys addr of end of bootstrap data */
 
 /*
@@ -424,8 +422,8 @@ static int pmap_flags = PMAP_PDE_SUPERPAGE;	/* flags for x86 pmaps */
 
 static vmem_t *large_vmem;
 static u_int lm_ents;
-#define	PMAP_LARGEMAP_MAX_ADDRESS()			\
-    (LARGEMAP_MIN_ADDRESS + NBPML4 * (u_long)lm_ents)
+#define	PMAP_ADDRESS_IN_LARGEMAP(va)	((va) >= LARGEMAP_MIN_ADDRESS && \
+	(va) < LARGEMAP_MIN_ADDRESS + NBPML4 * (u_long)lm_ents)
 
 int pmap_pcid_enabled = 1;
 SYSCTL_INT(_vm_pmap, OID_AUTO, pcid_enabled, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
@@ -442,10 +440,6 @@ static vm_object_t pti_obj;
 static pml4_entry_t *pti_pml4;
 static vm_pindex_t pti_pg_idx;
 static bool pti_finalized;
-
-extern struct pcpu *__pcpu;
-extern struct pcpu temp_bsp_pcpu;
-extern pt_entry_t *pcpu_pte;
 
 struct pmap_pkru_range {
 	struct rs_el	pkru_rs_el;
@@ -1434,16 +1428,6 @@ create_pagetables(vm_paddr_t *firstaddr)
 	pml4_entry_t *p4_p;
 	uint64_t DMPDkernphys;
 
-	npapdpphys = howmany(ptoa(Maxmem) / sizeof(struct vm_page), NBPML4);
-	if (npapdpphys > NPAPML4E) {
-		printf("NDMPML4E limits system to %lu GB\n",
-		    (NDMPML4E * 512) * (PAGE_SIZE / sizeof(struct vm_page)));
-		npapdpphys = NPAPML4E;
-		Maxmem = atop(NPAPML4E * NBPML4 *
-		    (PAGE_SIZE / sizeof(struct vm_page)));
-	}
-	PAPDPphys = allocpages(firstaddr, npapdpphys);
-
 	/* Allocate page table pages for the direct map */
 	ndmpdp = howmany(ptoa(Maxmem), NBPDP);
 	if (ndmpdp < 4)		/* Minimum 4GB of dirmap */
@@ -1589,12 +1573,6 @@ create_pagetables(vm_paddr_t *firstaddr)
 	for (i = 0; i < NKPML4E; i++) {
 		p4_p[KPML4BASE + i] = KPDPphys + ptoa(i);
 		p4_p[KPML4BASE + i] |= X86_PG_RW | X86_PG_V;
-	}
-
-	/* Connect the page array slots up to the pml4. */
-	for (i = 0; i < npapdpphys; i++) {
-		p4_p[PAPML4I + i] = PAPDPphys + ptoa(i);
-		p4_p[PAPML4I + i] |= X86_PG_RW | X86_PG_V | pg_nx;
 	}
 }
 
@@ -2114,6 +2092,41 @@ pmap_cache_mask(pmap_t pmap, boolean_t is_pde)
 	}
 
 	return (mask);
+}
+
+static int
+pmap_pat_index(pmap_t pmap, pt_entry_t pte, bool is_pde)
+{
+	int pat_flag, pat_idx;
+
+	pat_idx = 0;
+	switch (pmap->pm_type) {
+	case PT_X86:
+	case PT_RVI:
+		/* The PAT bit is different for PTE's and PDE's. */
+		pat_flag = is_pde ? X86_PG_PDE_PAT : X86_PG_PTE_PAT;
+
+		if ((pte & pat_flag) != 0)
+			pat_idx |= 0x4;
+		if ((pte & PG_NC_PCD) != 0)
+			pat_idx |= 0x2;
+		if ((pte & PG_NC_PWT) != 0)
+			pat_idx |= 0x1;
+		break;
+	case PT_EPT:
+		if ((pte & EPT_PG_IGNORE_PAT) != 0)
+			panic("EPT PTE %#lx has no PAT memory type", pte);
+		pat_idx = (pte & EPT_PG_MEMORY_TYPE(0x7)) >> 3;
+		break;
+	}
+
+	/* See pmap_init_pat(). */
+	if (pat_idx == 4)
+		pat_idx = 0;
+	if (pat_idx == 7)
+		pat_idx = 3;
+
+	return (pat_idx);
 }
 
 bool
@@ -3095,8 +3108,7 @@ pmap_kextract(vm_offset_t va)
 
 	if (va >= DMAP_MIN_ADDRESS && va < DMAP_MAX_ADDRESS) {
 		pa = DMAP_TO_PHYS(va);
-	} else if (LARGEMAP_MIN_ADDRESS <= va &&
-	    va < PMAP_LARGEMAP_MAX_ADDRESS()) {
+	} else if (PMAP_ADDRESS_IN_LARGEMAP(va)) {
 		pa = pmap_large_map_kextract(va);
 	} else {
 		pde = *vtopde(va);
@@ -3422,11 +3434,6 @@ pmap_pinit_pml4(vm_page_t pml4pg)
 	}
 	for (i = 0; i < ndmpdpphys; i++) {
 		pm_pml4[DMPML4I + i] = (DMPDPphys + ptoa(i)) | X86_PG_RW |
-		    X86_PG_V;
-	}
-
-	for (i = 0; i < npapdpphys; i++) {
-		pm_pml4[PAPML4I + i] = (PAPDPphys + ptoa(i)) | X86_PG_RW |
 		    X86_PG_V;
 	}
 
@@ -3786,8 +3793,6 @@ pmap_release(pmap_t pmap)
 		pmap->pm_pml4[KPML4BASE + i] = 0;
 	for (i = 0; i < ndmpdpphys; i++)/* Direct Map */
 		pmap->pm_pml4[DMPML4I + i] = 0;
-	for (i = 0; i < npapdpphys; i++)
-		pmap->pm_pml4[PAPML4I + i] = 0;
 	pmap->pm_pml4[PML4PML4I] = 0;	/* Recursive Mapping */
 	for (i = 0; i < lm_ents; i++)	/* Large Map */
 		pmap->pm_pml4[LMSPML4I + i] = 0;
@@ -3825,6 +3830,10 @@ kvm_free(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_vm, OID_AUTO, kvm_free, CTLTYPE_LONG|CTLFLAG_RD, 
     0, 0, kvm_free, "LU", "Amount of KVM free");
 
+/*
+ * Allocate physical memory for the vm_page array and map it into KVA,
+ * attempting to back the vm_pages with domain-local memory.
+ */
 void
 pmap_page_array_startup(long pages)
 {
@@ -3837,14 +3846,15 @@ pmap_page_array_startup(long pages)
 
 	vm_page_array_size = pages;
 
-	start = va = PA_MIN_ADDRESS;
-	end = va + (pages * sizeof(struct vm_page));
+	start = va = VM_MIN_KERNEL_ADDRESS;
+	end = va + pages * sizeof(struct vm_page);
 	while (va < end) {
-		pfn = first_page + ((va - start) / sizeof(struct vm_page));
+		pfn = first_page + (va - start) / sizeof(struct vm_page);
 		domain = _vm_phys_domain(ctob(pfn));
 		pdpe = pmap_pdpe(kernel_pmap, va);
 		if ((*pdpe & X86_PG_V) == 0) {
 			pa = vm_phys_early_alloc(domain, PAGE_SIZE);
+			dump_add_page(pa);
 			bzero((void *)PHYS_TO_DMAP(pa), PAGE_SIZE);
 			*pdpe = (pdp_entry_t)(pa | X86_PG_V | X86_PG_RW |
 			    X86_PG_A | X86_PG_M);
@@ -3861,6 +3871,7 @@ pmap_page_array_startup(long pages)
 		pde_store(pde, newpdir);
 		va += NBPDR;
 	}
+	vm_page_array = (vm_page_t)start;
 }
 
 /*
@@ -9026,7 +9037,7 @@ pmap_large_map_kextract(vm_offset_t va)
 	pd_entry_t *pde, pd;
 	pt_entry_t *pte, pt;
 
-	KASSERT(LARGEMAP_MIN_ADDRESS <= va && va < PMAP_LARGEMAP_MAX_ADDRESS(),
+	KASSERT(PMAP_ADDRESS_IN_LARGEMAP(va),
 	    ("not largemap range %#lx", (u_long)va));
 	pdpe = pmap_large_map_pdpe(va);
 	pdp = *pdpe;
@@ -9168,8 +9179,8 @@ pmap_large_unmap(void *svaa, vm_size_t len)
 		return;
 
 	SLIST_INIT(&spgf);
-	KASSERT(LARGEMAP_MIN_ADDRESS <= sva &&
-	    sva + len <= PMAP_LARGEMAP_MAX_ADDRESS(),
+	KASSERT(PMAP_ADDRESS_IN_LARGEMAP(sva) &&
+	    PMAP_ADDRESS_IN_LARGEMAP(sva + len - 1),
 	    ("not largemap range %#lx %#lx", (u_long)svaa, (u_long)svaa + len));
 	PMAP_LOCK(kernel_pmap);
 	for (va = sva; va < sva + len; va += inc) {
@@ -9985,6 +9996,268 @@ pmap_pkru_clear(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	}
 	return (error);
 }
+
+/*
+ * Track a range of the kernel's virtual address space that is contiguous
+ * in various mapping attributes.
+ */
+struct pmap_kernel_map_range {
+	vm_offset_t sva;
+	pt_entry_t attrs;
+	int ptes;
+	int pdes;
+	int pdpes;
+};
+
+static void
+sysctl_kmaps_dump(struct sbuf *sb, struct pmap_kernel_map_range *range,
+    vm_offset_t eva)
+{
+	const char *mode;
+	int i, pat_idx;
+
+	if (eva <= range->sva)
+		return;
+
+	pat_idx = pmap_pat_index(kernel_pmap, range->attrs, true);
+	for (i = 0; i < PAT_INDEX_SIZE; i++)
+		if (pat_index[i] == pat_idx)
+			break;
+
+	switch (i) {
+	case PAT_WRITE_BACK:
+		mode = "WB";
+		break;
+	case PAT_WRITE_THROUGH:
+		mode = "WT";
+		break;
+	case PAT_UNCACHEABLE:
+		mode = "UC";
+		break;
+	case PAT_WRITE_PROTECTED:
+		mode = "WP";
+		break;
+	case PAT_WRITE_COMBINING:
+		mode = "WC";
+		break;
+	default:
+		printf("%s: unknown PAT mode %#x for range %#016lx-%#016lx\n",
+		    __func__, i, range->sva, eva);
+		mode = "??";
+		break;
+	}
+
+	sbuf_printf(sb, "%#016lx-%#016lx r%c%c%c%c %s %d %d %d\n",
+	    range->sva, eva,
+	    (range->attrs & X86_PG_RW) != 0 ? 'w' : '-',
+	    (range->attrs & pg_nx) != 0 ? '-' : 'x',
+	    (range->attrs & X86_PG_U) != 0 ? 'u' : 's',
+	    (range->attrs & X86_PG_G) != 0 ? 'g' : '-',
+	    mode, range->pdpes, range->pdes, range->ptes);
+
+	/* Reset to sentinel value. */
+	range->sva = KVADDR(NPML4EPG - 1, NPDPEPG - 1, NPDEPG - 1, NPTEPG - 1);
+}
+
+/*
+ * Determine whether the attributes specified by a page table entry match those
+ * being tracked by the current range.  This is not quite as simple as a direct
+ * flag comparison since some PAT modes have multiple representations.
+ */
+static bool
+sysctl_kmaps_match(struct pmap_kernel_map_range *range, pt_entry_t attrs)
+{
+	pt_entry_t diff, mask;
+
+	mask = X86_PG_G | X86_PG_RW | X86_PG_U | X86_PG_PDE_CACHE | pg_nx;
+	diff = (range->attrs ^ attrs) & mask;
+	if (diff == 0)
+		return (true);
+	if ((diff & ~X86_PG_PDE_PAT) == 0 &&
+	    pmap_pat_index(kernel_pmap, range->attrs, true) ==
+	    pmap_pat_index(kernel_pmap, attrs, true))
+		return (true);
+	return (false);
+}
+
+static void
+sysctl_kmaps_reinit(struct pmap_kernel_map_range *range, vm_offset_t va,
+    pt_entry_t attrs)
+{
+
+	memset(range, 0, sizeof(*range));
+	range->sva = va;
+	range->attrs = attrs;
+}
+
+/*
+ * Given a leaf PTE, derive the mapping's attributes.  If they do not match
+ * those of the current run, dump the address range and its attributes, and
+ * begin a new run.
+ */
+static void
+sysctl_kmaps_check(struct sbuf *sb, struct pmap_kernel_map_range *range,
+    vm_offset_t va, pml4_entry_t pml4e, pdp_entry_t pdpe, pd_entry_t pde,
+    pt_entry_t pte)
+{
+	pt_entry_t attrs;
+
+	attrs = pml4e & (X86_PG_RW | X86_PG_U | pg_nx);
+
+	attrs |= pdpe & pg_nx;
+	attrs &= pg_nx | (pdpe & (X86_PG_RW | X86_PG_U));
+	if ((pdpe & PG_PS) != 0) {
+		attrs |= pdpe & (X86_PG_G | X86_PG_PDE_CACHE);
+	} else if (pde != 0) {
+		attrs |= pde & pg_nx;
+		attrs &= pg_nx | (pde & (X86_PG_RW | X86_PG_U));
+	}
+	if ((pde & PG_PS) != 0) {
+		attrs |= pde & (X86_PG_G | X86_PG_PDE_CACHE);
+	} else if (pte != 0) {
+		attrs |= pte & pg_nx;
+		attrs &= pg_nx | (pte & (X86_PG_RW | X86_PG_U));
+		attrs |= pte & (X86_PG_G | X86_PG_PTE_CACHE);
+
+		/* Canonicalize by always using the PDE PAT bit. */
+		if ((attrs & X86_PG_PTE_PAT) != 0)
+			attrs ^= X86_PG_PDE_PAT | X86_PG_PTE_PAT;
+	}
+
+	if (range->sva > va || !sysctl_kmaps_match(range, attrs)) {
+		sysctl_kmaps_dump(sb, range, va);
+		sysctl_kmaps_reinit(range, va, attrs);
+	}
+}
+
+static int
+sysctl_kmaps(SYSCTL_HANDLER_ARGS)
+{
+	struct pmap_kernel_map_range range;
+	struct sbuf sbuf, *sb;
+	pml4_entry_t pml4e;
+	pdp_entry_t *pdp, pdpe;
+	pd_entry_t *pd, pde;
+	pt_entry_t *pt, pte;
+	vm_offset_t sva;
+	vm_paddr_t pa;
+	int error, i, j, k, l;
+
+	error = sysctl_wire_old_buffer(req, 0);
+	if (error != 0)
+		return (error);
+	sb = &sbuf;
+	sbuf_new_for_sysctl(sb, NULL, PAGE_SIZE, req);
+
+	/* Sentinel value. */
+	range.sva = KVADDR(NPML4EPG - 1, NPDPEPG - 1, NPDEPG - 1, NPTEPG - 1);
+
+	/*
+	 * Iterate over the kernel page tables without holding the kernel pmap
+	 * lock.  Outside of the large map, kernel page table pages are never
+	 * freed, so at worst we will observe inconsistencies in the output.
+	 * Within the large map, ensure that PDP and PD page addresses are
+	 * valid before descending.
+	 */
+	for (sva = 0, i = pmap_pml4e_index(sva); i < NPML4EPG; i++) {
+		switch (i) {
+		case PML4PML4I:
+			sbuf_printf(sb, "\nRecursive map:\n");
+			break;
+		case DMPML4I:
+			sbuf_printf(sb, "\nDirect map:\n");
+			break;
+		case KPML4BASE:
+			sbuf_printf(sb, "\nKernel map:\n");
+			break;
+		case LMSPML4I:
+			sbuf_printf(sb, "\nLarge map:\n");
+			break;
+		}
+
+		/* Convert to canonical form. */
+		if (sva == 1ul << 47)
+			sva |= -1ul << 48;
+
+restart:
+		pml4e = kernel_pmap->pm_pml4[i];
+		if ((pml4e & X86_PG_V) == 0) {
+			sva = rounddown2(sva, NBPML4);
+			sysctl_kmaps_dump(sb, &range, sva);
+			sva += NBPML4;
+			continue;
+		}
+		pa = pml4e & PG_FRAME;
+		pdp = (pdp_entry_t *)PHYS_TO_DMAP(pa);
+
+		for (j = pmap_pdpe_index(sva); j < NPDPEPG; j++) {
+			pdpe = pdp[j];
+			if ((pdpe & X86_PG_V) == 0) {
+				sva = rounddown2(sva, NBPDP);
+				sysctl_kmaps_dump(sb, &range, sva);
+				sva += NBPDP;
+				continue;
+			}
+			pa = pdpe & PG_FRAME;
+			if (PMAP_ADDRESS_IN_LARGEMAP(sva) &&
+			    vm_phys_paddr_to_vm_page(pa) == NULL)
+				goto restart;
+			if ((pdpe & PG_PS) != 0) {
+				sva = rounddown2(sva, NBPDP);
+				sysctl_kmaps_check(sb, &range, sva, pml4e, pdpe,
+				    0, 0);
+				range.pdpes++;
+				sva += NBPDP;
+				continue;
+			}
+			pd = (pd_entry_t *)PHYS_TO_DMAP(pa);
+
+			for (k = pmap_pde_index(sva); k < NPDEPG; k++) {
+				pde = pd[k];
+				if ((pde & X86_PG_V) == 0) {
+					sva = rounddown2(sva, NBPDR);
+					sysctl_kmaps_dump(sb, &range, sva);
+					sva += NBPDR;
+					continue;
+				}
+				pa = pde & PG_FRAME;
+				if (PMAP_ADDRESS_IN_LARGEMAP(sva) &&
+				    vm_phys_paddr_to_vm_page(pa) == NULL)
+					goto restart;
+				if ((pde & PG_PS) != 0) {
+					sva = rounddown2(sva, NBPDR);
+					sysctl_kmaps_check(sb, &range, sva,
+					    pml4e, pdpe, pde, 0);
+					range.pdes++;
+					sva += NBPDR;
+					continue;
+				}
+				pt = (pt_entry_t *)PHYS_TO_DMAP(pa);
+
+				for (l = pmap_pte_index(sva); l < NPTEPG; l++,
+				    sva += PAGE_SIZE) {
+					pte = pt[l];
+					if ((pte & X86_PG_V) == 0) {
+						sysctl_kmaps_dump(sb, &range,
+						    sva);
+						continue;
+					}
+					sysctl_kmaps_check(sb, &range, sva,
+					    pml4e, pdpe, pde, pte);
+					range.ptes++;
+				}
+			}
+		}
+	}
+
+	error = sbuf_finish(sb);
+	sbuf_delete(sb);
+	return (error);
+}
+SYSCTL_OID(_vm_pmap, OID_AUTO, kernel_maps,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    NULL, 0, sysctl_kmaps, "A",
+    "Dump kernel address layout");
 
 #ifdef DDB
 DB_SHOW_COMMAND(pte, pmap_print_pte)
