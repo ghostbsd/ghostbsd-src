@@ -161,16 +161,18 @@ static int availmem_regions_sz;
 static struct mem_region *physmem_regions;
 static int physmem_regions_sz;
 
+#ifndef __powerpc64__
 /* Reserved KVA space and mutex for mmu_booke_zero_page. */
 static vm_offset_t zero_page_va;
 static struct mtx zero_page_mutex;
-
-static struct mtx tlbivax_mutex;
 
 /* Reserved KVA space and mutex for mmu_booke_copy_page. */
 static vm_offset_t copy_page_src_va;
 static vm_offset_t copy_page_dst_va;
 static struct mtx copy_page_mutex;
+#endif
+
+static struct mtx tlbivax_mutex;
 
 /**************************************************************************/
 /* PMAP */
@@ -219,7 +221,7 @@ uint32_t tlb1_entries;
 
 #define TLB1_ENTRIES (tlb1_entries)
 
-static vm_offset_t tlb1_map_base = VM_MAXUSER_ADDRESS + PAGE_SIZE;
+static vm_offset_t tlb1_map_base = (vm_offset_t)VM_MAXUSER_ADDRESS + PAGE_SIZE;
 
 static tlbtid_t tid_alloc(struct pmap *);
 static void tid_flush(tlbtid_t tid);
@@ -1574,7 +1576,6 @@ mmu_booke_bootstrap(mmu_t mmu, vm_offset_t start, vm_offset_t kernelend)
 	 * Note that kernel end does not necessarily relate to kernsize.
 	 * kernsize is the size of the kernel that is actually mapped.
 	 */
-	kernstart = trunc_page(start);
 	data_start = round_page(kernelend);
 	data_end = data_start;
 
@@ -1647,6 +1648,7 @@ mmu_booke_bootstrap(mmu_t mmu, vm_offset_t start, vm_offset_t kernelend)
 	virtual_avail = round_page(data_end);
 	virtual_end = VM_MAX_KERNEL_ADDRESS;
 
+#ifndef __powerpc64__
 	/* Allocate KVA space for page zero/copy operations. */
 	zero_page_va = virtual_avail;
 	virtual_avail += PAGE_SIZE;
@@ -1662,7 +1664,6 @@ mmu_booke_bootstrap(mmu_t mmu, vm_offset_t start, vm_offset_t kernelend)
 	mtx_init(&zero_page_mutex, "mmu_booke_zero_page", NULL, MTX_DEF);
 	mtx_init(&copy_page_mutex, "mmu_booke_copy_page", NULL, MTX_DEF);
 
-#ifndef __powerpc64__
 	/* Allocate KVA space for ptbl bufs. */
 	ptbl_buf_pool_vabase = virtual_avail;
 	virtual_avail += PTBL_BUFS * PTBL_PAGES * PAGE_SIZE;
@@ -1687,7 +1688,7 @@ mmu_booke_bootstrap(mmu_t mmu, vm_offset_t start, vm_offset_t kernelend)
 	mem_regions(&physmem_regions, &physmem_regions_sz,
 	    &availmem_regions, &availmem_regions_sz);
 
-	if (nitems(phys_avail) < availmem_regions_sz)
+	if (PHYS_AVAIL_ENTRIES < availmem_regions_sz)
 		panic("mmu_booke_bootstrap: phys_avail too small");
 
 	sz = 0;
@@ -1821,12 +1822,10 @@ mmu_booke_bootstrap(mmu_t mmu, vm_offset_t start, vm_offset_t kernelend)
 	/* Initialize (statically allocated) kernel pmap. */
 	/*******************************************************/
 	PMAP_LOCK_INIT(kernel_pmap);
-#ifndef __powerpc64__
-	kptbl_min = VM_MIN_KERNEL_ADDRESS / PDIR_SIZE;
-#endif
 #ifdef __powerpc64__
 	kernel_pmap->pm_pp2d = (pte_t ***)kernel_ptbl_root;
 #else
+	kptbl_min = VM_MIN_KERNEL_ADDRESS / PDIR_SIZE;
 	kernel_pmap->pm_pdir = (pte_t **)kernel_ptbl_root;
 #endif
 
@@ -1957,6 +1956,11 @@ mmu_booke_kextract(mmu_t mmu, vm_offset_t va)
 	tlb_entry_t e;
 	vm_paddr_t p = 0;
 	int i;
+
+#ifdef __powerpc64__
+	if (va >= DMAP_BASE_ADDRESS && va <= DMAP_MAX_ADDRESS)
+		return (DMAP_TO_PHYS(va));
+#endif
 
 	if (va >= VM_MIN_KERNEL_ADDRESS && va <= VM_MAX_KERNEL_ADDRESS)
 		p = pte_vatopa(mmu, kernel_pmap, va);
@@ -2141,7 +2145,7 @@ mmu_booke_map_user_ptr(mmu_t mmu, pmap_t pm, volatile const void *uaddr,
     void **kaddr, size_t ulen, size_t *klen)
 {
 
-	if ((uintptr_t)uaddr + ulen > VM_MAXUSER_ADDRESS + PAGE_SIZE)
+	if (trunc_page((uintptr_t)uaddr + ulen) > VM_MAXUSER_ADDRESS)
 		return (EFAULT);
 
 	*kaddr = (void *)(uintptr_t)uaddr;
@@ -2161,7 +2165,7 @@ mmu_booke_decode_kernel_ptr(mmu_t mmu, vm_offset_t addr, int *is_user,
     vm_offset_t *decoded_addr)
 {
 
-	if (addr < VM_MAXUSER_ADDRESS)
+	if (trunc_page(addr) <= VM_MAXUSER_ADDRESS)
 		*is_user = 1;
 	else
 		*is_user = 0;
@@ -2542,8 +2546,11 @@ mmu_booke_map(mmu_t mmu, vm_offset_t *virt, vm_paddr_t pa_start,
 	vm_offset_t sva = *virt;
 	vm_offset_t va = sva;
 
-	//debugf("mmu_booke_map: s (sva = 0x%08x pa_start = 0x%08x pa_end = 0x%08x)\n",
-	//		sva, pa_start, pa_end);
+#ifdef __powerpc64__
+	/* XXX: Handle memory not starting at 0x0. */
+	if (pa_end < ctob(Maxmem))
+		return (PHYS_TO_DMAP(pa_start));
+#endif
 
 	while (pa_start < pa_end) {
 		mmu_booke_kenter(mmu, va, pa_start);
@@ -2552,7 +2559,6 @@ mmu_booke_map(mmu_t mmu, vm_offset_t *virt, vm_paddr_t pa_start,
 	}
 	*virt = va;
 
-	//debugf("mmu_booke_map: e (va = 0x%08x)\n", va);
 	return (sva);
 }
 
@@ -2801,7 +2807,7 @@ retry:
 			if (vm_page_pa_tryrelock(pmap, PTE_PA(pte), &pa))
 				goto retry;
 			m = PHYS_TO_VM_PAGE(PTE_PA(pte));
-			m->wire_count++;
+			vm_page_wire(m);
 		}
 	}
 
@@ -4020,7 +4026,8 @@ tlb1_mapin_region(vm_offset_t va, vm_paddr_t pa, vm_size_t size)
 void
 tlb1_init()
 {
-	uint32_t mas0, mas1, mas2, mas3, mas7;
+	vm_offset_t mas2;
+	uint32_t mas0, mas1, mas3, mas7;
 	uint32_t tsz;
 
 	tlb1_get_tlbconf();
@@ -4039,6 +4046,7 @@ tlb1_init()
 
 	tsz = (mas1 & MAS1_TSIZE_MASK) >> MAS1_TSIZE_SHIFT;
 	kernsize += (tsz > 0) ? tsize2size(tsz) : 0;
+	kernstart = trunc_page(mas2);
 
 	/* Setup TLB miss defaults */
 	set_mas4_defaults();

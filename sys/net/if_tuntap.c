@@ -110,7 +110,6 @@ struct tuntap_softc {
 	u_short				 tun_flags;	/* misc flags */
 #define	TUN_OPEN	0x0001
 #define	TUN_INITED	0x0002
-#define	TUN_RCOLL	0x0004
 #define	TUN_IASET	0x0008
 #define	TUN_DSTADDR	0x0010
 #define	TUN_LMODE	0x0020
@@ -168,9 +167,9 @@ SX_SYSINIT(tun_ioctl_sx, &tun_ioctl_sx, "tun_ioctl");
 SYSCTL_DECL(_net_link);
 /* tun */
 static SYSCTL_NODE(_net_link, OID_AUTO, tun, CTLFLAG_RW, 0,
-    "IP tunnel software network interface.");
+    "IP tunnel software network interface");
 SYSCTL_INT(_net_link_tun, OID_AUTO, devfs_cloning, CTLFLAG_RWTUN, &tundclone, 0,
-    "Enable legacy devfs interface creation.");
+    "Enable legacy devfs interface creation");
 
 /* tap */
 static SYSCTL_NODE(_net_link, OID_AUTO, tap, CTLFLAG_RW, 0,
@@ -442,7 +441,7 @@ tun_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 		return (ENXIO);
 
 	if (unit != -1) {
-		/* If this unit number is still available that/s okay. */
+		/* If this unit number is still available that's okay. */
 		if (alloc_unr_specific(drv->unrhdr, unit) == -1)
 			return (EEXIST);
 	} else {
@@ -672,6 +671,8 @@ static moduledata_t tuntap_mod = {
 
 DECLARE_MODULE(if_tuntap, tuntap_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
 MODULE_VERSION(if_tuntap, 1);
+MODULE_VERSION(if_tun, 1);
+MODULE_VERSION(if_tap, 1);
 
 static void
 tunstart(struct ifnet *ifp)
@@ -1435,22 +1436,22 @@ tunread(struct cdev *dev, struct uio *uio, int flag)
 
 	tp->tun_flags &= ~TUN_RWAIT;
 
-	do {
+	for (;;) {
 		IFQ_DEQUEUE(&ifp->if_snd, m);
-		if (m == NULL) {
-			if (flag & O_NONBLOCK) {
-				TUN_UNLOCK(tp);
-				return (EWOULDBLOCK);
-			}
-			tp->tun_flags |= TUN_RWAIT;
-			error = mtx_sleep(tp, &tp->tun_mtx, PCATCH | (PZERO + 1),
-			    "tunread", 0);
-			if (error != 0) {
-				TUN_UNLOCK(tp);
-				return (error);
-			}
+		if (m != NULL)
+			break;
+		if (flag & O_NONBLOCK) {
+			TUN_UNLOCK(tp);
+			return (EWOULDBLOCK);
 		}
-	} while (m == NULL);
+		tp->tun_flags |= TUN_RWAIT;
+		error = mtx_sleep(tp, &tp->tun_mtx, PCATCH | (PZERO + 1),
+		    "tunread", 0);
+		if (error != 0) {
+			TUN_UNLOCK(tp);
+			return (error);
+		}
+	}
 	TUN_UNLOCK(tp);
 
 	if ((tp->tun_flags & TUN_L2) != 0)
@@ -1629,8 +1630,7 @@ tunpoll(struct cdev *dev, int events, struct thread *td)
 		}
 		IFQ_UNLOCK(&ifp->if_snd);
 	}
-	if (events & (POLLOUT | POLLWRNORM))
-		revents |= events & (POLLOUT | POLLWRNORM);
+	revents |= events & (POLLOUT | POLLWRNORM);
 
 	return (revents);
 }

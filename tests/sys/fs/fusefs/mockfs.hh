@@ -26,6 +26,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 extern "C" {
@@ -143,6 +145,7 @@ union fuse_payloads_in {
 	fuse_fsync_in	fsync;
 	fuse_fsync_in	fsyncdir;
 	fuse_forget_in	forget;
+	fuse_getattr_in	getattr;
 	fuse_interrupt_in interrupt;
 	fuse_lk_in	getlk;
 	fuse_getxattr_in getxattr;
@@ -280,6 +283,7 @@ class MockFS {
 	/* Timestamp granularity in nanoseconds */
 	unsigned m_time_gran;
 
+	void audit_request(const mockfs_buf_in &in);
 	void debug_request(const mockfs_buf_in&);
 	void debug_response(const mockfs_buf_out&);
 

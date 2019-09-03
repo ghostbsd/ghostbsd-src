@@ -48,6 +48,10 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_media.h>
+
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
@@ -60,6 +64,8 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/usb/net/usb_ethernet.h>
 #include <dev/usb/net/if_axgereg.h>
+
+#include "miibus_if.h"
 
 /*
  * Various supported device vendors/products.
@@ -1035,7 +1041,7 @@ axge_rxeof(struct usb_ether *ue, struct usb_page_cache *pc, unsigned int offset,
 	}
 	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
-	_IF_ENQUEUE(&ue->ue_rxq, m);
+	(void)mbufq_enqueue(&ue->ue_rxq, m);
 }
 
 static void
