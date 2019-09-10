@@ -6,6 +6,8 @@ CONFGROUPS=	CONFETC CONFETCEXEC CONFETCDEFAULTS
 CONFETCDIR=	/etc
 CONFETC+=	network.subr openrc openrc.shutdown rc rc.dynamicdiskless
 CONFETC+=	rc.initdiskless rc.subr rc.shutdown rc.bsdextended
+CONFETCPACKAGE=	rc
+
 .if ${MK_IPFW} != "no"
 CONFETC+=	rc.firewall
 .endif
@@ -16,9 +18,10 @@ CONFETCMODE=	644
 CONFETCEXEC=	netstart pccard_ether rc.devd rc.resume rc.suspend
 CONFETCEXECDIR=	/etc
 CONFETCEXECMODE=	755
+CONFETCEXECPACKAGE=	rc
 CONFETCDEFAULTSDIR=	/etc/defaults
 CONFETCDEFAULTS=	rc.conf
-#PACKAGE=rc
+CONFETCDEFAULTSPACKAGE=	rc
 
 SUBDIR+=	bin
 SUBDIR+=	init.d

@@ -198,10 +198,8 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 				printf(
 	    "uiomove_object: vm_obj %p idx %jd valid %x pager error %d\n",
 				    obj, idx, m->valid, rv);
-				vm_page_lock(m);
 				vm_page_unwire_noq(m);
 				vm_page_free(m);
-				vm_page_unlock(m);
 				VM_OBJECT_WUNLOCK(obj);
 				return (EIO);
 			}
@@ -217,9 +215,7 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 		vm_pager_page_unswapped(m);
 		VM_OBJECT_WUNLOCK(obj);
 	}
-	vm_page_lock(m);
 	vm_page_unwire(m, PQ_ACTIVE);
-	vm_page_unlock(m);
 
 	return (error);
 }
@@ -474,7 +470,6 @@ retry:
 					goto retry;
 				rv = vm_pager_get_pages(object, &m, 1, NULL,
 				    NULL);
-				vm_page_lock(m);
 				if (rv == VM_PAGER_OK) {
 					/*
 					 * Since the page was not resident,
@@ -485,11 +480,9 @@ retry:
 					 * as an access.
 					 */
 					vm_page_launder(m);
-					vm_page_unlock(m);
 					vm_page_xunbusy(m);
 				} else {
 					vm_page_free(m);
-					vm_page_unlock(m);
 					VM_OBJECT_WUNLOCK(object);
 					return (EIO);
 				}
@@ -895,6 +888,7 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 	struct shmfd *shmfd;
 	vm_prot_t maxprot;
 	int error;
+	bool writecnt;
 
 	shmfd = fp->f_data;
 	maxprot = VM_PROT_NONE;
@@ -905,10 +899,10 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 	if ((fp->f_flag & FWRITE) != 0)
 		maxprot |= VM_PROT_WRITE;
 
+	writecnt = (flags & MAP_SHARED) != 0 && (prot & VM_PROT_WRITE) != 0;
+
 	/* Don't permit shared writable mappings on read-only descriptors. */
-	if ((flags & MAP_SHARED) != 0 &&
-	    (maxprot & VM_PROT_WRITE) == 0 &&
-	    (prot & VM_PROT_WRITE) != 0)
+	if (writecnt && (maxprot & VM_PROT_WRITE) == 0)
 		return (EACCES);
 	maxprot &= cap_maxprot;
 
@@ -931,10 +925,16 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 	mtx_unlock(&shm_timestamp_lock);
 	vm_object_reference(shmfd->shm_object);
 
+	if (writecnt)
+		vm_pager_update_writecount(shmfd->shm_object, 0, objsize);
 	error = vm_mmap_object(map, addr, objsize, prot, maxprot, flags,
-	    shmfd->shm_object, foff, FALSE, td);
-	if (error != 0)
+	    shmfd->shm_object, foff, writecnt, td);
+	if (error != 0) {
+		if (writecnt)
+			vm_pager_release_writecount(shmfd->shm_object, 0,
+			    objsize);
 		vm_object_deallocate(shmfd->shm_object);
+	}
 	return (error);
 }
 
