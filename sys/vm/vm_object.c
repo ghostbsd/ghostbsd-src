@@ -508,7 +508,6 @@ void
 vm_object_deallocate(vm_object_t object)
 {
 	vm_object_t temp;
-	struct vnode *vp;
 
 	while (object != NULL) {
 		VM_OBJECT_WLOCK(object);
@@ -531,25 +530,6 @@ vm_object_deallocate(vm_object_t object)
 			VM_OBJECT_WUNLOCK(object);
 			return;
 		} else if (object->ref_count == 1) {
-			if (object->type == OBJT_SWAP &&
-			    (object->flags & OBJ_TMPFS) != 0) {
-				vp = object->un_pager.swp.swp_tmpfs;
-				vhold(vp);
-				VM_OBJECT_WUNLOCK(object);
-				vn_lock(vp, LK_SHARED | LK_RETRY);
-				VM_OBJECT_WLOCK(object);
-				if (object->type == OBJT_DEAD ||
-				    object->ref_count != 1) {
-					VM_OBJECT_WUNLOCK(object);
-					VOP_UNLOCK(vp, 0);
-					vdrop(vp);
-					return;
-				}
-				if ((object->flags & OBJ_TMPFS) != 0)
-					VOP_UNSET_TEXT(vp);
-				VOP_UNLOCK(vp, 0);
-				vdrop(vp);
-			}
 			if (object->shadow_count == 0 &&
 			    object->handle == NULL &&
 			    (object->type == OBJT_DEFAULT ||
@@ -694,11 +674,8 @@ static void
 vm_object_terminate_pages(vm_object_t object)
 {
 	vm_page_t p, p_next;
-	struct mtx *mtx;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
-
-	mtx = NULL;
 
 	/*
 	 * Free any remaining pageable pages.  This also removes them from the
@@ -708,20 +685,16 @@ vm_object_terminate_pages(vm_object_t object)
 	 */
 	TAILQ_FOREACH_SAFE(p, &object->memq, listq, p_next) {
 		vm_page_assert_unbusied(p);
-		if ((object->flags & OBJ_UNMANAGED) == 0)
-			/*
-			 * vm_page_free_prep() only needs the page
-			 * lock for managed pages.
-			 */
-			vm_page_change_lock(p, &mtx);
+		KASSERT(p->object == object &&
+		    (p->ref_count & VPRC_OBJREF) != 0,
+		    ("vm_object_terminate_pages: page %p is inconsistent", p));
+
 		p->object = NULL;
-		if (vm_page_wired(p))
-			continue;
-		VM_CNT_INC(v_pfree);
-		vm_page_free(p);
+		if (vm_page_drop(p, VPRC_OBJREF) == VPRC_OBJREF) {
+			VM_CNT_INC(v_pfree);
+			vm_page_free(p);
+		}
 	}
-	if (mtx != NULL)
-		mtx_unlock(mtx);
 
 	/*
 	 * If the object contained any pages, then reset it to an empty state.
@@ -1178,13 +1151,9 @@ next_page:
 		/*
 		 * If the page is not in a normal state, skip it.
 		 */
-		if (tm->valid != VM_PAGE_BITS_ALL)
+		if (tm->valid != VM_PAGE_BITS_ALL ||
+		    vm_page_wired(tm))
 			goto next_pindex;
-		vm_page_lock(tm);
-		if (vm_page_wired(tm)) {
-			vm_page_unlock(tm);
-			goto next_pindex;
-		}
 		KASSERT((tm->flags & PG_FICTITIOUS) == 0,
 		    ("vm_object_madvise: page %p is fictitious", tm));
 		KASSERT((tm->oflags & VPO_UNMANAGED) == 0,
@@ -1192,6 +1161,7 @@ next_page:
 		if (vm_page_busied(tm)) {
 			if (object != tobject)
 				VM_OBJECT_WUNLOCK(tobject);
+			vm_page_lock(tm);
 			VM_OBJECT_WUNLOCK(object);
 			if (advice == MADV_WILLNEED) {
 				/*
@@ -1204,6 +1174,7 @@ next_page:
 			vm_page_busy_sleep(tm, "madvpo", false);
   			goto relookup;
 		}
+		vm_page_lock(tm);
 		vm_page_advise(tm, advice);
 		vm_page_unlock(tm);
 		vm_object_madvise_freespace(tobject, advice, tm->pindex, 1);
@@ -1557,16 +1528,10 @@ vm_object_collapse_scan(vm_object_t object, int op)
 				swap_pager_freespace(backing_object, p->pindex,
 				    1);
 
-			/*
-			 * Page is out of the parent object's range, we can
-			 * simply destroy it.
-			 */
-			vm_page_lock(p);
 			KASSERT(!pmap_page_is_mapped(p),
 			    ("freeing mapped page %p", p));
 			if (vm_page_remove(p))
 				vm_page_free(p);
-			vm_page_unlock(p);
 			continue;
 		}
 
@@ -1603,12 +1568,10 @@ vm_object_collapse_scan(vm_object_t object, int op)
 			if (backing_object->type == OBJT_SWAP)
 				swap_pager_freespace(backing_object, p->pindex,
 				    1);
-			vm_page_lock(p);
 			KASSERT(!pmap_page_is_mapped(p),
 			    ("freeing mapped page %p", p));
 			if (vm_page_remove(p))
 				vm_page_free(p);
-			vm_page_unlock(p);
 			continue;
 		}
 
@@ -1909,7 +1872,14 @@ again:
 			VM_OBJECT_WLOCK(object);
 			goto again;
 		}
+		if (vm_page_busied(p)) {
+			VM_OBJECT_WUNLOCK(object);
+			vm_page_busy_sleep(p, "vmopar", false);
+			VM_OBJECT_WLOCK(object);
+			goto again;
+		}
 		if (vm_page_wired(p)) {
+wired:
 			if ((options & OBJPR_NOTMAPPED) == 0 &&
 			    object->ref_count != 0)
 				pmap_remove_all(p);
@@ -1919,23 +1889,19 @@ again:
 			}
 			continue;
 		}
-		if (vm_page_busied(p)) {
-			VM_OBJECT_WUNLOCK(object);
-			vm_page_busy_sleep(p, "vmopar", false);
-			VM_OBJECT_WLOCK(object);
-			goto again;
-		}
 		KASSERT((p->flags & PG_FICTITIOUS) == 0,
 		    ("vm_object_page_remove: page %p is fictitious", p));
 		if ((options & OBJPR_CLEANONLY) != 0 && p->valid != 0) {
 			if ((options & OBJPR_NOTMAPPED) == 0 &&
-			    object->ref_count != 0)
-				pmap_remove_write(p);
+			    object->ref_count != 0 &&
+			    !vm_page_try_remove_write(p))
+				goto wired;
 			if (p->dirty != 0)
 				continue;
 		}
-		if ((options & OBJPR_NOTMAPPED) == 0 && object->ref_count != 0)
-			pmap_remove_all(p);
+		if ((options & OBJPR_NOTMAPPED) == 0 &&
+		    object->ref_count != 0 && !vm_page_try_remove_all(p))
+			goto wired;
 		vm_page_free(p);
 	}
 	if (mtx != NULL)
@@ -2009,9 +1975,7 @@ vm_object_populate(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 		if (m->valid != VM_PAGE_BITS_ALL) {
 			rv = vm_pager_get_pages(object, &m, 1, NULL, NULL);
 			if (rv != VM_PAGER_OK) {
-				vm_page_lock(m);
 				vm_page_free(m);
-				vm_page_unlock(m);
 				break;
 			}
 		}
@@ -2062,7 +2026,7 @@ vm_object_coalesce(vm_object_t prev_object, vm_ooffset_t prev_offset,
 	VM_OBJECT_WLOCK(prev_object);
 	if ((prev_object->type != OBJT_DEFAULT &&
 	    prev_object->type != OBJT_SWAP) ||
-	    (prev_object->flags & OBJ_TMPFS_NODE) != 0) {
+	    (prev_object->flags & OBJ_NOSPLIT) != 0) {
 		VM_OBJECT_WUNLOCK(prev_object);
 		return (FALSE);
 	}
@@ -2225,8 +2189,8 @@ again:
 			tm = m;
 			m = TAILQ_NEXT(m, listq);
 		}
-		vm_page_lock(tm);
 		if (vm_page_xbusied(tm)) {
+			vm_page_lock(tm);
 			for (tobject = object; locked_depth >= 1;
 			    locked_depth--) {
 				t1object = tobject->backing_object;
@@ -2237,7 +2201,6 @@ again:
 			goto again;
 		}
 		vm_page_unwire(tm, queue);
-		vm_page_unlock(tm);
 next_page:
 		pindex++;
 	}

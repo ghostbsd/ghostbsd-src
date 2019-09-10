@@ -4,7 +4,7 @@
 
 CONFDIR=	/etc/rc.d
 CONFGROUPS=	CONFS
-#PACKAGE=rc
+CONFSPACKAGE=	rc
 
 CONFS=	DAEMON \
 	FILESYSTEMS \
@@ -329,6 +329,7 @@ DIRS+=	ETC_ZFS
 ETC_ZFS=	/etc/zfs
 ETC_ZFSPACKAGE=	zfs
 #.endif
+.endif
 
 .for fg in ${CONFGROUPS}
 ${fg}MODE?=	${BINMODE}

@@ -3071,31 +3071,23 @@ pmap_extract_and_hold(pmap_t pmap, vm_offset_t va, vm_prot_t prot)
 	m = NULL;
 	PG_RW = pmap_rw_bit(pmap);
 	PG_V = pmap_valid_bit(pmap);
+
 	PMAP_LOCK(pmap);
-retry:
 	pdep = pmap_pde(pmap, va);
 	if (pdep != NULL && (pde = *pdep)) {
 		if (pde & PG_PS) {
-			if ((pde & PG_RW) || (prot & VM_PROT_WRITE) == 0) {
-				if (vm_page_pa_tryrelock(pmap, (pde &
-				    PG_PS_FRAME) | (va & PDRMASK), &pa))
-					goto retry;
-				m = PHYS_TO_VM_PAGE(pa);
-			}
+			if ((pde & PG_RW) != 0 || (prot & VM_PROT_WRITE) == 0)
+				m = PHYS_TO_VM_PAGE((pde & PG_PS_FRAME) |
+				    (va & PDRMASK));
 		} else {
 			pte = *pmap_pde_to_pte(pdep, va);
-			if ((pte & PG_V) &&
-			    ((pte & PG_RW) || (prot & VM_PROT_WRITE) == 0)) {
-				if (vm_page_pa_tryrelock(pmap, pte & PG_FRAME,
-				    &pa))
-					goto retry;
-				m = PHYS_TO_VM_PAGE(pa);
-			}
+			if ((pte & PG_V) != 0 &&
+			    ((pte & PG_RW) != 0 || (prot & VM_PROT_WRITE) == 0))
+				m = PHYS_TO_VM_PAGE(pte & PG_FRAME);
 		}
-		if (m != NULL)
-			vm_page_wire(m);
+		if (m != NULL && !vm_page_wire_mapped(m))
+			m = NULL;
 	}
-	PA_UNLOCK_COND(pa);
 	PMAP_UNLOCK(pmap);
 	return (m);
 }
@@ -3850,22 +3842,21 @@ pmap_page_array_startup(long pages)
 	end = va + pages * sizeof(struct vm_page);
 	while (va < end) {
 		pfn = first_page + (va - start) / sizeof(struct vm_page);
-		domain = _vm_phys_domain(ctob(pfn));
+		domain = _vm_phys_domain(ptoa(pfn));
 		pdpe = pmap_pdpe(kernel_pmap, va);
 		if ((*pdpe & X86_PG_V) == 0) {
 			pa = vm_phys_early_alloc(domain, PAGE_SIZE);
 			dump_add_page(pa);
-			bzero((void *)PHYS_TO_DMAP(pa), PAGE_SIZE);
+			pagezero((void *)PHYS_TO_DMAP(pa));
 			*pdpe = (pdp_entry_t)(pa | X86_PG_V | X86_PG_RW |
 			    X86_PG_A | X86_PG_M);
-			continue; /* try again */
 		}
 		pde = pmap_pdpe_to_pde(pdpe, va);
 		if ((*pde & X86_PG_V) != 0)
 			panic("Unexpected pde");
 		pa = vm_phys_early_alloc(domain, NBPDR);
 		for (i = 0; i < NPDEPG; i++)
-			dump_add_page(pa + (i * PAGE_SIZE));
+			dump_add_page(pa + i * PAGE_SIZE);
 		newpdir = (pd_entry_t)(pa | X86_PG_V | X86_PG_RW | X86_PG_A |
 		    X86_PG_M | PG_PS | pg_g | pg_nx);
 		pde_store(pde, newpdir);
