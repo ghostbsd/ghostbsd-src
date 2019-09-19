@@ -641,7 +641,20 @@ vfs_busy(struct mount *mp, int flags)
 	MPASS((flags & ~MBF_MASK) == 0);
 	CTR3(KTR_VFS, "%s: mp %p with flags %d", __func__, mp, flags);
 
+	if (vfs_op_thread_enter(mp)) {
+		MPASS((mp->mnt_kern_flag & MNTK_DRAINING) == 0);
+		MPASS((mp->mnt_kern_flag & MNTK_UNMOUNT) == 0);
+		MPASS((mp->mnt_kern_flag & MNTK_REFEXPIRE) == 0);
+		vfs_mp_count_add_pcpu(mp, ref, 1);
+		vfs_mp_count_add_pcpu(mp, lockref, 1);
+		vfs_op_thread_exit(mp);
+		if (flags & MBF_MNTLSTLOCK)
+			mtx_unlock(&mountlist_mtx);
+		return (0);
+	}
+
 	MNT_ILOCK(mp);
+	vfs_assert_mount_counters(mp);
 	MNT_REF(mp);
 	/*
 	 * If mount point is currently being unmounted, sleep until the
@@ -684,13 +697,30 @@ vfs_busy(struct mount *mp, int flags)
 void
 vfs_unbusy(struct mount *mp)
 {
+	int c;
 
 	CTR2(KTR_VFS, "%s: mp %p", __func__, mp);
+
+	if (vfs_op_thread_enter(mp)) {
+		MPASS((mp->mnt_kern_flag & MNTK_DRAINING) == 0);
+		vfs_mp_count_sub_pcpu(mp, lockref, 1);
+		vfs_mp_count_sub_pcpu(mp, ref, 1);
+		vfs_op_thread_exit(mp);
+		return;
+	}
+
 	MNT_ILOCK(mp);
+	vfs_assert_mount_counters(mp);
 	MNT_REL(mp);
-	KASSERT(mp->mnt_lockref > 0, ("negative mnt_lockref"));
-	mp->mnt_lockref--;
-	if (mp->mnt_lockref == 0 && (mp->mnt_kern_flag & MNTK_DRAINING) != 0) {
+	c = --mp->mnt_lockref;
+	if (mp->mnt_vfs_ops == 0) {
+		MPASS((mp->mnt_kern_flag & MNTK_DRAINING) == 0);
+		MNT_IUNLOCK(mp);
+		return;
+	}
+	if (c < 0)
+		vfs_dump_mount_counters(mp);
+	if (c == 0 && (mp->mnt_kern_flag & MNTK_DRAINING) != 0) {
 		MPASS(mp->mnt_kern_flag & MNTK_UNMOUNT);
 		CTR1(KTR_VFS, "%s: waking up waiters", __func__);
 		mp->mnt_kern_flag &= ~MNTK_DRAINING;
@@ -2667,12 +2697,13 @@ v_decr_devcount(struct vnode *vp)
  * see doomed vnodes.  If inactive processing was delayed in
  * vput try to do it here.
  *
- * Notes on lockless counter manipulation:
- * _vhold, vputx and other routines make various decisions based
- * on either holdcnt or usecount being 0. As long as either counter
- * is not transitioning 0->1 nor 1->0, the manipulation can be done
- * with atomic operations. Otherwise the interlock is taken covering
- * both the atomic and additional actions.
+ * Both holdcnt and usecount can be manipulated using atomics without holding
+ * any locks except in these cases which require the vnode interlock:
+ * holdcnt: 1->0 and 0->1
+ * usecount: 0->1
+ *
+ * usecount is permitted to transition 1->0 without the interlock because
+ * vnode is kept live by holdcnt.
  */
 static enum vgetstate
 _vget_prep(struct vnode *vp, bool interlock)
@@ -2784,6 +2815,29 @@ vget_finish(struct vnode *vp, int flags, enum vgetstate vs)
 	 * Upgrade our holdcnt to a usecount.
 	 */
 	VI_LOCK(vp);
+	/*
+	 * See the previous section. By the time we get here we may find
+	 * ourselves in the same spot.
+	 */
+	if (vp->v_type != VCHR) {
+		if (refcount_acquire_if_not_zero(&vp->v_usecount)) {
+#ifdef INVARIANTS
+			int old = atomic_fetchadd_int(&vp->v_holdcnt, -1) - 1;
+			VNASSERT(old > 0, vp, ("%s: wrong hold count", __func__));
+#else
+			refcount_release(&vp->v_holdcnt);
+#endif
+			VNODE_REFCOUNT_FENCE_ACQ();
+			VNASSERT((vp->v_iflag & VI_OWEINACT) == 0, vp,
+			    ("%s: vnode with usecount and VI_OWEINACT set",
+			    __func__));
+			VI_UNLOCK(vp);
+			return (0);
+		}
+	} else {
+		if (vp->v_usecount > 0)
+			refcount_release(&vp->v_holdcnt);
+	}
 	if ((vp->v_iflag & VI_OWEINACT) == 0) {
 		oweinact = 0;
 	} else {
@@ -2791,8 +2845,6 @@ vget_finish(struct vnode *vp, int flags, enum vgetstate vs)
 		vp->v_iflag &= ~VI_OWEINACT;
 		VNODE_REFCOUNT_FENCE_REL();
 	}
-	if (vp->v_usecount > 0)
-		refcount_release(&vp->v_holdcnt);
 	v_incr_devcount(vp);
 	refcount_acquire(&vp->v_usecount);
 	if (oweinact && VOP_ISLOCKED(vp) == LK_EXCLUSIVE &&
@@ -2832,6 +2884,15 @@ vrefl(struct vnode *vp)
 
 	ASSERT_VI_LOCKED(vp, __func__);
 	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
+	if (vp->v_type != VCHR &&
+	    refcount_acquire_if_not_zero(&vp->v_usecount)) {
+		VNODE_REFCOUNT_FENCE_ACQ();
+		VNASSERT(vp->v_holdcnt > 0, vp,
+		    ("%s: active vnode not held", __func__));
+		VNASSERT((vp->v_iflag & VI_OWEINACT) == 0, vp,
+		    ("%s: vnode with usecount and VI_OWEINACT set", __func__));
+		return;
+	}
 	if (vp->v_usecount == 0)
 		vholdl(vp);
 	if ((vp->v_iflag & VI_OWEINACT) != 0) {
@@ -2917,21 +2978,35 @@ vputx(struct vnode *vp, int func)
 	if (func == VPUTX_VPUT)
 		VOP_UNLOCK(vp, 0);
 
-	if (vp->v_type != VCHR &&
-	    refcount_release_if_not_last(&vp->v_usecount))
-		return;
-
-	VI_LOCK(vp);
-
 	/*
 	 * We want to hold the vnode until the inactive finishes to
 	 * prevent vgone() races.  We drop the use count here and the
 	 * hold count below when we're done.
 	 */
-	v_decr_devcount(vp);
-	if (!refcount_release(&vp->v_usecount)) {
-		VI_UNLOCK(vp);
-		return;
+	if (vp->v_type != VCHR) {
+		/*
+		 * If we release the last usecount we take ownership of the hold
+		 * count which provides liveness of the vnode, in which case we
+		 * have to vdrop.
+		 */
+		if (!refcount_release(&vp->v_usecount))
+			return;
+		VI_LOCK(vp);
+		/*
+		 * By the time we got here someone else might have transitioned
+		 * the count back to > 0.
+		 */
+		if (vp->v_usecount > 0) {
+			vdropl(vp);
+			return;
+		}
+	} else {
+		VI_LOCK(vp);
+		v_decr_devcount(vp);
+		if (!refcount_release(&vp->v_usecount)) {
+			VI_UNLOCK(vp);
+			return;
+		}
 	}
 	if (vp->v_iflag & VI_DOINGINACT) {
 		vdropl(vp);
@@ -3972,21 +4047,25 @@ DB_SHOW_COMMAND(mount, db_show_mount)
 	if (jailed(mp->mnt_cred))
 		db_printf(", jail=%d", mp->mnt_cred->cr_prison->pr_id);
 	db_printf(" }\n");
-	db_printf("    mnt_ref = %d\n", mp->mnt_ref);
+	db_printf("    mnt_ref = %d (with %d in the struct)\n",
+	    vfs_mount_fetch_counter(mp, MNT_COUNT_REF), mp->mnt_ref);
 	db_printf("    mnt_gen = %d\n", mp->mnt_gen);
 	db_printf("    mnt_nvnodelistsize = %d\n", mp->mnt_nvnodelistsize);
 	db_printf("    mnt_activevnodelistsize = %d\n",
 	    mp->mnt_activevnodelistsize);
-	db_printf("    mnt_writeopcount = %d\n", mp->mnt_writeopcount);
+	db_printf("    mnt_writeopcount = %d (with %d in the struct)\n",
+	    vfs_mount_fetch_counter(mp, MNT_COUNT_WRITEOPCOUNT), mp->mnt_writeopcount);
 	db_printf("    mnt_maxsymlinklen = %d\n", mp->mnt_maxsymlinklen);
 	db_printf("    mnt_iosize_max = %d\n", mp->mnt_iosize_max);
 	db_printf("    mnt_hashseed = %u\n", mp->mnt_hashseed);
-	db_printf("    mnt_lockref = %d\n", mp->mnt_lockref);
+	db_printf("    mnt_lockref = %d (with %d in the struct)\n",
+	    vfs_mount_fetch_counter(mp, MNT_COUNT_LOCKREF), mp->mnt_lockref);
 	db_printf("    mnt_secondary_writes = %d\n", mp->mnt_secondary_writes);
 	db_printf("    mnt_secondary_accwrites = %d\n",
 	    mp->mnt_secondary_accwrites);
 	db_printf("    mnt_gjprovider = %s\n",
 	    mp->mnt_gjprovider != NULL ? mp->mnt_gjprovider : "NULL");
+	db_printf("    mnt_vfs_ops = %d\n", mp->mnt_vfs_ops);
 
 	db_printf("\n\nList of active vnodes\n");
 	TAILQ_FOREACH(vp, &mp->mnt_activevnodelist, v_actfreelist) {

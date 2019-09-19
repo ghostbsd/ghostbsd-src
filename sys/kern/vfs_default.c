@@ -601,17 +601,28 @@ vop_stdgetwritemount(ap)
 	 */
 	vp = ap->a_vp;
 	mp = vp->v_mount;
-	if (mp == NULL)
-		goto out;
-	MNT_ILOCK(mp);
-	if (mp != vp->v_mount) {
-		MNT_IUNLOCK(mp);
-		mp = NULL;
-		goto out;
+	if (mp == NULL) {
+		*(ap->a_mpp) = NULL;
+		return (0);
 	}
-	MNT_REF(mp);
-	MNT_IUNLOCK(mp);
-out:
+	if (vfs_op_thread_enter(mp)) {
+		if (mp == vp->v_mount) {
+			vfs_mp_count_add_pcpu(mp, ref, 1);
+			vfs_op_thread_exit(mp);
+		} else {
+			vfs_op_thread_exit(mp);
+			mp = NULL;
+		}
+	} else {
+		MNT_ILOCK(mp);
+		if (mp == vp->v_mount) {
+			MNT_REF(mp);
+			MNT_IUNLOCK(mp);
+		} else {
+			MNT_IUNLOCK(mp);
+			mp = NULL;
+		}
+	}
 	*(ap->a_mpp) = mp;
 	return (0);
 }

@@ -153,22 +153,6 @@ struct camcontrol_opts {
 	const char	*subopt;
 };
 
-struct ata_res_pass16 {
-	u_int16_t reserved[5];
-	u_int8_t flags;
-	u_int8_t error;
-	u_int8_t sector_count_exp;
-	u_int8_t sector_count;
-	u_int8_t lba_low_exp;
-	u_int8_t lba_low;
-	u_int8_t lba_mid_exp;
-	u_int8_t lba_mid;
-	u_int8_t lba_high_exp;
-	u_int8_t lba_high;
-	u_int8_t device;
-	u_int8_t status;
-};
-
 struct ata_set_max_pwd
 {
 	u_int16_t reserved1;
@@ -1616,16 +1600,6 @@ atacapprint(struct ata_params *parm)
 	printf("flush cache                    %s	%s\n",
 		parm->support.command2 & ATA_SUPPORT_FLUSHCACHE ? "yes" : "no",
 		parm->enabled.command2 & ATA_SUPPORT_FLUSHCACHE ? "yes" : "no");
-	printf("overlap                        %s\n",
-		parm->capabilities1 & ATA_SUPPORT_OVERLAP ? "yes" : "no");
-	printf("Tagged Command Queuing (TCQ)   %s	%s",
-		parm->support.command2 & ATA_SUPPORT_QUEUED ? "yes" : "no",
-		parm->enabled.command2 & ATA_SUPPORT_QUEUED ? "yes" : "no");
-		if (parm->support.command2 & ATA_SUPPORT_QUEUED) {
-			printf("	%d tags\n",
-			    ATA_QUEUE_LEN(parm->queue) + 1);
-		} else
-			printf("\n");
 	printf("Native Command Queuing (NCQ)   ");
 	if (atasata(parm) && (parm->satacapabilities & ATA_SUPPORT_NCQ)) {
 		printf("yes		%d tags\n",
@@ -1733,6 +1707,9 @@ atacapprint(struct ata_params *parm)
 	} else {
 		printf("no\n");
 	}
+	printf("Trusted Computing              %s\n",
+	    ((parm->tcg & 0xc000) == 0x4000) && (parm->tcg & ATA_SUPPORT_TCG) ?
+	    "yes" : "no");
 	printf("encrypts all user data         %s\n",
 		parm->support3 & ATA_ENCRYPTS_ALL_USER_DATA ? "yes" : "no");
 	printf("Sanitize                       ");
