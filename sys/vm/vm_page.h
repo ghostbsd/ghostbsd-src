@@ -497,6 +497,7 @@ vm_page_t PHYS_TO_VM_PAGE(vm_paddr_t pa);
 #define	VM_ALLOC_ZERO		0x0040	/* (acfgp) Allocate a prezeroed page */
 #define	VM_ALLOC_NOOBJ		0x0100	/* (acg) No associated object */
 #define	VM_ALLOC_NOBUSY		0x0200	/* (acgp) Do not excl busy the page */
+#define	VM_ALLOC_NOCREAT	0x0400	/* (gp) Don't create a page */
 #define	VM_ALLOC_IGN_SBUSY	0x1000	/* (gp) Ignore shared busy flag */
 #define	VM_ALLOC_NODUMP		0x2000	/* (ag) don't include in dump */
 #define	VM_ALLOC_SBUSY		0x4000	/* (acgp) Shared busy the page */
@@ -539,9 +540,9 @@ malloc2vm_flags(int malloc_flags)
 #define	PS_ALL_VALID	0x2
 #define	PS_NONE_BUSY	0x4
 
+int vm_page_busy_acquire(vm_page_t m, int allocflags);
 void vm_page_busy_downgrade(vm_page_t m);
 void vm_page_busy_sleep(vm_page_t m, const char *msg, bool nonshared);
-void vm_page_flash(vm_page_t m);
 void vm_page_free(vm_page_t m);
 void vm_page_free_zero(vm_page_t m);
 
@@ -566,6 +567,8 @@ void vm_page_change_lock(vm_page_t m, struct mtx **mtx);
 vm_page_t vm_page_grab (vm_object_t, vm_pindex_t, int);
 int vm_page_grab_pages(vm_object_t object, vm_pindex_t pindex, int allocflags,
     vm_page_t *ma, int count);
+int vm_page_grab_valid(vm_page_t *mp, vm_object_t object, vm_pindex_t pindex,
+    int allocflags);
 void vm_page_deactivate(vm_page_t);
 void vm_page_deactivate_noreuse(vm_page_t);
 void vm_page_dequeue(vm_page_t m);
@@ -604,6 +607,7 @@ vm_page_t vm_page_scan_contig(u_long npages, vm_page_t m_start,
     vm_page_t m_end, u_long alignment, vm_paddr_t boundary, int options);
 void vm_page_set_valid_range(vm_page_t m, int base, int size);
 int vm_page_sleep_if_busy(vm_page_t m, const char *msg);
+int vm_page_sleep_if_xbusy(vm_page_t m, const char *msg);
 vm_offset_t vm_page_startup(vm_offset_t vaddr);
 void vm_page_sunbusy(vm_page_t m);
 void vm_page_swapqueue(vm_page_t m, uint8_t oldq, uint8_t newq);
@@ -618,7 +622,6 @@ void vm_page_updatefake(vm_page_t m, vm_paddr_t paddr, vm_memattr_t memattr);
 void vm_page_wire(vm_page_t);
 bool vm_page_wire_mapped(vm_page_t m);
 void vm_page_xunbusy_hard(vm_page_t m);
-void vm_page_xunbusy_maybelocked(vm_page_t m);
 void vm_page_set_validclean (vm_page_t, int, int);
 void vm_page_clear_dirty (vm_page_t, int, int);
 void vm_page_set_invalid (vm_page_t, int, int);
@@ -780,8 +783,6 @@ vm_page_pqstate_cmpset(vm_page_t m, uint32_t oldq, uint32_t newq,
 {
 	uint32_t *addr, nval, oval, qsmask;
 
-	vm_page_assert_locked(m);
-
 	fflags <<= VM_PAGE_AFLAG_SHIFT;
 	nflags <<= VM_PAGE_AFLAG_SHIFT;
 	newq <<= VM_PAGE_QUEUE_SHIFT;
@@ -901,13 +902,17 @@ vm_page_in_laundry(vm_page_t m)
 static inline u_int
 vm_page_drop(vm_page_t m, u_int val)
 {
+	u_int old;
 
 	/*
 	 * Synchronize with vm_page_free_prep(): ensure that all updates to the
 	 * page structure are visible before it is freed.
 	 */
 	atomic_thread_fence_rel();
-	return (atomic_fetchadd_int(&m->ref_count, -val));
+	old = atomic_fetchadd_int(&m->ref_count, -val);
+	KASSERT(old != VPRC_BLOCKED,
+	    ("vm_page_drop: page %p has an invalid refcount value", m));
+	return (old);
 }
 
 /*
