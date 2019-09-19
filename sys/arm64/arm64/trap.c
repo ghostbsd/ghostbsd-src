@@ -151,7 +151,7 @@ svc_handler(struct thread *td, struct trapframe *frame)
 
 static void
 data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
-    uint64_t far, int lower)
+    uint64_t far, int lower, int exec)
 {
 	struct vm_map *map;
 	struct proc *p;
@@ -193,32 +193,16 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	}
 
 	/*
-	 * The call to pmap_fault can be dangerous when coming from the
-	 * kernel as it may be not be able to lock the pmap to check if
-	 * the address is now valid. Because of this we filter the cases
-	 * when we are not going to see superpage activity.
+	 * Try to handle translation, access flag, and permission faults.
+	 * Translation faults may occur as a result of the required
+	 * break-before-make sequence used when promoting or demoting
+	 * superpages.  Such faults must not occur while holding the pmap lock,
+	 * or pmap_fault() will recurse on that lock.
 	 */
-	if (!lower) {
-		/*
-		 * We may fault in a DMAP region due to a superpage being
-		 * unmapped when the access took place.
-		 */
-		if (map == kernel_map && !VIRT_IN_DMAP(far))
-			goto no_pmap_fault;
-		/*
-		 * We can also fault in the userspace handling functions,
-		 * e.g. copyin. In these cases we will have set a fault
-		 * handler so we can check if this is set before calling
-		 * pmap_fault.
-		 */
-		if (map != kernel_map && pcb->pcb_onfault == 0)
-			goto no_pmap_fault;
-	}
-
-	if (pmap_fault(map->pmap, esr, far) == KERN_SUCCESS)
+	if ((lower || map == kernel_map || pcb->pcb_onfault != 0) &&
+	    pmap_fault(map->pmap, esr, far) == KERN_SUCCESS)
 		return;
 
-no_pmap_fault:
 	KASSERT(td->td_md.md_spinlock_count == 0,
 	    ("data abort with spinlock held"));
 	if (td->td_critnest != 0 || WITNESS_CHECK(WARN_SLEEPOK |
@@ -230,7 +214,11 @@ no_pmap_fault:
 	}
 
 	va = trunc_page(far);
-	ftype = ((esr >> 6) & 1) ? VM_PROT_READ | VM_PROT_WRITE : VM_PROT_READ;
+	if (exec)
+		ftype = VM_PROT_EXECUTE;
+	else
+		ftype = (esr & ISS_DATA_WnR) == 0 ? VM_PROT_READ :
+		    VM_PROT_READ | VM_PROT_WRITE;
 
 	/* Fault in the page. */
 	error = vm_fault(map, va, ftype, VM_FAULT_NORMAL);
@@ -338,7 +326,8 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_DATA_ABORT:
 		far = READ_SPECIALREG(far_el1);
 		intr_enable();
-		data_abort(td, frame, esr, far, 0);
+		data_abort(td, frame, esr, far, 0,
+		    exception == EXCP_INSN_ABORT);
 		break;
 	case EXCP_BRK:
 #ifdef KDTRACE_HOOKS
@@ -435,7 +424,8 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_INSN_ABORT_L:
 	case EXCP_DATA_ABORT_L:
 	case EXCP_DATA_ABORT:
-		data_abort(td, frame, esr, far, 1);
+		data_abort(td, frame, esr, far, 1,
+		    exception == EXCP_INSN_ABORT_L);
 		break;
 	case EXCP_UNKNOWN:
 		if (!undef_insn(0, frame))

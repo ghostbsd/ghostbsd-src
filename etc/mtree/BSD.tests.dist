@@ -280,6 +280,14 @@
             test-programs
             ..
         ..
+        csu
+            dynamic
+            ..
+            dynamiclib
+            ..
+            static
+            ..
+        ..
         googletest
             gmock
             ..
@@ -427,6 +435,8 @@
         pfctl
             files
             ..
+        ..
+        ping
         ..
     ..
     secure
@@ -717,6 +727,8 @@
         file
         ..
         fs
+            fusefs
+            ..
             tmpfs
             ..
         ..
@@ -987,6 +999,8 @@
         lastcomm
         ..
         limits
+        ..
+        locale
         ..
         m4
         ..
