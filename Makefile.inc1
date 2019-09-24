@@ -126,9 +126,9 @@ TARGET_ABI=	gnueabi
 .endif
 .endif
 MACHINE_ABI?=	unknown
-MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/hf$//:S/mipsn32/mips64/}-${MACHINE_ABI}-freebsd12.0
+MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/hf$//:S/mipsn32/mips64/}-${MACHINE_ABI}-freebsd12.1
 TARGET_ABI?=	unknown
-TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/hf$//:S/mipsn32/mips64/}-${TARGET_ABI}-freebsd12.0
+TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/hf$//:S/mipsn32/mips64/}-${TARGET_ABI}-freebsd12.1
 KNOWN_ARCHES?=	aarch64/arm64 \
 		amd64 \
 		arm \
@@ -2514,8 +2514,10 @@ _prereq_libs+= gnu/lib/libssp/libssp_nonshared
 # gnu/lib/csu, gnu/lib/libgcc, lib/csu and lib/libc must be built before
 # all shared libraries for ELF.
 #
-_startup_libs=	gnu/lib/csu
-_startup_libs+=	lib/csu
+_startup_libs=	lib/csu
+.if ${MK_BSD_CRTBEGIN} == "no"
+_startup_libs+=	gnu/lib/csu
+.endif
 _startup_libs+=	lib/libcompiler_rt
 _startup_libs+=	lib/libc
 _startup_libs+=	lib/libc_nonshared

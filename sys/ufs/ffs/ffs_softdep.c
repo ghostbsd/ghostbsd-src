@@ -2016,8 +2016,6 @@ retry_flush:
 		if (oldmnt->mnt_kern_flag & MNTK_UNMOUNT) {
 			retry = 0;
 			MNT_ILOCK(oldmnt);
-			KASSERT((oldmnt->mnt_kern_flag & MNTK_NOINSMNTQ) != 0,
-			    ("softdep_flushfiles: !MNTK_NOINSMNTQ"));
 			morework = oldmnt->mnt_nvnodelistsize > 0;
 #ifdef QUOTA
 			ump = VFSTOUFS(oldmnt);
@@ -6670,7 +6668,7 @@ softdep_journal_freeblocks(ip, cred, length, flags)
 #ifdef QUOTA
 	/* Reference the quotas in case the block count is wrong in the end. */
 	quotaref(vp, freeblks->fb_quota);
-	(void) chkdq(ip, -datablocks, NOCRED, 0);
+	(void) chkdq(ip, -datablocks, NOCRED, FORCE);
 #endif
 	freeblks->fb_chkcnt = -datablocks;
 	UFS_LOCK(ump);
@@ -6932,7 +6930,7 @@ softdep_setup_freeblocks(ip, length, flags)
 #ifdef QUOTA
 	/* Reference the quotas in case the block count is wrong in the end. */
 	quotaref(ITOV(ip), freeblks->fb_quota);
-	(void) chkdq(ip, -datablocks, NOCRED, 0);
+	(void) chkdq(ip, -datablocks, NOCRED, FORCE);
 #endif
 	freeblks->fb_chkcnt = -datablocks;
 	UFS_LOCK(ump);
@@ -12480,24 +12478,13 @@ restart:
 		FREE_LOCK(ump);
 		if (ffs_vgetf(mp, parentino, LK_NOWAIT | LK_EXCLUSIVE, &pvp,
 		    FFSV_FORCEINSMQ)) {
-			error = vfs_busy(mp, MBF_NOWAIT);
-			if (error != 0) {
-				vfs_ref(mp);
-				VOP_UNLOCK(vp, 0);
-				error = vfs_busy(mp, 0);
-				vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-				vfs_rel(mp);
-				if (error != 0)
-					return (ENOENT);
-				if (vp->v_iflag & VI_DOOMED) {
-					vfs_unbusy(mp);
-					return (ENOENT);
-				}
-			}
+			/*
+			 * Unmount cannot proceed after unlock because
+			 * caller must have called vn_start_write().
+			 */
 			VOP_UNLOCK(vp, 0);
 			error = ffs_vgetf(mp, parentino, LK_EXCLUSIVE,
 			    &pvp, FFSV_FORCEINSMQ);
-			vfs_unbusy(mp);
 			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 			if (vp->v_iflag & VI_DOOMED) {
 				if (error == 0)

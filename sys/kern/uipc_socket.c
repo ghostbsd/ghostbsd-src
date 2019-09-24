@@ -1131,9 +1131,9 @@ drop:
 	so->so_state |= SS_NOFDREF;
 	sorele(so);
 	if (listening) {
-		struct socket *sp;
+		struct socket *sp, *tsp;
 
-		TAILQ_FOREACH(sp, &lqueue, so_list) {
+		TAILQ_FOREACH_SAFE(sp, &lqueue, so_list, tsp) {
 			SOCK_LOCK(sp);
 			if (sp->so_count == 0) {
 				SOCK_UNLOCK(sp);
@@ -2774,7 +2774,12 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 			error = sooptcopyin(sopt, &l, sizeof l, sizeof l);
 			if (error)
 				goto bad;
-
+			if (l.l_linger < 0 ||
+			    l.l_linger > USHRT_MAX ||
+			    l.l_linger > (INT_MAX / hz)) {
+				error = EDOM;
+				goto bad;
+			}
 			SOCK_LOCK(so);
 			so->so_linger = l.l_linger;
 			if (l.l_onoff)
@@ -4103,6 +4108,9 @@ so_linger_get(const struct socket *so)
 void
 so_linger_set(struct socket *so, int val)
 {
+
+	KASSERT(val >= 0 && val <= USHRT_MAX && val <= (INT_MAX / hz),
+	    ("%s: val %d out of range", __func__, val));
 
 	so->so_linger = val;
 }

@@ -16,6 +16,33 @@ from older versions of FreeBSD, try WITHOUT_CLANG and WITH_GCC to bootstrap to
 the tip of head, and then rebuild without this option. The bootstrap process
 from older version of current across the gcc/clang cutover is a bit fragile.
 
+20190914:
+	The vfs.fusefs.sync_unmount and vfs.fusefs.init_backgrounded sysctls
+	and the "-o sync_unmount" and "-o init_backgrounded" mount options have
+	been removed from mount_fusefs(8).  You can safely remove them from
+	your scripts, because they had no effect.
+
+	The vfs.fusefs.fix_broken_io, vfs.fusefs.sync_resize,
+	vfs.fusefs.refresh_size, vfs.fusefs.mmap_enable,
+	vfs.fusefs.reclaim_revoked, and vfs.fusefs.data_cache_invalidate
+	sysctls have been removed.  If you felt the need to set any of them to
+	a non-default value, please tell asomers@FreeBSD.org why.
+
+20190906:
+	The fuse(4) module has been renamed to fusefs(4) for consistency with
+	other filesystems.  You should update any kld_load="fuse" entries in
+	/etc/rc.conf, fuse_load="YES" entries in /boot/loader.conf, and
+	"options FUSE" enties in kernel config files.
+
+20190811:
+	Default permissions on the /var/account/acct file (and copies of it 
+	rotated by periodic daily scripts) are changed from 0644 to 0640 
+	because the file contains sensitive information that should not be 
+	world-readable.  If the /var/account directory must be created by 
+	rc.d/accounting, the mode used is now 0750.  Admins who use the 
+	accounting feature are encouraged to change the mode of an existing 
+	/var/account directory to 0750 or 0700.  
+
 20190723:
 	Clang, llvm, lld, lldb, compiler-rt, libc++, libunwind and openmp have
 	been upgraded to 8.0.1.  Please see the 20141231 entry below for

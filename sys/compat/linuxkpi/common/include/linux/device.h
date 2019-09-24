@@ -40,7 +40,6 @@
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/workqueue.h>
-#include <linux/sysfs.h>
 #include <linux/kdev_t.h>
 #include <asm/atomic.h>
 
@@ -61,7 +60,9 @@ struct class {
 };
 
 struct dev_pm_ops {
+#if defined(LINUXKPI_VERSION) && LINUXKPI_VERSION >= 50000
 	int (*prepare)(struct device *dev);
+#endif
 	int (*suspend)(struct device *dev);
 	int (*suspend_late)(struct device *dev);
 	int (*resume)(struct device *dev);
@@ -110,8 +111,8 @@ struct device {
 	void		*driver_data;
 	unsigned int	irq;
 #define	LINUX_IRQ_INVALID	65535
-	unsigned int	msix;
-	unsigned int	msix_max;
+	unsigned int	irq_start;
+	unsigned int	irq_end;
 	const struct attribute_group **groups;
 	struct fwnode_handle *fwnode;
 
@@ -316,6 +317,10 @@ device_add(struct device *dev)
 			dev->devt = makedev(0, device_get_unit(dev->bsddev));
 	}
 	kobject_add(&dev->kobj, &dev->class->kobj, dev_name(dev));
+
+	if (dev->groups)
+		return (sysfs_create_groups(&dev->kobj, dev->groups));
+
 	return (0);
 }
 

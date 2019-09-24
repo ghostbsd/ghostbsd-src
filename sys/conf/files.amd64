@@ -46,7 +46,7 @@ linux32_assym.h			optional	compat_linux32		\
 #
 linux32_locore.o	optional	compat_linux32		\
 	dependency 	"linux32_assym.h $S/amd64/linux32/linux32_locore.s"	\
-	compile-with	"${CC} -x assembler-with-cpp -DLOCORE -m32 -shared -s -pipe -I. -I$S -Werror -Wall -fPIC -fno-common -nostdinc -nostdlib -Wl,-T$S/amd64/linux32/linux32_vdso.lds.s -Wl,-soname=linux32_vdso.so,--eh-frame-hdr,-warn-common ${.IMPSRC} -o ${.TARGET}" \
+	compile-with	"${CC} -x assembler-with-cpp -DLOCORE -m32 -shared -s -pipe -I. -I$S ${WERROR} -Wall -fPIC -fno-common -nostdinc -nostdlib -Wl,-T$S/amd64/linux32/linux32_vdso.lds.s -Wl,-soname=linux32_vdso.so,--eh-frame-hdr,-warn-common ${.IMPSRC} -o ${.TARGET}" \
 	no-obj no-implicit-rule						\
 	clean		"linux32_locore.o"
 #
@@ -175,6 +175,11 @@ aesni_ghash.o			optional aesni				\
 	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc} ${WERROR} ${NO_WCAST_QUAL} ${PROF} -mmmx -msse -msse4 -maes -mpclmul ${.IMPSRC}" \
 	no-implicit-rule						\
 	clean		"aesni_ghash.o"
+aesni_ccm.o			optional aesni				\
+	dependency	"$S/crypto/aesni/aesni_ccm.c"			\
+	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc} ${WERROR} ${NO_WCAST_QUAL} ${PROF} -mmmx -msse -msse4 -maes -mpclmul ${.IMPSRC}" \
+	no-implicit-rule						\
+	clean		"aesni_ccm.o"
 aesni_wrap.o			optional aesni				\
 	dependency	"$S/crypto/aesni/aesni_wrap.c"			\
 	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc} ${WERROR} ${NO_WCAST_QUAL} ${PROF} -mmmx -msse -msse4 -maes ${.IMPSRC}" \
@@ -346,8 +351,9 @@ dev/nctgpio/nctgpio.c		optional	nctgpio
 dev/nfe/if_nfe.c		optional	nfe pci
 dev/ntb/if_ntb/if_ntb.c		optional	if_ntb
 dev/ntb/ntb_transport.c		optional	ntb_transport | if_ntb
-dev/ntb/ntb.c			optional	ntb | ntb_transport | if_ntb | ntb_hw_intel | ntb_hw_plx | ntb_hw
-dev/ntb/ntb_if.m		optional	ntb | ntb_transport | if_ntb | ntb_hw_intel | ntb_hw_plx | ntb_hw
+dev/ntb/ntb.c			optional	ntb | ntb_transport | if_ntb | ntb_hw_amd | ntb_hw_intel | ntb_hw_plx | ntb_hw
+dev/ntb/ntb_if.m		optional	ntb | ntb_transport | if_ntb | ntb_hw_amd | ntb_hw_intel | ntb_hw_plx | ntb_hw
+dev/ntb/ntb_hw/ntb_hw_amd.c	optional	ntb_hw_amd | ntb_hw
 dev/ntb/ntb_hw/ntb_hw_intel.c	optional	ntb_hw_intel | ntb_hw
 dev/ntb/ntb_hw/ntb_hw_plx.c	optional	ntb_hw_plx | ntb_hw
 dev/nvd/nvd.c			optional	nvd nvme

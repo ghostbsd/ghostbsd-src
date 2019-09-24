@@ -11,7 +11,11 @@
         defaults
         ..
         dtb
+            allwinner             tags=package=runtime
+            ..
             overlays              tags=package=runtime
+            ..
+            rockchip              tags=package=runtime
             ..
         ..
         firmware
@@ -107,6 +111,8 @@
         casper
         ..
         geom
+        ..
+        nvmecontrol
         ..
     ..
     libexec

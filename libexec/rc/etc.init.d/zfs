@@ -42,7 +42,7 @@ start() {
 	checksystem || return 1
 
 	if [ ! -c /dev/zfs ]; then
-		load_kld $ZFS_MODULE
+		kldload -nq $ZFS_MODULE
 		rv=$?
 		if [ $rv -ne 0 ]; then
 			eerror "Failed to load the $ZFS_MODULE module, check 'dmesg|tail'."

@@ -25,6 +25,7 @@ MAN=	aac.4 \
 	adm6996fc.4 \
 	adv.4 \
 	adw.4 \
+	ads111x.4 \
 	ae.4 \
 	${_aesni.4} \
 	age.4 \
@@ -108,6 +109,7 @@ MAN=	aac.4 \
 	ccr.4 \
 	cd.4 \
 	cdce.4 \
+	cdceem.4 \
 	cfi.4 \
 	cfumass.4 \
 	ch.4 \
@@ -391,6 +393,7 @@ MAN=	aac.4 \
 	null.4 \
 	numa.4 \
 	${_nvd.4} \
+	${_nvdimm.4} \
 	${_nvme.4} \
 	${_nvram.4} \
 	${_nvram2env.4} \
@@ -425,6 +428,7 @@ MAN=	aac.4 \
 	psm.4 \
 	pst.4 \
 	pt.4 \
+	ptnet.4 \
 	pts.4 \
 	pty.4 \
 	puc.4 \
@@ -588,7 +592,13 @@ MAN=	aac.4 \
 	xpt.4 \
 	zero.4
 
-MLINKS=	ae.4 if_ae.4
+MLINKS=	ads111x.4 ads1013.4 \
+	ads111x.4 ads1014.4 \
+	ads111x.4 ads1015.4 \
+	ads111x.4 ads1113.4 \
+	ads111x.4 ads1114.4 \
+	ads111x.4 ads1115.4
+MLINKS+=ae.4 if_ae.4
 MLINKS+=age.4 if_age.4
 MLINKS+=agp.4 agpgart.4
 MLINKS+=alc.4 if_alc.4
@@ -706,6 +716,7 @@ MLINKS+=pcm.4 snd.4 \
 	pcm.4 sound.4
 MLINKS+=pcn.4 if_pcn.4
 MLINKS+=pms.4 pmspcv.4
+MLINKS+=ptnet.4 if_ptnet.4
 MLINKS+=ral.4 if_ral.4
 MLINKS+=re.4 if_re.4
 MLINKS+=rl.4 if_rl.4
@@ -844,6 +855,7 @@ _ntb.4=		ntb.4
 _ntb_hw_intel.4=	ntb_hw_intel.4
 _ntb_hw_plx.4=	ntb_hw_plx.4
 _ntb_transport.4=ntb_transport.4
+_nvdimm.4=	nvdimm.4
 _qlxge.4=	qlxge.4
 _qlxgb.4=	qlxgb.4
 _qlxgbe.4=	qlxgbe.4
