@@ -1348,8 +1348,8 @@ pmap_add_delayed_free_list(vm_page_t m, struct spglist *free,
 }
 
 /*
- * Decrements a page table page's wire count, which is used to record the
- * number of valid page table entries within the page.  If the wire count
+ * Decrements a page table page's reference count, which is used to record the
+ * number of valid page table entries within the page.  If the reference count
  * drops to zero, then the page table page is unmapped.  Returns TRUE if the
  * page table page was unmapped and FALSE otherwise.
  */
@@ -1357,8 +1357,8 @@ static inline boolean_t
 pmap_unwire_l3(pmap_t pmap, vm_offset_t va, vm_page_t m, struct spglist *free)
 {
 
-	--m->wire_count;
-	if (m->wire_count == 0) {
+	--m->ref_count;
+	if (m->ref_count == 0) {
 		_pmap_unwire_l3(pmap, va, m, free);
 		return (TRUE);
 	} else
@@ -1423,7 +1423,7 @@ _pmap_unwire_l3(pmap_t pmap, vm_offset_t va, vm_page_t m, struct spglist *free)
 
 /*
  * After removing a page table entry, this routine is used to
- * conditionally free the page, and manage the hold/wire counts.
+ * conditionally free the page, and manage the reference count.
  */
 static int
 pmap_unuse_pt(pmap_t pmap, vm_offset_t va, pd_entry_t ptepde,
@@ -1554,7 +1554,7 @@ _pmap_alloc_l3(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			}
 		} else {
 			l1pg = PHYS_TO_VM_PAGE(tl0 & ~ATTR_MASK);
-			l1pg->wire_count++;
+			l1pg->ref_count++;
 		}
 
 		l1 = (pd_entry_t *)PHYS_TO_DMAP(pmap_load(l0) & ~ATTR_MASK);
@@ -1595,7 +1595,7 @@ _pmap_alloc_l3(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 				}
 			} else {
 				l2pg = PHYS_TO_VM_PAGE(tl1 & ~ATTR_MASK);
-				l2pg->wire_count++;
+				l2pg->ref_count++;
 			}
 		}
 
@@ -1621,7 +1621,7 @@ retry:
 	if (l1 != NULL && (pmap_load(l1) & ATTR_DESCR_MASK) == L1_TABLE) {
 		/* Add a reference to the L2 page. */
 		l2pg = PHYS_TO_VM_PAGE(pmap_load(l1) & ~ATTR_MASK);
-		l2pg->wire_count++;
+		l2pg->ref_count++;
 	} else {
 		/* Allocate a L2 page. */
 		l2pindex = pmap_l2_pindex(va) >> Ln_ENTRIES_SHIFT;
@@ -1679,7 +1679,7 @@ retry:
 		tpde = pmap_load(pde);
 		if (tpde != 0) {
 			m = PHYS_TO_VM_PAGE(tpde & ~ATTR_MASK);
-			m->wire_count++;
+			m->ref_count++;
 			return (m);
 		}
 		break;
@@ -2044,7 +2044,7 @@ next_chunk:
 		m_pc = SLIST_FIRST(&free);
 		SLIST_REMOVE_HEAD(&free, plinks.s.ss);
 		/* Recycle a freed page table page. */
-		m_pc->wire_count = 1;
+		m_pc->ref_count = 1;
 	}
 	vm_page_free_pages_toq(&free, true);
 	return (m_pc);
@@ -2482,9 +2482,9 @@ pmap_remove_l2(pmap_t pmap, pt_entry_t *l2, vm_offset_t sva,
 			KASSERT(ml3->valid == VM_PAGE_BITS_ALL,
 			    ("pmap_remove_l2: l3 page not promoted"));
 			pmap_resident_count_dec(pmap, 1);
-			KASSERT(ml3->wire_count == NL3PG,
-			    ("pmap_remove_l2: l3 page wire count error"));
-			ml3->wire_count = 0;
+			KASSERT(ml3->ref_count == NL3PG,
+			    ("pmap_remove_l2: l3 page ref count error"));
+			ml3->ref_count = 0;
 			pmap_add_delayed_free_list(ml3, free, FALSE);
 		}
 	}
@@ -3007,7 +3007,6 @@ pmap_update_entry(pmap_t pmap, pd_entry_t *pte, pd_entry_t newpte,
 	 * as they may make use of an address we are about to invalidate.
 	 */
 	intr = intr_disable();
-	critical_enter();
 
 	/*
 	 * Clear the old mapping's valid bit, but leave the rest of the entry
@@ -3021,7 +3020,6 @@ pmap_update_entry(pmap_t pmap, pd_entry_t *pte, pd_entry_t newpte,
 	pmap_store(pte, newpte);
 	dsb(ishst);
 
-	critical_exit();
 	intr_restore(intr);
 }
 
@@ -3229,7 +3227,7 @@ retry:
 		l3 = pmap_l2_to_l3(pde, va);
 		if (va < VM_MAXUSER_ADDRESS && mpte == NULL) {
 			mpte = PHYS_TO_VM_PAGE(pmap_load(pde) & ~ATTR_MASK);
-			mpte->wire_count++;
+			mpte->ref_count++;
 		}
 		goto havel3;
 	} else if (pde != NULL && lvl == 1) {
@@ -3240,7 +3238,7 @@ retry:
 			if (va < VM_MAXUSER_ADDRESS) {
 				mpte = PHYS_TO_VM_PAGE(
 				    pmap_load(l2) & ~ATTR_MASK);
-				mpte->wire_count++;
+				mpte->ref_count++;
 			}
 			goto havel3;
 		}
@@ -3291,8 +3289,8 @@ havel3:
 		 * Remove the extra PT page reference.
 		 */
 		if (mpte != NULL) {
-			mpte->wire_count--;
-			KASSERT(mpte->wire_count > 0,
+			mpte->ref_count--;
+			KASSERT(mpte->ref_count > 0,
 			    ("pmap_enter: missing reference to page table page,"
 			     " va: 0x%lx", va));
 		}
@@ -3417,7 +3415,7 @@ validate:
 	}
 
 #if VM_NRESERVLEVEL > 0
-	if ((mpte == NULL || mpte->wire_count == NL3PG) &&
+	if ((mpte == NULL || mpte->ref_count == NL3PG) &&
 	    pmap_ps_enabled(pmap) &&
 	    (m->flags & PG_FICTITIOUS) == 0 &&
 	    vm_reserv_level_iffullpop(m) == 0) {
@@ -3494,10 +3492,10 @@ pmap_enter_l2(pmap_t pmap, vm_offset_t va, pd_entry_t new_l2, u_int flags,
 	l2 = (pd_entry_t *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(l2pg));
 	l2 = &l2[pmap_l2_index(va)];
 	if ((old_l2 = pmap_load(l2)) != 0) {
-		KASSERT(l2pg->wire_count > 1,
-		    ("pmap_enter_l2: l2pg's wire count is too low"));
+		KASSERT(l2pg->ref_count > 1,
+		    ("pmap_enter_l2: l2pg's ref count is too low"));
 		if ((flags & PMAP_ENTER_NOREPLACE) != 0) {
-			l2pg->wire_count--;
+			l2pg->ref_count--;
 			CTR2(KTR_PMAP,
 			    "pmap_enter_l2: failure for va %#lx in pmap %p",
 			    va, pmap);
@@ -3671,7 +3669,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 		 */
 		l2pindex = pmap_l2_pindex(va);
 		if (mpte && (mpte->pindex == l2pindex)) {
-			mpte->wire_count++;
+			mpte->ref_count++;
 		} else {
 			/*
 			 * Get the l2 entry
@@ -3693,7 +3691,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 			if (lvl == 2 && pmap_load(pde) != 0) {
 				mpte =
 				    PHYS_TO_VM_PAGE(pmap_load(pde) & ~ATTR_MASK);
-				mpte->wire_count++;
+				mpte->ref_count++;
 			} else {
 				/*
 				 * Pass NULL instead of the PV list lock
@@ -3722,7 +3720,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	 */
 	if (pmap_load(l3) != 0) {
 		if (mpte != NULL) {
-			mpte->wire_count--;
+			mpte->ref_count--;
 			mpte = NULL;
 		}
 		return (mpte);
@@ -3754,8 +3752,8 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	    ATTR_AP(ATTR_AP_RO) | L3_PAGE;
 	if ((prot & VM_PROT_EXECUTE) == 0 || m->md.pv_memattr == DEVICE_MEMORY)
 		l3_val |= ATTR_XN;
-	else if (va < VM_MAXUSER_ADDRESS)
-		l3_val |= ATTR_PXN;
+	if (va < VM_MAXUSER_ADDRESS)
+		l3_val |= ATTR_AP(ATTR_AP_USER) | ATTR_PXN;
 
 	/*
 	 * Now validate mapping with RO protection
@@ -3952,14 +3950,14 @@ pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr, vm_size_t len,
 				    PAGE_SIZE);
 				atomic_add_long(&pmap_l2_mappings, 1);
 			} else
-				dst_l2pg->wire_count--;
+				dst_l2pg->ref_count--;
 			continue;
 		}
 		KASSERT((srcptepaddr & ATTR_DESCR_MASK) == L2_TABLE,
 		    ("pmap_copy: invalid L2 entry"));
 		srcptepaddr &= ~ATTR_MASK;
 		srcmpte = PHYS_TO_VM_PAGE(srcptepaddr);
-		KASSERT(srcmpte->wire_count > 0,
+		KASSERT(srcmpte->ref_count > 0,
 		    ("pmap_copy: source page table page is unused"));
 		if (va_next > end_addr)
 			va_next = end_addr;
@@ -3978,7 +3976,7 @@ pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr, vm_size_t len,
 			if (dstmpte != NULL) {
 				KASSERT(dstmpte->pindex == pmap_l2_pindex(addr),
 				    ("dstmpte pindex/addr mismatch"));
-				dstmpte->wire_count++;
+				dstmpte->ref_count++;
 			} else if ((dstmpte = pmap_alloc_l3(dst_pmap, addr,
 			    NULL)) == NULL)
 				goto out;
@@ -4017,7 +4015,7 @@ pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr, vm_size_t len,
 				goto out;
 			}
 			/* Have we copied all of the valid mappings? */ 
-			if (dstmpte->wire_count >= srcmpte->wire_count)
+			if (dstmpte->ref_count >= srcmpte->ref_count)
 				break;
 		}
 	}
@@ -4241,6 +4239,27 @@ restart:
 }
 
 /*
+ * Returns true if the given page is mapped individually or as part of
+ * a 2mpage.  Otherwise, returns false.
+ */
+bool
+pmap_page_is_mapped(vm_page_t m)
+{
+	struct rwlock *lock;
+	bool rv;
+
+	if ((m->oflags & VPO_UNMANAGED) != 0)
+		return (false);
+	lock = VM_PAGE_TO_PV_LIST_LOCK(m);
+	rw_rlock(lock);
+	rv = !TAILQ_EMPTY(&m->md.pv_list) ||
+	    ((m->flags & PG_FICTITIOUS) == 0 &&
+	    !TAILQ_EMPTY(&pa_to_pvh(VM_PAGE_TO_PHYS(m))->pv_list));
+	rw_runlock(lock);
+	return (rv);
+}
+
+/*
  * Destroy all managed, non-wired mappings in the given user-space
  * pmap.  This pmap cannot be active on any processor besides the
  * caller.
@@ -4382,9 +4401,9 @@ pmap_remove_pages(pmap_t pmap)
 						KASSERT(ml3->valid == VM_PAGE_BITS_ALL,
 						    ("pmap_remove_pages: l3 page not promoted"));
 						pmap_resident_count_dec(pmap,1);
-						KASSERT(ml3->wire_count == NL3PG,
-						    ("pmap_remove_pages: l3 page wire count error"));
-						ml3->wire_count = 0;
+						KASSERT(ml3->ref_count == NL3PG,
+						    ("pmap_remove_pages: l3 page ref count error"));
+						ml3->ref_count = 0;
 						pmap_add_delayed_free_list(ml3,
 						    &free, FALSE);
 					}
@@ -5521,7 +5540,7 @@ pmap_demote_l2_locked(pmap_t pmap, pt_entry_t *l2, vm_offset_t va,
 		}
 
 		if (va < VM_MAXUSER_ADDRESS) {
-			ml3->wire_count = NL3PG;
+			ml3->ref_count = NL3PG;
 			pmap_resident_count_inc(pmap, 1);
 		}
 	}
@@ -5810,23 +5829,33 @@ pmap_fault(pmap_t pmap, uint64_t esr, uint64_t far)
 	case ISS_DATA_DFSC_TF_L1:
 	case ISS_DATA_DFSC_TF_L2:
 	case ISS_DATA_DFSC_TF_L3:
-		PMAP_LOCK(pmap);
-		/* Ask the MMU to check the address */
-		intr = intr_disable();
-		if (pmap == kernel_pmap)
-			par = arm64_address_translate_s1e1r(far);
-		else
-			par = arm64_address_translate_s1e0r(far);
-		intr_restore(intr);
-		PMAP_UNLOCK(pmap);
-
 		/*
-		 * If the translation was successful the address was invalid
-		 * due to a break-before-make sequence. We can unlock and
-		 * return success to the trap handler.
+		 * Retry the translation.  A break-before-make sequence can
+		 * produce a transient fault.
 		 */
-		if (PAR_SUCCESS(par))
-			rv = KERN_SUCCESS;
+		if (pmap == kernel_pmap) {
+			/*
+			 * The translation fault may have occurred within a
+			 * critical section.  Therefore, we must check the
+			 * address without acquiring the kernel pmap's lock.
+			 */
+			if (pmap_kextract(far) != 0)
+				rv = KERN_SUCCESS;
+		} else {
+			PMAP_LOCK(pmap);
+			/* Ask the MMU to check the address. */
+			intr = intr_disable();
+			par = arm64_address_translate_s1e0r(far);
+			intr_restore(intr);
+			PMAP_UNLOCK(pmap);
+
+			/*
+			 * If the translation was successful, then we can
+			 * return success to the trap handler.
+			 */
+			if (PAR_SUCCESS(par))
+				rv = KERN_SUCCESS;
+		}
 		break;
 	}
 

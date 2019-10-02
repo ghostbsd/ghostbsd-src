@@ -77,6 +77,7 @@ __DEFAULT_YES_OPTIONS = \
     BZIP2 \
     CALENDAR \
     CAPSICUM \
+    CAROOT \
     CASPER \
     CCD \
     CDDL \
@@ -198,6 +199,7 @@ __DEFAULT_NO_OPTIONS = \
     EXPERIMENTAL \
     GNU_GREP_COMPAT \
     HESIOD \
+    HTTPD \
     LIBSOFT \
     LOADER_FIREWIRE \
     LOADER_FORCE_LE \
