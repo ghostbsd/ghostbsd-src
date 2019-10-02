@@ -42,16 +42,14 @@ color.MAGENTA = 5
 color.CYAN    = 6
 color.WHITE   = 7
 
-color.DEFAULT = 0
+color.DEFAULT = 9
 color.BRIGHT  = 1
 color.DIM     = 2
 
 function color.isEnabled()
 	local c = loader.getenv("loader_color")
 	if c ~= nil then
-		if c:lower() == "no" or c == "0" then
-			return false
-		end
+		return c:lower() ~= "no" and c ~= "0"
 	end
 	return not core.isSerialBoot()
 end
@@ -69,7 +67,7 @@ function color.resetfg()
 	if color.disabled then
 		return ''
 	end
-	return color.escapefg(color.WHITE)
+	return color.escapefg(color.DEFAULT)
 end
 
 function color.escapebg(color_value)
@@ -83,7 +81,7 @@ function color.resetbg()
 	if color.disabled then
 		return ''
 	end
-	return color.escapebg(color.BLACK)
+	return color.escapebg(color.DEFAULT)
 end
 
 function color.escape(fg_color, bg_color, attribute)
@@ -103,7 +101,7 @@ function color.default()
 	if color.disabled then
 		return ""
 	end
-	return color.escape(color.WHITE, color.BLACK, color.DEFAULT)
+	return color.escape(color.DEFAULT, color.DEFAULT)
 end
 
 function color.highlight(str)

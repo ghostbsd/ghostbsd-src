@@ -678,6 +678,10 @@ CROSSENV+=	BUILD_TOOLS_META=.NOMETA
 .if defined(TARGET_CFLAGS)
 CROSSENV+=	${TARGET_CFLAGS}
 .endif
+.if (${TARGET} != ${MACHINE} && !defined(WITH_LOCAL_MODULES)) || \
+    defined(WITHOUT_LOCAL_MODULES)
+CROSSENV+=	LOCAL_MODULES=
+.endif
 
 BOOTSTRAPPING_OSRELDATE?=${OSRELDATE}
 
@@ -947,7 +951,8 @@ _cleanobj_fast_depend_hack: .PHONY
 # Syscall stubs rewritten in C and obsolete MD assembly implementations
 # Date      SVN Rev  Syscalls
 # 20180604  r334626  brk sbrk
-.for f in brk sbrk
+# 20190916  r352703  shm_open
+.for f in brk sbrk shm_open
 	@if [ -e "${OBJTOP}/lib/libc/.depend.${f}.o" ] && \
 	    egrep -qw '${f}\.[sS]' ${OBJTOP}/lib/libc/.depend.${f}.o; then \
 		echo "Removing stale dependencies for ${f} syscall wrappers"; \
@@ -1460,8 +1465,14 @@ packageworld: .PHONY
 . endif
 .endfor
 
+makeman: .PHONY
+	${_+_}cd ${.CURDIR}/tools/build/options; sh makeman > \
+	    ${.CURDIR}/share/man/man5/src.conf.5
+
 _sysent_dirs=	sys/kern
 _sysent_dirs+=	sys/compat/freebsd32
+_sysent_dirs+=	sys/compat/cloudabi32	\
+		sys/compat/cloudabi64
 _sysent_dirs+=	sys/amd64/linux		\
 		sys/amd64/linux32	\
 		sys/arm64/linux		\
@@ -2832,6 +2843,7 @@ _lib_casper=	lib/libcasper
 lib/libpjdlog__L: lib/libutil__L
 lib/libcasper__L: lib/libnv__L
 lib/liblzma__L: lib/libthr__L
+lib/libzstd__L: lib/libthr__L
 
 _generic_libs=	${_cddl_lib} gnu/lib ${_kerberos5_lib} lib ${_secure_lib} usr.bin/lex/lib
 .if ${MK_IPFILTER} != "no"
