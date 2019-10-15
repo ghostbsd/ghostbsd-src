@@ -146,6 +146,8 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp.h>
 
 #include <net/vnet.h>
+#include <net/if.h>	/* XXXGL: net_epoch should move out there */
+#include <net/if_var.h>	/* XXXGL: net_epoch should move out there */
 
 #include <security/mac/mac_framework.h>
 
@@ -1489,7 +1491,7 @@ sosend_generic(struct socket *so, struct sockaddr *addr, struct uio *uio,
 	tls_pruflag = 0;
 	tls = ktls_hold(so->so_snd.sb_tls_info);
 	if (tls != NULL) {
-		if (tls->sw_encrypt != NULL)
+		if (tls->mode == TCP_TLS_MODE_SW)
 			tls_pruflag = PRUS_NOTREADY;
 
 		if (control != NULL) {
@@ -1657,7 +1659,7 @@ restart:
 			}
 
 #ifdef KERN_TLS
-			if (tls != NULL && tls->sw_encrypt != NULL) {
+			if (tls != NULL && tls->mode == TCP_TLS_MODE_SW) {
 				/*
 				 * Note that error is intentionally
 				 * ignored.
