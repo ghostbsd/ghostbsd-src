@@ -80,6 +80,8 @@
 struct pmap;
 typedef struct pmap *pmap_t;
 
+#define	PMAP_ENTER_QUICK_LOCKED	0x10000000
+
 #if !defined(NPMAPS)
 #define	NPMAPS		32768
 #endif /* !defined(NPMAPS) */
@@ -266,11 +268,13 @@ void		pmap_deactivate(struct thread *);
 vm_paddr_t	pmap_kextract(vm_offset_t);
 int		pmap_dev_direct_mapped(vm_paddr_t, vm_size_t);
 boolean_t	pmap_mmu_install(char *name, int prio);
+const char	*pmap_mmu_name(void);
 
 #define	vtophys(va)	pmap_kextract((vm_offset_t)(va))
 
 extern	vm_offset_t virtual_avail;
 extern	vm_offset_t virtual_end;
+extern	caddr_t crashdumpmap;
 
 extern	vm_offset_t msgbuf_phys;
 

@@ -418,11 +418,9 @@ cluster_rbuild(struct vnode *vp, u_quad_t filesize, daddr_t lbn,
 	for (bn = blkno, i = 0; i < run; ++i, bn += inc) {
 		if (i == 0) {
 			VM_OBJECT_WLOCK(tbp->b_bufobj->bo_object);
-			vfs_drain_busy_pages(tbp);
 			vm_object_pip_add(tbp->b_bufobj->bo_object,
 			    tbp->b_npages);
-			for (k = 0; k < tbp->b_npages; k++)
-				vm_page_sbusy(tbp->b_pages[k]);
+			vfs_busy_pages_acquire(tbp);
 			VM_OBJECT_WUNLOCK(tbp->b_bufobj->bo_object);
 		} else {
 			if ((bp->b_npages * PAGE_SIZE) +
@@ -467,13 +465,14 @@ cluster_rbuild(struct vnode *vp, u_quad_t filesize, daddr_t lbn,
 				if (toff + tinc > PAGE_SIZE)
 					tinc = PAGE_SIZE - toff;
 				VM_OBJECT_ASSERT_WLOCKED(tbp->b_pages[j]->object);
+				if (vm_page_trysbusy(tbp->b_pages[j]) == 0)
+					break;
 				if ((tbp->b_pages[j]->valid &
-				    vm_page_bits(toff, tinc)) != 0)
+				    vm_page_bits(toff, tinc)) != 0) {
+					vm_page_sunbusy(tbp->b_pages[j]);
 					break;
-				if (vm_page_xbusied(tbp->b_pages[j]))
-					break;
+				}
 				vm_object_pip_add(tbp->b_bufobj->bo_object, 1);
-				vm_page_sbusy(tbp->b_pages[j]);
 				off += tinc;
 				tsize -= tinc;
 			}
@@ -527,7 +526,7 @@ clean_sbusy:
 				bp->b_pages[bp->b_npages] = m;
 				bp->b_npages++;
 			}
-			if (m->valid == VM_PAGE_BITS_ALL)
+			if (vm_page_all_valid(m))
 				tbp->b_pages[j] = bogus_page;
 		}
 		VM_OBJECT_WUNLOCK(tbp->b_bufobj->bo_object);
@@ -551,7 +550,7 @@ clean_sbusy:
 	VM_OBJECT_WLOCK(bp->b_bufobj->bo_object);
 	for (j = 0; j < bp->b_npages; j++) {
 		VM_OBJECT_ASSERT_WLOCKED(bp->b_pages[j]->object);
-		if (bp->b_pages[j]->valid == VM_PAGE_BITS_ALL)
+		if (vm_page_all_valid(bp->b_pages[j]))
 			bp->b_pages[j] = bogus_page;
 	}
 	VM_OBJECT_WUNLOCK(bp->b_bufobj->bo_object);
@@ -991,11 +990,14 @@ cluster_wbuild(struct vnode *vp, long size, daddr_t start_lbn, int len,
 
 				VM_OBJECT_WLOCK(tbp->b_bufobj->bo_object);
 				if (i == 0) {
-					vfs_drain_busy_pages(tbp);
+					vfs_busy_pages_acquire(tbp);
 				} else { /* if not first buffer */
 					for (j = 0; j < tbp->b_npages; j += 1) {
 						m = tbp->b_pages[j];
-						if (vm_page_xbusied(m)) {
+						if (vm_page_trysbusy(m) == 0) {
+							for (j--; j >= 0; j--)
+								vm_page_sunbusy(
+								    tbp->b_pages[j]);
 							VM_OBJECT_WUNLOCK(
 							    tbp->b_object);
 							bqrelse(tbp);
@@ -1003,10 +1005,10 @@ cluster_wbuild(struct vnode *vp, long size, daddr_t start_lbn, int len,
 						}
 					}
 				}
+				vm_object_pip_add(tbp->b_bufobj->bo_object,
+				    tbp->b_npages);
 				for (j = 0; j < tbp->b_npages; j += 1) {
 					m = tbp->b_pages[j];
-					vm_page_sbusy(m);
-					vm_object_pip_add(m->object, 1);
 					if ((bp->b_npages == 0) ||
 					  (bp->b_pages[bp->b_npages - 1] != m)) {
 						bp->b_pages[bp->b_npages] = m;

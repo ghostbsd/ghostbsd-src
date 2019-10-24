@@ -234,6 +234,17 @@ epoch_trace_exit(struct thread *td, epoch_t epoch, epoch_tracker_t et,
 	} else
 		SLIST_REMOVE_HEAD(&td->td_epochs, et_tlink);
 }
+
+/* Used by assertions that check thread state before going to sleep. */
+void
+epoch_trace_list(struct thread *td)
+{
+	epoch_tracker_t iet;
+
+	SLIST_FOREACH(iet, &td->td_epochs, et_tlink)
+		printf("Epoch %s entered at %s:%d\n", iet->et_epoch->e_name,
+		    iet->et_file, iet->et_line);
+}
 #endif /* EPOCH_TRACE */
 
 static void
@@ -258,7 +269,9 @@ epoch_init(void *arg __unused)
 		    DPCPU_ID_PTR(cpu, epoch_cb_task), NULL, cpu, NULL, NULL,
 		    "epoch call task");
 	}
+#ifdef EPOCH_TRACE
 	SLIST_INIT(&thread0.td_epochs);
+#endif
 	inited = 1;
 	global_epoch = epoch_alloc("Global", 0);
 	global_epoch_preempt = epoch_alloc("Global preemptible", EPOCH_PREEMPT);
@@ -353,9 +366,13 @@ _epoch_enter_preempt(epoch_t epoch, epoch_tracker_t et EPOCH_FILE_LINE)
 	struct thread *td;
 
 	MPASS(cold || epoch != NULL);
-	INIT_CHECK(epoch);
 	MPASS(epoch->e_flags & EPOCH_PREEMPT);
 	td = curthread;
+	MPASS((vm_offset_t)et >= td->td_kstack &&
+	    (vm_offset_t)et + sizeof(struct epoch_tracker) <=
+	    td->td_kstack + td->td_kstack_pages * PAGE_SIZE);
+
+	INIT_CHECK(epoch);
 #ifdef EPOCH_TRACE
 	epoch_trace_enter(td, epoch, et, file, line);
 #endif
@@ -828,18 +845,4 @@ epoch_drain_callbacks(epoch_t epoch)
 	sx_xunlock(&epoch->e_drain_sx);
 
 	PICKUP_GIANT();
-}
-
-void
-epoch_thread_init(struct thread *td)
-{
-
-	td->td_et = malloc(sizeof(struct epoch_tracker), M_EPOCH, M_WAITOK);
-}
-
-void
-epoch_thread_fini(struct thread *td)
-{
-
-	free(td->td_et, M_EPOCH);
 }

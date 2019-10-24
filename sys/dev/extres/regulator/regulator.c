@@ -65,18 +65,21 @@ typedef TAILQ_HEAD(regnode_list, regnode) regnode_list_t;
 typedef TAILQ_HEAD(regulator_list, regulator) regulator_list_t;
 
 /* Default regulator methods. */
+static int regnode_method_init(struct regnode *regnode);
 static int regnode_method_enable(struct regnode *regnode, bool enable,
     int *udelay);
 static int regnode_method_status(struct regnode *regnode, int *status);
 static int regnode_method_set_voltage(struct regnode *regnode, int min_uvolt,
     int max_uvolt, int *udelay);
 static int regnode_method_get_voltage(struct regnode *regnode, int *uvolt);
+static void regulator_constraint(void *dummy);
 static void regulator_shutdown(void *dummy);
 
 /*
  * Regulator controller methods.
  */
 static regnode_method_t regnode_methods[] = {
+	REGNODEMETHOD(regnode_init,		regnode_method_init),
 	REGNODEMETHOD(regnode_enable,		regnode_method_enable),
 	REGNODEMETHOD(regnode_status,		regnode_method_status),
 	REGNODEMETHOD(regnode_set_voltage,	regnode_method_set_voltage),
@@ -152,8 +155,26 @@ SX_SYSINIT(regulator_topology, &regnode_topo_lock, "Regulator topology lock");
 #define REGNODE_XLOCK(_sc)	sx_xlock(&((_sc)->lock))
 #define REGNODE_UNLOCK(_sc)	sx_unlock(&((_sc)->lock))
 
+SYSINIT(regulator_constraint, SI_SUB_LAST, SI_ORDER_ANY, regulator_constraint,
+    NULL);
 SYSINIT(regulator_shutdown, SI_SUB_LAST, SI_ORDER_ANY, regulator_shutdown,
     NULL);
+
+static void
+regulator_constraint(void *dummy)
+{
+	struct regnode *entry;
+	int rv;
+
+	REG_TOPO_SLOCK();
+	TAILQ_FOREACH(entry, &regnode_list, reglist_link) {
+		rv = regnode_set_constraint(entry);
+		if (rv != 0 && bootverbose)
+			printf("regulator: setting constraint on %s failed (%d)\n",
+			    entry->name, rv);
+	}
+	REG_TOPO_UNLOCK();
+}
 
 /*
  * Disable unused regulator
@@ -212,6 +233,13 @@ regnode_uvolt_sysctl(SYSCTL_HANDLER_ARGS)
  * Default regulator methods for base class.
  *
  */
+static int
+regnode_method_init(struct regnode *regnode)
+{
+
+	return (0);
+}
+
 static int
 regnode_method_enable(struct regnode *regnode, bool enable, int *udelay)
 {
@@ -769,6 +797,56 @@ regnode_set_voltage_checked(struct regnode *regnode, struct regulator *reg,
 	regnode_delay(udelay);
 	REGNODE_UNLOCK(regnode);
 	return (rv);
+}
+
+int
+regnode_set_constraint(struct regnode *regnode)
+{
+	int status, rv, uvolt;
+
+	if (regnode->std_param.boot_on != true &&
+	    regnode->std_param.always_on != true)
+		return (0);
+
+	rv = regnode_status(regnode, &status);
+	if (rv != 0) {
+		if (bootverbose)
+			printf("Cannot get regulator status for %s\n",
+			    regnode_get_name(regnode));
+		return (rv);
+	}
+
+	if (status == REGULATOR_STATUS_ENABLED)
+		return (0);
+
+	rv = regnode_get_voltage(regnode, &uvolt);
+	if (rv != 0) {
+		if (bootverbose)
+			printf("Cannot get regulator voltage for %s\n",
+			    regnode_get_name(regnode));
+		return (rv);
+	}
+
+	if (uvolt < regnode->std_param.min_uvolt ||
+	  uvolt > regnode->std_param.max_uvolt) {
+		if (bootverbose)
+			printf("Regulator %s current voltage %d is not in the"
+			    " acceptable range : %d<->%d\n",
+			    regnode_get_name(regnode),
+			    uvolt, regnode->std_param.min_uvolt,
+			    regnode->std_param.max_uvolt);
+		return (ERANGE);
+	}
+
+	rv = regnode_enable(regnode);
+	if (rv != 0) {
+		if (bootverbose)
+			printf("Cannot enable regulator %s\n",
+			    regnode_get_name(regnode));
+		return (rv);
+	}
+
+	return (0);
 }
 
 #ifdef FDT

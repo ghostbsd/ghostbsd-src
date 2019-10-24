@@ -555,6 +555,7 @@ path_rec_completion(int status, struct ib_sa_path_rec *pathrec, void *path_ptr)
 	struct ifnet *dev = priv->dev;
 	struct ipoib_ah *ah = NULL;
 	struct ipoib_ah *old_ah = NULL;
+	struct epoch_tracker et;
 	struct ifqueue mbqueue;
 	struct mbuf *mb;
 	unsigned long flags;
@@ -609,6 +610,7 @@ path_rec_completion(int status, struct ib_sa_path_rec *pathrec, void *path_ptr)
 	if (old_ah)
 		ipoib_put_ah(old_ah);
 
+	NET_EPOCH_ENTER(et);
 	for (;;) {
 		_IF_DEQUEUE(&mbqueue, mb);
 		if (mb == NULL)
@@ -618,6 +620,7 @@ path_rec_completion(int status, struct ib_sa_path_rec *pathrec, void *path_ptr)
 			ipoib_warn(priv, "dev_queue_xmit failed "
 				   "to requeue packet\n");
 	}
+	NET_EPOCH_EXIT(et);
 }
 
 static struct ipoib_path *
@@ -1312,13 +1315,16 @@ ipoib_config_vlan(void *arg, struct ifnet *ifp, u_int16_t vtag)
 {
 	struct ipoib_dev_priv *parent;
 	struct ipoib_dev_priv *priv;
+	struct epoch_tracker et;
 	struct ifnet *dev;
 	uint16_t pkey;
 	int error;
 
 	if (ifp->if_type != IFT_INFINIBAND)
 		return;
+	NET_EPOCH_ENTER(et);
 	dev = VLAN_DEVAT(ifp, vtag);
+	NET_EPOCH_EXIT(et);
 	if (dev == NULL)
 		return;
 	priv = NULL;
@@ -1380,13 +1386,16 @@ ipoib_unconfig_vlan(void *arg, struct ifnet *ifp, u_int16_t vtag)
 {
 	struct ipoib_dev_priv *parent;
 	struct ipoib_dev_priv *priv;
+	struct epoch_tracker et;
 	struct ifnet *dev;
 	uint16_t pkey;
 
 	if (ifp->if_type != IFT_INFINIBAND)
 		return;
 
+	NET_EPOCH_ENTER(et);
 	dev = VLAN_DEVAT(ifp, vtag);
+	NET_EPOCH_EXIT(et);
 	if (dev)
 		VLAN_SETCOOKIE(dev, NULL);
 	pkey = vtag | 0x8000;
@@ -1482,6 +1491,8 @@ ipoib_output(struct ifnet *ifp, struct mbuf *m,
 	struct ipoib_header *eh;
 	int error = 0, is_gw = 0;
 	short type;
+
+	NET_EPOCH_ASSERT();
 
 	if (ro != NULL)
 		is_gw = (ro->ro_flags & RT_HAS_GW) != 0;

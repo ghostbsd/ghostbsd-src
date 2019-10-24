@@ -273,7 +273,6 @@ thread_init(void *mem, int size, int flags)
 	td->td_rlqe = NULL;
 	EVENTHANDLER_DIRECT_INVOKE(thread_init, td);
 	umtx_thread_init(td);
-	epoch_thread_init(td);
 	td->td_kstack = 0;
 	td->td_sel = NULL;
 	return (0);
@@ -293,7 +292,6 @@ thread_fini(void *mem, int size)
 	turnstile_free(td->td_turnstile);
 	sleepq_free(td->td_sleepqueue);
 	umtx_thread_fini(td);
-	epoch_thread_fini(td);
 	seltdfini(td);
 }
 
@@ -668,7 +666,9 @@ thread_link(struct thread *td, struct proc *p)
 	LIST_INIT(&td->td_contested);
 	LIST_INIT(&td->td_lprof[0]);
 	LIST_INIT(&td->td_lprof[1]);
+#ifdef EPOCH_TRACE
 	SLIST_INIT(&td->td_epochs);
+#endif
 	sigqueue_init(&td->td_sigqueue, p);
 	callout_init(&td->td_slpcallout, 1);
 	TAILQ_INSERT_TAIL(&p->p_threads, td, td_plist);
@@ -685,7 +685,9 @@ thread_unlink(struct thread *td)
 	struct proc *p = td->td_proc;
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
+#ifdef EPOCH_TRACE
 	MPASS(SLIST_EMPTY(&td->td_epochs));
+#endif
 
 	TAILQ_REMOVE(&p->p_threads, td, td_plist);
 	p->p_numthreads--;

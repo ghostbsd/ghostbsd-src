@@ -84,6 +84,7 @@
  *	vm_object_t		Virtual memory object.
  *
  * List of locks
+ *	(a)	atomic
  *	(c)	const until freed
  *	(o)	per-object lock 
  *	(f)	free pages queue mutex
@@ -112,6 +113,7 @@ struct vm_object {
 	u_short flags;			/* see below */
 	u_short pg_color;		/* (c) color of first page in obj */
 	volatile u_int paging_in_progress; /* Paging (in or out) so don't collapse or destroy */
+	volatile u_int busy;		/* (a) object is busy, disallow page busy. */
 	int resident_page_count;	/* number of resident pages */
 	struct vm_object *backing_object; /* object that I'm a shadow of */
 	vm_ooffset_t backing_object_offset;/* Offset in backing object */
@@ -184,6 +186,7 @@ struct vm_object {
 #define	OBJ_DEAD	0x0008		/* dead objects (during rundown) */
 #define	OBJ_NOSPLIT	0x0010		/* dont split this object */
 #define	OBJ_UMTXDEAD	0x0020		/* umtx pshared was terminated */
+#define	OBJ_SIZEVNLOCK	0x0040		/* lock vnode to check obj size */
 #define	OBJ_PG_DTOR	0x0080		/* dont reset object, leave that for dtor */
 #define	OBJ_MIGHTBEDIRTY 0x0100		/* object might be dirty, only for vnode */
 #define	OBJ_TMPFS_NODE	0x0200		/* object belongs to tmpfs VREG node */
@@ -207,7 +210,7 @@ struct vm_object {
 
 #define OBJPC_SYNC	0x1			/* sync I/O */
 #define OBJPC_INVAL	0x2			/* invalidate */
-#define OBJPC_NOSYNC	0x4			/* skip if VPO_NOSYNC */
+#define OBJPC_NOSYNC	0x4			/* skip if PGA_NOSYNC */
 
 /*
  * The following options are supported by vm_object_page_remove().
@@ -312,6 +315,18 @@ void vm_object_pip_wakeup(vm_object_t object);
 void vm_object_pip_wakeupn(vm_object_t object, short i);
 void vm_object_pip_wait(vm_object_t object, char *waitid);
 void vm_object_pip_wait_unlocked(vm_object_t object, char *waitid);
+
+void vm_object_busy(vm_object_t object);
+void vm_object_unbusy(vm_object_t object);
+void vm_object_busy_wait(vm_object_t object, const char *wmesg);
+
+static inline bool
+vm_object_busied(vm_object_t object)
+{
+
+	return (object->busy != 0);
+}
+#define	VM_OBJECT_ASSERT_BUSY(object)	MPASS(vm_object_busied((object)))
 
 void umtx_shm_object_init(vm_object_t object);
 void umtx_shm_object_terminated(vm_object_t object);

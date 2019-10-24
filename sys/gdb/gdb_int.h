@@ -31,7 +31,13 @@
 #ifndef _GDB_GDB_INT_H_
 #define	_GDB_GDB_INT_H_
 
+#include "opt_ddb.h"
+
 #include <sys/sysctl.h>
+
+#ifdef DDB
+#include <ddb/ddb.h>
+#endif
 
 #ifndef EOF
 #define EOF	(-1)
@@ -47,6 +53,13 @@ void gdb_consinit(void);
 extern char *gdb_rxp;
 extern size_t gdb_rxsz;
 extern char *gdb_txp;
+
+extern bool gdb_ackmode;
+
+#ifdef DDB
+/* If set, return to DDB when controlling GDB detaches. */
+extern bool gdb_return_to_ddb;
+#endif
 
 int gdb_rx_begin(void);
 int gdb_rx_equal(const char *);
@@ -121,6 +134,20 @@ static __inline void
 gdb_tx_varhex(uintmax_t n)
 {
 	gdb_txp += sprintf(gdb_txp, "%jx", n);
+}
+
+static __inline void
+gdb_nack(void)
+{
+	if (gdb_ackmode)
+		gdb_cur->gdb_putc('-');
+}
+
+static __inline void
+gdb_ack(void)
+{
+	if (gdb_ackmode)
+		gdb_cur->gdb_putc('+');
 }
 
 #endif /* !_GDB_GDB_INT_H_ */

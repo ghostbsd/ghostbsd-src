@@ -237,34 +237,54 @@ static void
 rs_destroy(epoch_context_t ctx)
 {
 	struct tcp_rate_set *rs;
+	bool do_free_rs;
 
 	rs = __containerof(ctx, struct tcp_rate_set, rs_epoch_ctx);
+
 	mtx_lock(&rs_mtx);
 	rs->rs_flags &= ~RS_FUNERAL_SCHD;
-	if (rs->rs_flows_using == 0) {
-		/*
-		 * In theory its possible (but unlikely)
-		 * that while the delete was occuring
-		 * and we were applying the DEAD flag
-		 * someone slipped in and found the
-		 * interface in a lookup. While we
-		 * decided rs_flows_using were 0 and
-		 * scheduling the epoch_call, the other
-		 * thread incremented rs_flow_using. This
-		 * is because users have a pointer and
-		 * we only use the rs_flows_using in an
-		 * atomic fashion, i.e. the other entities
-		 * are not protected. To assure this did
-		 * not occur, we check rs_flows_using here
-		 * before deleteing.
-		 */
+	/*
+	 * In theory its possible (but unlikely)
+	 * that while the delete was occuring
+	 * and we were applying the DEAD flag
+	 * someone slipped in and found the
+	 * interface in a lookup. While we
+	 * decided rs_flows_using were 0 and
+	 * scheduling the epoch_call, the other
+	 * thread incremented rs_flow_using. This
+	 * is because users have a pointer and
+	 * we only use the rs_flows_using in an
+	 * atomic fashion, i.e. the other entities
+	 * are not protected. To assure this did
+	 * not occur, we check rs_flows_using here
+	 * before deleting.
+	 */
+	do_free_rs = (rs->rs_flows_using == 0);
+	rs_number_dead--;
+	mtx_unlock(&rs_mtx);
+
+	if (do_free_rs) {
 		sysctl_ctx_free(&rs->sysctl_ctx);
 		free(rs->rs_rlt, M_TCPPACE);
 		free(rs, M_TCPPACE);
-		rs_number_dead--;
 	}
-	mtx_unlock(&rs_mtx);
+}
 
+static void
+rs_defer_destroy(struct tcp_rate_set *rs)
+{
+
+	mtx_assert(&rs_mtx, MA_OWNED);
+
+	/* Check if already pending. */
+	if (rs->rs_flags & RS_FUNERAL_SCHD)
+		return;
+
+	rs_number_dead++;
+
+	/* Set flag to only defer once. */
+	rs->rs_flags |= RS_FUNERAL_SCHD;
+	epoch_call(net_epoch, &rs->rs_epoch_ctx, rs_destroy);
 }
 
 #ifdef INET
@@ -986,7 +1006,6 @@ tcp_rl_ifnet_departure(void *arg __unused, struct ifnet *ifp)
 		    (rs->rs_if_dunit == ifp->if_dunit)) {
 			CK_LIST_REMOVE(rs, next);
 			rs_number_alive--;
-			rs_number_dead++;
 			rs->rs_flags |= RS_IS_DEAD;
 			for (i = 0; i < rs->rs_rate_cnt; i++) {
 				if (rs->rs_rlt[i].flags & HDWRPACE_TAGPRESENT) {
@@ -996,14 +1015,8 @@ tcp_rl_ifnet_departure(void *arg __unused, struct ifnet *ifp)
 				}
 				rs->rs_rlt[i].flags = HDWRPACE_IFPDEPARTED;
 			}
-			if (rs->rs_flows_using == 0) {
-				/*
-				 * No references left, so we can schedule the
-				 * destruction after the epoch (with a caveat).
-				 */
-				rs->rs_flags |= RS_FUNERAL_SCHD;
-				epoch_call(net_epoch, &rs->rs_epoch_ctx, rs_destroy);
-			}
+			if (rs->rs_flows_using == 0)
+				rs_defer_destroy(rs);
 			break;
 		}
 	}
@@ -1021,7 +1034,6 @@ tcp_rl_shutdown(void *arg __unused, int howto __unused)
 	CK_LIST_FOREACH_SAFE(rs, &int_rs, next, nrs) {
 		CK_LIST_REMOVE(rs, next);
 		rs_number_alive--;
-		rs_number_dead++;
 		rs->rs_flags |= RS_IS_DEAD;
 		for (i = 0; i < rs->rs_rate_cnt; i++) {
 			if (rs->rs_rlt[i].flags & HDWRPACE_TAGPRESENT) {
@@ -1031,20 +1043,8 @@ tcp_rl_shutdown(void *arg __unused, int howto __unused)
 			}
 			rs->rs_rlt[i].flags = HDWRPACE_IFPDEPARTED;
 		}
-		if (rs->rs_flows_using != 0) {
-			/*
-			 * We dont hold a reference
-			 * so we have nothing left to
-			 * do.
-			 */
-		} else {
-			/*
-			 * No references left, so we can destroy it
-			 * after the epoch.
-			 */
-			rs->rs_flags |= RS_FUNERAL_SCHD;
-			epoch_call(net_epoch, &rs->rs_epoch_ctx, rs_destroy);
-		}
+		if (rs->rs_flows_using == 0)
+			rs_defer_destroy(rs);
 	}
 	mtx_unlock(&rs_mtx);
 }
@@ -1187,16 +1187,8 @@ tcp_rel_pacing_rate(const struct tcp_hwrate_limit_table *crte, struct tcpcb *tp)
 		/*
 		 * Is it dead?
 		 */
-		if ((rs->rs_flags & RS_IS_DEAD) &&
-		    ((rs->rs_flags & RS_FUNERAL_SCHD) == 0)){
-			/*
-			 * We were the last,
-			 * and a funeral is not pending, so
-			 * we must schedule it.
-			 */
-			rs->rs_flags |= RS_FUNERAL_SCHD;
-			epoch_call(net_epoch, &rs->rs_epoch_ctx, rs_destroy);
-		}
+		if (rs->rs_flags & RS_IS_DEAD)
+			rs_defer_destroy(rs);
 		mtx_unlock(&rs_mtx);
 	}
 	in_pcbdetach_txrtlmt(tp->t_inpcb);
