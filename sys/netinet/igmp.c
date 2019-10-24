@@ -2174,12 +2174,12 @@ igmp_slowtimo_vnet(void)
 static int
 igmp_v1v2_queue_report(struct in_multi *inm, const int type)
 {
+	struct epoch_tracker 	et;
 	struct ifnet		*ifp;
 	struct igmp		*igmp;
 	struct ip		*ip;
 	struct mbuf		*m;
 
-	NET_EPOCH_ASSERT();
 	IN_MULTI_LIST_LOCK_ASSERT();
 	IGMP_LOCK_ASSERT();
 
@@ -2224,7 +2224,9 @@ igmp_v1v2_queue_report(struct in_multi *inm, const int type)
 		m->m_flags |= M_IGMP_LOOP;
 
 	CTR2(KTR_IGMPV3, "%s: netisr_dispatch(NETISR_IGMP, %p)", __func__, m);
+	NET_EPOCH_ENTER(et);
 	netisr_dispatch(NETISR_IGMP, m);
+	NET_EPOCH_EXIT(et);
 
 	return (0);
 }

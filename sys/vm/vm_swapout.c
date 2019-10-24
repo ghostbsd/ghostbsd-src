@@ -208,6 +208,9 @@ vm_swapout_object_deactivate_pages(pmap_t pmap, vm_object_t first_object,
 				goto unlock_return;
 			if (should_yield())
 				goto unlock_return;
+			if (vm_page_tryxbusy(p) == 0)
+				continue;
+			VM_CNT_INC(v_pdpages);
 
 			/*
 			 * The page may acquire a wiring after this check.
@@ -215,11 +218,10 @@ vm_swapout_object_deactivate_pages(pmap_t pmap, vm_object_t first_object,
 			 * no harm done if a wiring appears while we are
 			 * attempting to deactivate the page.
 			 */
-			if (vm_page_busied(p) || vm_page_wired(p))
+			if (vm_page_wired(p) || !pmap_page_exists_quick(pmap, p)) {
+				vm_page_xunbusy(p);
 				continue;
-			VM_CNT_INC(v_pdpages);
-			if (!pmap_page_exists_quick(pmap, p))
-				continue;
+			}
 			act_delta = pmap_ts_referenced(p);
 			vm_page_lock(p);
 			if ((p->aflags & PGA_REFERENCED) != 0) {
@@ -251,6 +253,7 @@ vm_swapout_object_deactivate_pages(pmap_t pmap, vm_object_t first_object,
 			} else if (vm_page_inactive(p))
 				(void)vm_page_try_remove_all(p);
 			vm_page_unlock(p);
+			vm_page_xunbusy(p);
 		}
 		if ((backing_object = object->backing_object) == NULL)
 			goto unlock_return;
@@ -579,14 +582,14 @@ vm_thread_swapin(struct thread *td, int oom_alloc)
 	    pages);
 	for (i = 0; i < pages;) {
 		vm_page_assert_xbusied(ma[i]);
-		if (ma[i]->valid == VM_PAGE_BITS_ALL) {
+		if (vm_page_all_valid(ma[i])) {
 			vm_page_xunbusy(ma[i]);
 			i++;
 			continue;
 		}
 		vm_object_pip_add(ksobj, 1);
 		for (j = i + 1; j < pages; j++)
-			if (ma[j]->valid == VM_PAGE_BITS_ALL)
+			if (vm_page_all_valid(ma[j]))
 				break;
 		rv = vm_pager_has_page(ksobj, ma[i]->pindex, NULL, &a);
 		KASSERT(rv == 1, ("%s: missing page %p", __func__, ma[i]));

@@ -70,7 +70,7 @@ struct	route;			/* if_output */
 struct	vnet;
 struct	ifmedia;
 struct	netmap_adapter;
-struct	netdump_methods;
+struct	debugnet_methods;
 
 #ifdef _KERNEL
 #include <sys/_eventhandler.h>
@@ -417,9 +417,9 @@ struct ifnet {
 	uint8_t if_pcp;
 
 	/*
-	 * Netdump hooks to be called while dumping.
+	 * Debugnet (Netdump) hooks to be called while in db/panic.
 	 */
-	struct netdump_methods *if_netdump_methods;
+	struct debugnet_methods *if_debugnet_methods;
 	struct epoch_context	if_epoch_ctx;
 
 	/*
@@ -448,16 +448,6 @@ struct ifnet {
 #define	NET_EPOCH_EXIT(et)	epoch_exit_preempt(net_epoch_preempt, &(et))
 #define	NET_EPOCH_WAIT()	epoch_wait_preempt(net_epoch_preempt)
 #define	NET_EPOCH_ASSERT()	MPASS(in_epoch(net_epoch_preempt))
-
-/*
- * Function variations on locking macros intended to be used by loadable
- * kernel modules in order to divorce them from the internals of address list
- * locking.
- */
-void	if_addr_rlock(struct ifnet *ifp);	/* if_addrhead */
-void	if_addr_runlock(struct ifnet *ifp);	/* if_addrhead */
-void	if_maddr_rlock(if_t ifp);	/* if_multiaddrs */
-void	if_maddr_runlock(if_t ifp);	/* if_multiaddrs */
 
 #ifdef _KERNEL
 /* interface link layer address change event */
@@ -629,7 +619,6 @@ extern	struct sx ifnet_sxlock;
  * to call ifnet_byindex() instead of ifnet_byindex_ref().
  */
 struct ifnet	*ifnet_byindex(u_short idx);
-struct ifnet	*ifnet_byindex_locked(u_short idx);
 struct ifnet	*ifnet_byindex_ref(u_short idx);
 
 /*
@@ -765,11 +754,16 @@ void if_bpfmtap(if_t ifp, struct mbuf *m);
 void if_etherbpfmtap(if_t ifp, struct mbuf *m);
 void if_vlancap(if_t ifp);
 
-int if_setupmultiaddr(if_t ifp, void *mta, int *cnt, int max);
-int if_multiaddr_array(if_t ifp, void *mta, int *cnt, int max);
-int if_multiaddr_count(if_t ifp, int max);
+/*
+ * Traversing through interface address lists.
+ */
+struct sockaddr_dl;
+typedef u_int iflladdr_cb_t(void *, struct sockaddr_dl *, u_int);
+u_int if_foreach_lladdr(if_t, iflladdr_cb_t, void *);
+u_int if_foreach_llmaddr(if_t, iflladdr_cb_t, void *);
+u_int if_lladdr_count(if_t);
+u_int if_llmaddr_count(if_t);
 
-int if_multi_apply(struct ifnet *ifp, int (*filter)(void *, struct ifmultiaddr *, int), void *arg);
 int if_getamcount(if_t ifp);
 struct ifaddr * if_getifaddr(if_t ifp);
 

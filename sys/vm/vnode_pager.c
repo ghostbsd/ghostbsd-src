@@ -269,8 +269,12 @@ retry:
 		object->un_pager.vnp.vnp_size = size;
 		object->un_pager.vnp.writemappings = 0;
 		object->domain.dr_policy = vnode_domainset;
-
 		object->handle = handle;
+		if ((vp->v_vflag & VV_VMSIZEVNLOCK) != 0) {
+			VM_OBJECT_WLOCK(object);
+			vm_object_set_flag(object, OBJ_SIZEVNLOCK);
+			VM_OBJECT_WUNLOCK(object);
+		}
 		VI_LOCK(vp);
 		if (vp->v_object != NULL) {
 			/*
@@ -440,7 +444,16 @@ vnode_pager_setsize(struct vnode *vp, vm_ooffset_t nsize)
 
 	if ((object = vp->v_object) == NULL)
 		return;
-/* 	ASSERT_VOP_ELOCKED(vp, "vnode_pager_setsize and not locked vnode"); */
+#ifdef DEBUG_VFS_LOCKS
+	{
+		struct mount *mp;
+
+		mp = vp->v_mount;
+		if (mp != NULL && (mp->mnt_kern_flag & MNTK_VMSETSIZE_BUG) == 0)
+			assert_vop_elocked(vp,
+			    "vnode_pager_setsize and not locked vnode");
+	}
+#endif
 	VM_OBJECT_WLOCK(object);
 	if (object->type == OBJT_DEAD) {
 		VM_OBJECT_WUNLOCK(object);
@@ -471,9 +484,12 @@ vnode_pager_setsize(struct vnode *vp, vm_ooffset_t nsize)
 		 * completely invalid page and mark it partially valid
 		 * it can screw up NFS reads, so we don't allow the case.
 		 */
-		if ((nsize & PAGE_MASK) &&
-		    (m = vm_page_lookup(object, OFF_TO_IDX(nsize))) != NULL &&
-		    m->valid != 0) {
+		if (!(nsize & PAGE_MASK))
+			goto out;
+		m = vm_page_grab(object, OFF_TO_IDX(nsize), VM_ALLOC_NOCREAT);
+		if (m == NULL)
+			goto out;
+		if (!vm_page_none_valid(m)) {
 			int base = (int)nsize & PAGE_MASK;
 			int size = PAGE_SIZE - base;
 
@@ -506,7 +522,9 @@ vnode_pager_setsize(struct vnode *vp, vm_ooffset_t nsize)
 			 */
 			vm_page_clear_dirty(m, base, PAGE_SIZE - base);
 		}
+		vm_page_xunbusy(m);
 	}
+out:
 	object->un_pager.vnp.vnp_size = nsize;
 	object->size = nobjsize;
 	VM_OBJECT_WUNLOCK(object);
@@ -701,7 +719,7 @@ vnode_pager_input_old(vm_object_t object, vm_page_t m)
 	}
 	KASSERT(m->dirty == 0, ("vnode_pager_input_old: page %p is dirty", m));
 	if (!error)
-		m->valid = VM_PAGE_BITS_ALL;
+		vm_page_valid(m);
 	return error ? VM_PAGER_ERROR : VM_PAGER_OK;
 }
 
@@ -810,7 +828,7 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 	 * exist at the end of file, and the page is made fully valid
 	 * by zeroing in vm_pager_get_pages().
 	 */
-	if (m[count - 1]->valid != 0 && --count == 0) {
+	if (!vm_page_none_valid(m[count - 1]) && --count == 0) {
 		if (iodone != NULL)
 			iodone(arg, m, 1, 0);
 		return (VM_PAGER_OK);
@@ -870,7 +888,7 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 		KASSERT(m[0]->dirty == 0, ("%s: page %p is dirty",
 		    __func__, m[0]));
 		VM_OBJECT_WLOCK(object);
-		m[0]->valid = VM_PAGE_BITS_ALL;
+		vm_page_valid(m[0]);
 		VM_OBJECT_WUNLOCK(object);
 		return (VM_PAGER_OK);
 	}
@@ -1131,12 +1149,14 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 
 		nextoff = tfoff + PAGE_SIZE;
 		mt = bp->b_pages[i];
+		if (mt == bogus_page)
+			continue;
 
 		if (nextoff <= object->un_pager.vnp.vnp_size) {
 			/*
 			 * Read filled up entire page.
 			 */
-			mt->valid = VM_PAGE_BITS_ALL;
+			vm_page_valid(mt);
 			KASSERT(mt->dirty == 0,
 			    ("%s: page %p is dirty", __func__, mt));
 			KASSERT(!pmap_page_is_mapped(mt),

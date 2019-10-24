@@ -301,6 +301,7 @@ MAN=	accept_filter.9 \
 	store.9 \
 	style.9 \
 	style.lua.9 \
+	${_superio.9} \
 	swi.9 \
 	sx.9 \
 	syscall_helper_register.9 \
@@ -2084,7 +2085,8 @@ MLINKS+=taskqueue.9 TASK_INIT.9 \
 	taskqueue.9 taskqueue_run.9 \
 	taskqueue.9 taskqueue_set_callback.9 \
 	taskqueue.9 taskqueue_start_threads.9 \
-	taskqueue.9 taskqueue_start_threads_pinned.9 \
+	taskqueue.9 taskqueue_start_threads_cpuset.9 \
+	taskqueue.9 taskqueue_start_threads_in_proc.9 \
 	taskqueue.9 taskqueue_unblock.9 \
 	taskqueue.9 TIMEOUT_TASK_INIT.9
 MLINKS+=tcp_functions.9 register_tcp_functions.9 \
@@ -2308,5 +2310,24 @@ MLINKS+=zone.9 uma.9 \
 	zone.9 uma_zone_set_maxcache.9 \
 	zone.9 uma_zone_set_warning.9 \
 	zone.9 uma_zsecond_create.9
+
+.if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
+_superio.9=	superio.9
+MLINKS+=superio.9 superio_devid.9 \
+	superio.9 superio_dev_disable.9 \
+	superio.9 superio_dev_enable.9 \
+	superio.9 superio_dev_enabled.9 \
+	superio.9 superio_find_dev.9 \
+	superio.9 superio_find_dev.9 \
+	superio.9 superio_get_dma.9 \
+	superio.9 superio_get_iobase.9 \
+	superio.9 superio_get_irq.9 \
+	superio.9 superio_get_ldn.9 \
+	superio.9 superio_get_type.9 \
+	superio.9 superio_read.9 \
+	superio.9 superio_revid.9 \
+	superio.9 superio_vendor.9 \
+	superio.9 superio_write.9
+.endif
 
 .include <bsd.prog.mk>

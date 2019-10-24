@@ -57,8 +57,13 @@ SET_DECLARE(gdb_dbgport_set, struct gdb_dbgport);
 
 struct gdb_dbgport *gdb_cur = NULL;
 int gdb_listening = 0;
+bool gdb_ackmode = true;
 
 static unsigned char gdb_bindata[64];
+
+#ifdef DDB
+bool gdb_return_to_ddb = false;
+#endif
 
 static int
 gdb_init(void)
@@ -256,6 +261,14 @@ gdb_do_qsupported(uint32_t *feat)
 	gdb_tx_varhex(GDB_BUFSZ + strlen("$#nn") - 1);
 
 	gdb_tx_str(";qXfer:threads:read+");
+
+	/*
+	 * If the debugport is a reliable transport, request No Ack mode from
+	 * the server.  The server may or may not choose to enter No Ack mode.
+	 * https://sourceware.org/gdb/onlinedocs/gdb/Packet-Acknowledgment.html
+	 */
+	if (gdb_cur->gdb_dbfeatures & GDB_DBGP_FEAT_RELIABLE)
+		gdb_tx_str(";QStartNoAckMode+");
 
 	/*
 	 * Future consideration:
@@ -569,6 +582,26 @@ unrecognized:
 	return;
 }
 
+static void
+gdb_handle_detach(void)
+{
+	kdb_cpu_clear_singlestep();
+	gdb_listening = 0;
+
+	if (gdb_cur->gdb_dbfeatures & GDB_DBGP_FEAT_WANTTERM)
+		gdb_cur->gdb_term();
+
+#ifdef DDB
+	if (!gdb_return_to_ddb)
+		return;
+
+	gdb_return_to_ddb = false;
+
+	if (kdb_dbbe_select("ddb") != 0)
+		printf("The ddb backend could not be selected.\n");
+#endif
+}
+
 static int
 gdb_trap(int type, int code)
 {
@@ -586,6 +619,8 @@ gdb_trap(int type, int code)
 	}
 
 	gdb_listening = 0;
+	gdb_ackmode = true;
+
 	/*
 	 * Send a T packet. We currently do not support watchpoints (the
 	 * awatch, rwatch or watch elements).
@@ -638,7 +673,7 @@ gdb_trap(int type, int code)
 		}
 		case 'D': {     /* Detach */
 			gdb_tx_ok();
-			kdb_cpu_clear_singlestep();
+			gdb_handle_detach();
 			return (1);
 		}
 		case 'g': {	/* Read registers. */
@@ -675,8 +710,7 @@ gdb_trap(int type, int code)
 			break;
 		}
 		case 'k':	/* Kill request. */
-			kdb_cpu_clear_singlestep();
-			gdb_listening = 1;
+			gdb_handle_detach();
 			return (1);
 		case 'm': {	/* Read memory. */
 			uintmax_t addr, size;
@@ -736,6 +770,22 @@ gdb_trap(int type, int code)
 			} else if (gdb_rx_equal("Search:memory:")) {
 				gdb_do_mem_search();
 			} else if (!gdb_cpu_query())
+				gdb_tx_empty();
+			break;
+		case 'Q':
+			if (gdb_rx_equal("StartNoAckMode")) {
+				if ((gdb_cur->gdb_dbfeatures &
+				    GDB_DBGP_FEAT_RELIABLE) == 0) {
+					/*
+					 * Shouldn't happen if we didn't
+					 * advertise support.  Reject.
+					 */
+					gdb_tx_empty();
+					break;
+				}
+				gdb_ackmode = false;
+				gdb_tx_ok();
+			} else
 				gdb_tx_empty();
 			break;
 		case 's': {	/* Step. */

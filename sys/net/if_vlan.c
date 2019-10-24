@@ -1346,11 +1346,10 @@ vlan_lladdr_fn(void *arg, int pending __unused)
 static int
 vlan_config(struct ifvlan *ifv, struct ifnet *p, uint16_t vid)
 {
+	struct epoch_tracker et;
 	struct ifvlantrunk *trunk;
 	struct ifnet *ifp;
 	int error = 0;
-
-	NET_EPOCH_ASSERT();
 
 	/*
 	 * We can handle non-ethernet hardware types as long as
@@ -1452,7 +1451,9 @@ vlan_config(struct ifvlan *ifv, struct ifnet *p, uint16_t vid)
 
 	ifp->if_link_state = p->if_link_state;
 
+	NET_EPOCH_ENTER(et);
 	vlan_capabilities(ifv);
+	NET_EPOCH_EXIT(et);
 
 	/*
 	 * Set up our interface address to reflect the underlying
@@ -1624,14 +1625,16 @@ vlan_setflags(struct ifnet *ifp, int status)
 static void
 vlan_link_state(struct ifnet *ifp)
 {
+	struct epoch_tracker et;
 	struct ifvlantrunk *trunk;
 	struct ifvlan *ifv;
 
-	NET_EPOCH_ASSERT();
-
+	NET_EPOCH_ENTER(et);
 	trunk = ifp->if_vlantrunk;
-	if (trunk == NULL)
+	if (trunk == NULL) {
+		NET_EPOCH_EXIT(et);
 		return;
+	}
 
 	TRUNK_WLOCK(trunk);
 	VLAN_FOREACH(ifv, trunk) {
@@ -1640,6 +1643,7 @@ vlan_link_state(struct ifnet *ifp)
 		    trunk->parent->if_link_state);
 	}
 	TRUNK_WUNLOCK(trunk);
+	NET_EPOCH_EXIT(et);
 }
 
 static void
@@ -1769,6 +1773,7 @@ vlan_capabilities(struct ifvlan *ifv)
 static void
 vlan_trunk_capabilities(struct ifnet *ifp)
 {
+	struct epoch_tracker et;
 	struct ifvlantrunk *trunk;
 	struct ifvlan *ifv;
 
@@ -1778,8 +1783,10 @@ vlan_trunk_capabilities(struct ifnet *ifp)
 		VLAN_SUNLOCK();
 		return;
 	}
+	NET_EPOCH_ENTER(et);
 	VLAN_FOREACH(ifv, trunk)
 		vlan_capabilities(ifv);
+	NET_EPOCH_EXIT(et);
 	VLAN_SUNLOCK();
 }
 
@@ -1793,8 +1800,6 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	struct ifvlantrunk *trunk;
 	struct vlanreq vlr;
 	int error = 0;
-
-	NET_EPOCH_ASSERT();
 
 	ifr = (struct ifreq *)data;
 	ifa = (struct ifaddr *) data;
@@ -1972,8 +1977,13 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		VLAN_SLOCK();
 		ifv->ifv_capenable = ifr->ifr_reqcap;
 		trunk = TRUNK(ifv);
-		if (trunk != NULL)
+		if (trunk != NULL) {
+			struct epoch_tracker et;
+
+			NET_EPOCH_ENTER(et);
 			vlan_capabilities(ifv);
+			NET_EPOCH_EXIT(et);
+		}
 		VLAN_SUNLOCK();
 		break;
 

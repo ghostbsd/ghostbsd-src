@@ -230,7 +230,7 @@ ${PROG}.debug: ${FULLPROG}
 
 .if ${__KLD_SHARED} == yes
 ${FULLPROG}: ${KMOD}.kld
-	${LD} -m ${LD_EMULATION} -Bshareable -znotext ${_LDFLAGS} \
+	${LD} -m ${LD_EMULATION} -Bshareable -znotext -znorelro ${_LDFLAGS} \
 	    -o ${.TARGET} ${KMOD}.kld
 .if !defined(DEBUG_FLAGS)
 	${OBJCOPY} --strip-debug ${.TARGET}
@@ -242,18 +242,16 @@ EXPORT_SYMS?=	NO
 CLEANFILES+=	export_syms
 .endif
 
+.if !defined(FIRMWS) && exists(${SYSDIR}/conf/ldscript.kmod.${MACHINE_ARCH})
+_LDFLAGS+=-T ${SYSDIR}/conf/ldscript.kmod.${MACHINE_ARCH}
+.endif
+
 .if ${__KLD_SHARED} == yes
 ${KMOD}.kld: ${OBJS}
 .else
 ${FULLPROG}: ${OBJS}
 .endif
-.if !defined(FIRMWS) && (${MACHINE_CPUARCH} == "i386")
-	${LD} -m ${LD_EMULATION} ${_LDFLAGS} -r \
-	    -T ${SYSDIR}/conf/ldscript.set_padding \
-	    -d -o ${.TARGET} ${OBJS}
-.else
 	${LD} -m ${LD_EMULATION} ${_LDFLAGS} -r -d -o ${.TARGET} ${OBJS}
-.endif
 .if ${MK_CTF} != "no"
 	${CTFMERGE} ${CTFFLAGS} -o ${.TARGET} ${OBJS}
 .endif

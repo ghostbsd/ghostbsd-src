@@ -184,6 +184,7 @@ SUBDIR=	\
 	${_iser} \
 	isp \
 	${_ispfw} \
+	${_itwd} \
 	${_iwi} \
 	${_iwifw} \
 	${_iwm} \
@@ -369,6 +370,7 @@ SUBDIR=	\
 	${_viawd} \
 	videomode \
 	vkbd \
+	${_vmd} \
 	${_vmm} \
 	${_vmware} \
 	${_vpo} \
@@ -597,6 +599,7 @@ _et=		et
 _exca=		exca
 _if_ndis=	if_ndis
 _io=		io
+_itwd=		itwd
 _ix=		ix
 _ixv=		ixv
 .if ${MK_SOURCELESS_UCODE} != "no"
@@ -704,6 +707,7 @@ _nvdimm=	nvdimm
 _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
+_vmd=		vmd
 .if ${MK_SOURCELESS_UCODE} != "no"
 _qlxgbe=	qlxgbe
 _qlnx=		qlnx

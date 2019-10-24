@@ -227,6 +227,7 @@ MAN=	aac.4 \
 	ismt.4 \
 	isp.4 \
 	ispfw.4 \
+	${_itwd.4} \
 	iwi.4 \
 	iwifw.4 \
 	iwm.4 \
@@ -306,6 +307,7 @@ MAN=	aac.4 \
 	net80211.4 \
 	netdump.4 \
 	netfpga10g_nf10bmac.4 \
+	netgdb.4 \
 	netgraph.4 \
 	netintro.4 \
 	netmap.4 \
@@ -349,6 +351,7 @@ MAN=	aac.4 \
 	ng_netflow.4 \
 	ng_one2many.4 \
 	ng_patch.4 \
+	ng_pipe.4 \
 	ng_ppp.4 \
 	ng_pppoe.4 \
 	ng_pptpgre.4 \
@@ -504,6 +507,7 @@ MAN=	aac.4 \
 	ste.4 \
 	stf.4 \
 	stge.4 \
+	${_superio.4} \
 	sym.4 \
 	syncache.4 \
 	syncer.4 \
@@ -543,6 +547,7 @@ MAN=	aac.4 \
 	vkbd.4 \
 	vlan.4 \
 	vxlan.4 \
+	${_vmd.4} \
 	${_vmm.4} \
 	${_vmx.4} \
 	vpo.4 \
@@ -789,6 +794,7 @@ _if_wpi.4=	if_wpi.4
 _imcsmb.4=	imcsmb.4
 _ipmi.4=	ipmi.4
 _io.4=		io.4
+_itwd.4=	itwd.4
 _linux.4=	linux.4
 _nda.4=		nda.4
 _ndis.4=	ndis.4
@@ -803,22 +809,23 @@ _ntb_transport.4=ntb_transport.4
 _nvd.4=		nvd.4
 _nvme.4=	nvme.4
 _nvram.4=	nvram.4
+_padlock.4=	padlock.4
+_rr232x.4=	rr232x.4
+_speaker.4=	speaker.4
+_spkr.4=	spkr.4
+_superio.4=	superio.4
+_tpm.4=		tpm.4
+_urtw.4=	urtw.4
+_viawd.4=	viawd.4
 _virtio.4=	virtio.4
 _virtio_balloon.4=virtio_balloon.4
 _virtio_blk.4=	virtio_blk.4
 _virtio_console.4=virtio_console.4
 _virtio_random.4= virtio_random.4
 _virtio_scsi.4= virtio_scsi.4
+_vmci.4=	vmci.4
 _vmx.4=		vmx.4
 _vtnet.4=	vtnet.4
-_padlock.4=	padlock.4
-_rr232x.4=	rr232x.4
-_speaker.4=	speaker.4
-_spkr.4=	spkr.4
-_tpm.4=		tpm.4
-_urtw.4=	urtw.4
-_viawd.4=	viawd.4
-_vmci.4=	vmci.4
 _wbwd.4=	wbwd.4
 _wpi.4=		wpi.4
 _xen.4=		xen.4
@@ -835,6 +842,7 @@ _qlxgbe.4=	qlxgbe.4
 _qlnxe.4=	qlnxe.4
 _sfxge.4=	sfxge.4
 _smartpqi.4=	smartpqi.4
+_vmd.4=		vmd.4
 
 MLINKS+=qlxge.4 if_qlxge.4
 MLINKS+=qlxgb.4 if_qlxgb.4
