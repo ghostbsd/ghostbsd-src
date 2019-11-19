@@ -71,6 +71,7 @@
 #define	CR4_PCE	0x00000100	/* Performance monitoring counter enable */
 #define	CR4_FXSR 0x00000200	/* Fast FPU save/restore used by OS */
 #define	CR4_XMM	0x00000400	/* enable SIMD/MMX2 to use except 16 */
+#define	CR4_UMIP 0x00000800	/* User Mode Instruction Prevention */
 #define	CR4_VMXE 0x00002000	/* enable VMX operation (Intel-specific) */
 #define	CR4_FSGSBASE 0x00010000	/* Enable FS/GS BASE accessing instructions */
 #define	CR4_PCIDE 0x00020000	/* Enable Context ID */
@@ -90,6 +91,7 @@
 #define	EFER_LMSLE 0x000002000	/* Long Mode Segment Limit Enable */
 #define	EFER_FFXSR 0x000004000	/* Fast FXSAVE/FSRSTOR */
 #define	EFER_TCE   0x000008000	/* Translation Cache Extension */
+#define	EFER_MCOMMIT	0x00020000	/* Enable MCOMMIT (AMD) */
 
 /*
  * Intel Extended Features registers
@@ -384,6 +386,9 @@
 #define	AMDFEID_CLZERO		0x00000001
 #define	AMDFEID_IRPERF		0x00000002
 #define	AMDFEID_XSAVEERPTR	0x00000004
+#define	AMDFEID_RDPRU		0x00000010
+#define	AMDFEID_MCOMMIT		0x00000100
+#define	AMDFEID_WBNOINVD	0x00000200
 #define	AMDFEID_IBPB		0x00001000
 #define	AMDFEID_IBRS		0x00004000
 #define	AMDFEID_STIBP		0x00008000
@@ -485,6 +490,13 @@
 #define	IA32_ARCH_CAP_SKIP_L1DFL_VMENTRY	0x00000008
 #define	IA32_ARCH_CAP_SSB_NO	0x00000010
 #define	IA32_ARCH_CAP_MDS_NO	0x00000020
+#define	IA32_ARCH_CAP_IF_PSCHANGE_MC_NO	0x00000040
+#define	IA32_ARCH_CAP_TSX_CTRL	0x00000080
+#define	IA32_ARCH_CAP_TAA_NO	0x00000100
+
+/* MSR IA32_TSX_CTRL bits */
+#define	IA32_TSX_CTRL_RTM_DISABLE	0x00000001
+#define	IA32_TSX_CTRL_TSX_CPUID_CLEAR	0x00000002
 
 /*
  * CPUID manufacturers identifiers
@@ -537,6 +549,7 @@
 #define	MSR_BBL_CR_TRIG		0x11a
 #define	MSR_BBL_CR_BUSY		0x11b
 #define	MSR_BBL_CR_CTL3		0x11e
+#define	MSR_IA32_TSX_CTRL	0x122
 #define	MSR_SYSENTER_CS_MSR	0x174
 #define	MSR_SYSENTER_ESP_MSR	0x175
 #define	MSR_SYSENTER_EIP_MSR	0x176

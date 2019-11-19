@@ -109,6 +109,8 @@ linux_common_open(struct thread *td, int dirfd, char *path, int l_flags, int mod
 		bsd_flags |= O_APPEND;
 	if (l_flags & LINUX_O_SYNC)
 		bsd_flags |= O_FSYNC;
+	if (l_flags & LINUX_O_CLOEXEC)
+		bsd_flags |= O_CLOEXEC;
 	if (l_flags & LINUX_O_NONBLOCK)
 		bsd_flags |= O_NONBLOCK;
 	if (l_flags & LINUX_FASYNC)
@@ -130,8 +132,11 @@ linux_common_open(struct thread *td, int dirfd, char *path, int l_flags, int mod
 	/* XXX LINUX_O_NOATIME: unable to be easily implemented. */
 
 	error = kern_openat(td, dirfd, path, UIO_SYSSPACE, bsd_flags, mode);
-	if (error != 0)
+	if (error != 0) {
+		if (error == EMLINK)
+			error = ELOOP;
 		goto done;
+	}
 	if (bsd_flags & O_NOCTTY)
 		goto done;
 
@@ -704,6 +709,13 @@ linux_renameat2(struct thread *td, struct linux_renameat2_args *args)
 	int error, olddfd, newdfd;
 
 	if (args->flags != 0) {
+		if (args->flags & ~(LINUX_RENAME_EXCHANGE |
+		    LINUX_RENAME_NOREPLACE | LINUX_RENAME_WHITEOUT))
+			return (EINVAL);
+		if (args->flags & LINUX_RENAME_EXCHANGE &&
+		    args->flags & (LINUX_RENAME_NOREPLACE |
+		    LINUX_RENAME_WHITEOUT))
+			return (EINVAL);
 		linux_msg(td, "renameat2 unsupported flags 0x%x",
 		    args->flags);
 		return (EINVAL);

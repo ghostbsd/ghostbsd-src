@@ -1,11 +1,37 @@
-#!/usr/local/bin/python2.7
+#!/usr/bin/env python
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2017 Kristof Provost <kp@FreeBSD.org>
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+#
 
 import argparse
 import scapy.all as sp
 import sys
 from sniffer import Sniffer
 
-PAYLOAD_MAGIC = 0x42c0ffee
+PAYLOAD_MAGIC = bytes.fromhex('42c0ffee')
 
 def check_ping_request(args, packet):
 	if args.ip6:
@@ -34,15 +60,15 @@ def check_ping4_request(args, packet):
 	raw = packet.getlayer(sp.Raw)
 	if not raw:
 		return False
-	if raw.load != str(PAYLOAD_MAGIC):
+	if raw.load != PAYLOAD_MAGIC:
 		return False
 
 	# Wait to check expectations until we've established this is the packet we
 	# sent.
 	if args.expect_tos:
 		if ip.tos != int(args.expect_tos[0]):
-			print "Unexpected ToS value %d, expected %s" \
-				% (ip.tos, args.expect_tos[0])
+			print("Unexpected ToS value %d, expected %d" \
+				% (ip.tos, int(args.expect_tos[0])))
 			return False
 
 	return True
@@ -62,7 +88,7 @@ def check_ping6_request(args, packet):
 	icmp = packet.getlayer(sp.ICMPv6EchoRequest)
 	if not icmp:
 		return False
-	if icmp.data != str(PAYLOAD_MAGIC):
+	if icmp.data != PAYLOAD_MAGIC:
 		return False
 
 	return True
@@ -71,7 +97,7 @@ def ping(send_if, dst_ip, args):
 	ether = sp.Ether()
 	ip = sp.IP(dst=dst_ip)
 	icmp = sp.ICMP(type='echo-request')
-	raw = sp.Raw(str(PAYLOAD_MAGIC))
+	raw = sp.raw(PAYLOAD_MAGIC)
 
 	if args.send_tos:
 		ip.tos = int(args.send_tos[0])
@@ -82,7 +108,7 @@ def ping(send_if, dst_ip, args):
 def ping6(send_if, dst_ip, args):
 	ether = sp.Ether()
 	ip6 = sp.IPv6(dst=dst_ip)
-	icmp = sp.ICMPv6EchoRequest(data=PAYLOAD_MAGIC)
+	icmp = sp.ICMPv6EchoRequest(data=sp.raw(PAYLOAD_MAGIC))
 
 	req = ether / ip6 / icmp
 	sp.sendp(req, iface=send_if, verbose=False)

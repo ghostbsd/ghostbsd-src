@@ -189,7 +189,11 @@ CROSS_BINUTILS_PREFIX?=${CROSS_TOOLCHAIN_PREFIX}
     !defined(CROSS_BINUTILS_PREFIX)
 CROSS_BINUTILS_PREFIX=/usr/local/${TARGET_TRIPLE}/bin/
 .if !exists(${CROSS_BINUTILS_PREFIX})
+.if !empty(BROKEN_OPTIONS:MGCC_BOOTSTRAP) && ${MK_CLANG_BOOTSTRAP} == "no"
+.error In-tree toolchain does not support the ${TARGET_ARCH} architecture. Install the ${TARGET_ARCH}-xtoolchain-gcc port or package or set CROSS_TOOLCHAIN_PREFIX.
+.else
 .error In-tree binutils does not support the ${TARGET_ARCH} architecture. Install the ${TARGET_ARCH}-binutils port or package or set CROSS_BINUTILS_PREFIX.
+.endif
 .endif
 .endif
 .endif
@@ -730,6 +734,7 @@ TMAKE=		\
 # TOOLS_PREFIX set in BMAKE
 XMAKE=		${BMAKE} \
 		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
+		MK_CLANG_IS_CC=${MK_CLANG_BOOTSTRAP} \
 		MK_GDB=no MK_TESTS=no
 
 # kernel-tools stage
@@ -802,11 +807,10 @@ XCFLAGS+=	--sysroot=${WORLDTMP}
 XCFLAGS+=	${BFLAGS}
 .endif
 
-.if ${MK_LIB32} != "no" && (${TARGET_ARCH} == "amd64" || \
-    ${TARGET_ARCH} == "powerpc64" || ${TARGET_ARCH:Mmips64*} != "")
+.if ${MK_LIB32} == "yes"
 _LIBCOMPAT= 32
 .include "Makefile.libcompat"
-.elif ${MK_LIBSOFT} != "no" && ${TARGET_ARCH:Marmv[67]*} != ""
+.elif ${MK_LIBSOFT} == "yes"
 _LIBCOMPAT= SOFT
 .include "Makefile.libcompat"
 .endif
@@ -1495,6 +1499,11 @@ makeman: .PHONY
 	${_+_}cd ${.CURDIR}/tools/build/options; sh makeman > \
 	    ${.CURDIR}/share/man/man5/src.conf.5
 
+.if make(sysent)
+.include <src.lua.mk>
+.endif
+
+_sysent_PATH=	${WORLDTMP}/legacy/usr/libexec:/usr/libexec:${PATH}
 _sysent_dirs=	sys/kern
 _sysent_dirs+=	sys/compat/freebsd32
 _sysent_dirs+=	sys/compat/cloudabi32	\
@@ -1505,7 +1514,9 @@ _sysent_dirs+=	sys/amd64/linux		\
 		sys/i386/linux
 sysent: .PHONY
 .for _dir in ${_sysent_dirs}
-	${_+_}${MAKE} -C ${.CURDIR}/${_dir} sysent
+	@echo "${MAKE} -C ${.CURDIR}/${_dir} sysent"
+	${_+_}@env PATH=${_sysent_PATH} LUA=${LUA_CMD} \
+	    ${MAKE} -C ${.CURDIR}/${_dir} sysent
 .endfor
 
 #
@@ -1697,7 +1708,7 @@ buildkernel: .MAKE .PHONY
 	@echo "--------------------------------------------------------------"
 	@echo ">>> Kernel build for ${_kernel} completed on `LC_ALL=C date`"
 	@echo "--------------------------------------------------------------"
-	
+
 .endfor
 	@seconds=$$(($$(date '+%s') - ${_BUILDKERNEL_START})); \
 	  echo -n ">>> Kernel(s) ${BUILDKERNELS} built in $$seconds seconds, "; \
@@ -2159,9 +2170,16 @@ _bootstrap_tools_links+=m4 lex
 # r339083 libelf: correct mips64el test to use ELF header
 # r348347 Add missing powerpc64 relocation support to libdwarf
 .if ${BOOTSTRAPPING} < 1300030
-_elftoolchain_libs= lib/libelf lib/libdwarf
+_elftoolchain_libs= lib/libelf lib/libdwarf lib/libzstd
 ${_bt}-lib/libelf: ${_bt_m4_depend}
 ${_bt}-lib/libdwarf: ${_bt_m4_depend}
+.endif
+
+# flua is required to regenerate syscall files.  It first appeared during the
+# 13.0-CURRENT cycle, thus needs to be built on -older releases and stable
+# branches.
+.if ${BOOTSTRAPPING} < 1300059
+_flua= libexec/flua
 .endif
 
 # r245440 mtree -N support added
@@ -2361,7 +2379,6 @@ ${_bt}-link-${_tool}: .PHONY .MAKE
 ${_bt}-links: ${_bt}-link-${_tool}
 .endfor
 
-
 bootstrap-tools: ${_bt}-links .PHONY
 
 #	Please document (add comment) why something is in 'bootstrap-tools'.
@@ -2387,6 +2404,7 @@ bootstrap-tools: ${_bt}-links .PHONY
     usr.bin/xinstall \
     ${_gensnmptree} \
     usr.sbin/config \
+    ${_flua} \
     ${_crunchide} \
     ${_crunchgen} \
     ${_nmtree} \

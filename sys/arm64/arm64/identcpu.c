@@ -320,7 +320,7 @@ static struct mrs_field id_aa64dfr0_fields[] = {
 	MRS_FIELD(ID_AA64DFR0, CTX_CMPs, false, MRS_EXACT,
 	    id_aa64dfr0_ctx_cmps),
 	MRS_FIELD(ID_AA64DFR0, WRPs, false, MRS_EXACT, id_aa64dfr0_wrps),
-	MRS_FIELD(ID_AA64DFR0, BRPs, false, MRS_EXACT, id_aa64dfr0_brps),
+	MRS_FIELD(ID_AA64DFR0, BRPs, false, MRS_LOWER, id_aa64dfr0_brps),
 	MRS_FIELD(ID_AA64DFR0, PMUVer, false, MRS_EXACT, id_aa64dfr0_pmuver),
 	MRS_FIELD(ID_AA64DFR0, TraceVer, false, MRS_EXACT,
 	    id_aa64dfr0_tracever),
@@ -710,6 +710,7 @@ static struct mrs_field id_aa64pfr1_fields[] = {
 };
 
 struct mrs_user_reg {
+	u_int		reg;
 	u_int		CRm;
 	u_int		Op2;
 	size_t		offset;
@@ -718,24 +719,28 @@ struct mrs_user_reg {
 
 static struct mrs_user_reg user_regs[] = {
 	{	/* id_aa64isar0_el1 */
+		.reg = ID_AA64ISAR0_EL1,
 		.CRm = 6,
 		.Op2 = 0,
 		.offset = __offsetof(struct cpu_desc, id_aa64isar0),
 		.fields = id_aa64isar0_fields,
 	},
 	{	/* id_aa64isar1_el1 */
+		.reg = ID_AA64ISAR1_EL1,
 		.CRm = 6,
 		.Op2 = 1,
 		.offset = __offsetof(struct cpu_desc, id_aa64isar1),
 		.fields = id_aa64isar1_fields,
 	},
 	{	/* id_aa64pfr0_el1 */
+		.reg = ID_AA64PFR0_EL1,
 		.CRm = 4,
 		.Op2 = 0,
 		.offset = __offsetof(struct cpu_desc, id_aa64pfr0),
 		.fields = id_aa64pfr0_fields,
 	},
 	{	/* id_aa64dfr0_el1 */
+		.reg = ID_AA64DFR0_EL1,
 		.CRm = 5,
 		.Op2 = 0,
 		.offset = __offsetof(struct cpu_desc, id_aa64dfr0),
@@ -818,6 +823,23 @@ user_mrs_handler(vm_offset_t va, uint32_t insn, struct trapframe *frame,
 	return (1);
 }
 
+bool
+extract_user_id_field(u_int reg, u_int field_shift, uint8_t *val)
+{
+	uint64_t value;
+	int i;
+
+	for (i = 0; i < nitems(user_regs); i++) {
+		if (user_regs[i].reg == reg) {
+			value = CPU_DESC_FIELD(user_cpu_desc, i);
+			*val = value >> field_shift;
+			return (true);
+		}
+	}
+
+	return (false);
+}
+
 static void
 update_user_regs(u_int cpu)
 {
@@ -897,25 +919,25 @@ parse_cpu_features_hwcap(u_int cpu)
 {
 	u_long hwcap = 0;
 
-	if (ID_AA64ISAR0_DP(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_DP_IMPL)
+	if (ID_AA64ISAR0_DP_VAL(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_DP_IMPL)
 		hwcap |= HWCAP_ASIMDDP;
 
-	if (ID_AA64ISAR0_SM4(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_SM4_IMPL)
+	if (ID_AA64ISAR0_SM4_VAL(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_SM4_IMPL)
 		hwcap |= HWCAP_SM4;
 
-	if (ID_AA64ISAR0_SM3(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_SM3_IMPL)
+	if (ID_AA64ISAR0_SM3_VAL(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_SM3_IMPL)
 		hwcap |= HWCAP_SM3;
 
-	if (ID_AA64ISAR0_RDM(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_RDM_IMPL)
+	if (ID_AA64ISAR0_RDM_VAL(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_RDM_IMPL)
 		hwcap |= HWCAP_ASIMDRDM;
 
-	if (ID_AA64ISAR0_Atomic(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_Atomic_IMPL)
+	if (ID_AA64ISAR0_Atomic_VAL(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_Atomic_IMPL)
 		hwcap |= HWCAP_ATOMICS;
 
-	if (ID_AA64ISAR0_CRC32(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_CRC32_BASE)
+	if (ID_AA64ISAR0_CRC32_VAL(cpu_desc[cpu].id_aa64isar0) == ID_AA64ISAR0_CRC32_BASE)
 		hwcap |= HWCAP_CRC32;
 
-	switch (ID_AA64ISAR0_SHA2(cpu_desc[cpu].id_aa64isar0)) {
+	switch (ID_AA64ISAR0_SHA2_VAL(cpu_desc[cpu].id_aa64isar0)) {
 		case ID_AA64ISAR0_SHA2_BASE:
 			hwcap |= HWCAP_SHA2;
 			break;
@@ -926,10 +948,10 @@ parse_cpu_features_hwcap(u_int cpu)
 		break;
 	}
 
-	if (ID_AA64ISAR0_SHA1(cpu_desc[cpu].id_aa64isar0))
+	if (ID_AA64ISAR0_SHA1_VAL(cpu_desc[cpu].id_aa64isar0))
 		hwcap |= HWCAP_SHA1;
 
-	switch (ID_AA64ISAR0_AES(cpu_desc[cpu].id_aa64isar0)) {
+	switch (ID_AA64ISAR0_AES_VAL(cpu_desc[cpu].id_aa64isar0)) {
 	case ID_AA64ISAR0_AES_BASE:
 		hwcap |= HWCAP_AES;
 		break;
@@ -940,22 +962,22 @@ parse_cpu_features_hwcap(u_int cpu)
 		break;
 	}
 
-	if (ID_AA64ISAR1_LRCPC(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_LRCPC_IMPL)
+	if (ID_AA64ISAR1_LRCPC_VAL(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_LRCPC_IMPL)
 		hwcap |= HWCAP_LRCPC;
 
-	if (ID_AA64ISAR1_FCMA(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_FCMA_IMPL)
+	if (ID_AA64ISAR1_FCMA_VAL(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_FCMA_IMPL)
 		hwcap |= HWCAP_FCMA;
 
-	if (ID_AA64ISAR1_JSCVT(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_JSCVT_IMPL)
+	if (ID_AA64ISAR1_JSCVT_VAL(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_JSCVT_IMPL)
 		hwcap |= HWCAP_JSCVT;
 
-	if (ID_AA64ISAR1_DPB(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_DPB_IMPL)
+	if (ID_AA64ISAR1_DPB_VAL(cpu_desc[cpu].id_aa64isar1) == ID_AA64ISAR1_DPB_IMPL)
 		hwcap |= HWCAP_DCPOP;
 
-	if (ID_AA64PFR0_SVE(cpu_desc[cpu].id_aa64pfr0) == ID_AA64PFR0_SVE_IMPL)
+	if (ID_AA64PFR0_SVE_VAL(cpu_desc[cpu].id_aa64pfr0) == ID_AA64PFR0_SVE_IMPL)
 		hwcap |= HWCAP_SVE;
 
-	switch (ID_AA64PFR0_AdvSIMD(cpu_desc[cpu].id_aa64pfr0)) {
+	switch (ID_AA64PFR0_AdvSIMD_VAL(cpu_desc[cpu].id_aa64pfr0)) {
 	case ID_AA64PFR0_AdvSIMD_IMPL:
 		hwcap |= HWCAP_ASIMD;
 		break;
@@ -966,7 +988,7 @@ parse_cpu_features_hwcap(u_int cpu)
 		break;
 	}
 
-	switch (ID_AA64PFR0_FP(cpu_desc[cpu].id_aa64pfr0)) {
+	switch (ID_AA64PFR0_FP_VAL(cpu_desc[cpu].id_aa64pfr0)) {
 	case ID_AA64PFR0_FP_IMPL:
 		hwcap |= HWCAP_FP;
 		break;
@@ -1187,15 +1209,15 @@ identify_cpu(void)
 	cpu_desc[cpu].mpidr = get_mpidr();
 	CPU_AFFINITY(cpu) = cpu_desc[cpu].mpidr & CPU_AFF_MASK;
 
-	cpu_desc[cpu].id_aa64dfr0 = READ_SPECIALREG(ID_AA64DFR0_EL1);
-	cpu_desc[cpu].id_aa64dfr1 = READ_SPECIALREG(ID_AA64DFR1_EL1);
-	cpu_desc[cpu].id_aa64isar0 = READ_SPECIALREG(ID_AA64ISAR0_EL1);
-	cpu_desc[cpu].id_aa64isar1 = READ_SPECIALREG(ID_AA64ISAR1_EL1);
-	cpu_desc[cpu].id_aa64mmfr0 = READ_SPECIALREG(ID_AA64MMFR0_EL1);
-	cpu_desc[cpu].id_aa64mmfr1 = READ_SPECIALREG(ID_AA64MMFR1_EL1);
-	cpu_desc[cpu].id_aa64mmfr2 = READ_SPECIALREG(ID_AA64MMFR2_EL1);
-	cpu_desc[cpu].id_aa64pfr0 = READ_SPECIALREG(ID_AA64PFR0_EL1);
-	cpu_desc[cpu].id_aa64pfr1 = READ_SPECIALREG(ID_AA64PFR1_EL1);
+	cpu_desc[cpu].id_aa64dfr0 = READ_SPECIALREG(id_aa64dfr0_el1);
+	cpu_desc[cpu].id_aa64dfr1 = READ_SPECIALREG(id_aa64dfr1_el1);
+	cpu_desc[cpu].id_aa64isar0 = READ_SPECIALREG(id_aa64isar0_el1);
+	cpu_desc[cpu].id_aa64isar1 = READ_SPECIALREG(id_aa64isar1_el1);
+	cpu_desc[cpu].id_aa64mmfr0 = READ_SPECIALREG(id_aa64mmfr0_el1);
+	cpu_desc[cpu].id_aa64mmfr1 = READ_SPECIALREG(id_aa64mmfr1_el1);
+	cpu_desc[cpu].id_aa64mmfr2 = READ_SPECIALREG(id_aa64mmfr2_el1);
+	cpu_desc[cpu].id_aa64pfr0 = READ_SPECIALREG(id_aa64pfr0_el1);
+	cpu_desc[cpu].id_aa64pfr1 = READ_SPECIALREG(id_aa64pfr1_el1);
 
 	if (cpu != 0) {
 		/*

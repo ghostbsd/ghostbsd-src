@@ -319,7 +319,7 @@ pmap_pte_cache_bits(vm_paddr_t pa, vm_page_t m)
 		ma = VM_MEMATTR_UNCACHEABLE;
 	return PTE_C(ma);
 }
-#define PMAP_PTE_SET_CACHE_BITS(pte, ps, m) {	\
+#define PMAP_PTE_SET_CACHE_BITS(pte, pa, m) {	\
 	pte &= ~PTE_C_MASK;			\
 	pte |= pmap_pte_cache_bits(pa, m);	\
 }
@@ -3093,7 +3093,6 @@ pmap_clear_modify(vm_page_t m)
 
 	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
 	    ("pmap_clear_modify: page %p is not managed", m));
-	VM_OBJECT_ASSERT_WLOCKED(m->object);
 	vm_page_assert_busied(m);
 
 	if (!pmap_page_is_write_mapped(m))

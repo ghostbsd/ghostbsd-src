@@ -58,12 +58,17 @@ __FBSDID("$FreeBSD$");
 
 #include "bcm2835_dma.h"
 #include <arm/broadcom/bcm2835/bcm2835_mbox_prop.h>
-#include "bcm2835_vcbus.h"
+#ifdef NOTYET
+#include <arm/broadcom/bcm2835/bcm2835_clkman.h>
+#endif
 
 #define	BCM2835_DEFAULT_SDHCI_FREQ	50
+#define	BCM2838_DEFAULT_SDHCI_FREQ	100
 
 #define	BCM_SDHCI_BUFFER_SIZE		512
 #define	NUM_DMA_SEGS			2
+
+#define	DATA_PENDING_MASK	(SDHCI_INT_DATA_AVAIL | SDHCI_INT_SPACE_AVAIL)
 
 #ifdef DEBUG
 static int bcm2835_sdhci_debug = 0;
@@ -84,10 +89,39 @@ SYSCTL_INT(_hw_sdhci, OID_AUTO, bcm2835_sdhci_debug, CTLFLAG_RWTUN,
 static int bcm2835_sdhci_hs = 1;
 static int bcm2835_sdhci_pio_mode = 0;
 
+struct bcm_mmc_conf {
+	int	clock_id;
+	int	clock_src;
+	int	default_freq;
+	int	quirks;
+	bool	use_dma;
+};
+
+struct bcm_mmc_conf bcm2835_sdhci_conf = {
+	.clock_id	= BCM2835_MBOX_CLOCK_ID_EMMC,
+	.clock_src	= -1,
+	.default_freq	= BCM2835_DEFAULT_SDHCI_FREQ,
+	.quirks		= SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK |
+	    SDHCI_QUIRK_BROKEN_TIMEOUT_VAL | SDHCI_QUIRK_DONT_SET_HISPD_BIT |
+	    SDHCI_QUIRK_MISSING_CAPS,
+	.use_dma	= true
+};
+
+struct bcm_mmc_conf bcm2838_emmc2_conf = {
+	.clock_id	= BCM2838_MBOX_CLOCK_ID_EMMC2,
+	.clock_src	= -1,
+	.default_freq	= BCM2838_DEFAULT_SDHCI_FREQ,
+	.quirks		= 0,
+	/* XXX DMA is currently broken, but it shouldn't be. */
+	.use_dma	= false
+};
+
 static struct ofw_compat_data compat_data[] = {
-	{"broadcom,bcm2835-sdhci",	1},
-	{"brcm,bcm2835-sdhci",		1},
-	{"brcm,bcm2835-mmc",		1},
+	{"broadcom,bcm2835-sdhci",	(uintptr_t)&bcm2835_sdhci_conf},
+	{"brcm,bcm2835-sdhci",		(uintptr_t)&bcm2835_sdhci_conf},
+	{"brcm,bcm2835-mmc",		(uintptr_t)&bcm2835_sdhci_conf},
+	{"brcm,bcm2711-emmc2",		(uintptr_t)&bcm2838_emmc2_conf},
+	{"brcm,bcm2838-emmc2",		(uintptr_t)&bcm2838_emmc2_conf},
 	{NULL,				0}
 };
 
@@ -115,6 +149,10 @@ struct bcm_sdhci_softc {
 	uint32_t		blksz_and_count;
 	uint32_t		cmd_and_mode;
 	bool			need_update_blk;
+#ifdef NOTYET
+	device_t		clkman;
+#endif
+	struct bcm_mmc_conf *	conf;
 };
 
 static int bcm_sdhci_probe(device_t);
@@ -131,6 +169,8 @@ bcm_sdhci_dmacb(void *arg, bus_dma_segment_t *segs, int nseg, int err)
 	struct bcm_sdhci_softc *sc = arg;
 	int i;
 
+	/* Sanity check: we can only ever have one mapping at a time. */
+	KASSERT(sc->dmamap_seg_count == 0, ("leaked DMA segment"));
 	sc->dmamap_status = err;
 	sc->dmamap_seg_count = nseg;
 
@@ -168,8 +208,12 @@ bcm_sdhci_attach(device_t dev)
 	sc->sc_dev = dev;
 	sc->sc_req = NULL;
 
-	err = bcm2835_mbox_set_power_state(BCM2835_MBOX_POWER_ID_EMMC,
-	    TRUE);
+	sc->conf = (struct bcm_mmc_conf *)ofw_bus_search_compatible(dev,
+	    compat_data)->ocd_data;
+	if (sc->conf == 0)
+	    return (ENXIO);
+
+	err = bcm2835_mbox_set_power_state(BCM2835_MBOX_POWER_ID_EMMC, TRUE);
 	if (err != 0) {
 		if (bootverbose)
 			device_printf(dev, "Unable to enable the power\n");
@@ -177,8 +221,7 @@ bcm_sdhci_attach(device_t dev)
 	}
 
 	default_freq = 0;
-	err = bcm2835_mbox_get_clock_rate(BCM2835_MBOX_CLOCK_ID_EMMC,
-	    &default_freq);
+	err = bcm2835_mbox_get_clock_rate(sc->conf->clock_id, &default_freq);
 	if (err == 0) {
 		/* Convert to MHz */
 		default_freq /= 1000000;
@@ -190,10 +233,27 @@ bcm_sdhci_attach(device_t dev)
 			default_freq = cell / 1000000;
 	}
 	if (default_freq == 0)
-		default_freq = BCM2835_DEFAULT_SDHCI_FREQ;
+		default_freq = sc->conf->default_freq;
 
 	if (bootverbose)
 		device_printf(dev, "SDHCI frequency: %dMHz\n", default_freq);
+#ifdef NOTYET
+	if (sc->conf->clock_src > 0) {
+		uint32_t f;
+		sc->clkman = devclass_get_device(devclass_find("bcm2835_clkman"), 0);
+		if (sc->clkman == NULL) {
+			device_printf(dev, "cannot find Clock Manager\n");
+			return (ENXIO);
+		}
+
+		f = bcm2835_clkman_set_frequency(sc->clkman, sc->conf->clock_src, default_freq);
+		if (f == 0)
+			return (EINVAL);
+
+		if (bootverbose)
+			device_printf(dev, "Clock source frequency: %dMHz\n", f);
+	}
+#endif
 
 	rid = 0;
 	sc->sc_mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
@@ -209,7 +269,7 @@ bcm_sdhci_attach(device_t dev)
 
 	rid = 0;
 	sc->sc_irq_res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid,
-	    RF_ACTIVE);
+	    RF_ACTIVE | RF_SHAREABLE);
 	if (!sc->sc_irq_res) {
 		device_printf(dev, "cannot allocate interrupt\n");
 		err = ENXIO;
@@ -230,36 +290,39 @@ bcm_sdhci_attach(device_t dev)
 	if (bcm2835_sdhci_hs)
 		sc->sc_slot.caps |= SDHCI_CAN_DO_HISPD;
 	sc->sc_slot.caps |= (default_freq << SDHCI_CLOCK_BASE_SHIFT);
-	sc->sc_slot.quirks = SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK 
-		| SDHCI_QUIRK_BROKEN_TIMEOUT_VAL
-		| SDHCI_QUIRK_DONT_SET_HISPD_BIT
-		| SDHCI_QUIRK_MISSING_CAPS;
+	sc->sc_slot.quirks = sc->conf->quirks;
  
 	sdhci_init_slot(dev, &sc->sc_slot, 0);
 
-	sc->sc_dma_ch = bcm_dma_allocate(BCM_DMA_CH_ANY);
-	if (sc->sc_dma_ch == BCM_DMA_CH_INVALID)
-		goto fail;
+	if (sc->conf->use_dma) {
+		sc->sc_dma_ch = bcm_dma_allocate(BCM_DMA_CH_ANY);
+		if (sc->sc_dma_ch == BCM_DMA_CH_INVALID)
+			goto fail;
 
-	bcm_dma_setup_intr(sc->sc_dma_ch, bcm_sdhci_dma_intr, sc);
+		if (bcm_dma_setup_intr(sc->sc_dma_ch, bcm_sdhci_dma_intr, sc) != 0) {
+			device_printf(dev, "cannot setup dma interrupt handler\n");
+			err = ENXIO;
+			goto fail;
+		}
 
-	/* Allocate bus_dma resources. */
-	err = bus_dma_tag_create(bus_get_dma_tag(dev),
-	    1, 0, BUS_SPACE_MAXADDR_32BIT,
-	    BUS_SPACE_MAXADDR, NULL, NULL,
-	    BCM_SDHCI_BUFFER_SIZE, NUM_DMA_SEGS, BCM_SDHCI_BUFFER_SIZE,
-	    BUS_DMA_ALLOCNOW, NULL, NULL,
-	    &sc->sc_dma_tag);
+		/* Allocate bus_dma resources. */
+		err = bus_dma_tag_create(bus_get_dma_tag(dev),
+		    1, 0, BUS_SPACE_MAXADDR_32BIT,
+		    BUS_SPACE_MAXADDR, NULL, NULL,
+		    BCM_SDHCI_BUFFER_SIZE, NUM_DMA_SEGS, BCM_SDHCI_BUFFER_SIZE,
+		    BUS_DMA_ALLOCNOW, NULL, NULL,
+		    &sc->sc_dma_tag);
 
-	if (err) {
-		device_printf(dev, "failed allocate DMA tag");
-		goto fail;
-	}
+		if (err) {
+			device_printf(dev, "failed allocate DMA tag");
+			goto fail;
+		}
 
-	err = bus_dmamap_create(sc->sc_dma_tag, 0, &sc->sc_dma_map);
-	if (err) {
-		device_printf(dev, "bus_dmamap_create failed\n");
-		goto fail;
+		err = bus_dmamap_create(sc->sc_dma_tag, 0, &sc->sc_dma_map);
+		if (err) {
+			device_printf(dev, "bus_dmamap_create failed\n");
+			goto fail;
+		}
 	}
 
 	/* FIXME: Fix along with other BUS_SPACE_PHYSADDR instances */
@@ -454,26 +517,25 @@ bcm_sdhci_start_dma_seg(struct bcm_sdhci_softc *sc)
 {
 	struct sdhci_slot *slot;
 	vm_paddr_t pdst, psrc;
-	int err, idx, len, sync_op;
+	int err, idx, len, sync_op, width;
 
 	slot = &sc->sc_slot;
 	idx = sc->dmamap_seg_index++;
 	len = sc->dmamap_seg_sizes[idx];
 	slot->offset += len;
+	width = (len & 0xf ? BCM_DMA_32BIT : BCM_DMA_128BIT);
 
 	if (slot->curcmd->data->flags & MMC_DATA_READ) {
 		bcm_dma_setup_src(sc->sc_dma_ch, BCM_DMA_DREQ_EMMC,
 		    BCM_DMA_SAME_ADDR, BCM_DMA_32BIT); 
 		bcm_dma_setup_dst(sc->sc_dma_ch, BCM_DMA_DREQ_NONE,
-		    BCM_DMA_INC_ADDR,
-		    (len & 0xf) ? BCM_DMA_32BIT : BCM_DMA_128BIT);
+		    BCM_DMA_INC_ADDR, width);
 		psrc = sc->sc_sdhci_buffer_phys;
 		pdst = sc->dmamap_seg_addrs[idx];
 		sync_op = BUS_DMASYNC_PREREAD;
 	} else {
 		bcm_dma_setup_src(sc->sc_dma_ch, BCM_DMA_DREQ_NONE,
-		    BCM_DMA_INC_ADDR,
-		    (len & 0xf) ? BCM_DMA_32BIT : BCM_DMA_128BIT);
+		    BCM_DMA_INC_ADDR, width);
 		bcm_dma_setup_dst(sc->sc_dma_ch, BCM_DMA_DREQ_EMMC,
 		    BCM_DMA_SAME_ADDR, BCM_DMA_32BIT);
 		psrc = sc->dmamap_seg_addrs[idx];
@@ -488,8 +550,7 @@ bcm_sdhci_start_dma_seg(struct bcm_sdhci_softc *sc)
 	 */
 	if (idx == 0) {
 		bus_dmamap_sync(sc->sc_dma_tag, sc->sc_dma_map, sync_op);
-		slot->intmask &= ~(SDHCI_INT_DATA_AVAIL | 
-		    SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_END);
+		slot->intmask &= ~DATA_PENDING_MASK;
 		bcm_sdhci_write_4(sc->sc_dev, &sc->sc_slot, SDHCI_SIGNAL_ENABLE,
 		    slot->intmask);
 	}
@@ -507,10 +568,15 @@ bcm_sdhci_dma_intr(int ch, void *arg)
 {
 	struct bcm_sdhci_softc *sc = (struct bcm_sdhci_softc *)arg;
 	struct sdhci_slot *slot = &sc->sc_slot;
-	uint32_t reg, mask;
+	uint32_t reg;
 	int left, sync_op;
 
 	mtx_lock(&slot->mtx);
+
+	if (slot->curcmd == NULL) {
+		mtx_unlock(&slot->mtx);
+		return;
+	}
 
 	/*
 	 * If there are more segments for the current dma, start the next one.
@@ -523,18 +589,18 @@ bcm_sdhci_dma_intr(int ch, void *arg)
 		return;
 	}
 
-	if (slot->curcmd->data->flags & MMC_DATA_READ) {
+	if (slot->curcmd->data->flags & MMC_DATA_READ)
 		sync_op = BUS_DMASYNC_POSTREAD;
-		mask = SDHCI_INT_DATA_AVAIL;
-	} else {
+	else
 		sync_op = BUS_DMASYNC_POSTWRITE;
-		mask = SDHCI_INT_SPACE_AVAIL;
-	}
-	bus_dmamap_sync(sc->sc_dma_tag, sc->sc_dma_map, sync_op);
-	bus_dmamap_unload(sc->sc_dma_tag, sc->sc_dma_map);
 
-	sc->dmamap_seg_count = 0;
-	sc->dmamap_seg_index = 0;
+	if (sc->dmamap_seg_count != 0) {
+		bus_dmamap_sync(sc->sc_dma_tag, sc->sc_dma_map, sync_op);
+		bus_dmamap_unload(sc->sc_dma_tag, sc->sc_dma_map);
+
+		sc->dmamap_seg_count = 0;
+		sc->dmamap_seg_index = 0;
+	}
 
 	left = min(BCM_SDHCI_BUFFER_SIZE,
 	    slot->curcmd->data->len - slot->offset);
@@ -547,57 +613,39 @@ bcm_sdhci_dma_intr(int ch, void *arg)
 	 */
 	if (left < BCM_SDHCI_BUFFER_SIZE) {
 		/* Re-enable data interrupts. */
-		slot->intmask |= SDHCI_INT_DATA_AVAIL | SDHCI_INT_SPACE_AVAIL |
-		    SDHCI_INT_DATA_END;
+		slot->intmask |= DATA_PENDING_MASK;
 		bcm_sdhci_write_4(slot->bus, slot, SDHCI_SIGNAL_ENABLE,
 		    slot->intmask);
 		mtx_unlock(&slot->mtx);
 		return;
 	}
 
-	/* DATA END? */
 	reg = bcm_sdhci_read_4(slot->bus, slot, SDHCI_INT_STATUS);
 
-	if (reg & SDHCI_INT_DATA_END) {
-		/* ACK for all outstanding interrupts */
-		bcm_sdhci_write_4(slot->bus, slot, SDHCI_INT_STATUS, reg);
+	/* already available? */
+	if ((reg & DATA_PENDING_MASK) != 0) {
+
+		/* ACK for DATA_AVAIL or SPACE_AVAIL */
+		bcm_sdhci_write_4(slot->bus, slot,
+		    SDHCI_INT_STATUS, DATA_PENDING_MASK);
+
+		/* continue next DMA transfer */
+		if (bus_dmamap_load(sc->sc_dma_tag, sc->sc_dma_map,
+		    (uint8_t *)slot->curcmd->data->data +
+		    slot->offset, left, bcm_sdhci_dmacb, sc,
+		    BUS_DMA_NOWAIT) != 0 || sc->dmamap_status != 0) {
+			slot->curcmd->error = MMC_ERR_NO_MEMORY;
+			sdhci_finish_data(slot);
+		} else {
+			bcm_sdhci_start_dma_seg(sc);
+		}
+	} else {
+		/* wait for next data by INT */
 
 		/* enable INT */
-		slot->intmask |= SDHCI_INT_DATA_AVAIL | SDHCI_INT_SPACE_AVAIL
-		    | SDHCI_INT_DATA_END;
+		slot->intmask |= DATA_PENDING_MASK;
 		bcm_sdhci_write_4(slot->bus, slot, SDHCI_SIGNAL_ENABLE,
 		    slot->intmask);
-
-		/* finish this data */
-		sdhci_finish_data(slot);
-	} 
-	else {
-		/* already available? */
-		if (reg & mask) {
-
-			/* ACK for DATA_AVAIL or SPACE_AVAIL */
-			bcm_sdhci_write_4(slot->bus, slot,
-			    SDHCI_INT_STATUS, mask);
-
-			/* continue next DMA transfer */
-			if (bus_dmamap_load(sc->sc_dma_tag, sc->sc_dma_map, 
-			    (uint8_t *)slot->curcmd->data->data + 
-			    slot->offset, left, bcm_sdhci_dmacb, sc, 
-			    BUS_DMA_NOWAIT) != 0 || sc->dmamap_status != 0) {
-				slot->curcmd->error = MMC_ERR_NO_MEMORY;
-				sdhci_finish_data(slot);
-			} else {
-				bcm_sdhci_start_dma_seg(sc);
-			}
-		} else {
-			/* wait for next data by INT */
-
-			/* enable INT */
-			slot->intmask |= SDHCI_INT_DATA_AVAIL |
-			    SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_END;
-			bcm_sdhci_write_4(slot->bus, slot, SDHCI_SIGNAL_ENABLE,
-			    slot->intmask);
-		}
 	}
 
 	mtx_unlock(&slot->mtx);
@@ -609,6 +657,7 @@ bcm_sdhci_read_dma(device_t dev, struct sdhci_slot *slot)
 	struct bcm_sdhci_softc *sc = device_get_softc(slot->bus);
 	size_t left;
 
+	/* XXX TODO: Not many-segment safe */
 	if (sc->dmamap_seg_count != 0) {
 		device_printf(sc->sc_dev, "DMA in use\n");
 		return;
@@ -638,6 +687,7 @@ bcm_sdhci_write_dma(device_t dev, struct sdhci_slot *slot)
 	struct bcm_sdhci_softc *sc = device_get_softc(slot->bus);
 	size_t left;
 
+	/* XXX TODO: Not many-segment safe */
 	if (sc->dmamap_seg_count != 0) {
 		device_printf(sc->sc_dev, "DMA in use\n");
 		return;
@@ -664,7 +714,11 @@ bcm_sdhci_write_dma(device_t dev, struct sdhci_slot *slot)
 static int
 bcm_sdhci_will_handle_transfer(device_t dev, struct sdhci_slot *slot)
 {
+	struct bcm_sdhci_softc *sc = device_get_softc(slot->bus);
 	size_t left;
+
+	if (!sc->conf->use_dma)
+		return (0);
 
 	/*
 	 * Do not use DMA for transfers less than block size or with a length
@@ -695,7 +749,29 @@ bcm_sdhci_start_transfer(device_t dev, struct sdhci_slot *slot,
 static void
 bcm_sdhci_finish_transfer(device_t dev, struct sdhci_slot *slot)
 {
+	struct bcm_sdhci_softc *sc = device_get_softc(slot->bus);
 
+	/* Clean up */
+	if (sc->dmamap_seg_count != 0) {
+		if (slot->curcmd->data->flags & MMC_DATA_READ)
+			bus_dmamap_sync(sc->sc_dma_tag, sc->sc_dma_map,
+			    BUS_DMASYNC_POSTREAD);
+		else
+			bus_dmamap_sync(sc->sc_dma_tag, sc->sc_dma_map,
+			    BUS_DMASYNC_POSTWRITE);
+		bus_dmamap_unload(sc->sc_dma_tag, sc->sc_dma_map);
+
+		sc->dmamap_seg_count = 0;
+		sc->dmamap_seg_index = 0;
+
+		slot->intmask |= DATA_PENDING_MASK;
+		bcm_sdhci_write_4(slot->bus, slot, SDHCI_SIGNAL_ENABLE,
+		    slot->intmask);
+	} else {
+		KASSERT((slot->intmask & DATA_PENDING_MASK) ==
+		    DATA_PENDING_MASK,
+		    ("%s: interrupt mask not restored", __func__));
+	}
 	sdhci_finish_data(slot);
 }
 
@@ -744,6 +820,9 @@ static driver_t bcm_sdhci_driver = {
 
 DRIVER_MODULE(sdhci_bcm, simplebus, bcm_sdhci_driver, bcm_sdhci_devclass,
     NULL, NULL);
+#ifdef NOTYET
+MODULE_DEPEND(sdhci_bcm, bcm2835_clkman, 1, 1, 1);
+#endif
 SDHCI_DEPEND(sdhci_bcm);
 #ifndef MMCCAM
 MMC_DECLARE_BRIDGE(sdhci_bcm);

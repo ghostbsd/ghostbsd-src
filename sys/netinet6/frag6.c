@@ -106,8 +106,6 @@ struct ip6asfrag {
 	bool		ip6af_mff;	/* More fragment bit in frag off. */
 };
 
-#define IP6_REASS_MBUF(ip6af) (*(struct mbuf **)&((ip6af)->ip6af_m))
-
 static MALLOC_DEFINE(M_FRAG6, "frag6", "IPv6 fragment reassembly header");
 
 #ifdef VIMAGE
@@ -204,6 +202,10 @@ SYSCTL_PROC(_net_inet6_ip6, IPV6CTL_MAXFRAGPACKETS, maxfragpackets,
 	"Default maximum number of outstanding fragmented IPv6 packets. "
 	"A value of 0 means no fragmented packets will be accepted, while a "
 	"a value of -1 means no limit");
+SYSCTL_UINT(_net_inet6_ip6, OID_AUTO, frag6_nfragpackets,
+	CTLFLAG_VNET | CTLFLAG_RD,
+	__DEVOLATILE(u_int *, &VNET_NAME(frag6_nfragpackets)), 0,
+	"Per-VNET number of IPv6 fragments across all reassembly queues.");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGSPERPACKET, maxfragsperpacket,
 	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip6_maxfragsperpacket), 0,
 	"Maximum allowed number of fragments per packet");
@@ -216,30 +218,22 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGBUCKETSIZE, maxfragbucketsize,
  * Remove the IPv6 fragmentation header from the mbuf.
  */
 int
-ip6_deletefraghdr(struct mbuf *m, int offset, int wait)
+ip6_deletefraghdr(struct mbuf *m, int offset, int wait __unused)
 {
 	struct ip6_hdr *ip6;
-	struct mbuf *t;
+
+	KASSERT(m->m_len >= offset + sizeof(struct ip6_frag),
+	    ("%s: ext headers not contigous in mbuf %p m_len %d >= "
+	    "offset %d + %zu\n", __func__, m, m->m_len, offset,
+	    sizeof(struct ip6_frag)));
 
 	/* Delete frag6 header. */
-	if (m->m_len >= offset + sizeof(struct ip6_frag)) {
-
-		/* This is the only possible case with !PULLDOWN_TEST. */
-		ip6 = mtod(m, struct ip6_hdr *);
-		bcopy(ip6, (char *)ip6 + sizeof(struct ip6_frag),
-		    offset);
-		m->m_data += sizeof(struct ip6_frag);
-		m->m_len -= sizeof(struct ip6_frag);
-	} else {
-
-		/* This comes with no copy if the boundary is on cluster. */
-		if ((t = m_split(m, offset, wait)) == NULL)
-			return (ENOMEM);
-		m_adj(t, sizeof(struct ip6_frag));
-		m_cat(m, t);
-	}
-
+	ip6 = mtod(m, struct ip6_hdr *);
+	bcopy(ip6, (char *)ip6 + sizeof(struct ip6_frag), offset);
+	m->m_data += sizeof(struct ip6_frag);
+	m->m_len -= sizeof(struct ip6_frag);
 	m->m_flags |= M_FRAGMENTED;
+
 	return (0);
 }
 
@@ -257,7 +251,7 @@ frag6_freef(struct ip6q *q6, uint32_t bucket)
 
 	while ((af6 = TAILQ_FIRST(&q6->ip6q_frags)) != NULL) {
 
-		m = IP6_REASS_MBUF(af6);
+		m = af6->ip6af_m;
 		TAILQ_REMOVE(&q6->ip6q_frags, af6, ip6af_tq);
 
 		/*
@@ -301,21 +295,22 @@ frag6_cleanup(void *arg __unused, struct ifnet *ifp)
 	struct ip6qhead *head;
 	struct ip6q *q6;
 	struct ip6asfrag *af6;
-	struct mbuf *m;
 	uint32_t bucket;
 
 	KASSERT(ifp != NULL, ("%s: ifp is NULL", __func__));
 
+	CURVNET_SET_QUIET(ifp->if_vnet);
 #ifdef VIMAGE
 	/*
 	 * Skip processing if IPv6 reassembly is not initialised or
 	 * torn down by frag6_destroy().
 	 */
-	if (!V_frag6_on)
+	if (!V_frag6_on) {
+		CURVNET_RESTORE();
 		return;
+	}
 #endif
 
-	CURVNET_SET_QUIET(ifp->if_vnet);
 	for (bucket = 0; bucket < IP6REASS_NHASH; bucket++) {
 		IP6QB_LOCK(bucket);
 		head = IP6QB_HEAD(bucket);
@@ -323,11 +318,9 @@ frag6_cleanup(void *arg __unused, struct ifnet *ifp)
 		TAILQ_FOREACH(q6, head, ip6q_tq) {
 			TAILQ_FOREACH(af6, &q6->ip6q_frags, ip6af_tq) {
 
-				m = IP6_REASS_MBUF(af6);
-
 				/* Clear no longer valid rcvif pointer. */
-				if (m->m_pkthdr.rcvif == ifp)
-					m->m_pkthdr.rcvif = NULL;
+				if (af6->ip6af_m->m_pkthdr.rcvif == ifp)
+					af6->ip6af_m->m_pkthdr.rcvif = NULL;
 			}
 		}
 		IP6QB_UNLOCK(bucket);
@@ -394,18 +387,15 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	m = *mp;
 	offset = *offp;
 
-	ip6 = mtod(m, struct ip6_hdr *);
-#ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, offset, sizeof(struct ip6_frag), IPPROTO_DONE);
-	ip6f = (struct ip6_frag *)((caddr_t)ip6 + offset);
-#else
-	IP6_EXTHDR_GET(ip6f, struct ip6_frag *, m, offset, sizeof(*ip6f));
-	if (ip6f == NULL)
-		return (IPPROTO_DONE);
-#endif
+	M_ASSERTPKTHDR(m);
 
-	/* Store receive network interface pointer for later. */
-	srcifp = m->m_pkthdr.rcvif;
+	m = m_pullup(m, offset + sizeof(struct ip6_frag));
+	if (m == NULL) {
+		IP6STAT_INC(ip6s_exthdrtoolong);
+		*mp = NULL;
+		return (IPPROTO_DONE);
+	}
+	ip6 = mtod(m, struct ip6_hdr *);
 
 	dstifp = NULL;
 	/* Find the destination interface of the packet. */
@@ -419,6 +409,7 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	if (ip6->ip6_plen == 0) {
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER, offset);
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
+		*mp = NULL;
 		return (IPPROTO_DONE);
 	}
 
@@ -428,33 +419,48 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 * sizeof(struct ip6_frag) == 8
 	 * sizeof(struct ip6_hdr) = 40
 	 */
+	ip6f = (struct ip6_frag *)((caddr_t)ip6 + offset);
 	if ((ip6f->ip6f_offlg & IP6F_MORE_FRAG) &&
 	    (((ntohs(ip6->ip6_plen) - offset) & 0x7) != 0)) {
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 		    offsetof(struct ip6_hdr, ip6_plen));
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
+		*mp = NULL;
 		return (IPPROTO_DONE);
 	}
 
 	IP6STAT_INC(ip6s_fragments);
 	in6_ifstat_inc(dstifp, ifs6_reass_reqd);
 
-	/* Offset now points to data portion. */
-	offset += sizeof(struct ip6_frag);
-
 	/*
 	 * Handle "atomic" fragments (offset and m bit set to 0) upfront,
-	 * unrelated to any reassembly.  Still need to remove the frag hdr.
+	 * unrelated to any reassembly.  We need to remove the frag hdr
+	 * which is ugly.
 	 * See RFC 6946 and section 4.5 of RFC 8200.
 	 */
 	if ((ip6f->ip6f_offlg & ~IP6F_RESERVED_MASK) == 0) {
 		IP6STAT_INC(ip6s_atomicfrags);
-		/* XXX-BZ handle correctly. */
+		nxt = ip6f->ip6f_nxt;
+		/*
+		 * Set nxt(-hdr field value) to the original value.
+		 * We cannot just set ip6->ip6_nxt as there might be
+		 * an unfragmentable part with extension headers and
+		 * we must update the last one.
+		 */
+		m_copyback(m, ip6_get_prevhdr(m, offset), sizeof(uint8_t),
+		    (caddr_t)&nxt);
+		ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) -
+		    sizeof(struct ip6_frag));
+		if (ip6_deletefraghdr(m, offset, M_NOWAIT) != 0)
+			goto dropfrag2;
+		m->m_pkthdr.len -= sizeof(struct ip6_frag);
 		in6_ifstat_inc(dstifp, ifs6_reass_ok);
-		*offp = offset;
-		m->m_flags |= M_FRAGMENTED;
-		return (ip6f->ip6f_nxt);
+		*mp = m;
+		return (nxt);
 	}
+
+	/* Offset now points to data portion. */
+	offset += sizeof(struct ip6_frag);
 
 	/* Get fragment length and discard 0-byte fragments. */
 	frgpartlen = sizeof(struct ip6_hdr) + ntohs(ip6->ip6_plen) - offset;
@@ -463,8 +469,34 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 		    offsetof(struct ip6_hdr, ip6_plen));
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
 		IP6STAT_INC(ip6s_fragdropped);
+		*mp = NULL;
 		return (IPPROTO_DONE);
 	}
+
+	/*
+	 * Enforce upper bound on number of fragments for the entire system.
+	 * If maxfrag is 0, never accept fragments.
+	 * If maxfrag is -1, accept all fragments without limitation.
+	 */
+	if (ip6_maxfrags < 0)
+		;
+	else if (atomic_load_int(&frag6_nfrags) >= (u_int)ip6_maxfrags)
+		goto dropfrag2;
+
+	/*
+	 * Validate that a full header chain to the ULP is present in the
+	 * packet containing the first fragment as per RFC RFC7112 and
+	 * RFC 8200 pages 18,19:
+	 * The first fragment packet is composed of:
+	 * (3)  Extension headers, if any, and the Upper-Layer header.  These
+	 *      headers must be in the first fragment.  ...
+	 */
+	fragoff = ntohs(ip6f->ip6f_offlg & IP6F_OFF_MASK);
+	/* XXX TODO.  thj has D16851 open for this. */
+	/* Send ICMPv6 4,3 in case of violation. */
+
+	/* Store receive network interface pointer for later. */
+	srcifp = m->m_pkthdr.rcvif;
 
 	/* Generate a hash value for fragment bucket selection. */
 	hashkeyp = hashkey;
@@ -477,16 +509,6 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	bucket &= IP6REASS_HMASK;
 	IP6QB_LOCK(bucket);
 	head = IP6QB_HEAD(bucket);
-
-	/*
-	 * Enforce upper bound on number of fragments for the entire system.
-	 * If maxfrag is 0, never accept fragments.
-	 * If maxfrag is -1, accept all fragments without limitation.
-	 */
-	if (ip6_maxfrags < 0)
-		;
-	else if (atomic_load_int(&frag6_nfrags) >= (u_int)ip6_maxfrags)
-		goto dropfrag;
 
 	TAILQ_FOREACH(q6, head, ip6q_tq)
 		if (ip6f->ip6f_ident == q6->ip6q_ident &&
@@ -517,7 +539,6 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 		    atomic_load_int(&V_frag6_nfragpackets) >=
 		    (u_int)V_ip6_maxfragpackets)
 			goto dropfrag;
-		atomic_add_int(&V_frag6_nfragpackets, 1);
 
 		/* Allocate IPv6 fragement packet queue entry. */
 		q6 = (struct ip6q *)malloc(sizeof(struct ip6q), M_FRAG6,
@@ -531,6 +552,7 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 		}
 		mac_ip6q_create(m, q6);
 #endif
+		atomic_add_int(&V_frag6_nfragpackets, 1);
 
 		/* ip6q_nxt will be filled afterwards, from 1st fragment. */
 		TAILQ_INIT(&q6->ip6q_frags);
@@ -550,12 +572,16 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	/*
 	 * If it is the 1st fragment, record the length of the
 	 * unfragmentable part and the next header of the fragment header.
+	 * Assume the first 1st fragement to arrive will be correct.
+	 * We do not have any duplicate checks here yet so another packet
+	 * with fragoff == 0 could come and overwrite the ip6q_unfrglen
+	 * and worse, the next header, at any time.
 	 */
-	fragoff = ntohs(ip6f->ip6f_offlg & IP6F_OFF_MASK);
-	if (fragoff == 0) {
+	if (fragoff == 0 && q6->ip6q_unfrglen == -1) {
 		q6->ip6q_unfrglen = offset - sizeof(struct ip6_hdr) -
 		    sizeof(struct ip6_frag);
 		q6->ip6q_nxt = ip6f->ip6f_nxt;
+		/* XXX ECN? */
 	}
 
 	/*
@@ -566,17 +592,37 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	if (q6->ip6q_unfrglen >= 0) {
 		/* The 1st fragment has already arrived. */
 		if (q6->ip6q_unfrglen + fragoff + frgpartlen > IPV6_MAXPACKET) {
+			if (only_frag) {
+				TAILQ_REMOVE(head, q6, ip6q_tq);
+				V_ip6qb[bucket].count--;
+				atomic_subtract_int(&V_frag6_nfragpackets, 1);
+#ifdef MAC
+				mac_ip6q_destroy(q6);
+#endif
+				free(q6, M_FRAG6);
+			}
+			IP6QB_UNLOCK(bucket);
 			icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 			    offset - sizeof(struct ip6_frag) +
 			    offsetof(struct ip6_frag, ip6f_offlg));
-			IP6QB_UNLOCK(bucket);
+			*mp = NULL;
 			return (IPPROTO_DONE);
 		}
 	} else if (fragoff + frgpartlen > IPV6_MAXPACKET) {
+		if (only_frag) {
+			TAILQ_REMOVE(head, q6, ip6q_tq);
+			V_ip6qb[bucket].count--;
+			atomic_subtract_int(&V_frag6_nfragpackets, 1);
+#ifdef MAC
+			mac_ip6q_destroy(q6);
+#endif
+			free(q6, M_FRAG6);
+		}
+		IP6QB_UNLOCK(bucket);
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 		    offset - sizeof(struct ip6_frag) +
 		    offsetof(struct ip6_frag, ip6f_offlg));
-		IP6QB_UNLOCK(bucket);
+		*mp = NULL;
 		return (IPPROTO_DONE);
 	}
 
@@ -584,20 +630,22 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 * If it is the first fragment, do the above check for each
 	 * fragment already stored in the reassembly queue.
 	 */
-	if (fragoff == 0) {
+	if (fragoff == 0 && !only_frag) {
 		TAILQ_FOREACH_SAFE(af6, &q6->ip6q_frags, ip6af_tq, af6tmp) {
 
-			if (q6->ip6q_unfrglen + af6->ip6af_off + af6->ip6af_frglen >
-			    IPV6_MAXPACKET) {
+			if (q6->ip6q_unfrglen + af6->ip6af_off +
+			    af6->ip6af_frglen > IPV6_MAXPACKET) {
 				struct ip6_hdr *ip6err;
 				struct mbuf *merr;
 				int erroff;
 
-				merr = IP6_REASS_MBUF(af6);
+				merr = af6->ip6af_m;
 				erroff = af6->ip6af_offset;
 
 				/* Dequeue the fragment. */
 				TAILQ_REMOVE(&q6->ip6q_frags, af6, ip6af_tq);
+				q6->ip6q_nfrag--;
+				atomic_subtract_int(&frag6_nfrags, 1);
 				free(af6, M_FRAG6);
 
 				/* Set a valid receive interface pointer. */
@@ -630,7 +678,7 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	ip6af->ip6af_off = fragoff;
 	ip6af->ip6af_frglen = frgpartlen;
 	ip6af->ip6af_offset = offset;
-	IP6_REASS_MBUF(ip6af) = m;
+	ip6af->ip6af_m = m;
 
 	if (only_frag) {
 		/*
@@ -682,6 +730,9 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	if (af6tmp != NULL) {
 		if (af6tmp->ip6af_off + af6tmp->ip6af_frglen -
 		    ip6af->ip6af_off > 0) {
+			if (af6tmp->ip6af_off != ip6af->ip6af_off ||
+			    af6tmp->ip6af_frglen != ip6af->ip6af_frglen)
+				frag6_freef(q6, bucket);
 			free(ip6af, M_FRAG6);
 			goto dropfrag;
 		}
@@ -689,6 +740,9 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	if (af6 != NULL) {
 		if (ip6af->ip6af_off + ip6af->ip6af_frglen -
 		    af6->ip6af_off > 0) {
+			if (af6->ip6af_off != ip6af->ip6af_off ||
+			    af6->ip6af_frglen != ip6af->ip6af_frglen)
+				frag6_freef(q6, bucket);
 			free(ip6af, M_FRAG6);
 			goto dropfrag;
 		}
@@ -719,6 +773,7 @@ postinsert:
 				frag6_freef(q6, bucket);
 			}
 			IP6QB_UNLOCK(bucket);
+			*mp = NULL;
 			return (IPPROTO_DONE);
 		}
 		plen += af6->ip6af_frglen;
@@ -730,25 +785,25 @@ postinsert:
 			frag6_freef(q6, bucket);
 		}
 		IP6QB_UNLOCK(bucket);
+		*mp = NULL;
 		return (IPPROTO_DONE);
 	}
 
 	/* Reassembly is complete; concatenate fragments. */
 	ip6af = TAILQ_FIRST(&q6->ip6q_frags);
-	t = m = IP6_REASS_MBUF(ip6af);
+	t = m = ip6af->ip6af_m;
 	TAILQ_REMOVE(&q6->ip6q_frags, ip6af, ip6af_tq);
 	while ((af6 = TAILQ_FIRST(&q6->ip6q_frags)) != NULL) {
 		m->m_pkthdr.csum_flags &=
-		    IP6_REASS_MBUF(af6)->m_pkthdr.csum_flags;
+		    af6->ip6af_m->m_pkthdr.csum_flags;
 		m->m_pkthdr.csum_data +=
-		    IP6_REASS_MBUF(af6)->m_pkthdr.csum_data;
+		    af6->ip6af_m->m_pkthdr.csum_data;
 
 		TAILQ_REMOVE(&q6->ip6q_frags, af6, ip6af_tq);
-		while (t->m_next)
-			t = t->m_next;
-		m_adj(IP6_REASS_MBUF(af6), af6->ip6af_offset);
-		m_demote_pkthdr(IP6_REASS_MBUF(af6));
-		m_cat(t, IP6_REASS_MBUF(af6));
+		t = m_last(t);
+		m_adj(af6->ip6af_m, af6->ip6af_offset);
+		m_demote_pkthdr(af6->ip6af_m);
+		m_cat(t, af6->ip6af_m);
 		free(af6, M_FRAG6);
 	}
 
@@ -769,15 +824,7 @@ postinsert:
 	V_ip6qb[bucket].count--;
 	atomic_subtract_int(&frag6_nfrags, q6->ip6q_nfrag);
 
-	if (ip6_deletefraghdr(m, offset, M_NOWAIT) != 0) {
-#ifdef MAC
-		mac_ip6q_destroy(q6);
-#endif
-		free(q6, M_FRAG6);
-		atomic_subtract_int(&V_frag6_nfragpackets, 1);
-
-		goto dropfrag;
-	}
+	ip6_deletefraghdr(m, offset, M_NOWAIT);
 
 	/* Set nxt(-hdr field value) to the original value. */
 	m_copyback(m, ip6_get_prevhdr(m, offset), sizeof(uint8_t),
@@ -820,6 +867,7 @@ postinsert:
 #ifdef RSS
 	/* Queue/dispatch for reprocessing. */
 	netisr_dispatch(NETISR_IPV6_DIRECT, m);
+	*mp = NULL;
 	return (IPPROTO_DONE);
 #endif
 
@@ -831,9 +879,11 @@ postinsert:
 
 dropfrag:
 	IP6QB_UNLOCK(bucket);
+dropfrag2:
 	in6_ifstat_inc(dstifp, ifs6_reass_fail);
 	IP6STAT_INC(ip6s_fragdropped);
 	m_freem(m);
+	*mp = NULL;
 	return (IPPROTO_DONE);
 }
 
@@ -935,7 +985,7 @@ frag6_init(void)
 	frag6_set_bucketsize();
 	for (bucket = 0; bucket < IP6REASS_NHASH; bucket++) {
 		TAILQ_INIT(IP6QB_HEAD(bucket));
-		mtx_init(&V_ip6qb[bucket].lock, "ip6qlock", NULL, MTX_DEF);
+		mtx_init(&V_ip6qb[bucket].lock, "ip6qb", NULL, MTX_DEF);
 		V_ip6qb[bucket].count = 0;
 	}
 	V_ip6qb_hashseed = arc4random();

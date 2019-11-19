@@ -12,11 +12,16 @@ MAN=	cli.lua.8 \
 	password.lua.8 \
 	screen.lua.8
 
+<<<<<<< HEAD
 FILESDIR=	/boot/lua
 
 FILES=	brand-trident.lua \
   brand-trueos.lua \
 	cli.lua \
+=======
+FILESDIR=	${LUAPATH}
+FILES=	cli.lua \
+>>>>>>> ec4371dcb1792d7f0806ffa9cc6212751c7f385e
 	color.lua \
 	config.lua \
 	core.lua \
