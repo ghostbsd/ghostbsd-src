@@ -1289,7 +1289,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		addr = et_dyn_addr;
 
 	/*
-	 * Construct auxargs table (used by the fixup routine)
+	 * Construct auxargs table (used by the copyout_auxargs routine)
 	 */
 	elf_auxargs = malloc(sizeof(Elf_Auxargs), M_TEMP, M_NOWAIT);
 	if (elf_auxargs == NULL) {
@@ -1324,15 +1324,13 @@ ret:
 #define	suword __CONCAT(suword, __ELF_WORD_SIZE)
 
 int
-__elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
+__elfN(freebsd_copyout_auxargs)(struct image_params *imgp, u_long *base)
 {
 	Elf_Auxargs *args = (Elf_Auxargs *)imgp->auxargs;
 	Elf_Auxinfo *argarray, *pos;
-	Elf_Addr *base, *auxbase;
+	u_long auxlen;
 	int error;
 
-	base = (Elf_Addr *)*stack_base;
-	auxbase = base + imgp->args->argc + 1 + imgp->args->envc + 1;
 	argarray = pos = malloc(AT_COUNT * sizeof(*pos), M_TEMP,
 	    M_WAITOK | M_ZERO);
 
@@ -1376,11 +1374,19 @@ __elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
 	imgp->auxargs = NULL;
 	KASSERT(pos - argarray <= AT_COUNT, ("Too many auxargs"));
 
-	error = copyout(argarray, auxbase, sizeof(*argarray) * AT_COUNT);
+	auxlen = sizeof(*argarray) * (pos - argarray);
+	*base -= auxlen;
+	error = copyout(argarray, (void *)*base, auxlen);
 	free(argarray, M_TEMP);
-	if (error != 0)
-		return (error);
+	return (error);
+}
 
+int
+__elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
+{
+	Elf_Addr *base;
+
+	base = (Elf_Addr *)*stack_base;
 	base--;
 	if (suword(base, imgp->args->argc) == -1)
 		return (EFAULT);
@@ -2229,7 +2235,7 @@ __elfN(note_thrmisc)(void *arg, struct sbuf *sb, size_t *sizep)
 	td = (struct thread *)arg;
 	if (sb != NULL) {
 		KASSERT(*sizep == sizeof(thrmisc), ("invalid size"));
-		bzero(&thrmisc._pad, sizeof(thrmisc._pad));
+		bzero(&thrmisc, sizeof(thrmisc));
 		strcpy(thrmisc.pr_tname, td->td_name);
 		sbuf_bcat(sb, &thrmisc, sizeof(thrmisc));
 	}

@@ -1045,6 +1045,9 @@ printcpuinfo(void)
 				       "\003RSBA"
 				       "\004SKIP_L1DFL_VME"
 				       "\005SSB_NO"
+				       "\006MDS_NO"
+				       "\010TSX_CTRL"
+				       "\011TAA_NO"
 				       );
 			}
 
@@ -1067,6 +1070,9 @@ printcpuinfo(void)
 				    "\001CLZERO"
 				    "\002IRPerf"
 				    "\003XSaveErPtr"
+				    "\005RDPRU"
+				    "\011MCOMMIT"
+				    "\012WBNOINVD"
 				    "\015IBPB"
 				    "\017IBRS"
 				    "\020STIBP"
@@ -2355,7 +2361,7 @@ print_svm_info(void)
 	       "\017<b14>"
 	       "\020V_VMSAVE_VMLOAD"
 	       "\021vGIF"
-	       "\022<b17>"
+	       "\022GMET"		/* Guest Mode Execute Trap */
 	       "\023<b18>"
 	       "\024<b19>"
 	       "\025<b20>"

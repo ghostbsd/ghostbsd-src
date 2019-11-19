@@ -197,6 +197,14 @@ void freebsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     else
       CmdArgs.push_back("elf64ltsmip_fbsd");
     break;
+  case llvm::Triple::riscv32:
+    CmdArgs.push_back("-m");
+    CmdArgs.push_back("elf32lriscv");
+    break;
+  case llvm::Triple::riscv64:
+    CmdArgs.push_back("-m");
+    CmdArgs.push_back("elf64lriscv");
+    break;
   default:
     break;
   }
@@ -408,6 +416,8 @@ llvm::ExceptionHandling FreeBSD::GetExceptionModel(const ArgList &Args) const {
 }
 
 bool FreeBSD::HasNativeLLVMSupport() const { return true; }
+
+bool FreeBSD::IsUnwindTablesDefault(const ArgList &Args) const { return true; }
 
 bool FreeBSD::isPIEDefault() const { return getSanitizerArgs().requiresPIE(); }
 

@@ -112,10 +112,10 @@ SYSCTL_INT(_vm, OID_AUTO, old_msync, CTLFLAG_RW, &old_msync, 0,
     "Use old (insecure) msync behavior");
 
 static int	vm_object_page_collect_flush(vm_object_t object, vm_page_t p,
-		    int pagerflags, int flags, boolean_t *clearobjflags,
+		    int pagerflags, int flags, boolean_t *allclean,
 		    boolean_t *eio);
 static boolean_t vm_object_page_remove_write(vm_page_t p, int flags,
-		    boolean_t *clearobjflags);
+		    boolean_t *allclean);
 static void	vm_object_qcollapse(vm_object_t object);
 static void	vm_object_vndeallocate(vm_object_t object);
 
@@ -224,8 +224,8 @@ vm_object_zinit(void *mem, int size, int flags)
 
 	/* These are true for any object that has been freed */
 	object->type = OBJT_DEAD;
-	object->ref_count = 0;
 	vm_radix_init(&object->rtree);
+	refcount_init(&object->ref_count, 0);
 	refcount_init(&object->paging_in_progress, 0);
 	refcount_init(&object->busy, 0);
 	object->resident_page_count = 0;
@@ -282,7 +282,8 @@ _vm_object_allocate(objtype_t type, vm_pindex_t size, vm_object_t object)
 	object->size = size;
 	object->domain.dr_policy = NULL;
 	object->generation = 1;
-	object->ref_count = 1;
+	object->cleangeneration = 1;
+	refcount_init(&object->ref_count, 1);
 	object->memattr = VM_MEMATTR_DEFAULT;
 	object->cred = NULL;
 	object->charge = 0;
@@ -444,9 +445,9 @@ vm_object_reference(vm_object_t object)
 {
 	if (object == NULL)
 		return;
-	VM_OBJECT_WLOCK(object);
+	VM_OBJECT_RLOCK(object);
 	vm_object_reference_locked(object);
-	VM_OBJECT_WUNLOCK(object);
+	VM_OBJECT_RUNLOCK(object);
 }
 
 /*
@@ -461,8 +462,8 @@ vm_object_reference_locked(vm_object_t object)
 {
 	struct vnode *vp;
 
-	VM_OBJECT_ASSERT_WLOCKED(object);
-	object->ref_count++;
+	VM_OBJECT_ASSERT_LOCKED(object);
+	refcount_acquire(&object->ref_count);
 	if (object->type == OBJT_VNODE) {
 		vp = object->handle;
 		vref(vp);
@@ -477,24 +478,16 @@ vm_object_vndeallocate(vm_object_t object)
 {
 	struct vnode *vp = (struct vnode *) object->handle;
 
-	VM_OBJECT_ASSERT_WLOCKED(object);
 	KASSERT(object->type == OBJT_VNODE,
 	    ("vm_object_vndeallocate: not a vnode object"));
 	KASSERT(vp != NULL, ("vm_object_vndeallocate: missing vp"));
-#ifdef INVARIANTS
-	if (object->ref_count == 0) {
-		vn_printf(vp, "vm_object_vndeallocate ");
-		panic("vm_object_vndeallocate: bad object reference count");
-	}
-#endif
 
-	if (!umtx_shm_vnobj_persistent && object->ref_count == 1)
+	if (refcount_release(&object->ref_count) &&
+	    !umtx_shm_vnobj_persistent)
 		umtx_shm_object_terminated(object);
 
-	object->ref_count--;
-
+	VM_OBJECT_RUNLOCK(object);
 	/* vrele may need the vnode lock. */
-	VM_OBJECT_WUNLOCK(object);
 	vrele(vp);
 }
 
@@ -513,24 +506,32 @@ void
 vm_object_deallocate(vm_object_t object)
 {
 	vm_object_t temp;
+	bool released;
 
 	while (object != NULL) {
-		VM_OBJECT_WLOCK(object);
+		VM_OBJECT_RLOCK(object);
 		if (object->type == OBJT_VNODE) {
 			vm_object_vndeallocate(object);
 			return;
 		}
 
+		/*
+		 * If the reference count goes to 0 we start calling
+		 * vm_object_terminate() on the object chain.  A ref count
+		 * of 1 may be a special case depending on the shadow count
+		 * being 0 or 1.  These cases require a write lock on the
+		 * object.
+		 */
+		released = refcount_release_if_gt(&object->ref_count, 2);
+		VM_OBJECT_RUNLOCK(object);
+		if (released)
+			return;
+
+		VM_OBJECT_WLOCK(object);
 		KASSERT(object->ref_count != 0,
 			("vm_object_deallocate: object deallocated too many times: %d", object->type));
 
-		/*
-		 * If the reference count goes to 0 we start calling
-		 * vm_object_terminate() on the object chain.
-		 * A ref count of 1 may be a special case depending on the
-		 * shadow count being 0 or 1.
-		 */
-		object->ref_count--;
+		refcount_release(&object->ref_count);
 		if (object->ref_count > 1) {
 			VM_OBJECT_WUNLOCK(object);
 			return;
@@ -558,7 +559,7 @@ vm_object_deallocate(vm_object_t object)
 					/*
 					 * Avoid a potential deadlock.
 					 */
-					object->ref_count++;
+					refcount_acquire(&object->ref_count);
 					VM_OBJECT_WUNLOCK(object);
 					/*
 					 * More likely than not the thread
@@ -580,7 +581,7 @@ vm_object_deallocate(vm_object_t object)
 				    (robject->type == OBJT_DEFAULT ||
 				     robject->type == OBJT_SWAP)) {
 
-					robject->ref_count++;
+					refcount_acquire(&robject->ref_count);
 retry:
 					if (REFCOUNT_COUNT(robject->paging_in_progress) > 0) {
 						VM_OBJECT_WUNLOCK(object);
@@ -769,7 +770,7 @@ vm_object_terminate(vm_object_t object)
  * page should be flushed, and FALSE otherwise.
  */
 static boolean_t
-vm_object_page_remove_write(vm_page_t p, int flags, boolean_t *clearobjflags)
+vm_object_page_remove_write(vm_page_t p, int flags, boolean_t *allclean)
 {
 
 	vm_page_assert_busied(p);
@@ -780,7 +781,7 @@ vm_object_page_remove_write(vm_page_t p, int flags, boolean_t *clearobjflags)
 	 * cleared in this case so we do not have to set them.
 	 */
 	if ((flags & OBJPC_NOSYNC) != 0 && (p->aflags & PGA_NOSYNC) != 0) {
-		*clearobjflags = FALSE;
+		*allclean = FALSE;
 		return (FALSE);
 	} else {
 		pmap_remove_write(p);
@@ -813,16 +814,11 @@ vm_object_page_clean(vm_object_t object, vm_ooffset_t start, vm_ooffset_t end,
 	vm_page_t np, p;
 	vm_pindex_t pi, tend, tstart;
 	int curgeneration, n, pagerflags;
-	boolean_t clearobjflags, eio, res;
+	boolean_t eio, res, allclean;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
 
-	/*
-	 * The OBJ_MIGHTBEDIRTY flag is only set for OBJT_VNODE
-	 * objects.  The check below prevents the function from
-	 * operating on non-vnode objects.
-	 */
-	if ((object->flags & OBJ_MIGHTBEDIRTY) == 0 ||
+	if (object->type != OBJT_VNODE || !vm_object_mightbedirty(object) ||
 	    object->resident_page_count == 0)
 		return (TRUE);
 
@@ -832,7 +828,7 @@ vm_object_page_clean(vm_object_t object, vm_ooffset_t start, vm_ooffset_t end,
 
 	tstart = OFF_TO_IDX(start);
 	tend = (end == 0) ? object->size : OFF_TO_IDX(end + PAGE_MASK);
-	clearobjflags = tstart == 0 && tend >= object->size;
+	allclean = tstart == 0 && tend >= object->size;
 	res = TRUE;
 
 rescan:
@@ -846,32 +842,26 @@ rescan:
 		if (vm_page_none_valid(p))
 			continue;
 		if (vm_page_busy_acquire(p, VM_ALLOC_WAITFAIL) == 0) {
-			if (object->generation != curgeneration) {
-				if ((flags & OBJPC_SYNC) != 0)
-					goto rescan;
-				else
-					clearobjflags = FALSE;
-			}
+			if (object->generation != curgeneration &&
+			    (flags & OBJPC_SYNC) != 0)
+				goto rescan;
 			np = vm_page_find_least(object, pi);
 			continue;
 		}
-		if (!vm_object_page_remove_write(p, flags, &clearobjflags)) {
+		if (!vm_object_page_remove_write(p, flags, &allclean)) {
 			vm_page_xunbusy(p);
 			continue;
 		}
 
 		n = vm_object_page_collect_flush(object, p, pagerflags,
-		    flags, &clearobjflags, &eio);
+		    flags, &allclean, &eio);
 		if (eio) {
 			res = FALSE;
-			clearobjflags = FALSE;
+			allclean = FALSE;
 		}
-		if (object->generation != curgeneration) {
-			if ((flags & OBJPC_SYNC) != 0)
-				goto rescan;
-			else
-				clearobjflags = FALSE;
-		}
+		if (object->generation != curgeneration &&
+		    (flags & OBJPC_SYNC) != 0)
+			goto rescan;
 
 		/*
 		 * If the VOP_PUTPAGES() did a truncated write, so
@@ -887,7 +877,7 @@ rescan:
 		 */
 		if (n == 0) {
 			n = 1;
-			clearobjflags = FALSE;
+			allclean = FALSE;
 		}
 		np = vm_page_find_least(object, pi + n);
 	}
@@ -895,14 +885,14 @@ rescan:
 	VOP_FSYNC(vp, (pagerflags & VM_PAGER_PUT_SYNC) ? MNT_WAIT : 0);
 #endif
 
-	if (clearobjflags)
-		vm_object_clear_flag(object, OBJ_MIGHTBEDIRTY);
+	if (allclean)
+		object->cleangeneration = curgeneration;
 	return (res);
 }
 
 static int
 vm_object_page_collect_flush(vm_object_t object, vm_page_t p, int pagerflags,
-    int flags, boolean_t *clearobjflags, boolean_t *eio)
+    int flags, boolean_t *allclean, boolean_t *eio)
 {
 	vm_page_t ma[vm_pageout_page_count], p_first, tp;
 	int count, i, mreq, runlen;
@@ -918,7 +908,7 @@ vm_object_page_collect_flush(vm_object_t object, vm_page_t p, int pagerflags,
 		tp = vm_page_next(tp);
 		if (tp == NULL || vm_page_tryxbusy(tp) == 0)
 			break;
-		if (!vm_object_page_remove_write(tp, flags, clearobjflags)) {
+		if (!vm_object_page_remove_write(tp, flags, allclean)) {
 			vm_page_xunbusy(tp);
 			break;
 		}
@@ -928,7 +918,7 @@ vm_object_page_collect_flush(vm_object_t object, vm_page_t p, int pagerflags,
 		tp = vm_page_prev(p_first);
 		if (tp == NULL || vm_page_tryxbusy(tp) == 0)
 			break;
-		if (!vm_object_page_remove_write(tp, flags, clearobjflags)) {
+		if (!vm_object_page_remove_write(tp, flags, allclean)) {
 			vm_page_xunbusy(tp);
 			break;
 		}
@@ -993,7 +983,7 @@ vm_object_sync(vm_object_t object, vm_ooffset_t offset, vm_size_t size,
 	 * I/O.
 	 */
 	if (object->type == OBJT_VNODE &&
-	    (object->flags & OBJ_MIGHTBEDIRTY) != 0 &&
+	    vm_object_mightbedirty(object) != 0 &&
 	    ((vp = object->handle)->v_vflag & VV_NOSYNC) == 0) {
 		VM_OBJECT_WUNLOCK(object);
 		(void) vn_start_write(vp, &mp, V_WAIT);
@@ -1223,15 +1213,15 @@ vm_object_shadow(
 	 * Don't create the new object if the old object isn't shared.
 	 */
 	if (source != NULL) {
-		VM_OBJECT_WLOCK(source);
+		VM_OBJECT_RLOCK(source);
 		if (source->ref_count == 1 &&
 		    source->handle == NULL &&
 		    (source->type == OBJT_DEFAULT ||
 		     source->type == OBJT_SWAP)) {
-			VM_OBJECT_WUNLOCK(source);
+			VM_OBJECT_RUNLOCK(source);
 			return;
 		}
-		VM_OBJECT_WUNLOCK(source);
+		VM_OBJECT_RUNLOCK(source);
 	}
 
 	/*
@@ -1822,7 +1812,7 @@ vm_object_collapse(vm_object_t object)
 			 * Drop the reference count on backing_object. Since
 			 * its ref_count was at least 2, it will not vanish.
 			 */
-			backing_object->ref_count--;
+			refcount_release(&backing_object->ref_count);
 			VM_OBJECT_WUNLOCK(backing_object);
 			counter_u64_add(object_bypasses, 1);
 		}
@@ -2130,18 +2120,13 @@ void
 vm_object_set_writeable_dirty(vm_object_t object)
 {
 
-	VM_OBJECT_ASSERT_WLOCKED(object);
-	if (object->type != OBJT_VNODE) {
-		if ((object->flags & OBJ_TMPFS_NODE) != 0) {
-			KASSERT(object->type == OBJT_SWAP, ("non-swap tmpfs"));
-			vm_object_set_flag(object, OBJ_TMPFS_DIRTY);
-		}
+	VM_OBJECT_ASSERT_LOCKED(object);
+
+	/* Only set for vnodes & tmpfs */
+	if (object->type != OBJT_VNODE &&
+	    (object->flags & OBJ_TMPFS_NODE) == 0)
 		return;
-	}
-	object->generation++;
-	if ((object->flags & OBJ_MIGHTBEDIRTY) != 0)
-		return;
-	vm_object_set_flag(object, OBJ_MIGHTBEDIRTY);
+	atomic_add_int(&object->generation, 1);
 }
 
 /*

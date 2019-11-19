@@ -384,6 +384,8 @@
         ..
         libdevdctl
         ..
+        libexecinfo
+        ..
         libkvm
         ..
         libmp
@@ -1061,6 +1063,8 @@
         uudecode
         ..
         uuencode
+        ..
+        unifdef
         ..
         uniq
         ..

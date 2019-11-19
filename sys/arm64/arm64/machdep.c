@@ -134,7 +134,7 @@ pan_setup(void)
 	uint64_t id_aa64mfr1;
 
 	id_aa64mfr1 = READ_SPECIALREG(id_aa64mmfr1_el1);
-	if (ID_AA64MMFR1_PAN(id_aa64mfr1) != ID_AA64MMFR1_PAN_NONE)
+	if (ID_AA64MMFR1_PAN_VAL(id_aa64mfr1) != ID_AA64MMFR1_PAN_NONE)
 		has_pan = 1;
 }
 
@@ -281,17 +281,60 @@ set_fpregs(struct thread *td, struct fpreg *regs)
 int
 fill_dbregs(struct thread *td, struct dbreg *regs)
 {
+	struct debug_monitor_state *monitor;
+	int count, i;
+	uint8_t debug_ver, nbkpts;
 
-	printf("ARM64TODO: fill_dbregs");
-	return (EDOOFUS);
+	memset(regs, 0, sizeof(*regs));
+
+	extract_user_id_field(ID_AA64DFR0_EL1, ID_AA64DFR0_DebugVer_SHIFT,
+	    &debug_ver);
+	extract_user_id_field(ID_AA64DFR0_EL1, ID_AA64DFR0_BRPs_SHIFT,
+	    &nbkpts);
+
+	/*
+	 * The BRPs field contains the number of breakpoints - 1. Armv8-A
+	 * allows the hardware to provide 2-16 breakpoints so this won't
+	 * overflow an 8 bit value.
+	 */
+	count = nbkpts + 1;
+
+	regs->db_info = debug_ver;
+	regs->db_info <<= 8;
+	regs->db_info |= count;
+
+	monitor = &td->td_pcb->pcb_dbg_regs;
+	if ((monitor->dbg_flags & DBGMON_ENABLED) != 0) {
+		for (i = 0; i < count; i++) {
+			regs->db_regs[i].dbr_addr = monitor->dbg_bvr[i];
+			regs->db_regs[i].dbr_ctrl = monitor->dbg_bcr[i];
+		}
+	}
+
+	return (0);
 }
 
 int
 set_dbregs(struct thread *td, struct dbreg *regs)
 {
+	struct debug_monitor_state *monitor;
+	int count;
+	int i;
 
-	printf("ARM64TODO: set_dbregs");
-	return (EDOOFUS);
+	monitor = &td->td_pcb->pcb_dbg_regs;
+	count = 0;
+	monitor->dbg_enable_count = 0;
+	for (i = 0; i < DBG_BRP_MAX; i++) {
+		/* TODO: Check these values */
+		monitor->dbg_bvr[i] = regs->db_regs[i].dbr_addr;
+		monitor->dbg_bcr[i] = regs->db_regs[i].dbr_ctrl;
+		if ((monitor->dbg_bcr[i] & 1) != 0)
+			monitor->dbg_enable_count++;
+	}
+	if (monitor->dbg_enable_count > 0)
+		monitor->dbg_flags |= DBGMON_ENABLED;
+
+	return (0);
 }
 
 #ifdef COMPAT_FREEBSD32
@@ -441,7 +484,8 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 
 	spsr = mcp->mc_gpregs.gp_spsr;
 	if ((spsr & PSR_M_MASK) != PSR_M_EL0t ||
-	    (spsr & (PSR_AARCH32 | PSR_F | PSR_I | PSR_A | PSR_D)) != 0)
+	    (spsr & PSR_AARCH32) != 0 ||
+	    (spsr & PSR_DAIF) != (td->td_frame->tf_spsr & PSR_DAIF))
 		return (EINVAL); 
 
 	memcpy(tf->tf_x, mcp->mc_gpregs.gp_x, sizeof(tf->tf_x));
@@ -747,15 +791,12 @@ init_proc0(vm_offset_t kstack)
 	thread0.td_kstack = kstack;
 	thread0.td_kstack_pages = KSTACK_PAGES;
 	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
-	    thread0.td_kstack_pages * KSTACK_PAGES) - 1;
+	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
 	thread0.td_pcb->pcb_fpflags = 0;
 	thread0.td_pcb->pcb_fpusaved = &thread0.td_pcb->pcb_fpustate;
 	thread0.td_pcb->pcb_vfpcpu = UINT_MAX;
 	thread0.td_frame = &proc0_tf;
 	pcpup->pc_curpcb = thread0.td_pcb;
-
-	/* Set the base address of translation table 0. */
-	thread0.td_proc->p_md.md_l0addr = READ_SPECIALREG(ttbr0_el1);
 }
 
 typedef struct {
@@ -922,6 +963,16 @@ try_load_dtb(caddr_t kmdp)
 	vm_offset_t dtbp;
 
 	dtbp = MD_FETCH(kmdp, MODINFOMD_DTBP, vm_offset_t);
+
+#if defined(FDT_DTB_STATIC)
+	/*
+	 * In case the device tree blob was not retrieved (from metadata) try
+	 * to use the statically embedded one.
+	 */
+	if (dtbp == 0)
+		dtbp = (vm_offset_t)&fdt_static_dtb;
+#endif
+
 	if (dtbp == (vm_offset_t)NULL) {
 		printf("ERROR loading DTB\n");
 		return;
@@ -1025,6 +1076,26 @@ cache_setup(void)
 	}
 }
 
+static vm_offset_t
+freebsd_parse_boot_param(struct arm64_bootparams *abp)
+{
+	vm_offset_t lastaddr;
+	void *kmdp;
+	static char *loader_envp;
+
+	preload_metadata = (caddr_t)(uintptr_t)(abp->modulep);
+	kmdp = preload_search_by_type("elf kernel");
+	if (kmdp == NULL)
+		return (0);
+
+	boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
+	loader_envp = MD_FETCH(kmdp, MODINFOMD_ENVP, char *);
+	init_static_kenv(loader_envp, 0);
+	lastaddr = MD_FETCH(kmdp, MODINFOMD_KERNEND, vm_offset_t);
+
+	return (lastaddr);
+}
+
 void
 initarm(struct arm64_bootparams *abp)
 {
@@ -1040,26 +1111,31 @@ initarm(struct arm64_bootparams *abp)
 	caddr_t kmdp;
 	bool valid;
 
-	/* Set the module data location */
-	preload_metadata = (caddr_t)(uintptr_t)(abp->modulep);
+	if ((abp->modulep & VM_MIN_KERNEL_ADDRESS) ==
+	    VM_MIN_KERNEL_ADDRESS)
+		/* Booted from loader. */
+		lastaddr = freebsd_parse_boot_param(abp);
+#ifdef LINUX_BOOT_ABI
+	else
+		/* Booted from U-Boot. */
+		lastaddr = linux_parse_boot_param(abp);
+#endif
 
 	/* Find the kernel address */
 	kmdp = preload_search_by_type("elf kernel");
 	if (kmdp == NULL)
 		kmdp = preload_search_by_type("elf64 kernel");
 
-	boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
-	init_static_kenv(MD_FETCH(kmdp, MODINFOMD_ENVP, char *), 0);
 	link_elf_ireloc(kmdp);
 
 #ifdef FDT
 	try_load_dtb(kmdp);
+#ifdef LINUX_BOOT_ABI
+	parse_bootargs(&lastaddr, abp);
+#endif
 #endif
 
 	efi_systbl_phys = MD_FETCH(kmdp, MODINFOMD_FW_HANDLE, vm_paddr_t);
-
-	/* Find the address to start allocating from */
-	lastaddr = MD_FETCH(kmdp, MODINFOMD_KERNEND, vm_offset_t);
 
 	/* Load the physical memory ranges */
 	efihdr = (struct efi_map_header *)preload_search_info(kmdp,
@@ -1150,7 +1226,7 @@ dbg_init(void)
 {
 
 	/* Clear OS lock */
-	WRITE_SPECIALREG(OSLAR_EL1, 0);
+	WRITE_SPECIALREG(oslar_el1, 0);
 
 	/* This permits DDB to use debug registers for watchpoints. */
 	dbg_monitor_init();

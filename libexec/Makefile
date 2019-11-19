@@ -10,6 +10,7 @@ SUBDIR=	${_atf} \
 	${_dma} \
 	dhcpcd-hooks \
 	dhcpcd-run-hooks \
+	flua \
 	getty \
 	${_mail.local} \
 	${_makewhatis.local} \
@@ -76,6 +77,7 @@ _tftp-proxy=	tftp-proxy
 
 .if !defined(NO_PIC) && !defined(NO_RTLD)
 _rtld-elf=	rtld-elf
+SUBDIR.${MK_LIB32}+=	rtld-elf32
 .endif
 
 .if ${MK_RBOOTD} != "no"
