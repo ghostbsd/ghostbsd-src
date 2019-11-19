@@ -840,18 +840,26 @@ vdev_indirect_remap(vdev_t *vd, uint64_t offset, uint64_t asize, void *arg)
 	list_t stack;
 	spa_t *spa = vd->spa;
 	zio_t *zio = arg;
+	remap_segment_t *rs;
 
 	list_create(&stack, sizeof (remap_segment_t),
 	    offsetof(remap_segment_t, rs_node));
 
-	for (remap_segment_t *rs = rs_alloc(vd, offset, asize, 0);
-	    rs != NULL; rs = list_remove_head(&stack)) {
+	rs = rs_alloc(vd, offset, asize, 0);
+	if (rs == NULL) {
+		printf("vdev_indirect_remap: out of memory.\n");
+		zio->io_error = ENOMEM;
+	}
+	for ( ; rs != NULL; rs = list_remove_head(&stack)) {
 		vdev_t *v = rs->rs_vd;
 		uint64_t num_entries = 0;
 		/* vdev_indirect_mapping_t *vim = v->v_mapping; */
 		vdev_indirect_mapping_entry_phys_t *mapping =
 		    vdev_indirect_mapping_duplicate_adjacent_entries(v,
 		    rs->rs_offset, rs->rs_asize, &num_entries);
+
+		if (num_entries == 0)
+			zio->io_error = ENOMEM;
 
 		for (uint64_t i = 0; i < num_entries; i++) {
 			vdev_indirect_mapping_entry_phys_t *m = &mapping[i];
@@ -865,9 +873,18 @@ vdev_indirect_remap(vdev_t *vd, uint64_t offset, uint64_t asize, void *arg)
 			vdev_t *dst_v = vdev_lookup_top(spa, dst_vdev);
 
 			if (dst_v->v_read == vdev_indirect_read) {
-				list_insert_head(&stack,
-				    rs_alloc(dst_v, dst_offset + inner_offset,
-				    inner_size, rs->rs_split_offset));
+				remap_segment_t *o;
+
+				o = rs_alloc(dst_v, dst_offset + inner_offset,
+				    inner_size, rs->rs_split_offset);
+				if (o == NULL) {
+					printf("vdev_indirect_remap: "
+					    "out of memory.\n");
+					zio->io_error = ENOMEM;
+					break;
+				}
+
+				list_insert_head(&stack, o);
 			}
 			vdev_indirect_gather_splits(rs->rs_split_offset, dst_v,
 			    dst_offset + inner_offset,
@@ -1085,7 +1102,7 @@ vdev_init_from_nvlist(const unsigned char *nvlist, vdev_t *pvdev,
     vdev_t **vdevp, int is_newer)
 {
 	int rc;
-	uint64_t guid, id, ashift, nparity;
+	uint64_t guid, id, ashift, asize, nparity;
 	const char *type;
 	const char *path;
 	vdev_t *vdev, *kid;
@@ -1163,6 +1180,11 @@ vdev_init_from_nvlist(const unsigned char *nvlist, vdev_t *pvdev,
 			vdev->v_ashift = ashift;
 		} else {
 			vdev->v_ashift = 0;
+		}
+		if (nvlist_find(nvlist, ZPOOL_CONFIG_ASIZE,
+		    DATA_TYPE_UINT64, NULL, &asize) == 0) {
+			vdev->v_psize = asize +
+			    VDEV_LABEL_START_SIZE + VDEV_LABEL_END_SIZE;
 		}
 		if (nvlist_find(nvlist, ZPOOL_CONFIG_NPARITY,
 			DATA_TYPE_UINT64, NULL, &nparity) == 0) {
@@ -1530,7 +1552,6 @@ vdev_probe(vdev_phys_read_t *_read, void *read_priv, spa_t **spap)
 	uint64_t guid;
 	uint64_t best_txg = 0;
 	uint64_t pool_txg, pool_guid;
-	uint64_t psize;
 	const char *pool_name;
 	const unsigned char *vdevs;
 	const unsigned char *features;
@@ -1545,17 +1566,17 @@ vdev_probe(vdev_phys_read_t *_read, void *read_priv, spa_t **spap)
 	memset(&vtmp, 0, sizeof(vtmp));
 	vtmp.v_phys_read = _read;
 	vtmp.v_read_priv = read_priv;
-	psize = P2ALIGN(ldi_get_size(read_priv),
+	vtmp.v_psize = P2ALIGN(ldi_get_size(read_priv),
 	    (uint64_t)sizeof (vdev_label_t));
 
 	/* Test for minimum pool size. */
-	if (psize < SPA_MINDEVSIZE)
+	if (vtmp.v_psize < SPA_MINDEVSIZE)
 		return (EIO);
 
 	tmp_label = zfs_alloc(sizeof(vdev_phys_t));
 
 	for (l = 0; l < VDEV_LABELS; l++) {
-		off = vdev_label_offset(psize, l,
+		off = vdev_label_offset(vtmp.v_psize, l,
 		    offsetof(vdev_label_t, vl_vdev_phys));
 
 		BP_ZERO(&bp);
@@ -1578,8 +1599,20 @@ vdev_probe(vdev_phys_read_t *_read, void *read_priv, spa_t **spap)
 			continue;
 
 		if (best_txg <= pool_txg) {
+			uint64_t asize;
+
 			best_txg = pool_txg;
 			memcpy(vdev_label, tmp_label, sizeof (vdev_phys_t));
+
+			/*
+			 * Use asize from pool config. We need this
+			 * because we can get bad value from BIOS.
+			 */
+			if (nvlist_find(nvlist, ZPOOL_CONFIG_ASIZE,
+			    DATA_TYPE_UINT64, NULL, &asize) == 0) {
+				vtmp.v_psize = asize +
+				    VDEV_LABEL_START_SIZE + VDEV_LABEL_END_SIZE;
+			}
 		}
 	}
 
@@ -1699,6 +1732,7 @@ vdev_probe(vdev_phys_read_t *_read, void *read_priv, spa_t **spap)
 		vdev->v_phys_read = _read;
 		vdev->v_read_priv = read_priv;
 		vdev->v_state = VDEV_STATE_HEALTHY;
+		vdev->v_psize = vtmp.v_psize;
 	} else {
 		printf("ZFS: inconsistent nvlist contents\n");
 		return (EIO);
@@ -1718,7 +1752,7 @@ vdev_probe(vdev_phys_read_t *_read, void *read_priv, spa_t **spap)
 	up = (const struct uberblock *)upbuf;
 	for (l = 0; l < VDEV_LABELS; l++) {
 		for (i = 0; i < VDEV_UBERBLOCK_COUNT(vdev); i++) {
-			off = vdev_label_offset(psize, l,
+			off = vdev_label_offset(vdev->v_psize, l,
 			    VDEV_UBERBLOCK_OFFSET(vdev, i));
 			BP_ZERO(&bp);
 			DVA_SET_OFFSET(&bp.blk_dva[0], off);
