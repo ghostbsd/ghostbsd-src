@@ -256,8 +256,12 @@ retry:
 		object->un_pager.vnp.vnp_size = size;
 		object->un_pager.vnp.writemappings = 0;
 		object->domain.dr_policy = vnode_domainset;
-
 		object->handle = handle;
+		if ((vp->v_vflag & VV_VMSIZEVNLOCK) != 0) {
+			VM_OBJECT_WLOCK(object);
+			vm_object_set_flag(object, OBJ_SIZEVNLOCK);
+			VM_OBJECT_WUNLOCK(object);
+		}
 		VI_LOCK(vp);
 		if (vp->v_object != NULL) {
 			/*
@@ -429,7 +433,16 @@ vnode_pager_setsize(struct vnode *vp, vm_ooffset_t nsize)
 
 	if ((object = vp->v_object) == NULL)
 		return;
-/* 	ASSERT_VOP_ELOCKED(vp, "vnode_pager_setsize and not locked vnode"); */
+#ifdef DEBUG_VFS_LOCKS
+	{
+		struct mount *mp;
+
+		mp = vp->v_mount;
+		if (mp != NULL && (mp->mnt_kern_flag & MNTK_VMSETSIZE_BUG) == 0)
+			assert_vop_elocked(vp,
+			    "vnode_pager_setsize and not locked vnode");
+	}
+#endif
 	VM_OBJECT_WLOCK(object);
 	if (object->type == OBJT_DEAD) {
 		VM_OBJECT_WUNLOCK(object);
@@ -1130,6 +1143,8 @@ vnode_pager_generic_getpages_done(struct buf *bp)
 
 		nextoff = tfoff + PAGE_SIZE;
 		mt = bp->b_pages[i];
+		if (mt == bogus_page)
+			continue;
 
 		if (nextoff <= object->un_pager.vnp.vnp_size) {
 			/*
