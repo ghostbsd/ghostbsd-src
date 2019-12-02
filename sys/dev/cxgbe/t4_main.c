@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_kern_tls.h"
 #include "opt_ratelimit.h"
 #include "opt_rss.h"
 
@@ -65,6 +66,9 @@ __FBSDID("$FreeBSD$");
 #endif
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#ifdef KERN_TLS
+#include <netinet/tcp_seq.h>
+#endif
 #if defined(__i386__) || defined(__amd64__)
 #include <machine/md_var.h>
 #include <machine/cputypes.h>
@@ -229,7 +233,7 @@ static void cxgbe_init(void *);
 static int cxgbe_ioctl(struct ifnet *, unsigned long, caddr_t);
 static int cxgbe_transmit(struct ifnet *, struct mbuf *);
 static void cxgbe_qflush(struct ifnet *);
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 static int cxgbe_snd_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
     struct m_snd_tag **);
 static int cxgbe_snd_tag_modify(struct m_snd_tag *,
@@ -576,6 +580,28 @@ SYSCTL_INT(_hw_cxgbe, OID_AUTO, cop_managed_offloading, CTLFLAG_RDTUN,
     "COP (Connection Offload Policy) controls all TOE offload");
 #endif
 
+#ifdef KERN_TLS
+/*
+ * This enables KERN_TLS for all adapters if set.
+ */
+static int t4_kern_tls = 0;
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, kern_tls, CTLFLAG_RDTUN, &t4_kern_tls, 0,
+    "Enable KERN_TLS mode for all supported adapters");
+
+SYSCTL_NODE(_hw_cxgbe, OID_AUTO, tls, CTLFLAG_RD, 0,
+    "cxgbe(4) KERN_TLS parameters");
+
+static int t4_tls_inline_keys = 0;
+SYSCTL_INT(_hw_cxgbe_tls, OID_AUTO, inline_keys, CTLFLAG_RDTUN,
+    &t4_tls_inline_keys, 0,
+    "Always pass TLS keys in work requests (1) or attempt to store TLS keys "
+    "in card memory.");
+
+static int t4_tls_combo_wrs = 0;
+SYSCTL_INT(_hw_cxgbe_tls, OID_AUTO, combo_wrs, CTLFLAG_RDTUN, &t4_tls_combo_wrs,
+    0, "Attempt to combine TCB field updates with TLS record work requests.");
+#endif
+
 /* Functions used by VIs to obtain unique MAC addresses for each VI. */
 static int vi_mac_funcs[] = {
 	FW_VI_FUNC_ETH,
@@ -652,10 +678,12 @@ static int sysctl_qsize_rxq(SYSCTL_HANDLER_ARGS);
 static int sysctl_qsize_txq(SYSCTL_HANDLER_ARGS);
 static int sysctl_pause_settings(SYSCTL_HANDLER_ARGS);
 static int sysctl_fec(SYSCTL_HANDLER_ARGS);
+static int sysctl_module_fec(SYSCTL_HANDLER_ARGS);
 static int sysctl_autoneg(SYSCTL_HANDLER_ARGS);
 static int sysctl_handle_t4_reg64(SYSCTL_HANDLER_ARGS);
 static int sysctl_temperature(SYSCTL_HANDLER_ARGS);
 static int sysctl_vdd(SYSCTL_HANDLER_ARGS);
+static int sysctl_reset_sensor(SYSCTL_HANDLER_ARGS);
 static int sysctl_loadavg(SYSCTL_HANDLER_ARGS);
 static int sysctl_cctrl(SYSCTL_HANDLER_ARGS);
 static int sysctl_cim_ibq_obq(SYSCTL_HANDLER_ARGS);
@@ -1010,6 +1038,8 @@ t4_attach(device_t dev)
 
 	sc->policy = NULL;
 	rw_init(&sc->policy_lock, "connection offload policy");
+
+	callout_init(&sc->ktls_tick, 1);
 
 	rc = t4_map_bars_0_and_4(sc);
 	if (rc != 0)
@@ -1585,6 +1615,7 @@ t4_detach_common(device_t dev)
 	free(sc->tt.tls_rx_ports, M_CXGBE);
 	t4_destroy_dma_tag(sc);
 
+	callout_drain(&sc->ktls_tick);
 	callout_drain(&sc->sfl_callout);
 	if (mtx_initialized(&sc->tids.ftid_lock)) {
 		mtx_destroy(&sc->tids.ftid_lock);
@@ -1663,18 +1694,20 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 	ifp->if_transmit = cxgbe_transmit;
 	ifp->if_qflush = cxgbe_qflush;
 	ifp->if_get_counter = cxgbe_get_counter;
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 	ifp->if_snd_tag_alloc = cxgbe_snd_tag_alloc;
 	ifp->if_snd_tag_modify = cxgbe_snd_tag_modify;
 	ifp->if_snd_tag_query = cxgbe_snd_tag_query;
 	ifp->if_snd_tag_free = cxgbe_snd_tag_free;
+#endif
+#ifdef RATELIMIT
 	ifp->if_ratelimit_query = cxgbe_ratelimit_query;
 #endif
 
 	ifp->if_capabilities = T4_CAP;
 	ifp->if_capenable = T4_CAP_ENABLE;
 #ifdef TCP_OFFLOAD
-	if (vi->nofldrxq != 0)
+	if (vi->nofldrxq != 0 && (vi->pi->adapter->flags & KERN_TLS_OK) == 0)
 		ifp->if_capabilities |= IFCAP_TOE;
 #endif
 #ifdef RATELIMIT
@@ -1693,6 +1726,12 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 		ifp->if_hw_tsomaxsegcount = TX_SGL_SEGS_EO_TSO;
 #endif
 	ifp->if_hw_tsomaxsegsize = 65536;
+#ifdef KERN_TLS
+	if (vi->pi->adapter->flags & KERN_TLS_OK) {
+		ifp->if_capabilities |= IFCAP_TXTLS;
+		ifp->if_capenable |= IFCAP_TXTLS;
+	}
+#endif
 
 	ether_ifattach(ifp, vi->hw_addr);
 #ifdef DEV_NETMAP
@@ -2001,6 +2040,11 @@ cxgbe_ioctl(struct ifnet *ifp, unsigned long cmd, caddr_t data)
 		if (mask & IFCAP_NOMAP)
 			ifp->if_capenable ^= IFCAP_NOMAP;
 
+#ifdef KERN_TLS
+		if (mask & IFCAP_TXTLS)
+			ifp->if_capenable ^= (mask & IFCAP_TXTLS);
+#endif
+
 #ifdef VLAN_CAPABILITIES
 		VLAN_CAPABILITIES(ifp);
 #endif
@@ -2061,7 +2105,7 @@ cxgbe_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	M_ASSERTPKTHDR(m);
 	MPASS(m->m_nextpkt == NULL);	/* not quite ready for this yet */
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 	if (m->m_pkthdr.csum_flags & CSUM_SND_TAG)
 		MPASS(m->m_pkthdr.snd_tag->ifp == ifp);
 #endif
@@ -2239,7 +2283,7 @@ cxgbe_get_counter(struct ifnet *ifp, ift_counter c)
 	}
 }
 
-#ifdef RATELIMIT
+#if defined(KERN_TLS) || defined(RATELIMIT)
 void
 cxgbe_snd_tag_init(struct cxgbe_snd_tag *cst, struct ifnet *ifp, int type)
 {
@@ -2258,6 +2302,11 @@ cxgbe_snd_tag_alloc(struct ifnet *ifp, union if_snd_tag_alloc_params *params,
 #ifdef RATELIMIT
 	case IF_SND_TAG_TYPE_RATE_LIMIT:
 		error = cxgbe_rate_tag_alloc(ifp, params, pt);
+		break;
+#endif
+#ifdef KERN_TLS
+	case IF_SND_TAG_TYPE_TLS:
+		error = cxgbe_tls_tag_alloc(ifp, params, pt);
 		break;
 #endif
 	default:
@@ -2314,6 +2363,11 @@ cxgbe_snd_tag_free(struct m_snd_tag *mst)
 		cxgbe_rate_tag_free(mst);
 		return;
 #endif
+#ifdef KERN_TLS
+	case IF_SND_TAG_TYPE_TLS:
+		cxgbe_tls_tag_free(mst);
+		return;
+#endif
 	default:
 		panic("shouldn't get here");
 	}
@@ -2340,7 +2394,7 @@ cxgbe_media_change(struct ifnet *ifp)
 	PORT_LOCK(pi);
 	if (IFM_SUBTYPE(ifm->ifm_media) == IFM_AUTO) {
 		/* ifconfig .. media autoselect */
-		if (!(lc->supported & FW_PORT_CAP32_ANEG)) {
+		if (!(lc->pcaps & FW_PORT_CAP32_ANEG)) {
 			rc = ENOTSUP; /* AN not supported by transceiver */
 			goto done;
 		}
@@ -4523,6 +4577,58 @@ get_params__post_init(struct adapter *sc)
 	return (rc);
 }
 
+#ifdef KERN_TLS
+static void
+ktls_tick(void *arg)
+{
+	struct adapter *sc;
+	uint32_t tstamp;
+
+	sc = arg;
+
+	tstamp = tcp_ts_getticks();
+	t4_write_reg(sc, A_TP_SYNC_TIME_HI, tstamp >> 1);
+	t4_write_reg(sc, A_TP_SYNC_TIME_LO, tstamp << 31);
+
+	callout_schedule_sbt(&sc->ktls_tick, SBT_1MS, 0, C_HARDCLOCK);
+}
+
+static void
+t4_enable_kern_tls(struct adapter *sc)
+{
+	uint32_t m, v;
+
+	m = F_ENABLECBYP;
+	v = F_ENABLECBYP;
+	t4_set_reg_field(sc, A_TP_PARA_REG6, m, v);
+
+	m = F_CPL_FLAGS_UPDATE_EN | F_SEQ_UPDATE_EN;
+	v = F_CPL_FLAGS_UPDATE_EN | F_SEQ_UPDATE_EN;
+	t4_set_reg_field(sc, A_ULP_TX_CONFIG, m, v);
+
+	m = F_NICMODE;
+	v = F_NICMODE;
+	t4_set_reg_field(sc, A_TP_IN_CONFIG, m, v);
+
+	m = F_LOOKUPEVERYPKT;
+	v = 0;
+	t4_set_reg_field(sc, A_TP_INGRESS_CONFIG, m, v);
+
+	m = F_TXDEFERENABLE | F_DISABLEWINDOWPSH | F_DISABLESEPPSHFLAG;
+	v = F_DISABLEWINDOWPSH;
+	t4_set_reg_field(sc, A_TP_PC_CONFIG, m, v);
+
+	m = V_TIMESTAMPRESOLUTION(M_TIMESTAMPRESOLUTION);
+	v = V_TIMESTAMPRESOLUTION(0x1f);
+	t4_set_reg_field(sc, A_TP_TIMER_RESOLUTION, m, v);
+
+	sc->flags |= KERN_TLS_OK;
+
+	sc->tlst.inline_keys = t4_tls_inline_keys;
+	sc->tlst.combo_wrs = t4_tls_combo_wrs;
+}
+#endif
+
 static int
 set_params__post_init(struct adapter *sc)
 {
@@ -4602,6 +4708,12 @@ set_params__post_init(struct adapter *sc)
 		}
 	}
 #endif
+
+#ifdef KERN_TLS
+	if (t4_kern_tls != 0 && sc->cryptocaps & FW_CAPS_CONFIG_TLSKEYS &&
+	    sc->toecaps & FW_CAPS_CONFIG_TOE)
+		t4_enable_kern_tls(sc);
+#endif
 	return (0);
 }
 
@@ -4652,7 +4764,7 @@ set_current_media(struct port_info *pi)
 
 	lc = &pi->link_cfg;
 	if (lc->requested_aneg != AUTONEG_DISABLE &&
-	    lc->supported & FW_PORT_CAP32_ANEG) {
+	    lc->pcaps & FW_PORT_CAP32_ANEG) {
 		ifmedia_set(ifm, IFM_ETHER | IFM_AUTO);
 		return;
 	}
@@ -4709,7 +4821,7 @@ build_medialist(struct port_info *pi)
 	ifm = &pi->media;
 	ifmedia_removeall(ifm);
 	lc = &pi->link_cfg;
-	ss = G_FW_PORT_CAP32_SPEED(lc->supported); /* Supported Speeds */
+	ss = G_FW_PORT_CAP32_SPEED(lc->pcaps); /* Supported Speeds */
 	if (__predict_false(ss == 0)) {	/* not supposed to happen. */
 		MPASS(ss != 0);
 no_media:
@@ -4735,7 +4847,7 @@ no_media:
 	}
 	if (unknown > 0) /* Add one unknown for all unknown media types. */
 		ifmedia_add4(ifm, IFM_ETHER | IFM_FDX | IFM_UNKNOWN);
-	if (lc->supported & FW_PORT_CAP32_ANEG)
+	if (lc->pcaps & FW_PORT_CAP32_ANEG)
 		ifmedia_add(ifm, IFM_ETHER | IFM_AUTO, 0, NULL);
 
 	set_current_media(pi);
@@ -4763,14 +4875,16 @@ init_link_config(struct port_info *pi)
 	lc->requested_fc = t4_pause_settings & (PAUSE_TX | PAUSE_RX |
 	    PAUSE_AUTONEG);
 
-	if (t4_fec == -1 || t4_fec & FEC_AUTO)
+	if (t4_fec & FEC_AUTO)
 		lc->requested_fec = FEC_AUTO;
-	else {
+	else if (t4_fec == 0)
 		lc->requested_fec = FEC_NONE;
-		if (t4_fec & FEC_RS)
-			lc->requested_fec |= FEC_RS;
-		if (t4_fec & FEC_BASER_RS)
-			lc->requested_fec |= FEC_BASER_RS;
+	else {
+		/* -1 is handled by the FEC_AUTO block above and not here. */
+		lc->requested_fec = t4_fec &
+		    (FEC_RS | FEC_BASER_RS | FEC_NONE | FEC_MODULE);
+		if (lc->requested_fec == 0)
+			lc->requested_fec = FEC_AUTO;
 	}
 }
 
@@ -4790,7 +4904,7 @@ fixup_link_config(struct port_info *pi)
 	/* Speed (when not autonegotiating) */
 	if (lc->requested_speed != 0) {
 		fwspeed = speed_to_fwcap(lc->requested_speed);
-		if ((fwspeed & lc->supported) == 0) {
+		if ((fwspeed & lc->pcaps) == 0) {
 			n++;
 			lc->requested_speed = 0;
 		}
@@ -4801,7 +4915,7 @@ fixup_link_config(struct port_info *pi)
 	    lc->requested_aneg == AUTONEG_DISABLE ||
 	    lc->requested_aneg == AUTONEG_AUTO);
 	if (lc->requested_aneg == AUTONEG_ENABLE &&
-	    !(lc->supported & FW_PORT_CAP32_ANEG)) {
+	    !(lc->pcaps & FW_PORT_CAP32_ANEG)) {
 		n++;
 		lc->requested_aneg = AUTONEG_AUTO;
 	}
@@ -4809,26 +4923,26 @@ fixup_link_config(struct port_info *pi)
 	/* Flow control */
 	MPASS((lc->requested_fc & ~(PAUSE_TX | PAUSE_RX | PAUSE_AUTONEG)) == 0);
 	if (lc->requested_fc & PAUSE_TX &&
-	    !(lc->supported & FW_PORT_CAP32_FC_TX)) {
+	    !(lc->pcaps & FW_PORT_CAP32_FC_TX)) {
 		n++;
 		lc->requested_fc &= ~PAUSE_TX;
 	}
 	if (lc->requested_fc & PAUSE_RX &&
-	    !(lc->supported & FW_PORT_CAP32_FC_RX)) {
+	    !(lc->pcaps & FW_PORT_CAP32_FC_RX)) {
 		n++;
 		lc->requested_fc &= ~PAUSE_RX;
 	}
 	if (!(lc->requested_fc & PAUSE_AUTONEG) &&
-	    !(lc->supported & FW_PORT_CAP32_FORCE_PAUSE)) {
+	    !(lc->pcaps & FW_PORT_CAP32_FORCE_PAUSE)) {
 		n++;
 		lc->requested_fc |= PAUSE_AUTONEG;
 	}
 
 	/* FEC */
 	if ((lc->requested_fec & FEC_RS &&
-	    !(lc->supported & FW_PORT_CAP32_FEC_RS)) ||
+	    !(lc->pcaps & FW_PORT_CAP32_FEC_RS)) ||
 	    (lc->requested_fec & FEC_BASER_RS &&
-	    !(lc->supported & FW_PORT_CAP32_FEC_BASER_RS))) {
+	    !(lc->pcaps & FW_PORT_CAP32_FEC_BASER_RS))) {
 		n++;
 		lc->requested_fec = FEC_AUTO;
 	}
@@ -4852,17 +4966,17 @@ apply_link_config(struct port_info *pi)
 	PORT_LOCK_ASSERT_OWNED(pi);
 
 	if (lc->requested_aneg == AUTONEG_ENABLE)
-		MPASS(lc->supported & FW_PORT_CAP32_ANEG);
+		MPASS(lc->pcaps & FW_PORT_CAP32_ANEG);
 	if (!(lc->requested_fc & PAUSE_AUTONEG))
-		MPASS(lc->supported & FW_PORT_CAP32_FORCE_PAUSE);
+		MPASS(lc->pcaps & FW_PORT_CAP32_FORCE_PAUSE);
 	if (lc->requested_fc & PAUSE_TX)
-		MPASS(lc->supported & FW_PORT_CAP32_FC_TX);
+		MPASS(lc->pcaps & FW_PORT_CAP32_FC_TX);
 	if (lc->requested_fc & PAUSE_RX)
-		MPASS(lc->supported & FW_PORT_CAP32_FC_RX);
+		MPASS(lc->pcaps & FW_PORT_CAP32_FC_RX);
 	if (lc->requested_fec & FEC_RS)
-		MPASS(lc->supported & FW_PORT_CAP32_FEC_RS);
+		MPASS(lc->pcaps & FW_PORT_CAP32_FEC_RS);
 	if (lc->requested_fec & FEC_BASER_RS)
-		MPASS(lc->supported & FW_PORT_CAP32_FEC_BASER_RS);
+		MPASS(lc->pcaps & FW_PORT_CAP32_FEC_BASER_RS);
 #endif
 	rc = -t4_link_l1cfg(sc, sc->mbox, pi->tx_chan, lc);
 	if (rc != 0) {
@@ -5480,6 +5594,11 @@ adapter_full_init(struct adapter *sc)
 
 	if (!(sc->flags & IS_VF))
 		t4_intr_enable(sc);
+#ifdef KERN_TLS
+	if (sc->flags & KERN_TLS_OK)
+		callout_reset_sbt(&sc->ktls_tick, SBT_1MS, 0, ktls_tick, sc,
+		    C_HARDCLOCK);
+#endif
 	sc->flags |= FULL_INIT_DONE;
 done:
 	if (rc != 0)
@@ -6149,6 +6268,9 @@ t4_sysctls(struct adapter *sc)
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "temperature", CTLTYPE_INT |
 	    CTLFLAG_RD, sc, 0, sysctl_temperature, "I",
 	    "chip temperature (in Celsius)");
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "reset_sensor", CTLTYPE_INT |
+	    CTLFLAG_RW, sc, 0, sysctl_reset_sensor, "I",
+	    "reset the chip's temperature sensor.");
 
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "loadavg", CTLTYPE_STRING |
 	    CTLFLAG_RD, sc, 0, sysctl_loadavg, "A",
@@ -6346,6 +6468,25 @@ t4_sysctls(struct adapter *sc)
 		    CTLTYPE_STRING | CTLFLAG_RD, sc, 0,
 		    sysctl_wcwr_stats, "A", "write combined work requests");
 	}
+
+#ifdef KERN_TLS
+	if (sc->flags & KERN_TLS_OK) {
+		/*
+		 * dev.t4nex.0.tls.
+		 */
+		oid = SYSCTL_ADD_NODE(ctx, c0, OID_AUTO, "tls", CTLFLAG_RD,
+		    NULL, "KERN_TLS parameters");
+		children = SYSCTL_CHILDREN(oid);
+
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "inline_keys",
+		    CTLFLAG_RW, &sc->tlst.inline_keys, 0, "Always pass TLS "
+		    "keys in work requests (1) or attempt to store TLS keys "
+		    "in card memory.");
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "combo_wrs",
+		    CTLFLAG_RW, &sc->tlst.combo_wrs, 0, "Attempt to combine "
+		    "TCB field updates with TLS record work requests.");
+	}
+#endif
 
 #ifdef TCP_OFFLOAD
 	if (is_offload(sc)) {
@@ -6612,10 +6753,20 @@ cxgbe_sysctls(struct port_info *pi)
     "PAUSE settings (bit 0 = rx_pause, 1 = tx_pause, 2 = pause_autoneg)");
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "fec",
 	    CTLTYPE_STRING | CTLFLAG_RW, pi, 0, sysctl_fec, "A",
-	    "Forward Error Correction (bit 0 = RS, bit 1 = BASER_RS)");
+	    "FECs to use (bit 0 = RS, 1 = FC, 2 = none, 5 = auto, 6 = module)");
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "module_fec",
+	    CTLTYPE_STRING, pi, 0, sysctl_module_fec, "A",
+	    "FEC recommended by the cable/transceiver");
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "autoneg",
 	    CTLTYPE_INT | CTLFLAG_RW, pi, 0, sysctl_autoneg, "I",
 	    "autonegotiation (-1 = not supported)");
+
+	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "pcaps", CTLFLAG_RD,
+	    &pi->link_cfg.pcaps, 0, "port capabilities");
+	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "acaps", CTLFLAG_RD,
+	    &pi->link_cfg.acaps, 0, "advertised capabilities");
+	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "lpacaps", CTLFLAG_RD,
+	    &pi->link_cfg.lpacaps, 0, "link partner advertised capabilities");
 
 	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "max_speed", CTLFLAG_RD, NULL,
 	    port_top_speed(pi), "max speed (in Gbps)");
@@ -6817,16 +6968,16 @@ cxgbe_sysctls(struct port_info *pi)
 
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_tls_records",
 	    CTLFLAG_RD, &pi->tx_tls_records,
-	    "# of TLS records transmitted");
+	    "# of TOE TLS records transmitted");
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_tls_octets",
 	    CTLFLAG_RD, &pi->tx_tls_octets,
-	    "# of payload octets in transmitted TLS records");
+	    "# of payload octets in transmitted TOE TLS records");
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_tls_records",
 	    CTLFLAG_RD, &pi->rx_tls_records,
-	    "# of TLS records received");
+	    "# of TOE TLS records received");
 	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_tls_octets",
 	    CTLFLAG_RD, &pi->rx_tls_octets,
-	    "# of payload octets in received TLS records");
+	    "# of payload octets in received TOE TLS records");
 }
 
 static int
@@ -7137,7 +7288,8 @@ sysctl_fec(SYSCTL_HANDLER_ARGS)
 
 	if (req->newptr == NULL) {
 		struct sbuf *sb;
-		static char *bits = "\20\1RS\2BASE-R\3RSVD1\4RSVD2\5RSVD3\6AUTO";
+		static char *bits = "\20\1RS-FEC\2FC-FEC\3NO-FEC\4RSVD2"
+		    "\5RSVD3\6auto\7module";
 
 		rc = sysctl_wire_old_buffer(req, 0);
 		if (rc != 0)
@@ -7153,19 +7305,20 @@ sysctl_fec(SYSCTL_HANDLER_ARGS)
 		 */
 		if (lc->link_ok) {
 			sbuf_printf(sb, "%b", (lc->fec & M_FW_PORT_CAP32_FEC) |
-			    (lc->requested_fec & FEC_AUTO), bits);
+			    (lc->requested_fec & (FEC_AUTO | FEC_MODULE)),
+			    bits);
 		} else {
 			sbuf_printf(sb, "%b", lc->requested_fec, bits);
 		}
 		rc = sbuf_finish(sb);
 		sbuf_delete(sb);
 	} else {
-		char s[3];
+		char s[8];
 		int n;
 
 		snprintf(s, sizeof(s), "%d",
 		    lc->requested_fec == FEC_AUTO ? -1 :
-		    lc->requested_fec & M_FW_PORT_CAP32_FEC);
+		    lc->requested_fec & (M_FW_PORT_CAP32_FEC | FEC_MODULE));
 
 		rc = sysctl_handle_string(oidp, s, sizeof(s), req);
 		if (rc != 0)
@@ -7174,12 +7327,8 @@ sysctl_fec(SYSCTL_HANDLER_ARGS)
 		n = strtol(&s[0], NULL, 0);
 		if (n < 0 || n & FEC_AUTO)
 			n = FEC_AUTO;
-		else {
-			if (n & ~M_FW_PORT_CAP32_FEC)
-				return (EINVAL);/* some other bit is set too */
-			if (!powerof2(n))
-				return (EINVAL);/* one bit can be set at most */
-		}
+		else if (n & ~(M_FW_PORT_CAP32_FEC | FEC_MODULE))
+			return (EINVAL);/* some other bit is set too */
 
 		rc = begin_synchronized_op(sc, &pi->vi[0], SLEEP_OK | INTR_OK,
 		    "t4fec");
@@ -7189,15 +7338,17 @@ sysctl_fec(SYSCTL_HANDLER_ARGS)
 		old = lc->requested_fec;
 		if (n == FEC_AUTO)
 			lc->requested_fec = FEC_AUTO;
-		else if (n == 0)
+		else if (n == 0 || n == FEC_NONE)
 			lc->requested_fec = FEC_NONE;
 		else {
-			if ((lc->supported | V_FW_PORT_CAP32_FEC(n)) !=
-			    lc->supported) {
+			if ((lc->pcaps |
+			    V_FW_PORT_CAP32_FEC(n & M_FW_PORT_CAP32_FEC)) !=
+			    lc->pcaps) {
 				rc = ENOTSUP;
 				goto done;
 			}
-			lc->requested_fec = n;
+			lc->requested_fec = n & (M_FW_PORT_CAP32_FEC |
+			    FEC_MODULE);
 		}
 		fixup_link_config(pi);
 		if (pi->up_vis > 0) {
@@ -7217,6 +7368,56 @@ done:
 }
 
 static int
+sysctl_module_fec(SYSCTL_HANDLER_ARGS)
+{
+	struct port_info *pi = arg1;
+	struct adapter *sc = pi->adapter;
+	struct link_config *lc = &pi->link_cfg;
+	int rc;
+	int8_t fec;
+	struct sbuf *sb;
+	static char *bits = "\20\1RS-FEC\2FC-FEC\3NO-FEC\4RSVD2\5RSVD3";
+
+	rc = sysctl_wire_old_buffer(req, 0);
+	if (rc != 0)
+		return (rc);
+
+	sb = sbuf_new_for_sysctl(NULL, NULL, 128, req);
+	if (sb == NULL)
+		return (ENOMEM);
+
+	if (begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK, "t4mfec") != 0)
+		return (EBUSY);
+	PORT_LOCK(pi);
+	if (pi->up_vis == 0) {
+		/*
+		 * If all the interfaces are administratively down the firmware
+		 * does not report transceiver changes.  Refresh port info here.
+		 * This is the only reason we have a synchronized op in this
+		 * function.  Just PORT_LOCK would have been enough otherwise.
+		 */
+		t4_update_port_info(pi);
+	}
+
+	fec = lc->fec_hint;
+	if (pi->mod_type == FW_PORT_MOD_TYPE_NONE ||
+	    !fec_supported(lc->pcaps)) {
+		sbuf_printf(sb, "n/a");
+	} else {
+		if (fec == 0)
+			fec = FEC_NONE;
+		sbuf_printf(sb, "%b", fec & M_FW_PORT_CAP32_FEC, bits);
+	}
+	rc = sbuf_finish(sb);
+	sbuf_delete(sb);
+
+	PORT_UNLOCK(pi);
+	end_synchronized_op(sc, 0);
+
+	return (rc);
+}
+
+static int
 sysctl_autoneg(SYSCTL_HANDLER_ARGS)
 {
 	struct port_info *pi = arg1;
@@ -7224,7 +7425,7 @@ sysctl_autoneg(SYSCTL_HANDLER_ARGS)
 	struct link_config *lc = &pi->link_cfg;
 	int rc, val;
 
-	if (lc->supported & FW_PORT_CAP32_ANEG)
+	if (lc->pcaps & FW_PORT_CAP32_ANEG)
 		val = lc->requested_aneg == AUTONEG_DISABLE ? 0 : 1;
 	else
 		val = -1;
@@ -7243,7 +7444,7 @@ sysctl_autoneg(SYSCTL_HANDLER_ARGS)
 	if (rc)
 		return (rc);
 	PORT_LOCK(pi);
-	if (val == AUTONEG_ENABLE && !(lc->supported & FW_PORT_CAP32_ANEG)) {
+	if (val == AUTONEG_ENABLE && !(lc->pcaps & FW_PORT_CAP32_ANEG)) {
 		rc = ENOTSUP;
 		goto done;
 	}
@@ -7318,6 +7519,36 @@ sysctl_vdd(SYSCTL_HANDLER_ARGS)
 	}
 
 	return (sysctl_handle_int(oidp, &sc->params.core_vdd, 0, req));
+}
+
+static int
+sysctl_reset_sensor(SYSCTL_HANDLER_ARGS)
+{
+	struct adapter *sc = arg1;
+	int rc, v;
+	uint32_t param, val;
+
+	v = sc->sensor_resets;
+	rc = sysctl_handle_int(oidp, &v, 0, req);
+	if (rc != 0 || req->newptr == NULL || v <= 0)
+		return (rc);
+
+	if (sc->params.fw_vers < FW_VERSION32(1, 24, 7, 0) ||
+	    chip_id(sc) < CHELSIO_T5)
+		return (ENOTSUP);
+
+	rc = begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK, "t4srst");
+	if (rc)
+		return (rc);
+	param = (V_FW_PARAMS_MNEM(FW_PARAMS_MNEM_DEV) |
+	    V_FW_PARAMS_PARAM_X(FW_PARAMS_PARAM_DEV_DIAG) |
+	    V_FW_PARAMS_PARAM_Y(FW_PARAM_DEV_DIAG_RESET_TMP_SENSOR));
+	val = 1;
+	rc = -t4_set_params(sc, sc->mbox, sc->pf, 0, 1, &param, &val);
+	end_synchronized_op(sc, 0);
+	if (rc == 0)
+		sc->sensor_resets++;
+	return (rc);
 }
 
 static int
@@ -10076,6 +10307,19 @@ clear_stats(struct adapter *sc, u_int port_id)
 				txq->txpkts0_pkts = 0;
 				txq->txpkts1_pkts = 0;
 				txq->raw_wrs = 0;
+				txq->tls_wrs = 0;
+				txq->kern_tls_records = 0;
+				txq->kern_tls_short = 0;
+				txq->kern_tls_partial = 0;
+				txq->kern_tls_full = 0;
+				txq->kern_tls_octets = 0;
+				txq->kern_tls_waste = 0;
+				txq->kern_tls_options = 0;
+				txq->kern_tls_header = 0;
+				txq->kern_tls_fin = 0;
+				txq->kern_tls_fin_short = 0;
+				txq->kern_tls_cbc = 0;
+				txq->kern_tls_gcm = 0;
 				mp_ring_reset_stats(txq->r);
 			}
 
@@ -10601,10 +10845,17 @@ tweak_tunables(void)
 #ifdef TCP_OFFLOAD
 	calculate_nqueues(&t4_nofldrxq, nc, NOFLDRXQ);
 	calculate_nqueues(&t4_nofldrxq_vi, nc, NOFLDRXQ_VI);
+#endif
 
+#if defined(TCP_OFFLOAD) || defined(KERN_TLS)
 	if (t4_toecaps_allowed == -1)
 		t4_toecaps_allowed = FW_CAPS_CONFIG_TOE;
+#else
+	if (t4_toecaps_allowed == -1)
+		t4_toecaps_allowed = 0;
+#endif
 
+#ifdef TCP_OFFLOAD
 	if (t4_rdmacaps_allowed == -1) {
 		t4_rdmacaps_allowed = FW_CAPS_CONFIG_RDMA_RDDP |
 		    FW_CAPS_CONFIG_RDMA_RDMAC;
@@ -10622,9 +10873,6 @@ tweak_tunables(void)
 	if (t4_pktc_idx_ofld < -1 || t4_pktc_idx_ofld >= SGE_NCOUNTERS)
 		t4_pktc_idx_ofld = PKTC_IDX_OFLD;
 #else
-	if (t4_toecaps_allowed == -1)
-		t4_toecaps_allowed = 0;
-
 	if (t4_rdmacaps_allowed == -1)
 		t4_rdmacaps_allowed = 0;
 
@@ -10889,6 +11137,9 @@ mod_event(module_t mod, int cmd, void *arg)
 #ifdef INET6
 			t4_clip_modload();
 #endif
+#ifdef KERN_TLS
+			t6_ktls_modload();
+#endif
 			t4_tracer_modload();
 			tweak_tunables();
 		}
@@ -10928,6 +11179,9 @@ mod_event(module_t mod, int cmd, void *arg)
 
 			if (t4_sge_extfree_refs() == 0) {
 				t4_tracer_modunload();
+#ifdef KERN_TLS
+				t6_ktls_modunload();
+#endif
 #ifdef INET6
 				t4_clip_modunload();
 #endif

@@ -461,7 +461,6 @@ MAN=	aac.4 \
 	siftr.4 \
 	siis.4 \
 	simplebus.4 \
-	sio.4 \
 	sis.4 \
 	sk.4 \
 	${_smartpqi.4} \
@@ -523,7 +522,6 @@ MAN=	aac.4 \
 	ti.4 \
 	timecounters.4 \
 	${_tpm.4} \
-	trm.4 \
 	tty.4 \
 	tun.4 \
 	twa.4 \

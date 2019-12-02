@@ -1263,10 +1263,12 @@ mld_input(struct mbuf **mp, int off, int icmp6len)
 	ifp = m->m_pkthdr.rcvif;
 
 	/* Pullup to appropriate size. */
-	m = m_pullup(m, off + sizeof(*mld));
-	if (m == NULL) {
-		ICMP6STAT_INC(icp6s_badlen);
-		return (IPPROTO_DONE);
+	if (m->m_len < off + sizeof(*mld)) {
+		m = m_pullup(m, off + sizeof(*mld));
+		if (m == NULL) {
+			ICMP6STAT_INC(icp6s_badlen);
+			return (IPPROTO_DONE);
+		}
 	}
 	mld = (struct mld_hdr *)(mtod(m, uint8_t *) + off);
 	if (mld->mld_type == MLD_LISTENER_QUERY &&
@@ -1275,10 +1277,12 @@ mld_input(struct mbuf **mp, int off, int icmp6len)
 	} else {
 		mldlen = sizeof(struct mld_hdr);
 	}
-	m = m_pullup(m, off + mldlen);
-	if (m == NULL) {
-		ICMP6STAT_INC(icp6s_badlen);
-		return (IPPROTO_DONE);
+	if (m->m_len < off + mldlen) {
+		m = m_pullup(m, off + mldlen);
+		if (m == NULL) {
+			ICMP6STAT_INC(icp6s_badlen);
+			return (IPPROTO_DONE);
+		}
 	}
 	*mp = m;
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -1800,6 +1804,7 @@ mld_v1_transmit_report(struct in6_multi *in6m, const int type)
 	struct mbuf		*mh, *md;
 	struct mld_hdr		*mld;
 
+	NET_EPOCH_ASSERT();
 	IN6_MULTI_LIST_LOCK_ASSERT();
 	MLD_LOCK_ASSERT();
 	
@@ -1968,6 +1973,7 @@ static int
 mld_initial_join(struct in6_multi *inm, struct mld_ifsoftc *mli,
     const int delay)
 {
+	struct epoch_tracker     et;
 	struct ifnet		*ifp;
 	struct mbufq		*mq;
 	int			 error, retval, syncstates;
@@ -2035,8 +2041,10 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifsoftc *mli,
 				V_current_state_timers_running6 = 1;
 			} else {
 				inm->in6m_state = MLD_IDLE_MEMBER;
+				NET_EPOCH_ENTER(et);
 				error = mld_v1_transmit_report(inm,
 				     MLD_LISTENER_REPORT);
+				NET_EPOCH_EXIT(et);
 				if (error == 0) {
 					inm->in6m_timer = odelay;
 					V_current_state_timers_running6 = 1;
@@ -2181,6 +2189,7 @@ mld_handle_state_change(struct in6_multi *inm, struct mld_ifsoftc *mli)
 static void
 mld_final_leave(struct in6_multi *inm, struct mld_ifsoftc *mli)
 {
+	struct epoch_tracker     et;
 	int syncstates;
 #ifdef KTR
 	char ip6tbuf[INET6_ADDRSTRLEN];
@@ -2214,7 +2223,9 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifsoftc *mli)
 			panic("%s: MLDv2 state reached, not MLDv2 mode",
 			     __func__);
 #endif
+			NET_EPOCH_ENTER(et);
 			mld_v1_transmit_report(inm, MLD_LISTENER_DONE);
+			NET_EPOCH_EXIT(et);
 			inm->in6m_state = MLD_NOT_MEMBER;
 			V_current_state_timers_running6 = 1;
 		} else if (mli->mli_version == MLD_VERSION_2) {
@@ -3194,6 +3205,7 @@ mld_v2_encap_report(struct ifnet *ifp, struct mbuf *m)
 	/*
 	 * RFC3590: OK to send as :: or tentative during DAD.
 	 */
+	NET_EPOCH_ASSERT();
 	ia = in6ifa_ifpforlinklocal(ifp, IN6_IFF_NOTREADY|IN6_IFF_ANYCAST);
 	if (ia == NULL)
 		CTR1(KTR_MLD, "%s: warning: ia is NULL", __func__);

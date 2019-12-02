@@ -1782,7 +1782,7 @@ make_request(struct interface_info *ip, struct client_lease * lease)
 	}
 
 	/* set unique client identifier */
-	char client_ident[sizeof(struct hardware)];
+	char client_ident[sizeof(ip->hw_address.haddr) + 1];
 	if (!options[DHO_DHCP_CLIENT_IDENTIFIER]) {
 		int hwlen = (ip->hw_address.hlen < sizeof(client_ident)-1) ?
 				ip->hw_address.hlen : sizeof(client_ident)-1;
@@ -2601,6 +2601,7 @@ check_option(struct client_lease *l, int option)
 	case DHO_DHCP_CLIENT_IDENTIFIER:
 	case DHO_BOOTFILE_NAME:
 	case DHO_DHCP_USER_CLASS_ID:
+	case DHO_URL:
 	case DHO_END:
 		return (1);
 	case DHO_CLASSLESS_ROUTES:

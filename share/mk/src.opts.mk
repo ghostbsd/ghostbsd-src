@@ -55,7 +55,6 @@ __<src.opts.mk>__:
 __DEFAULT_YES_OPTIONS = \
     ACCT \
     ACPI \
-    AMD \
     APM \
     AT \
     ATM \
@@ -193,6 +192,7 @@ __DEFAULT_YES_OPTIONS = \
     ZONEINFO
 
 __DEFAULT_NO_OPTIONS = \
+    AMD \
     BEARSSL \
     BSD_GREP \
     CLANG_EXTRAS \
@@ -284,9 +284,9 @@ __LLVM_TARGET_FILT=	C/(amd64|i386)/x86/:S/sparc64/sparc/:S/arm64/aarch64/:S/powe
 # Default the given TARGET's LLVM_TARGET support to the value of MK_CLANG.
 .if ${__TT:${__LLVM_TARGET_FILT}} == ${__llt}
 __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_${__llt:${__LLVM_TARGET_FILT}:tu}/CLANG
-# Disable other targets for arm and armv6, to work around "relocation truncated
+# Disable other targets for arm, to work around "relocation truncated
 # to fit" errors with BFD ld, since libllvm.a will get too large to link.
-.elif ${__T} == "arm" || ${__T} == "armv6"
+.elif ${__T} == "arm"
 __DEFAULT_NO_OPTIONS+=LLVM_TARGET_${__llt:tu}
 # aarch64 needs arm for -m32 support.
 .elif ${__TT} == "arm64" && ${__llt} == "arm"
