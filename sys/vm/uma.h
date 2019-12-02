@@ -494,7 +494,7 @@ int uma_zone_reserve_kva(uma_zone_t zone, int nitems);
  *	nitems  The requested upper limit on the number of items allowed
  *
  * Returns:
- *	int  The effective value of nitems after rounding up based on page size
+ *	int  The effective value of nitems
  */
 int uma_zone_set_max(uma_zone_t zone, int nitems);
 
@@ -504,11 +504,8 @@ int uma_zone_set_max(uma_zone_t zone, int nitems);
  * Arguments:
  *      zone  The zone to limit
  *      nitems  The requested upper limit on the number of items allowed
- *
- * Returns:
- *      int  The effective value of nitems set
  */
-int uma_zone_set_maxcache(uma_zone_t zone, int nitems);
+void uma_zone_set_maxcache(uma_zone_t zone, int nitems);
 
 /*
  * Obtains the effective limit on the number of items in a zone
@@ -618,7 +615,6 @@ void uma_zone_set_freef(uma_zone_t zone, uma_free freef);
 #define UMA_SLAB_KERNEL	0x04		/* Slab alloced from kmem */
 #define UMA_SLAB_PRIV	0x08		/* Slab alloced from priv allocator */
 #define UMA_SLAB_OFFP	0x10		/* Slab is managed separately  */
-#define UMA_SLAB_MALLOC	0x20		/* Slab is a large malloc slab */
 /* 0x02, 0x40, and 0x80 are available */
 
 /*

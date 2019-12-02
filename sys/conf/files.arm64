@@ -101,6 +101,7 @@ arm/broadcom/bcm2835/bcm2835_rng.c		optional !random_loadable soc_brcm_bcm2837 f
 arm/broadcom/bcm2835/bcm2835_sdhci.c		optional sdhci soc_brcm_bcm2837 fdt | sdhci soc_brcm_bcm2838 fdt
 arm/broadcom/bcm2835/bcm2835_sdhost.c		optional sdhci soc_brcm_bcm2837 fdt | sdhci soc_brcm_bcm2838 fdt
 arm/broadcom/bcm2835/bcm2835_spi.c		optional bcm2835_spi fdt
+arm/broadcom/bcm2835/bcm2835_vcbus.c		optional soc_brcm_bcm2837 fdt | soc_brcm_bcm2838 fdt
 arm/broadcom/bcm2835/bcm2835_vcio.c		optional soc_brcm_bcm2837 fdt | soc_brcm_bcm2838 fdt
 arm/broadcom/bcm2835/bcm2835_wdog.c		optional soc_brcm_bcm2837 fdt | soc_brcm_bcm2838 fdt
 arm/broadcom/bcm2835/bcm2836.c			optional soc_brcm_bcm2837 fdt | soc_brcm_bcm2838 fdt
@@ -285,8 +286,10 @@ kern/pic_if.m			optional	intrng
 kern/subr_devmap.c		standard
 kern/subr_intr.c		optional	intrng
 libkern/bcmp.c			standard
-libkern/memcmp.c		standard
-libkern/memset.c		standard
+libkern/memcmp.c		standard				\
+	compile-with "${NORMAL_C:N-fsanitize*}"
+libkern/memset.c		standard				\
+	compile-with "${NORMAL_C:N-fsanitize*}"
 libkern/arm64/crc32c_armv8.S	standard
 cddl/dev/dtrace/aarch64/dtrace_asm.S			optional dtrace compile-with "${DTRACE_S}"
 cddl/dev/dtrace/aarch64/dtrace_subr.c			optional dtrace compile-with "${DTRACE_C}"
@@ -304,6 +307,8 @@ arm64/rockchip/rk_spi.c			optional fdt rk_spi
 arm64/rockchip/rk_usb2phy.c		optional fdt rk_usb2phy soc_rockchip_rk3328 | soc_rockchip_rk3399
 arm64/rockchip/rk_typec_phy.c		optional fdt rk_typec_phy soc_rockchip_rk3399
 arm64/rockchip/if_dwc_rk.c		optional fdt dwc_rk soc_rockchip_rk3328 | fdt dwc_rk soc_rockchip_rk3399
+arm64/rockchip/rk_tsadc_if.m		optional fdt soc_rockchip_rk3399
+arm64/rockchip/rk_tsadc.c		optional fdt soc_rockchip_rk3399
 dev/dwc/if_dwc.c			optional fdt dwc_rk soc_rockchip_rk3328 | fdt dwc_rk soc_rockchip_rk3399
 dev/dwc/if_dwc_if.m			optional fdt dwc_rk soc_rockchip_rk3328 | fdt dwc_rk soc_rockchip_rk3399
 

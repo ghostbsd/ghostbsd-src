@@ -204,14 +204,8 @@ static u_long __read_mostly	ncnegfactor = 5; /* ratio of negative entries */
 SYSCTL_ULONG(_vfs, OID_AUTO, ncnegfactor, CTLFLAG_RW, &ncnegfactor, 0,
     "Ratio of negative namecache entries");
 static u_long __exclusive_cache_line	numneg;	/* number of negative entries allocated */
-SYSCTL_ULONG(_debug, OID_AUTO, numneg, CTLFLAG_RD, &numneg, 0,
-    "Number of negative entries in namecache");
 static u_long __exclusive_cache_line	numcache;/* number of cache entries allocated */
-SYSCTL_ULONG(_debug, OID_AUTO, numcache, CTLFLAG_RD, &numcache, 0,
-    "Number of namecache entries");
 static u_long __exclusive_cache_line	numcachehv;/* number of cache entries with vnodes held */
-SYSCTL_ULONG(_debug, OID_AUTO, numcachehv, CTLFLAG_RD, &numcachehv, 0,
-    "Number of namecache entries with vnodes held");
 u_int ncsizefactor = 2;
 SYSCTL_UINT(_vfs, OID_AUTO, ncsizefactor, CTLFLAG_RW, &ncsizefactor, 0,
     "Size factor for namecache");
@@ -336,9 +330,11 @@ cache_out_ts(struct namecache *ncp, struct timespec *tsp, int *ticksp)
 		*ticksp = ncp_ts->nc_ticks;
 }
 
+#ifdef DEBUG_CACHE
 static int __read_mostly	doingcache = 1;	/* 1 => enable the cache */
 SYSCTL_INT(_debug, OID_AUTO, vfscache, CTLFLAG_RW, &doingcache, 0,
     "VFS namecache enabled");
+#endif
 
 /* Export size information to userland */
 SYSCTL_INT(_debug_sizeof, OID_AUTO, namecache, CTLFLAG_RD, SYSCTL_NULL_INT_PTR,
@@ -356,6 +352,7 @@ static SYSCTL_NODE(_vfs, OID_AUTO, cache, CTLFLAG_RW, 0,
 	SYSCTL_COUNTER_U64(_vfs_cache, OID_AUTO, name, CTLFLAG_RD, &name, descr);
 STATNODE_ULONG(numneg, "Number of negative cache entries");
 STATNODE_ULONG(numcache, "Number of cache entries");
+STATNODE_ULONG(numcachehv, "Number of namecache entries with vnodes held");
 STATNODE_COUNTER(numcalls, "Number of cache lookups");
 STATNODE_COUNTER(dothits, "Number of '.' hits");
 STATNODE_COUNTER(dotdothits, "Number of '..' hits");
@@ -1303,10 +1300,12 @@ cache_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	enum vgetstate vs;
 	int error, ltype;
 
+#ifdef DEBUG_CACHE
 	if (__predict_false(!doingcache)) {
 		cnp->cn_flags &= ~MAKEENTRY;
 		return (0);
 	}
+#endif
 
 	counter_u64_add(numcalls, 1);
 
@@ -1662,6 +1661,33 @@ cache_enter_unlock(struct celockstate *cel)
 	cache_unlock_vnodes_cel(cel);
 }
 
+static void __noinline
+cache_enter_dotdot_prep(struct vnode *dvp, struct vnode *vp,
+    struct componentname *cnp)
+{
+	struct celockstate cel;
+	struct namecache *ncp;
+	uint32_t hash;
+	int len;
+
+	if (dvp->v_cache_dd == NULL)
+		return;
+	len = cnp->cn_namelen;
+	cache_celockstate_init(&cel);
+	hash = cache_get_hash(cnp->cn_nameptr, len, dvp);
+	cache_enter_lock_dd(&cel, dvp, vp, hash);
+	ncp = dvp->v_cache_dd;
+	if (ncp != NULL && (ncp->nc_flag & NCF_ISDOTDOT)) {
+		KASSERT(ncp->nc_dvp == dvp, ("wrong isdotdot parent"));
+		cache_zap_locked(ncp, false);
+	} else {
+		ncp = NULL;
+	}
+	dvp->v_cache_dd = NULL;
+	cache_enter_unlock(&cel);
+	cache_free(ncp);
+}
+
 /*
  * Add an entry to the cache.
  */
@@ -1673,11 +1699,10 @@ cache_enter_time(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	struct namecache *ncp, *n2, *ndd;
 	struct namecache_ts *ncp_ts, *n2_ts;
 	struct nchashhead *ncpp;
-	struct neglist *neglist;
 	uint32_t hash;
 	int flag;
 	int len;
-	bool neg_locked, held_dvp;
+	bool held_dvp;
 	u_long lnumcache;
 
 	CTR3(KTR_VFS, "cache_enter(%p, %p, %s)", dvp, vp, cnp->cn_nameptr);
@@ -1686,8 +1711,20 @@ cache_enter_time(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	VNASSERT(dvp == NULL || (dvp->v_iflag & VI_DOOMED) == 0, dvp,
 	    ("cache_enter: Doomed vnode used as src"));
 
+#ifdef DEBUG_CACHE
 	if (__predict_false(!doingcache))
 		return;
+#endif
+
+	flag = 0;
+	if (__predict_false(cnp->cn_nameptr[0] == '.')) {
+		if (cnp->cn_namelen == 1)
+			return;
+		if (cnp->cn_namelen == 2 && cnp->cn_nameptr[1] == '.') {
+			cache_enter_dotdot_prep(dvp, vp, cnp);
+			flag = NCF_ISDOTDOT;
+		}
+	}
 
 	/*
 	 * Avoid blowout in namecache entries.
@@ -1701,65 +1738,6 @@ cache_enter_time(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	cache_celockstate_init(&cel);
 	ndd = NULL;
 	ncp_ts = NULL;
-	flag = 0;
-	if (cnp->cn_nameptr[0] == '.') {
-		if (cnp->cn_namelen == 1)
-			return;
-		if (cnp->cn_namelen == 2 && cnp->cn_nameptr[1] == '.') {
-			len = cnp->cn_namelen;
-			hash = cache_get_hash(cnp->cn_nameptr, len, dvp);
-			cache_enter_lock_dd(&cel, dvp, vp, hash);
-			/*
-			 * If dotdot entry already exists, just retarget it
-			 * to new parent vnode, otherwise continue with new
-			 * namecache entry allocation.
-			 */
-			if ((ncp = dvp->v_cache_dd) != NULL &&
-			    ncp->nc_flag & NCF_ISDOTDOT) {
-				KASSERT(ncp->nc_dvp == dvp,
-				    ("wrong isdotdot parent"));
-				neg_locked = false;
-				if (ncp->nc_flag & NCF_NEGATIVE || vp == NULL) {
-					neglist = NCP2NEGLIST(ncp);
-					mtx_lock(&ncneg_hot.nl_lock);
-					mtx_lock(&neglist->nl_lock);
-					neg_locked = true;
-				}
-				if (!(ncp->nc_flag & NCF_NEGATIVE)) {
-					TAILQ_REMOVE(&ncp->nc_vp->v_cache_dst,
-					    ncp, nc_dst);
-				} else {
-					cache_negative_remove(ncp, true);
-				}
-				if (vp != NULL) {
-					TAILQ_INSERT_HEAD(&vp->v_cache_dst,
-					    ncp, nc_dst);
-					if (ncp->nc_flag & NCF_HOTNEGATIVE)
-						numhotneg--;
-					ncp->nc_flag &= ~(NCF_NEGATIVE|NCF_HOTNEGATIVE);
-				} else {
-					if (ncp->nc_flag & NCF_HOTNEGATIVE) {
-						numhotneg--;
-						ncp->nc_flag &= ~(NCF_HOTNEGATIVE);
-					}
-					ncp->nc_flag |= NCF_NEGATIVE;
-					cache_negative_insert(ncp, true);
-				}
-				if (neg_locked) {
-					mtx_unlock(&neglist->nl_lock);
-					mtx_unlock(&ncneg_hot.nl_lock);
-				}
-				ncp->nc_vp = vp;
-				cache_enter_unlock(&cel);
-				return;
-			}
-			dvp->v_cache_dd = NULL;
-			cache_enter_unlock(&cel);
-			cache_celockstate_init(&cel);
-			SDT_PROBE3(vfs, namecache, enter, done, dvp, "..", vp);
-			flag = NCF_ISDOTDOT;
-		}
-	}
 
 	held_dvp = false;
 	if (LIST_EMPTY(&dvp->v_cache_src) && flag != NCF_ISDOTDOT) {
