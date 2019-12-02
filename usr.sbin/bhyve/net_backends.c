@@ -220,7 +220,7 @@ tap_init(struct net_backend *be, const char *devname,
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 
-	priv->mevp = mevent_add(be->fd, EVF_READ, cb, param);
+	priv->mevp = mevent_add_disabled(be->fd, EVF_READ, cb, param);
 	if (priv->mevp == NULL) {
 		WPRINTF(("Could not register event\n"));
 		goto error;
@@ -328,7 +328,8 @@ DATA_SET(net_backend_set, vmnet_backend);
 #define NETMAP_FEATURES (VIRTIO_NET_F_CSUM | VIRTIO_NET_F_HOST_TSO4 | \
 		VIRTIO_NET_F_HOST_TSO6 | VIRTIO_NET_F_HOST_UFO | \
 		VIRTIO_NET_F_GUEST_CSUM | VIRTIO_NET_F_GUEST_TSO4 | \
-		VIRTIO_NET_F_GUEST_TSO6 | VIRTIO_NET_F_GUEST_UFO)
+		VIRTIO_NET_F_GUEST_TSO6 | VIRTIO_NET_F_GUEST_UFO | \
+		VIRTIO_NET_F_MRG_RXBUF)
 
 struct netmap_priv {
 	char ifname[IFNAMSIZ];
@@ -432,7 +433,7 @@ netmap_init(struct net_backend *be, const char *devname,
 	priv->cb_param = param;
 	be->fd = priv->nmd->fd;
 
-	priv->mevp = mevent_add(be->fd, EVF_READ, cb, param);
+	priv->mevp = mevent_add_disabled(be->fd, EVF_READ, cb, param);
 	if (priv->mevp == NULL) {
 		WPRINTF(("Could not register event\n"));
 		return (-1);
