@@ -11,9 +11,9 @@ MAN=	cli.lua.8 \
 	menu.lua.8 \
 	password.lua.8 \
 	screen.lua.8
-
+FILESDIR=	${LUAPATH}
+FILES=	cli.lua \
 FILESDIR=	/boot/lua
-
 FILES=	brand-trident.lua \
   brand-trueos.lua \
 	cli.lua \
