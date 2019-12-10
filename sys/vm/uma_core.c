@@ -279,8 +279,8 @@ static void *slab_alloc_item(uma_keg_t keg, uma_slab_t slab);
 static void slab_free_item(uma_zone_t zone, uma_slab_t slab, void *item);
 static uma_keg_t uma_kcreate(uma_zone_t zone, size_t size, uma_init uminit,
     uma_fini fini, int align, uint32_t flags);
-static int zone_import(uma_zone_t, void **, int, int, int);
-static void zone_release(uma_zone_t, void **, int);
+static int zone_import(void *, void **, int, int, int);
+static void zone_release(void *, void **, int);
 static void uma_zero_item(void *, uma_zone_t);
 static bool cache_alloc(uma_zone_t, uma_cache_t, void *, int);
 static bool cache_free(uma_zone_t, uma_cache_t, void *, void *, int);
@@ -664,8 +664,7 @@ hash_alloc(struct uma_hash *hash, u_int size)
 	if (size > UMA_HASH_SIZE_INIT)  {
 		hash->uh_hashsize = size;
 		alloc = sizeof(hash->uh_slab_hash[0]) * hash->uh_hashsize;
-		hash->uh_slab_hash = (struct slabhead *)malloc(alloc,
-		    M_UMAHASH, M_NOWAIT);
+		hash->uh_slab_hash = malloc(alloc, M_UMAHASH, M_NOWAIT);
 	} else {
 		alloc = sizeof(hash->uh_slab_hash[0]) * UMA_HASH_SIZE_INIT;
 		hash->uh_slab_hash = zone_alloc_item(hashzone, NULL,
@@ -698,7 +697,7 @@ hash_alloc(struct uma_hash *hash, u_int size)
 static int
 hash_expand(struct uma_hash *oldhash, struct uma_hash *newhash)
 {
-	uma_slab_t slab;
+	uma_hash_slab_t slab;
 	u_int hval;
 	u_int idx;
 
@@ -714,12 +713,12 @@ hash_expand(struct uma_hash *oldhash, struct uma_hash *newhash)
 	 */
 
 	for (idx = 0; idx < oldhash->uh_hashsize; idx++)
-		while (!SLIST_EMPTY(&oldhash->uh_slab_hash[idx])) {
-			slab = SLIST_FIRST(&oldhash->uh_slab_hash[idx]);
-			SLIST_REMOVE_HEAD(&oldhash->uh_slab_hash[idx], us_hlink);
-			hval = UMA_HASH(newhash, slab->us_data);
-			SLIST_INSERT_HEAD(&newhash->uh_slab_hash[hval],
-			    slab, us_hlink);
+		while (!LIST_EMPTY(&oldhash->uh_slab_hash[idx])) {
+			slab = LIST_FIRST(&oldhash->uh_slab_hash[idx]);
+			LIST_REMOVE(slab, uhs_hlink);
+			hval = UMA_HASH(newhash, slab->uhs_data);
+			LIST_INSERT_HEAD(&newhash->uh_slab_hash[hval],
+			    slab, uhs_hlink);
 		}
 
 	return (1);
@@ -992,7 +991,7 @@ keg_free_slab(uma_keg_t keg, uma_slab_t slab, int start)
 	CTR4(KTR_UMA, "keg_free_slab keg %s(%p) slab %p, returning %d bytes",
 	    keg->uk_name, keg, slab, PAGE_SIZE * keg->uk_ppera);
 
-	mem = slab->us_data;
+	mem = slab_data(slab, keg);
 	flags = slab->us_flags;
 	i = start;
 	if (keg->uk_fini != NULL) {
@@ -1006,11 +1005,10 @@ keg_free_slab(uma_keg_t keg, uma_slab_t slab, int start)
 		 * albeit we don't make skip check for other init/fini
 		 * invocations.
 		 */
-		if (!uma_dbg_kskip(keg, slab->us_data + (keg->uk_rsize * i)) ||
+		if (!uma_dbg_kskip(keg, slab_item(slab, keg, i)) ||
 		    keg->uk_fini != trash_fini)
 #endif
-			keg->uk_fini(slab->us_data + (keg->uk_rsize * i),
-			    keg->uk_size);
+			keg->uk_fini(slab_item(slab, keg, i), keg->uk_size);
 	}
 	if (keg->uk_flags & UMA_ZONE_OFFPAGE)
 		zone_free_item(keg->uk_slabzone, slab, NULL, SKIP_NONE);
@@ -1057,18 +1055,17 @@ keg_drain(uma_keg_t keg)
 			keg->uk_free -= keg->uk_ipers;
 
 			if (keg->uk_flags & UMA_ZONE_HASH)
-				UMA_HASH_REMOVE(&keg->uk_hash, slab,
-				    slab->us_data);
+				UMA_HASH_REMOVE(&keg->uk_hash, slab);
 
-			SLIST_INSERT_HEAD(&freeslabs, slab, us_hlink);
+			LIST_INSERT_HEAD(&freeslabs, slab, us_link);
 		}
 	}
 
 finished:
 	KEG_UNLOCK(keg);
 
-	while ((slab = SLIST_FIRST(&freeslabs)) != NULL) {
-		SLIST_REMOVE(&freeslabs, slab, uma_slab, us_hlink);
+	while ((slab = LIST_FIRST(&freeslabs)) != NULL) {
+		LIST_REMOVE(slab, us_link);
 		keg_free_slab(keg, slab, keg->uk_ipers);
 	}
 }
@@ -1190,24 +1187,25 @@ keg_alloc_slab(uma_keg_t keg, uma_zone_t zone, int domain, int flags,
 	/* Point the slab into the allocated memory */
 	if (!(keg->uk_flags & UMA_ZONE_OFFPAGE))
 		slab = (uma_slab_t )(mem + keg->uk_pgoff);
+	else
+		((uma_hash_slab_t)slab)->uhs_data = mem;
 
 	if (keg->uk_flags & UMA_ZONE_VTOSLAB)
 		for (i = 0; i < keg->uk_ppera; i++)
 			vsetzoneslab((vm_offset_t)mem + (i * PAGE_SIZE),
 			    zone, slab);
 
-	slab->us_data = mem;
 	slab->us_freecount = keg->uk_ipers;
 	slab->us_flags = sflags;
 	slab->us_domain = domain;
-	BIT_FILL(SLAB_SETSIZE, &slab->us_free);
+	BIT_FILL(keg->uk_ipers, &slab->us_free);
 #ifdef INVARIANTS
-	BIT_ZERO(SLAB_SETSIZE, &slab->us_debugfree);
+	BIT_ZERO(SLAB_MAX_SETSIZE, &slab->us_debugfree);
 #endif
 
 	if (keg->uk_init != NULL) {
 		for (i = 0; i < keg->uk_ipers; i++)
-			if (keg->uk_init(slab->us_data + (keg->uk_rsize * i),
+			if (keg->uk_init(slab_item(slab, keg, i),
 			    keg->uk_size, flags) != 0)
 				break;
 		if (i != keg->uk_ipers) {
@@ -1486,6 +1484,46 @@ zero_init(void *mem, int size, int flags)
 }
 
 /*
+ * Actual size of embedded struct slab (!OFFPAGE).
+ */
+size_t
+slab_sizeof(int nitems)
+{
+	size_t s;
+
+	s = sizeof(struct uma_slab) + BITSET_SIZE(nitems);
+	return (roundup(s, UMA_ALIGN_PTR + 1));
+}
+
+/*
+ * Size of memory for embedded slabs (!OFFPAGE).
+ */
+size_t
+slab_space(int nitems)
+{
+	return (UMA_SLAB_SIZE - slab_sizeof(nitems));
+}
+
+/*
+ * Compute the number of items that will fit in an embedded (!OFFPAGE) slab
+ * with a given size and alignment.
+ */
+int
+slab_ipers(size_t size, int align)
+{
+	int rsize;
+	int nitems;
+
+        /*
+         * Compute the ideal number of items that will fit in a page and
+         * then compute the actual number based on a bitset nitems wide.
+         */
+	rsize = roundup(size, align + 1);
+        nitems = UMA_SLAB_SIZE / rsize;
+	return (slab_space(nitems) / rsize);
+}
+
+/*
  * Finish creating a small uma keg.  This calculates ipers, and the keg size.
  *
  * Arguments
@@ -1519,20 +1557,25 @@ keg_small_init(uma_keg_t keg)
 	 * allocation bits for we round it up.
 	 */
 	rsize = keg->uk_size;
-	if (rsize < slabsize / SLAB_SETSIZE)
-		rsize = slabsize / SLAB_SETSIZE;
+	if (rsize < slabsize / SLAB_MAX_SETSIZE)
+		rsize = slabsize / SLAB_MAX_SETSIZE;
 	if (rsize & keg->uk_align)
-		rsize = (rsize & ~keg->uk_align) + (keg->uk_align + 1);
+		rsize = roundup(rsize, keg->uk_align + 1);
 	keg->uk_rsize = rsize;
 
 	KASSERT((keg->uk_flags & UMA_ZONE_PCPU) == 0 ||
 	    keg->uk_rsize < UMA_PCPU_ALLOC_SIZE,
 	    ("%s: size %u too large", __func__, keg->uk_rsize));
 
+	/*
+	 * Use a pessimistic bit count for shsize.  It may be possible to
+	 * squeeze one more item in for very particular sizes if we were
+	 * to loop and reduce the bitsize if there is waste.
+	 */
 	if (keg->uk_flags & UMA_ZONE_OFFPAGE)
 		shsize = 0;
 	else 
-		shsize = SIZEOF_UMA_SLAB;
+		shsize = slab_sizeof(slabsize / rsize);
 
 	if (rsize <= slabsize - shsize)
 		keg->uk_ipers = (slabsize - shsize) / rsize;
@@ -1543,7 +1586,7 @@ keg_small_init(uma_keg_t keg)
 		    ("%s: size %u greater than slab", __func__, keg->uk_size));
 		keg->uk_ipers = 1;
 	}
-	KASSERT(keg->uk_ipers > 0 && keg->uk_ipers <= SLAB_SETSIZE,
+	KASSERT(keg->uk_ipers > 0 && keg->uk_ipers <= SLAB_MAX_SETSIZE,
 	    ("%s: keg->uk_ipers %u", __func__, keg->uk_ipers));
 
 	memused = keg->uk_ipers * rsize + shsize;
@@ -1571,7 +1614,7 @@ keg_small_init(uma_keg_t keg)
 	if ((wastedspace >= slabsize / UMA_MAX_WASTE) &&
 	    (keg->uk_ipers < (slabsize / keg->uk_rsize))) {
 		keg->uk_ipers = slabsize / keg->uk_rsize;
-		KASSERT(keg->uk_ipers > 0 && keg->uk_ipers <= SLAB_SETSIZE,
+		KASSERT(keg->uk_ipers > 0 && keg->uk_ipers <= SLAB_MAX_SETSIZE,
 		    ("%s: keg->uk_ipers %u", __func__, keg->uk_ipers));
 		CTR6(KTR_UMA, "UMA decided we need offpage slab headers for "
 		    "keg: %s(%p), calculated wastedspace = %d, "
@@ -1620,7 +1663,8 @@ keg_large_init(uma_keg_t keg)
 
 	/* Check whether we have enough space to not do OFFPAGE. */
 	if ((keg->uk_flags & UMA_ZONE_OFFPAGE) == 0 &&
-	    PAGE_SIZE * keg->uk_ppera - keg->uk_rsize < SIZEOF_UMA_SLAB) {
+	    PAGE_SIZE * keg->uk_ppera - keg->uk_rsize <
+	    slab_sizeof(SLAB_MIN_SETSIZE)) {
 		/*
 		 * We can't do OFFPAGE if we're internal, in which case
 		 * we need an extra page per allocation to contain the
@@ -1667,7 +1711,7 @@ keg_cachespread_init(uma_keg_t keg)
 	keg->uk_ppera = pages;
 	keg->uk_ipers = ((pages * PAGE_SIZE) + trailer) / rsize;
 	keg->uk_flags |= UMA_ZONE_OFFPAGE | UMA_ZONE_VTOSLAB;
-	KASSERT(keg->uk_ipers <= SLAB_SETSIZE,
+	KASSERT(keg->uk_ipers <= SLAB_MAX_SETSIZE,
 	    ("%s: keg->uk_ipers too high(%d) increase max_ipers", __func__,
 	    keg->uk_ipers));
 }
@@ -1730,7 +1774,7 @@ keg_ctor(void *mem, int size, void *udata, int flags)
 	if (keg->uk_flags & UMA_ZONE_CACHESPREAD) {
 		keg_cachespread_init(keg);
 	} else {
-		if (keg->uk_size > UMA_SLAB_SPACE)
+		if (keg->uk_size > slab_space(SLAB_MIN_SETSIZE))
 			keg_large_init(keg);
 		else
 			keg_small_init(keg);
@@ -1770,11 +1814,14 @@ keg_ctor(void *mem, int size, void *udata, int flags)
 
 	/*
 	 * If we're putting the slab header in the actual page we need to
-	 * figure out where in each page it goes.  See SIZEOF_UMA_SLAB
-	 * macro definition.
+	 * figure out where in each page it goes.  See slab_sizeof
+	 * definition.
 	 */
 	if (!(keg->uk_flags & UMA_ZONE_OFFPAGE)) {
-		keg->uk_pgoff = (PAGE_SIZE * keg->uk_ppera) - SIZEOF_UMA_SLAB;
+		size_t shsize;
+
+		shsize = slab_sizeof(keg->uk_ipers);
+		keg->uk_pgoff = (PAGE_SIZE * keg->uk_ppera) - shsize;
 		/*
 		 * The only way the following is possible is if with our
 		 * UMA_ALIGN_PTR adjustments we are now bigger than
@@ -1782,8 +1829,7 @@ keg_ctor(void *mem, int size, void *udata, int flags)
 		 * mathematically possible for all cases, so we make
 		 * sure here anyway.
 		 */
-		KASSERT(keg->uk_pgoff + sizeof(struct uma_slab) <=
-		    PAGE_SIZE * keg->uk_ppera,
+		KASSERT(keg->uk_pgoff + shsize <= PAGE_SIZE * keg->uk_ppera,
 		    ("zone %s ipers %d rsize %d size %d slab won't fit",
 		    zone->uz_name, keg->uk_ipers, keg->uk_rsize, keg->uk_size));
 	}
@@ -1813,14 +1859,13 @@ zone_alloc_counters(uma_zone_t zone, void *unused)
 	zone->uz_fails = counter_u64_alloc(M_WAITOK);
 }
 
-#define	UMA_MAX_DUP	999
 static void
 zone_alloc_sysctl(uma_zone_t zone, void *unused)
 {
 	uma_zone_domain_t zdom;
 	uma_keg_t keg;
 	struct sysctl_oid *oid, *domainoid;
-	int domains, i;
+	int domains, i, cnt;
 	static const char *nokeg = "cache zone";
 	char *c;
 
@@ -1830,10 +1875,11 @@ zone_alloc_sysctl(uma_zone_t zone, void *unused)
 	 * an index.
 	 */
 	if (zone->uz_namecnt != 0) {
-		if (zone->uz_namecnt > UMA_MAX_DUP)
-			zone->uz_namecnt = UMA_MAX_DUP;
-		zone->uz_ctlname = malloc(strlen(zone->uz_name) +
-		    sizeof(__XSTRING(UMA_MAX_DUP)) + 1 , M_UMA, M_WAITOK);
+		/* Count the number of decimal digits and '_' separator. */
+		for (i = 1, cnt = zone->uz_namecnt; cnt != 0; i++)
+			cnt /= 10;
+		zone->uz_ctlname = malloc(strlen(zone->uz_name) + i + 1,
+		    M_UMA, M_WAITOK);
 		sprintf(zone->uz_ctlname, "%s_%d", zone->uz_name,
 		    zone->uz_namecnt);
 	} else
@@ -1866,7 +1912,7 @@ zone_alloc_sysctl(uma_zone_t zone, void *unused)
 	oid = SYSCTL_ADD_NODE(NULL, SYSCTL_CHILDREN(zone->uz_oid), OID_AUTO,
 	    "keg", CTLFLAG_RD, NULL, "");
 	keg = zone->uz_keg;
-	if ((zone->uz_flags & UMA_ZFLAG_CACHEONLY) == 0) {
+	if ((zone->uz_flags & UMA_ZFLAG_CACHE) == 0) {
 		SYSCTL_ADD_CONST_STRING(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
 		    "name", CTLFLAG_RD, keg->uk_name, "Keg name");
 		SYSCTL_ADD_U32(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
@@ -1972,8 +2018,14 @@ zone_count(uma_zone_t zone, void *arg)
 	struct uma_zone_count *cnt;
 
 	cnt = arg;
+	/*
+	 * Some zones are rapidly created with identical names and
+	 * destroyed out of order.  This can lead to gaps in the count.
+	 * Use one greater than the maximum observed for this name.
+	 */
 	if (strcmp(zone->uz_name, cnt->name) == 0)
-		cnt->count++;
+		cnt->count = MAX(cnt->count,
+		    zone->uz_namecnt + 1);
 }
 
 /*
@@ -2046,8 +2098,8 @@ zone_ctor(void *mem, int size, void *udata, int flags)
 	/*
 	 * Use the regular zone/keg/slab allocator.
 	 */
-	zone->uz_import = (uma_import)zone_import;
-	zone->uz_release = (uma_release)zone_release;
+	zone->uz_import = zone_import;
+	zone->uz_release = zone_release;
 	zone->uz_arg = zone; 
 	keg = arg->keg;
 
@@ -2245,6 +2297,7 @@ int
 uma_startup_count(int vm_zones)
 {
 	int zones, pages;
+	size_t space, size;
 
 	ksize = sizeof(struct uma_keg) +
 	    (sizeof(struct uma_domain) * vm_ndomains);
@@ -2265,38 +2318,28 @@ uma_startup_count(int vm_zones)
 	zones = UMA_BOOT_ZONES + vm_zones;
 	vm_zones = 0;
 #endif
+	size = slab_sizeof(SLAB_MAX_SETSIZE);
+	space = slab_space(SLAB_MAX_SETSIZE);
 
 	/* Memory for the rest of startup zones, UMA and VM, ... */
-	if (zsize > UMA_SLAB_SPACE) {
+	if (zsize > space) {
 		/* See keg_large_init(). */
 		u_int ppera;
 
 		ppera = howmany(roundup2(zsize, UMA_BOOT_ALIGN), PAGE_SIZE);
-		if (PAGE_SIZE * ppera - roundup2(zsize, UMA_BOOT_ALIGN) <
-		    SIZEOF_UMA_SLAB)
+		if (PAGE_SIZE * ppera - roundup2(zsize, UMA_BOOT_ALIGN) < size)
 			ppera++;
 		pages += (zones + vm_zones) * ppera;
-	} else if (roundup2(zsize, UMA_BOOT_ALIGN) > UMA_SLAB_SPACE)
+	} else if (roundup2(zsize, UMA_BOOT_ALIGN) > space)
 		/* See keg_small_init() special case for uk_ppera = 1. */
 		pages += zones;
 	else
 		pages += howmany(zones,
-		    UMA_SLAB_SPACE / roundup2(zsize, UMA_BOOT_ALIGN));
+		    space / roundup2(zsize, UMA_BOOT_ALIGN));
 
 	/* ... and their kegs. Note that zone of zones allocates a keg! */
 	pages += howmany(zones + 1,
-	    UMA_SLAB_SPACE / roundup2(ksize, UMA_BOOT_ALIGN));
-
-	/*
-	 * Most of startup zones are not going to be offpages, that's
-	 * why we use UMA_SLAB_SPACE instead of UMA_SLAB_SIZE in all
-	 * calculations.  Some large bucket zones will be offpage, and
-	 * thus will allocate hashes.  We take conservative approach
-	 * and assume that all zones may allocate hash.  This may give
-	 * us some positive inaccuracy, usually an extra single page.
-	 */
-	pages += howmany(zones, UMA_SLAB_SPACE /
-	    (sizeof(struct slabhead *) * UMA_HASH_SIZE_INIT));
+	    space / roundup2(ksize, UMA_BOOT_ALIGN));
 
 	return (pages);
 }
@@ -2354,15 +2397,12 @@ uma_startup(void *mem, int npages)
 	zone_ctor(zones, zsize, &args, M_WAITOK);
 
 	/* Now make a zone for slab headers */
-	slabzone = uma_zcreate("UMA Slabs",
-				sizeof(struct uma_slab),
-				NULL, NULL, NULL, NULL,
-				UMA_ALIGN_PTR, UMA_ZFLAG_INTERNAL);
+	slabzone = uma_zcreate("UMA Slabs", sizeof(struct uma_hash_slab),
+	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, UMA_ZFLAG_INTERNAL);
 
 	hashzone = uma_zcreate("UMA Hash",
 	    sizeof(struct slabhead *) * UMA_HASH_SIZE_INIT,
-	    NULL, NULL, NULL, NULL,
-	    UMA_ALIGN_PTR, UMA_ZFLAG_INTERNAL);
+	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, UMA_ZFLAG_INTERNAL);
 
 	bucket_init();
 
@@ -3056,9 +3096,9 @@ slab_alloc_item(uma_keg_t keg, uma_slab_t slab)
 
 	KEG_LOCK_ASSERT(keg);
 
-	freei = BIT_FFS(SLAB_SETSIZE, &slab->us_free) - 1;
-	BIT_CLR(SLAB_SETSIZE, freei, &slab->us_free);
-	item = slab->us_data + (keg->uk_rsize * freei);
+	freei = BIT_FFS(keg->uk_ipers, &slab->us_free) - 1;
+	BIT_CLR(keg->uk_ipers, freei, &slab->us_free);
+	item = slab_item(slab, keg, freei);
 	slab->us_freecount--;
 	keg->uk_free--;
 
@@ -3073,8 +3113,9 @@ slab_alloc_item(uma_keg_t keg, uma_slab_t slab)
 }
 
 static int
-zone_import(uma_zone_t zone, void **bucket, int max, int domain, int flags)
+zone_import(void *arg, void **bucket, int max, int domain, int flags)
 {
+	uma_zone_t zone;
 	uma_slab_t slab;
 	uma_keg_t keg;
 #ifdef NUMA
@@ -3082,6 +3123,7 @@ zone_import(uma_zone_t zone, void **bucket, int max, int domain, int flags)
 #endif
 	int i;
 
+	zone = arg;
 	slab = NULL;
 	keg = zone->uz_keg;
 	KEG_LOCK(keg);
@@ -3568,8 +3610,8 @@ slab_free_item(uma_zone_t zone, uma_slab_t slab, void *item)
 	}
 
 	/* Slab management. */
-	freei = ((uintptr_t)item - (uintptr_t)slab->us_data) / keg->uk_rsize;
-	BIT_SET(SLAB_SETSIZE, freei, &slab->us_free);
+	freei = slab_item_index(slab, keg, item);
+	BIT_SET(keg->uk_ipers, freei, &slab->us_free);
 	slab->us_freecount++;
 
 	/* Keg statistics. */
@@ -3577,14 +3619,16 @@ slab_free_item(uma_zone_t zone, uma_slab_t slab, void *item)
 }
 
 static void
-zone_release(uma_zone_t zone, void **bucket, int cnt)
+zone_release(void *arg, void **bucket, int cnt)
 {
+	uma_zone_t zone;
 	void *item;
 	uma_slab_t slab;
 	uma_keg_t keg;
 	uint8_t *mem;
 	int i;
 
+	zone = arg;
 	keg = zone->uz_keg;
 	KEG_LOCK(keg);
 	for (i = 0; i < cnt; i++) {
@@ -4448,12 +4492,12 @@ uma_dbg_alloc(uma_zone_t zone, uma_slab_t slab, void *item)
 			    item, zone->uz_name);
 	}
 	keg = zone->uz_keg;
-	freei = ((uintptr_t)item - (uintptr_t)slab->us_data) / keg->uk_rsize;
+	freei = slab_item_index(slab, keg, item);
 
-	if (BIT_ISSET(SLAB_SETSIZE, freei, &slab->us_debugfree))
+	if (BIT_ISSET(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree))
 		panic("Duplicate alloc of %p from zone %p(%s) slab %p(%d)\n",
 		    item, zone, zone->uz_name, slab, freei);
-	BIT_SET_ATOMIC(SLAB_SETSIZE, freei, &slab->us_debugfree);
+	BIT_SET_ATOMIC(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree);
 
 	return;
 }
@@ -4476,21 +4520,21 @@ uma_dbg_free(uma_zone_t zone, uma_slab_t slab, void *item)
 			    item, zone->uz_name);
 	}
 	keg = zone->uz_keg;
-	freei = ((uintptr_t)item - (uintptr_t)slab->us_data) / keg->uk_rsize;
+	freei = slab_item_index(slab, keg, item);
 
 	if (freei >= keg->uk_ipers)
 		panic("Invalid free of %p from zone %p(%s) slab %p(%d)\n",
 		    item, zone, zone->uz_name, slab, freei);
 
-	if (((freei * keg->uk_rsize) + slab->us_data) != item) 
+	if (slab_item(slab, keg, freei) != item)
 		panic("Unaligned free of %p from zone %p(%s) slab %p(%d)\n",
 		    item, zone, zone->uz_name, slab, freei);
 
-	if (!BIT_ISSET(SLAB_SETSIZE, freei, &slab->us_debugfree))
+	if (!BIT_ISSET(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree))
 		panic("Duplicate free of %p from zone %p(%s) slab %p(%d)\n",
 		    item, zone, zone->uz_name, slab, freei);
 
-	BIT_CLR_ATOMIC(SLAB_SETSIZE, freei, &slab->us_debugfree);
+	BIT_CLR_ATOMIC(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree);
 }
 #endif /* INVARIANTS */
 

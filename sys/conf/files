@@ -1753,6 +1753,7 @@ dev/gpio/gpioc.c		optional gpio				\
 dev/gpio/gpioiic.c		optional gpioiic
 dev/gpio/gpioled.c		optional gpioled !fdt
 dev/gpio/gpioled_fdt.c		optional gpioled fdt
+dev/gpio/gpiomdio.c		optional gpiomdio mii_bitbang
 dev/gpio/gpiopower.c		optional gpiopower fdt
 dev/gpio/gpioregulator.c	optional gpioregulator fdt ext_resources
 dev/gpio/gpiospi.c		optional gpiospi
@@ -4295,6 +4296,7 @@ netinet/tcp_pcap.c		optional inet tcppcap | inet6 tcppcap \
 	compile-with "${NORMAL_C} ${NO_WNONNULL}"
 netinet/tcp_reass.c		optional inet | inet6
 netinet/tcp_sack.c		optional inet | inet6
+netinet/tcp_stats.c		optional stats inet | stats inet6
 netinet/tcp_subr.c		optional inet | inet6
 netinet/tcp_syncache.c		optional inet | inet6
 netinet/tcp_timer.c		optional inet | inet6
@@ -4755,6 +4757,8 @@ dev/mlx5/mlx5_core/mlx5_rl.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_srq.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
+dev/mlx5/mlx5_core/mlx5_tls.c			optional mlx5 pci	\
+	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_transobj.c		optional mlx5 pci	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_uar.c			optional mlx5 pci	\
@@ -4777,6 +4781,8 @@ dev/mlx5/mlx5_en/mlx5_en_main.c			optional mlx5en pci inet inet6	\
 dev/mlx5/mlx5_en/mlx5_en_tx.c			optional mlx5en pci inet inet6	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_en/mlx5_en_flow_table.c		optional mlx5en pci inet inet6	\
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_en/mlx5_en_hw_tls.c		optional mlx5en pci inet inet6	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_en/mlx5_en_rx.c			optional mlx5en pci inet inet6	\
 	compile-with "${OFED_C}"

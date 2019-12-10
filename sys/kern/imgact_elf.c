@@ -1324,11 +1324,10 @@ ret:
 #define	suword __CONCAT(suword, __ELF_WORD_SIZE)
 
 int
-__elfN(freebsd_copyout_auxargs)(struct image_params *imgp, u_long *base)
+__elfN(freebsd_copyout_auxargs)(struct image_params *imgp, uintptr_t base)
 {
 	Elf_Auxargs *args = (Elf_Auxargs *)imgp->auxargs;
 	Elf_Auxinfo *argarray, *pos;
-	u_long auxlen;
 	int error;
 
 	argarray = pos = malloc(AT_COUNT * sizeof(*pos), M_TEMP,
@@ -1374,15 +1373,13 @@ __elfN(freebsd_copyout_auxargs)(struct image_params *imgp, u_long *base)
 	imgp->auxargs = NULL;
 	KASSERT(pos - argarray <= AT_COUNT, ("Too many auxargs"));
 
-	auxlen = sizeof(*argarray) * (pos - argarray);
-	*base -= auxlen;
-	error = copyout(argarray, (void *)*base, auxlen);
+	error = copyout(argarray, (void *)base, sizeof(*argarray) * AT_COUNT);
 	free(argarray, M_TEMP);
 	return (error);
 }
 
 int
-__elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
+__elfN(freebsd_fixup)(uintptr_t *stack_base, struct image_params *imgp)
 {
 	Elf_Addr *base;
 
@@ -1390,7 +1387,7 @@ __elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
 	base--;
 	if (suword(base, imgp->args->argc) == -1)
 		return (EFAULT);
-	*stack_base = (register_t *)base;
+	*stack_base = (uintptr_t)base;
 	return (0);
 }
 
@@ -2750,9 +2747,9 @@ __elfN(untrans_prot)(vm_prot_t prot)
 }
 
 void
-__elfN(stackgap)(struct image_params *imgp, u_long *stack_base)
+__elfN(stackgap)(struct image_params *imgp, uintptr_t *stack_base)
 {
-	u_long range, rbase, gap;
+	uintptr_t range, rbase, gap;
 	int pct;
 
 	if ((imgp->map_flags & MAP_ASLR) == 0)
