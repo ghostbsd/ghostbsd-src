@@ -1,0 +1,33 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	need dumpon
+	keyword -jail
+}
+
+name="ddb"
+desc="DDB kernel debugger"
+rcvar="ddb_enable"
+command="/sbin/${name}"
+required_files="${ddb_config}"
+command_args="${ddb_config}"
+
+start_pre()
+{
+	# Silently exit if ddb is not enabled
+	if [ -z "`sysctl -Nq debug.ddb.scripting.scripts`" ]; then
+		return 1
+	fi
+}
+
+start()
+{
+	${command} ${command_args}
+}
+
+stop()
+{
+	return 0
+}

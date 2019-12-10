@@ -1,0 +1,53 @@
+#!/sbin/openrc-run
+
+name="NFS Daemon"
+stopsig="USR1"
+
+depend()
+{
+	need localmount rpcbind mountd gssd
+	use net logger
+	keyword -stop
+}
+
+start_pre()
+{
+	# Load the nfsd kernel module
+	kldstat | grep -q "nfsd"
+	if [ $? -ne 0 ] ; then
+		kldload nfsd 2>/dev/null
+	fi
+
+        if yesno nfs_reserved_port_only; then
+                einfo 'NFS on reserved port only=YES'
+                sysctl vfs.nfsd.nfs_privport=1 > /dev/null
+        else    
+                sysctl vfs.nfsd.nfs_privport=0 > /dev/null
+        fi
+        
+        if yesno nfsv4_server_enable || \
+            yesno nfs_server_managegids; then
+                need nfsuserd
+        fi
+        
+        if yesno nfsv4_server_enable; then
+                sysctl vfs.nfsd.server_max_nfsvers=4 > /dev/null
+        else    
+                einfo 'NFSv4 is disabled'
+                sysctl vfs.nfsd.server_max_nfsvers=3 > /dev/null
+        fi
+}
+
+start()
+{
+	ebegin "Starting NFSd"
+	/usr/sbin/nfsd $nfs_server_flags
+	eend $?
+}
+
+stop()
+{
+	ebegin "Stopping NFSd"
+	killall -9 nfsd
+	eend $?
+}

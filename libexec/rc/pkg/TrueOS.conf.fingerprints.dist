@@ -1,0 +1,6 @@
+%%REPONAME%%: {
+  url: "%%URL%%",
+  signature_type: "fingerprints",
+  fingerprints: "%%FINGERPRINTS%%",
+  enabled: yes
+}

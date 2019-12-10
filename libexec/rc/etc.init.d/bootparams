@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+#
+# $FreeBSD$
+#
+
+depend()
+{
+	need rpcbind
+	keyword -jail
+}
+
+name="bootparamd"
+desc="Boot parameter daemon"
+required_files="/etc/bootparams"
+command="/usr/sbin/${name}"

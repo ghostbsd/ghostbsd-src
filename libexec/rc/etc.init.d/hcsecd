@@ -1,0 +1,48 @@
+#!/sbin/openrc-run
+###################################
+# OpenRC service file for the "hcsecd" daemon
+# Written by Ken Moore <ken@ixsystems.com> 4/10/2018
+# Available under the 2-clause BSD license
+# 
+###################################
+#General Info/Settings
+name="hcsecd"
+description="Control link keys and PIN codes for Bluetooth devices"
+command="/usr/sbin/${name}"
+pidfile="/var/run/${name}.pid"
+required_modules="ng_btsocket"
+supervisor="supervise-daemon"
+output_file="/var/log/${name}.log"
+error_file="/var/log/${name}.log"
+
+#Respect config file
+config="${hcsecd_config:-/etc/bluetooth/${name}.conf}"
+command_args="-d -f ${config}"
+required_files="${config}"
+
+depend(){
+  before devd
+  keyword -jail -shutdown
+}
+
+extra_started_commands="reload"
+description_reload="Prompt the service to reload its configuration files"
+
+reload(){
+  #Send the HUP signal to the daemon to reload the configs
+  local _pid
+  _pid=`cat ${pidfile}`
+  kill -s HUP ${_pid}
+}
+
+start_pre(){
+  for i in ${required_modules}
+  do
+    kldload -n "${i}" >/dev/null 2>/dev/null
+    if [ $? -ne 0 ] ; then
+      eerror "Could not load required kernel module: ${i}"
+      return 1
+    fi
+  done
+  return 0
+}

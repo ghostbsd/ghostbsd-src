@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+name="blacklistd"
+description="System blacklist daemon"
+command=/usr/sbin/blacklistd
+required_files="/etc/blacklistd.conf"
+
+depend()
+{
+	need localmount pf
+	use net
+	before inetd xinetd
+}

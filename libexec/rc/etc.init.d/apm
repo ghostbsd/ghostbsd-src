@@ -1,0 +1,47 @@
+#!/sbin/openrc-run
+#
+# $FreeBSD$
+#
+
+depend()
+{
+	keyword -jail
+}
+
+name="apm"
+desc="Advanced power management"
+command="/usr/sbin/${name}"
+
+start_pre()
+{
+	case `${SYSCTL_N} hw.machine_arch` in
+	i386)
+		return 0
+		;;
+	esac
+	return 1
+}
+
+start()
+{
+	$command -e enable
+}
+
+stop()
+{
+	$command -e disable
+}
+
+status()
+{
+	case `${command} -s` in
+	1)
+		einfo "APM is enabled."
+		return 0
+		;;
+	0)
+		einfo "APM is disabled"
+		;;
+	esac
+	return 1
+}

@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+name="ypldap"
+description="NIS LDAP binding daemon"
+
+command="/usr/sbin/${name}"
+command_args="${nis_ypldap_flags}"
+
+depend()
+{
+	need localmount
+	want ypserv
+	keyword -shutdown -stop
+}

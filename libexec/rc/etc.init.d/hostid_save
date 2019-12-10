@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+#
+
+provide()
+{
+	need hostid
+	keyword -jail
+}
+
+SYSCTL_N="sysctl -n"
+
+name="hostid_save"
+desc="Save unique host ID to disk"
+
+start()
+{
+	current_hostid=`$SYSCTL_N kern.hostuuid`
+
+	if [ -r ${hostid_file} ]; then
+		read saved_hostid < ${hostid_file}
+		if [ ${saved_hostid} = ${current_hostid} ]; then
+			exit 0
+		fi
+	fi
+
+	echo ${current_hostid} > ${hostid_file}
+	if [ $? -ne 0 ]; then
+		ewarn "could not store hostuuid in ${hostid_file}."
+	fi
+}

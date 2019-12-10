@@ -1,0 +1,268 @@
+#!/sbin/openrc-run
+# Copyright (c) 2016 - Kris Moore <kris@ixsystems.com>
+# Copyright (c) 2009-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+# except according to the terms contained in the LICENSE file.
+#
+# This script was inspired by the equivalent rc.d network from NetBSD.
+#
+# 2016-12-11 - Kris Moore - Improved to support per-interface sub-services
+#
+
+netif=${RC_SVCNAME##*.}
+if [ -n "$netif" -a "$netif" != "network" ]; then
+	ifconfig $netif >/dev/null 2>/dev/null
+	if [ $? -ne 0 ] ; then exit 0; fi
+	network_device="$netif"
+fi
+
+# Until we can determine why devd is throwing some bogus
+# $cdev = '' variables
+if [ "${RC_SVCNAME}" = "network." ] ; then
+	exit 1
+fi
+name="network"
+[ -n "$network_device" ] && name="$name ($network_device)"
+
+
+description="Configures network interfaces."
+__nl="
+"
+IFCONFIG_CMD="/sbin/ifconfig"
+
+# Needed for network scripts
+. /etc/rc.subr
+. /etc/network.subr
+
+depend()
+{
+        provide net
+        need localmount
+        after bootmisc modules
+	keyword -jail -prefix -vserver -stop
+}
+
+start()
+{
+	local _if
+
+	# Set the list of interfaces to work on.
+	cmdifn=$network_device
+
+	# Create IEEE802.11 interface
+	wlan_up $cmdifn
+
+	# Create cloned interfaces
+	clone_up $cmdifn
+
+	# Rename interfaces.
+	ifnet_rename $cmdifn
+
+	# Configure the interface(s).
+	netif_common ifn_start $cmdifn
+
+	#if [ -f /etc/rc.d/ipfilter ] ; then
+		# Resync ipfilter
+	#	/etc/rc.d/ipfilter quietresync
+	#fi
+	if [ -n "$cmdifn" ] ; then
+		export BRIDGE_IFLIST="${cmdifn}"
+		service bridge static
+	fi
+	if [ -n "$cmdifn" ] ; then
+		for _if in $cmdifn; do
+			export ROUTE_AF="any"
+			export ROUTE_IF="$_if"
+			service routing static
+		done
+	fi
+}
+
+stop()
+{
+	netif_stop0 $*
+}
+
+stop_pre()
+{
+	if [ "$RC_CMD" = "restart" ]; then
+		_clone_down=
+		_wlan_down=
+	else
+		_clone_down=1
+		_wlan_down=1
+	fi
+}
+
+netif_stop0()
+{
+	local _if
+
+	# Set the list of interfaces to work on.
+	#
+	cmdifn=$network_device
+
+	# Deconfigure the interface(s)
+	netif_common ifn_stop $cmdifn
+
+	# Destroy wlan interfaces
+	if [ -n "$_wlan_down" ]; then
+		wlan_down $cmdifn
+	fi
+
+	# Destroy cloned interfaces
+	if [ -n "$_clone_down" ]; then
+		clone_down $cmdifn
+	fi
+
+	if [ -n "$cmdifn" ] ; then
+		for _if in $cmdifn; do
+			export ROUTE_AF="any"
+			export ROUTE_IF="$_if"
+			service routing staticstop
+		done
+	fi
+}
+
+vnet_up()
+{
+	cmdifn=$*
+
+	netif_common ifn_vnetup $cmdifn
+}
+
+vnet_down()
+{
+	cmdifn=$*
+
+	netif_common ifn_vnetdown $cmdifn
+}
+
+# netif_common routine
+#	Common configuration subroutine for network interfaces. This
+#	routine takes all the preparatory steps needed for configuriing
+#	an interface and then calls $routine.
+netif_common()
+{
+	local _cooked_list _tmp_list _fail _func _ok _str _cmdifn
+
+	_func=
+
+	if [ -z "$1" ]; then
+		eerror "netif_common(): No function name specified."
+		exit 1
+	else
+		_func="$1"
+		shift
+	fi
+
+	# Set the scope of the command (all interfaces or just one).
+	#
+	_cooked_list=
+	_tmp_list=
+	_cmdifn=$*
+	if [ -n "$_cmdifn" ]; then
+		# Don't check that the interface(s) exist.  We need to run
+		# the down code even when the interface doesn't exist to
+		# kill off wpa_supplicant.
+		# XXXBED: is this really true or does wpa_supplicant die?
+		# if so, we should get rid of the devd entry
+		_cooked_list="$_cmdifn"
+	else
+		_cooked_list="`list_net_interfaces`"
+	fi
+
+	# Expand epair[0-9] to epair[0-9][ab].
+	for ifn in $_cooked_list; do
+	case ${ifn#epair} in
+	[0-9]*[ab])	;;	# Skip epair[0-9]*[ab].
+	[0-9]*)
+		for _str in $_cooked_list; do
+		case $_str in
+		$ifn)	_tmp_list="$_tmp_list ${ifn}a ${ifn}b" ;;
+		*)	_tmp_list="$_tmp_list ${ifn}" ;;
+		esac
+		done
+		_cooked_list=${_tmp_list# }
+	;;
+	esac
+	done
+
+	_dadwait=
+	_fail=
+	_ok=
+	for ifn in ${_cooked_list# }; do
+		# Skip if ifn does not exist.
+		case $_func in
+		ifn_stop)
+			if ! ${IFCONFIG_CMD} $ifn > /dev/null 2>&1; then
+				ewarn "$ifn does not exist.  Skipped."
+				_fail="${_fail} ${ifn}"
+				continue
+			fi
+		;;
+		esac
+		if ${_func} ${ifn} $2; then
+			_ok="${_ok} ${ifn}"
+			if ipv6if ${ifn}; then
+				_dadwait=1
+			fi
+		else
+			_fail="${_fail} ${ifn}"
+		fi
+	done
+
+	# inet6 address configuration needs sleep for DAD.
+	case ${_func}:${_dadwait} in
+	ifn_start:1|ifn_vnetup:1|ifn_vnetdown:1)
+		sleep `${SYSCTL_N} net.inet6.ip6.dad_count`
+		sleep 1
+	;;
+	esac
+
+	_str=
+	if [ -n "${_ok}" ]; then
+		case ${_func} in
+		ifn_start)
+			_str='Starting'
+		;;
+		ifn_stop)
+			_str='Stopping'
+		;;
+		ifn_vnetup)
+			_str='Moving'
+		;;
+		ifn_vnetdown)
+			_str='Reclaiming'
+		;;
+		esac
+		einfo "${_str} Network:${_ok}."
+		case ${_func} in
+		ifn_vnetup)
+			# Clear _ok not to do "ifconfig $ifn"
+			# because $ifn is no longer in the current vnet.
+			_ok=
+		;;
+		esac
+		if check_startmsgs; then
+			for ifn in ${_ok}; do
+				/sbin/ifconfig ${ifn} >/dev/null 2>/dev/null
+			done
+		fi
+	fi
+
+	if [ -n "$_fail" ] ; then
+		ewarn "The following interfaces were not configured: $_fail"
+	fi
+}
+
+# Load the old "network" config file also for compatibility.
+# This is needed for mfsBSD at least.
+#load_rc_config network
+#load_rc_config $name

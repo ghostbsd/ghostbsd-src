@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+#
+
+name="nfscbd"
+command="/usr/sbin/${name}"
+
+depend() {
+	need nfsuserd
+	keyword -jail -shutdown
+}

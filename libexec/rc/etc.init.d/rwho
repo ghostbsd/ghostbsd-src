@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+
+name="rwhod"
+rcvar="rwhod_enable"
+command="/usr/sbin/${name}"
+
+depend() {
+	before login
+	keyword -shutdown
+}

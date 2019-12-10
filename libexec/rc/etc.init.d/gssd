@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+
+command=/usr/sbin/gssd
+name="Generic Security Services Daemon"
+
+depend()
+{
+	need localmount
+}

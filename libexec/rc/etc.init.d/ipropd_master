@@ -1,0 +1,33 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	need kdc
+	keyword -shutdown
+}
+
+name=ipropd_master
+command="/usr/libexec/ipropd-master"
+required_files="$ipropd_master_keytab"
+
+start_pre()
+{
+
+	if [ -z "$ipropd_master_slaves" ]; then
+		ewarn "\$ipropd_master_slaves is empty."
+		return 1
+	fi
+	for _slave in $ipropd_master_slaves; do
+		echo $_slave
+	done > /var/heimdal/slaves || return 1
+	command_args="$command_args \
+	    --keytab=\"$ipropd_master_keytab\" \
+	    --detach \
+	"
+}
+start_post()
+{
+
+	einfo "${name}: slave nodes: $ipropd_master_slaves"
+}

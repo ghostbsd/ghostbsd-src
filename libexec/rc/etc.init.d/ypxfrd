@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+
+name="ypxfrd"
+description="NIS map transfer server"
+
+command="/usr/sbin/rpc.${name}"
+command_args="${nis_ypxfrd_flags}"
+
+depend()
+{
+	need localmount rpcbind ypserv
+	keyword -shutdown -stop
+}
+
+start_pre()
+{
+	local _domain
+
+	_domain=`domainname`
+	if [ -z "$_domain" ]; then
+		ewarn "NIS domainname(1) is not set."
+		return 1
+	fi
+}

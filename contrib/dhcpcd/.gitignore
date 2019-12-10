@@ -1,0 +1,24 @@
+# Ignore configure generated files
+config.mk
+config.log
+
+# Ignore object files
+.depend
+*.o
+*.So
+*.so
+dhcpcd
+
+# Ignore generated man pages and scripts
+dhcpcd-run-hooks
+dhcpcd-run-hooks.8
+hooks/50-ypbind
+
+# Ignore distribution
+dhcpcd*.xz*
+
+# Ignore swap files
+*.swp
+
+# Ignore Coverity
+cov-int

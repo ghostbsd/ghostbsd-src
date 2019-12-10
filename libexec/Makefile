@@ -9,6 +9,8 @@ SUBDIR=	${_atf} \
 	${_comsat} \
 	${_dma} \
 	flua \
+	dhcpcd-hooks \
+	dhcpcd-run-hooks \
 	getty \
 	${_mail.local} \
 	${_makewhatis.local} \

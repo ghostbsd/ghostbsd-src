@@ -1,0 +1,43 @@
+#!/sbin/openrc-run
+
+name="natd"
+description="Network Address Translation daemon"
+command=/sbin/natd
+pidfile="/var/run/${name}.pid"
+sigstop="SIGKILL"
+retry="30"
+
+# Needed for network scripts
+. /etc/network.subr
+
+depend()
+{
+	need localmount
+	use net
+	keyword -jail -shutdown
+}
+
+start_pre()
+{
+	# Make sure our modules are loaded
+	load_kld ipdivert
+
+	if [ -n "${natd_interface}" ]; then
+		dhcp_list="`list_net_interfaces dhcp`"
+		for ifn in ${dhcp_list}; do
+			case "${natd_interface}" in
+			${ifn})
+				command_args="$command_args -dynamic"
+				;;
+			esac
+		done
+
+		if echo "${natd_interface}" | \
+		    grep -q -E '^[0-9]+(\.[0-9]+){0,3}$'; then
+			command_args="$command_args -a ${natd_interface}"
+		else
+			command_args="$command_args -n ${natd_interface}"
+		fi
+	fi
+	return 0
+}

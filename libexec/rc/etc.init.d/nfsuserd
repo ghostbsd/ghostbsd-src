@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+
+name="NFSv4 User Services"
+
+depend()
+{
+	need localmount rpcbind
+	use net logger
+}
+
+start_pre()
+{
+	if yesno nfs_server_managegids; then
+		nfsuserd_flags="-manage-gids ${nfsuserd_flags}"
+	fi
+}
+
+start()
+{
+	ebegin "Starting NFS user services"
+	/usr/sbin/nfsuserd -force $nfsuserd_flags
+	eend $?
+}
+
+stop()
+{
+	ebegin "Stopping NFS user services"
+	killall -9 nfsuserd
+	eend $?
+}

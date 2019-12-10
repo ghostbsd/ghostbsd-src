@@ -1,0 +1,65 @@
+#!/sbin/openrc-run
+
+name="accounting"
+
+accounting_command="/usr/sbin/accton"
+accounting_file="/var/account/acct"
+
+extra_commands="rotate_log"
+description_rotate_log="Rotate the accounting logs"
+
+depend()
+{
+	need localmount
+}
+
+start()
+{
+	local _dir
+
+	_dir="${accounting_file%/*}"
+	if [ ! -d "$_dir" ]; then
+		if ! mkdir -p "$_dir"; then
+			eend 1 "Could not create $_dir."
+		fi
+	fi
+
+	if [ ! -e "$accounting_file" ]; then
+		einfo "Creating accounting file ${accounting_file}"
+		touch "$accounting_file"
+	fi
+	chmod 644 "$accounting_file"
+
+	ebegin "Turning on accounting."
+	${accounting_command} ${accounting_file}
+	eend $?
+}
+
+stop()
+{
+	ebegin "Turning off accounting."
+	${accounting_command}
+	eend $?
+}
+
+rotate_log()
+{
+	local _dir _file
+
+	_dir="${accounting_file%/*}"
+	cd $_dir
+
+	ebegin "Rotating accounting logs"
+	if yesno accounting_enable; then
+		_file=`mktemp newacct-XXXXX`
+		chmod 644 $_file
+		${accounting_command} ${_dir}/${_file}
+	fi
+
+	mv ${accounting_file} ${accounting_file}.0
+
+	if yesno accounting_enable; then
+		mv $_file ${accounting_file}
+	fi
+	eend 0
+}

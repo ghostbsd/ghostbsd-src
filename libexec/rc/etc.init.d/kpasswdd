@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+
+name=kpasswdd
+
+depend()
+{
+	provide kpasswd
+	need kdc
+	keyword -shutdown
+}
+
+
+start_pre()
+{
+
+	command_args="$command_args &"
+}
+
+start()
+{
+	return 0
+}
+
+stop()
+{
+	return 0
+}

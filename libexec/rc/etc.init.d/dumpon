@@ -1,0 +1,80 @@
+#!/sbin/openrc-run
+# Copyright (c) 2007-2015 The OpenRC Authors.
+# See the Authors file at the top-level directory of this distribution and
+# https://github.com/OpenRC/openrc/blob/master/AUTHORS
+#
+# This file is part of OpenRC. It is subject to the license terms in
+# the LICENSE file found in the top-level directory of this
+# distribution and at https://github.com/OpenRC/openrc/blob/master/LICENSE
+# This file may not be copied, modified, propagated, or distributed
+# except according to the terms contained in the LICENSE file.
+
+description="Configures a specific kernel dump device."
+
+depend() {
+	need swap
+	keyword -jail -prefix
+}
+
+if [ -n "$dump_device" ] ; then
+	dumpdev="${dump_device}"
+fi
+
+dumpon_try()
+{
+	local flags
+
+	flags=${dumpon_flags}
+	if [ -n "${dumppubkey}" ]; then
+		warn "The dumppubkey variable is deprecated.  Use dumpon_flags."
+		flags="${flags} -k ${dumppubkey}"
+	fi
+	/sbin/dumpon ${flags} "${1}"
+	if [ $? -eq 0 ]; then
+		# Make a symlink in devfs for savecore
+		ln -fs "${1}" /dev/dumpdev
+		return 0
+	fi
+	ewarn "unable to specify $1 as a dump device"
+	return 1
+}
+
+start()
+{
+	# Enable dumpdev so that savecore can see it. Enable it
+	# early so a crash early in the boot process can be caught.
+	#
+	case ${dumpdev} in
+	[Nn][Oo] | '')
+		;;
+	[Aa][Uu][Tt][Oo])
+		dev=$(/bin/kenv -q dumpdev)
+		if [ -n "${dev}" ] ; then
+			dumpon_try "${dev}"
+			return $?
+		fi
+		while read dev mp type more ; do
+			[ "${type}" = "swap" ] || continue
+			[ -c "${dev}" ] || continue
+			dumpon_try "${dev}" 2>/dev/null && return 0
+		done </etc/fstab
+		ewarn "No suitable dump device was found." 1>&2
+		return 1
+		;;
+	*)
+		dumpon_try "${dumpdev}"
+		;;
+	esac
+}
+
+stop()
+{
+	case ${dumpdev} in
+	[Nn][Oo] | '')
+		;;
+	*)
+		rm -f /dev/dumpdev
+		/sbin/dumpon -v off
+		;;
+	esac
+}

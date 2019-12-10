@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+name=kadmind
+
+depend() {
+	need kdc
+	keyword -shutdown
+}
+
+
+start_pre() {
+
+	command_args="$command_args &"
+}
+
+start() {
+	return 0
+}
+
+stop() {
+	return 0
+}

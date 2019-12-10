@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	need syslogd
+	keyword -jail -shutdown
+}
+
+name="hastd"
+desc="Highly Available Storage daemon"
+pidfile="/var/run/${name}.pid"
+command="/sbin/${name}"
+hastctl="/sbin/hastctl"
+required_files="/etc/hast.conf"
+required_modules="geom_gate:g_gate"
+
+stop_pre()
+{
+
+	${hastctl} role init all
+}

@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+#
+
+depend()
+{
+	keyword -jail
+}
+
+name="ccd"
+desc="Concatenated disks setup"
+
+start()
+{
+	if [ -f /etc/ccd.conf ]; then
+		einfo "Configuring CCD devices."
+		ccdconfig -C
+	fi
+}
+
+stop()
+{
+	return 0
+}
