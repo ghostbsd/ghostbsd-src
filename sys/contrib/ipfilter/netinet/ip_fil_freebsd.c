@@ -979,7 +979,7 @@ ipf_ifpaddr(softc, v, atype, ifptr, inp, inpmask)
 	i6addr_t *inp, *inpmask;
 {
 #ifdef USE_INET6
-	struct in6_addr *inp6 = NULL;
+	struct in6_addr *ia6 = NULL;
 #endif
 	struct sockaddr *sock, *mask;
 	struct sockaddr_in *sin;
@@ -1007,9 +1007,9 @@ ipf_ifpaddr(softc, v, atype, ifptr, inp, inpmask)
 			break;
 #ifdef USE_INET6
 		if ((v == 6) && (sin->sin_family == AF_INET6)) {
-			inp6 = &((struct sockaddr_in6 *)sin)->sin6_addr;
-			if (!IN6_IS_ADDR_LINKLOCAL(inp6) &&
-			    !IN6_IS_ADDR_LOOPBACK(inp6))
+			ia6 = &((struct sockaddr_in6 *)sin)->sin6_addr;
+			if (!IN6_IS_ADDR_LINKLOCAL(ia6) &&
+			    !IN6_IS_ADDR_LOOPBACK(ia6))
 				break;
 		}
 #endif
@@ -1454,17 +1454,15 @@ ipf_pcksum(fin, hlen, sum)
 
 #ifdef	USE_INET6
 u_int
-ipf_pcksum6(fin, ip6, off, len)
-	fr_info_t *fin;
+ipf_pcksum6(m, ip6, off, len)
+	struct mbuf *m;
 	ip6_t *ip6;
 	u_int32_t off;
 	u_int32_t len;
 {
 #ifdef	_KERNEL
-	struct mbuf *m;
 	int sum;
 
-	m = fin->fin_m;
 	if (m->m_len < sizeof(struct ip6_hdr)) {
 		return 0xffff;
 	}
