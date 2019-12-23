@@ -464,9 +464,11 @@ kdb_switch(void)
 
 /*
  * The machine independent parts of context switching.
+ *
+ * The thread lock is required on entry and is no longer held on return.
  */
 void
-mi_switch(int flags, struct thread *newtd)
+mi_switch(int flags)
 {
 	uint64_t runtime, new_switchtime;
 	struct thread *td;
@@ -482,7 +484,6 @@ mi_switch(int flags, struct thread *newtd)
 	    ("mi_switch: switch in a critical section"));
 	KASSERT((flags & (SW_INVOL | SW_VOL)) != 0,
 	    ("mi_switch: switch must be voluntary or involuntary"));
-	KASSERT(newtd != curthread, ("mi_switch: preempting back to ourself"));
 
 	/*
 	 * Don't perform context switches from the debugger.
@@ -521,7 +522,7 @@ mi_switch(int flags, struct thread *newtd)
 	    (flags & SW_TYPE_MASK) == SWT_NEEDRESCHED)))
 		SDT_PROBE0(sched, , , preempt);
 #endif
-	sched_switch(td, newtd, flags);
+	sched_switch(td, flags);
 	CTR4(KTR_PROC, "mi_switch: new thread %ld (td_sched %p, pid %ld, %s)",
 	    td->td_tid, td_get_sched(td), td->td_proc->p_pid, td->td_name);
 
@@ -532,46 +533,55 @@ mi_switch(int flags, struct thread *newtd)
 		PCPU_SET(deadthread, NULL);
 		thread_stash(td);
 	}
+	spinlock_exit();
 }
 
 /*
  * Change thread state to be runnable, placing it on the run queue if
  * it is in memory.  If it is swapped out, return true so our caller
  * will know to awaken the swapper.
+ *
+ * Requires the thread lock on entry, drops on exit.
  */
 int
-setrunnable(struct thread *td)
+setrunnable(struct thread *td, int srqflags)
 {
+	int swapin;
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	KASSERT(td->td_proc->p_state != PRS_ZOMBIE,
 	    ("setrunnable: pid %d is a zombie", td->td_proc->p_pid));
+
+	swapin = 0;
 	switch (td->td_state) {
 	case TDS_RUNNING:
 	case TDS_RUNQ:
+		break;
+	case TDS_CAN_RUN:
+		KASSERT((td->td_flags & TDF_INMEM) != 0,
+		    ("setrunnable: td %p not in mem, flags 0x%X inhibit 0x%X",
+		    td, td->td_flags, td->td_inhibitors));
+		/* unlocks thread lock according to flags */
+		sched_wakeup(td, srqflags);
 		return (0);
 	case TDS_INHIBITED:
 		/*
 		 * If we are only inhibited because we are swapped out
-		 * then arange to swap in this process. Otherwise just return.
+		 * arrange to swap in this process.
 		 */
-		if (td->td_inhibitors != TDI_SWAPPED)
-			return (0);
-		/* FALLTHROUGH */
-	case TDS_CAN_RUN:
+		if (td->td_inhibitors == TDI_SWAPPED &&
+		    (td->td_flags & TDF_SWAPINREQ) == 0) {
+			td->td_flags |= TDF_SWAPINREQ;
+			swapin = 1;
+		}
 		break;
 	default:
-		printf("state is 0x%x", td->td_state);
-		panic("setrunnable(2)");
+		panic("setrunnable: state 0x%x", td->td_state);
 	}
-	if ((td->td_flags & TDF_INMEM) == 0) {
-		if ((td->td_flags & TDF_SWAPINREQ) == 0) {
-			td->td_flags |= TDF_SWAPINREQ;
-			return (1);
-		}
-	} else
-		sched_wakeup(td);
-	return (0);
+	if ((srqflags & (SRQ_HOLD | SRQ_HOLDTD)) == 0)
+		thread_unlock(td);
+
+	return (swapin);
 }
 
 /*
@@ -638,8 +648,7 @@ kern_yield(int prio)
 		prio = td->td_user_pri;
 	if (prio >= 0)
 		sched_prio(td, prio);
-	mi_switch(SW_VOL | SWT_RELINQUISH, NULL);
-	thread_unlock(td);
+	mi_switch(SW_VOL | SWT_RELINQUISH);
 	PICKUP_GIANT();
 }
 
@@ -653,8 +662,7 @@ sys_yield(struct thread *td, struct yield_args *uap)
 	thread_lock(td);
 	if (PRI_BASE(td->td_pri_class) == PRI_TIMESHARE)
 		sched_prio(td, PRI_MAX_TIMESHARE);
-	mi_switch(SW_VOL | SWT_RELINQUISH, NULL);
-	thread_unlock(td);
+	mi_switch(SW_VOL | SWT_RELINQUISH);
 	td->td_retval[0] = 0;
 	return (0);
 }

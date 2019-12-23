@@ -376,9 +376,13 @@ struct thread0_storage {
 };
 
 struct mtx *thread_lock_block(struct thread *);
-void thread_lock_unblock(struct thread *, struct mtx *);
+void thread_lock_block_wait(struct thread *);
 void thread_lock_set(struct thread *, struct mtx *);
+void thread_lock_unblock(struct thread *, struct mtx *);
 #define	THREAD_LOCK_ASSERT(td, type)					\
+	mtx_assert((td)->td_lock, (type))
+
+#define	THREAD_LOCK_BLOCKED_ASSERT(td, type)				\
 do {									\
 	struct mtx *__m = (td)->td_lock;				\
 	if (__m != &blocked_lock)					\
@@ -388,8 +392,17 @@ do {									\
 #ifdef INVARIANTS
 #define	THREAD_LOCKPTR_ASSERT(td, lock)					\
 do {									\
-	struct mtx *__m = (td)->td_lock;				\
-	KASSERT((__m == &blocked_lock || __m == (lock)),		\
+	struct mtx *__m;						\
+	__m = (td)->td_lock;						\
+	KASSERT(__m == (lock),						\
+	    ("Thread %p lock %p does not match %p", td, __m, (lock)));	\
+} while (0)
+
+#define	THREAD_LOCKPTR_BLOCKED_ASSERT(td, lock)				\
+do {									\
+	struct mtx *__m;						\
+	__m = (td)->td_lock;						\
+	KASSERT(__m == (lock) || __m == &blocked_lock,			\
 	    ("Thread %p lock %p does not match %p", td, __m, (lock)));	\
 } while (0)
 
@@ -401,6 +414,7 @@ do {									\
 } while (0)
 #else
 #define	THREAD_LOCKPTR_ASSERT(td, lock)
+#define	THREAD_LOCKPTR_BLOCKED_ASSERT(td, lock)
 
 #define	TD_LOCKS_INC(td)
 #define	TD_LOCKS_DEC(td)
@@ -417,7 +431,7 @@ do {									\
 #define	TDF_TIMEOUT	0x00000010 /* Timing out during sleep. */
 #define	TDF_IDLETD	0x00000020 /* This is a per-CPU idle thread. */
 #define	TDF_CANSWAP	0x00000040 /* Thread can be swapped. */
-#define	TDF_SLEEPABORT	0x00000080 /* sleepq_abort was called. */
+#define	TDF_UNUSED80	0x00000080 /* unused. */
 #define	TDF_KTH_SUSP	0x00000100 /* kthread is suspended */
 #define	TDF_ALLPROCSUSP	0x00000200 /* suspended by SINGLE_ALLPROC */
 #define	TDF_BOUNDARY	0x00000400 /* Thread suspended at user boundary */
@@ -518,6 +532,9 @@ do {									\
 #define	TD_IS_INHIBITED(td)	((td)->td_state == TDS_INHIBITED)
 #define	TD_ON_UPILOCK(td)	((td)->td_flags & TDF_UPIBLOCKED)
 #define TD_IS_IDLETHREAD(td)	((td)->td_flags & TDF_IDLETD)
+
+#define	TD_CAN_ABORT(td)	(TD_ON_SLEEPQ((td)) &&			\
+				    ((td)->td_flags & TDF_SINTR) != 0)
 
 #define	KTDSTATE(td)							\
 	(((td)->td_inhibitors & TDI_SLEEPING) != 0 ? "sleep"  :		\
@@ -1058,7 +1075,7 @@ void	killjobc(void);
 int	leavepgrp(struct proc *p);
 int	maybe_preempt(struct thread *td);
 void	maybe_yield(void);
-void	mi_switch(int flags, struct thread *newtd);
+void	mi_switch(int flags);
 int	p_candebug(struct thread *td, struct proc *p);
 int	p_cansee(struct thread *td, struct proc *p);
 int	p_cansched(struct thread *td, struct proc *p);
@@ -1089,7 +1106,7 @@ int	securelevel_ge(struct ucred *cr, int level);
 int	securelevel_gt(struct ucred *cr, int level);
 void	sess_hold(struct session *);
 void	sess_release(struct session *);
-int	setrunnable(struct thread *);
+int	setrunnable(struct thread *, int);
 void	setsugid(struct proc *p);
 int	should_yield(void);
 int	sigonstack(size_t sp);

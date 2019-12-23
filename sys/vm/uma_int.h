@@ -254,6 +254,7 @@ struct uma_keg {
 };
 typedef struct uma_keg	* uma_keg_t;
 
+#ifdef _KERNEL
 /*
  * Free bits per-slab.
  */
@@ -271,16 +272,25 @@ struct uma_slab {
 	uint16_t	us_freecount;		/* How many are free? */
 	uint8_t		us_flags;		/* Page flags see uma.h */
 	uint8_t		us_domain;		/* Backing NUMA domain. */
-#ifdef INVARIANTS
-	struct slabbits	us_debugfree;		/* Debug bitmask. */
-#endif
-	struct noslabbits us_free;		/* Free bitmask. */
+	struct noslabbits us_free;		/* Free bitmask, flexible. */
 };
+_Static_assert(sizeof(struct uma_slab) == offsetof(struct uma_slab, us_free),
+    "us_free field must be last");
 #if MAXMEMDOM >= 255
 #error "Slab domain type insufficient"
 #endif
 
 typedef struct uma_slab * uma_slab_t;
+
+/*
+ * On INVARIANTS builds, the slab contains a second bitset of the same size,
+ * "dbg_bits", which is laid out immediately after us_free.
+ */
+#ifdef INVARIANTS
+#define	SLAB_BITSETS	2
+#else
+#define	SLAB_BITSETS	1
+#endif
 
 /* These three functions are for embedded (!OFFPAGE) use only. */
 size_t slab_sizeof(int nitems);
@@ -293,7 +303,10 @@ int slab_ipers(size_t size, int align);
  */
 struct uma_hash_slab {
 	struct uma_slab		uhs_slab;	/* Must be first. */
-	struct slabbits		uhs_bits;	/* Must be second. */
+	struct slabbits		uhs_bits1;	/* Must be second. */
+#ifdef INVARIANTS
+	struct slabbits		uhs_bits2;	/* Must be third. */
+#endif
 	LIST_ENTRY(uma_hash_slab) uhs_hlink;	/* Link for hash table */
 	uint8_t			*uhs_data;	/* First item */
 };
@@ -327,6 +340,7 @@ slab_item_index(uma_slab_t slab, uma_keg_t keg, void *item)
 	data = (uintptr_t)slab_data(slab, keg);
 	return (((uintptr_t)item - data) / keg->uk_rsize);
 }
+#endif /* _KERNEL */
 
 TAILQ_HEAD(uma_bucketlist, uma_bucket);
 
@@ -419,6 +433,32 @@ struct uma_zone {
 
 #define	UMA_ZFLAG_INHERIT						\
     (UMA_ZFLAG_INTERNAL | UMA_ZFLAG_CACHEONLY | UMA_ZFLAG_BUCKET)
+
+#define	PRINT_UMA_ZFLAGS	"\20"	\
+    "\40CACHEONLY"			\
+    "\37TRASH"				\
+    "\36INTERNAL"			\
+    "\35BUCKET"				\
+    "\34RECLAIMING"			\
+    "\33CACHE"				\
+    "\22MINBUCKET"			\
+    "\21NUMA"				\
+    "\20PCPU"				\
+    "\17NODUMP"				\
+    "\16VTOSLAB"			\
+    "\15CACHESPREAD"			\
+    "\14MAXBUCKET"			\
+    "\13NOBUCKET"			\
+    "\12SECONDARY"			\
+    "\11HASH"				\
+    "\10VM"				\
+    "\7MTXCLASS"			\
+    "\6NOFREE"				\
+    "\5MALLOC"				\
+    "\4OFFPAGE"				\
+    "\3STATIC"				\
+    "\2ZINIT"				\
+    "\1PAGEABLE"
 
 #undef UMA_ALIGN
 

@@ -64,6 +64,9 @@ typedef struct genkbd_softc {
 	unsigned int	gkb_q_length;
 } genkbd_softc_t;
 
+static u_char	*genkbd_get_fkeystr(keyboard_t *kbd, int fkey, size_t *len);
+static void	genkbd_diag(keyboard_t *kbd, int level);
+
 static	SLIST_HEAD(, keyboard_driver) keyboard_drivers =
 	SLIST_HEAD_INITIALIZER(keyboard_drivers);
 
@@ -80,8 +83,6 @@ SET_DECLARE(kbddriver_set, const keyboard_driver_t);
 static int		keyboards = 1;
 static keyboard_t	*kbd_ini;
 static keyboard_t	**keyboard = &kbd_ini;
-static keyboard_switch_t *kbdsw_ini;
-       keyboard_switch_t **kbdsw = &kbdsw_ini;
 
 static int keymap_restrict_change;
 static SYSCTL_NODE(_hw, OID_AUTO, kbd, CTLFLAG_RD, 0, "kbd");
@@ -94,7 +95,6 @@ static int
 kbd_realloc_array(void)
 {
 	keyboard_t **new_kbd;
-	keyboard_switch_t **new_kbdsw;
 	int newsize;
 	int s;
 
@@ -105,21 +105,10 @@ kbd_realloc_array(void)
 		splx(s);
 		return (ENOMEM);
 	}
-	new_kbdsw = malloc(sizeof(*new_kbdsw)*newsize, M_DEVBUF,
-			    M_NOWAIT|M_ZERO);
-	if (new_kbdsw == NULL) {
-		free(new_kbd, M_DEVBUF);
-		splx(s);
-		return (ENOMEM);
-	}
 	bcopy(keyboard, new_kbd, sizeof(*keyboard)*keyboards);
-	bcopy(kbdsw, new_kbdsw, sizeof(*kbdsw)*keyboards);
-	if (keyboards > 1) {
+	if (keyboards > 1)
 		free(keyboard, M_DEVBUF);
-		free(kbdsw, M_DEVBUF);
-	}
 	keyboard = new_kbd;
-	kbdsw = new_kbdsw;
 	keyboards = newsize;
 	splx(s);
 
@@ -176,6 +165,10 @@ kbd_add_driver(keyboard_driver_t *driver)
 {
 	if (SLIST_NEXT(driver, link))
 		return (EINVAL);
+	if (driver->kbdsw->get_fkeystr == NULL)
+		driver->kbdsw->get_fkeystr = genkbd_get_fkeystr;
+	if (driver->kbdsw->diag == NULL)
+		driver->kbdsw->diag = genkbd_diag;
 	SLIST_INSERT_HEAD(&keyboard_drivers, driver, link);
 	return (0);
 }
@@ -219,8 +212,8 @@ kbd_register(keyboard_t *kbd)
 
 	SLIST_FOREACH(p, &keyboard_drivers, link) {
 		if (strcmp(p->name, kbd->kb_name) == 0) {
+			kbd->kb_drv = p;
 			keyboard[index] = kbd;
-			kbdsw[index] = p->kbdsw;
 
 			if (mux != NULL) {
 				bzero(&ki, sizeof(ki));
@@ -236,8 +229,8 @@ kbd_register(keyboard_t *kbd)
 	SET_FOREACH(list, kbddriver_set) {
 		p = *list;
 		if (strcmp(p->name, kbd->kb_name) == 0) {
+			kbd->kb_drv = p;
 			keyboard[index] = kbd;
-			kbdsw[index] = p->kbdsw;
 
 			if (mux != NULL) {
 				bzero(&ki, sizeof(ki));
@@ -280,7 +273,6 @@ kbd_unregister(keyboard_t *kbd)
 	}
 	KBD_INVALID(kbd);
 	keyboard[kbd->kb_index] = NULL;
-	kbdsw[kbd->kb_index] = NULL;
 
 	splx(s);
 	return (0);
@@ -1121,7 +1113,7 @@ fkey_change_ok(fkeytab_t *oldkey, fkeyarg_t *newkey, struct thread *td)
 #endif
 
 /* get a pointer to the string associated with the given function key */
-u_char *
+static u_char *
 genkbd_get_fkeystr(keyboard_t *kbd, int fkey, size_t *len)
 {
 	if (kbd == NULL)
@@ -1154,7 +1146,7 @@ get_kbd_type_name(int type)
 	return ("unknown");
 }
 
-void
+static void
 genkbd_diag(keyboard_t *kbd, int level)
 {
 	if (level > 0) {
@@ -1514,3 +1506,20 @@ kbd_ev_event(keyboard_t *kbd, uint16_t type, uint16_t code, int32_t value)
 		kbdd_ioctl(kbd, KDSETREPEAT, (caddr_t)delay);
 	}
 }
+
+static void
+kbd_drv_init(void)
+{
+	const keyboard_driver_t **list;
+	const keyboard_driver_t *p;
+
+	SET_FOREACH(list, kbddriver_set) {
+		p = *list;
+		if (p->kbdsw->get_fkeystr == NULL)
+			p->kbdsw->get_fkeystr = genkbd_get_fkeystr;
+		if (p->kbdsw->diag == NULL)
+			p->kbdsw->diag = genkbd_diag;
+	}
+}
+
+SYSINIT(kbd_drv_init, SI_SUB_DRIVERS, SI_ORDER_FIRST, kbd_drv_init, NULL);

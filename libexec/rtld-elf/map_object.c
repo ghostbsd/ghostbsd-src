@@ -209,7 +209,7 @@ map_object(int fd, const char *path, const struct stat *sb)
 	base_flags |= MAP_FIXED | MAP_EXCL;
 
     mapbase = mmap(base_addr, mapsize, PROT_NONE, base_flags, -1, 0);
-    if (mapbase == (caddr_t) -1) {
+    if (mapbase == MAP_FAILED) {
 	_rtld_error("%s: mmap of entire address space failed: %s",
 	  path, rtld_strerror(errno));
 	goto error;
@@ -228,11 +228,12 @@ map_object(int fd, const char *path, const struct stat *sb)
 	data_addr = mapbase + (data_vaddr - base_vaddr);
 	data_prot = convert_prot(segs[i]->p_flags);
 	data_flags = convert_flags(segs[i]->p_flags) | MAP_FIXED;
-	if (mmap(data_addr, data_vlimit - data_vaddr, data_prot,
-	  data_flags | MAP_PREFAULT_READ, fd, data_offset) == (caddr_t) -1) {
-	    _rtld_error("%s: mmap of data failed: %s", path,
-		rtld_strerror(errno));
-	    goto error1;
+	if (data_vlimit != data_vaddr &&
+	    mmap(data_addr, data_vlimit - data_vaddr, data_prot, 
+	    data_flags | MAP_PREFAULT_READ, fd, data_offset) == MAP_FAILED) {
+		_rtld_error("%s: mmap of data failed: %s", path,
+		    rtld_strerror(errno));
+		goto error1;
 	}
 
 	/* Do BSS setup */
@@ -265,7 +266,7 @@ map_object(int fd, const char *path, const struct stat *sb)
 	    bss_addr = mapbase +  (bss_vaddr - base_vaddr);
 	    if (bss_vlimit > bss_vaddr) {	/* There is something to do */
 		if (mmap(bss_addr, bss_vlimit - bss_vaddr, data_prot,
-		    data_flags | MAP_ANON, -1, 0) == (caddr_t)-1) {
+		    data_flags | MAP_ANON, -1, 0) == MAP_FAILED) {
 		    _rtld_error("%s: mmap of bss failed: %s", path,
 			rtld_strerror(errno));
 		    goto error1;
@@ -347,7 +348,7 @@ get_elf_header(int fd, const char *path, const struct stat *sbp)
 
 	hdr = mmap(NULL, PAGE_SIZE, PROT_READ, MAP_PRIVATE | MAP_PREFAULT_READ,
 	    fd, 0);
-	if (hdr == (Elf_Ehdr *)MAP_FAILED) {
+	if (hdr == MAP_FAILED) {
 		_rtld_error("%s: read error: %s", path, rtld_strerror(errno));
 		return (NULL);
 	}

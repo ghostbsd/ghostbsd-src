@@ -760,12 +760,16 @@ int	vop_stdfsync(struct vop_fsync_args *);
 int	vop_stdgetwritemount(struct vop_getwritemount_args *);
 int	vop_stdgetpages(struct vop_getpages_args *);
 int	vop_stdinactive(struct vop_inactive_args *);
+int	vop_stdioctl(struct vop_ioctl_args *);
 int	vop_stdneed_inactive(struct vop_need_inactive_args *);
-int	vop_stdislocked(struct vop_islocked_args *);
 int	vop_stdkqfilter(struct vop_kqfilter_args *);
 int	vop_stdlock(struct vop_lock1_args *);
-int	vop_stdputpages(struct vop_putpages_args *);
 int	vop_stdunlock(struct vop_unlock_args *);
+int	vop_stdislocked(struct vop_islocked_args *);
+int	vop_lock(struct vop_lock1_args *);
+int	vop_unlock(struct vop_unlock_args *);
+int	vop_islocked(struct vop_islocked_args *);
+int	vop_stdputpages(struct vop_putpages_args *);
 int	vop_nopoll(struct vop_poll_args *);
 int	vop_stdaccess(struct vop_access_args *ap);
 int	vop_stdaccessx(struct vop_accessx_args *ap);
@@ -950,6 +954,12 @@ int vn_chown(struct file *fp, uid_t uid, gid_t gid, struct ucred *active_cred,
     struct thread *td);
 
 void vn_fsid(struct vnode *vp, struct vattr *va);
+
+#include <sys/kernel.h>
+
+#define VFS_VOP_VECTOR_REGISTER(vnodeops) \
+	SYSINIT(vfs_vector_##vnodeops##_f, SI_SUB_VFS, SI_ORDER_ANY, \
+	    vfs_vector_op_register, &vnodeops)
 
 #endif /* _KERNEL */
 

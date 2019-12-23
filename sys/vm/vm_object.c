@@ -897,7 +897,7 @@ vm_object_page_remove_write(vm_page_t p, int flags, boolean_t *allclean)
 	 * nosync page, skip it.  Note that the object flags were not
 	 * cleared in this case so we do not have to set them.
 	 */
-	if ((flags & OBJPC_NOSYNC) != 0 && (p->aflags & PGA_NOSYNC) != 0) {
+	if ((flags & OBJPC_NOSYNC) != 0 && (p->a.flags & PGA_NOSYNC) != 0) {
 		*allclean = FALSE;
 		return (FALSE);
 	} else {
@@ -1477,6 +1477,16 @@ retry:
 			goto retry;
 		}
 
+		/*
+		 * The page was left invalid.  Likely placed there by
+		 * an incomplete fault.  Just remove and ignore.
+		 */
+		if (vm_page_none_valid(m)) {
+			if (vm_page_remove(m))
+				vm_page_free(m);
+			continue;
+		}
+
 		/* vm_page_rename() will dirty the page. */
 		if (vm_page_rename(m, new_object, idx)) {
 			vm_page_xunbusy(m);
@@ -1663,8 +1673,6 @@ vm_object_collapse_scan(vm_object_t object, int op)
 			    ("freeing mapped page %p", p));
 			if (vm_page_remove(p))
 				vm_page_free(p);
-			else
-				vm_page_xunbusy(p);
 			continue;
 		}
 
@@ -1688,8 +1696,16 @@ vm_object_collapse_scan(vm_object_t object, int op)
 			continue;
 		}
 
-		KASSERT(pp == NULL || !vm_page_none_valid(pp),
-		    ("unbusy invalid page %p", pp));
+		if (pp != NULL && vm_page_none_valid(pp)) {
+			/*
+			 * The page was invalid in the parent.  Likely placed
+			 * there by an incomplete fault.  Just remove and
+			 * ignore.  p can replace it.
+			 */
+			if (vm_page_remove(pp))
+				vm_page_free(pp);
+			pp = NULL;
+		}
 
 		if (pp != NULL || vm_pager_has_page(object, new_pindex, NULL,
 			NULL)) {
@@ -1706,8 +1722,6 @@ vm_object_collapse_scan(vm_object_t object, int op)
 			    ("freeing mapped page %p", p));
 			if (vm_page_remove(p))
 				vm_page_free(p);
-			else
-				vm_page_xunbusy(p);
 			if (pp != NULL)
 				vm_page_xunbusy(pp);
 			continue;
@@ -2472,9 +2486,9 @@ sysctl_vm_object_list(SYSCTL_HANDLER_ARGS)
 			 * sysctl is only meant to give an
 			 * approximation of the system anyway.
 			 */
-			if (m->queue == PQ_ACTIVE)
+			if (m->a.queue == PQ_ACTIVE)
 				kvo->kvo_active++;
-			else if (m->queue == PQ_INACTIVE)
+			else if (m->a.queue == PQ_INACTIVE)
 				kvo->kvo_inactive++;
 		}
 

@@ -289,8 +289,12 @@ static int sysctl_vm_zone_count(SYSCTL_HANDLER_ARGS);
 static int sysctl_vm_zone_stats(SYSCTL_HANDLER_ARGS);
 static int sysctl_handle_uma_zone_allocs(SYSCTL_HANDLER_ARGS);
 static int sysctl_handle_uma_zone_frees(SYSCTL_HANDLER_ARGS);
+static int sysctl_handle_uma_zone_flags(SYSCTL_HANDLER_ARGS);
+static int sysctl_handle_uma_slab_efficiency(SYSCTL_HANDLER_ARGS);
 
 #ifdef INVARIANTS
+static inline struct noslabbits *slab_dbg_bits(uma_slab_t slab, uma_keg_t keg);
+
 static bool uma_dbg_kskip(uma_keg_t keg, void *mem);
 static bool uma_dbg_zskip(uma_zone_t zone, void *mem);
 static void uma_dbg_free(uma_zone_t zone, uma_slab_t slab, void *item);
@@ -332,6 +336,8 @@ SYSCTL_INT(_vm, OID_AUTO, zone_warnings, CTLFLAG_RWTUN, &zone_warnings, 0,
 static void
 bucket_enable(void)
 {
+
+	KASSERT(booted >= BOOT_BUCKETS, ("Bucket enable before init"));
 	bucketdisable = vm_page_count_min();
 }
 
@@ -1200,7 +1206,7 @@ keg_alloc_slab(uma_keg_t keg, uma_zone_t zone, int domain, int flags,
 	slab->us_domain = domain;
 	BIT_FILL(keg->uk_ipers, &slab->us_free);
 #ifdef INVARIANTS
-	BIT_ZERO(SLAB_MAX_SETSIZE, &slab->us_debugfree);
+	BIT_ZERO(keg->uk_ipers, slab_dbg_bits(slab, keg));
 #endif
 
 	if (keg->uk_init != NULL) {
@@ -1483,6 +1489,15 @@ zero_init(void *mem, int size, int flags)
 	return (0);
 }
 
+#ifdef INVARIANTS
+struct noslabbits *
+slab_dbg_bits(uma_slab_t slab, uma_keg_t keg)
+{
+
+	return ((void *)((char *)&slab->us_free + BITSET_SIZE(keg->uk_ipers)));
+}
+#endif
+
 /*
  * Actual size of embedded struct slab (!OFFPAGE).
  */
@@ -1491,7 +1506,7 @@ slab_sizeof(int nitems)
 {
 	size_t s;
 
-	s = sizeof(struct uma_slab) + BITSET_SIZE(nitems);
+	s = sizeof(struct uma_slab) + BITSET_SIZE(nitems) * SLAB_BITSETS;
 	return (roundup(s, UMA_ALIGN_PTR + 1));
 }
 
@@ -1896,8 +1911,9 @@ zone_alloc_sysctl(uma_zone_t zone, void *unused)
 	oid = zone->uz_oid;
 	SYSCTL_ADD_U32(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
 	    "size", CTLFLAG_RD, &zone->uz_size, 0, "Allocation size");
-	SYSCTL_ADD_U32(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
-	    "flags", CTLFLAG_RD, &zone->uz_flags, 0,
+	SYSCTL_ADD_PROC(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
+	    "flags", CTLFLAG_RD | CTLTYPE_STRING | CTLFLAG_MPSAFE,
+	    zone, 0, sysctl_handle_uma_zone_flags, "A",
 	    "Allocator configuration flags");
 	SYSCTL_ADD_U16(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
 	    "bucket_size", CTLFLAG_RD, &zone->uz_bucket_size, 0,
@@ -1933,6 +1949,10 @@ zone_alloc_sysctl(uma_zone_t zone, void *unused)
 		SYSCTL_ADD_U32(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
 		    "free", CTLFLAG_RD, &keg->uk_free, 0,
 		    "items free in the slab layer");
+		SYSCTL_ADD_PROC(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
+		    "efficiency", CTLFLAG_RD | CTLTYPE_INT | CTLFLAG_MPSAFE,
+		    keg, 0, sysctl_handle_uma_slab_efficiency, "I",
+		    "Slab utilization (100 - internal fragmentation %)");
 	} else
 		SYSCTL_ADD_CONST_STRING(NULL, SYSCTL_CHILDREN(oid), OID_AUTO,
 		    "name", CTLFLAG_RD, nokeg, "Keg name");
@@ -2286,7 +2306,7 @@ zone_foreach(void (*zfunc)(uma_zone_t, void *arg), void *arg)
 /*
  * Count how many pages do we need to bootstrap.  VM supplies
  * its need in early zones in the argument, we add up our zones,
- * which consist of: UMA Slabs, UMA Hash and 9 Bucket zones. The
+ * which consist of the UMA Slabs, UMA Hash and 9 Bucket zones.  The
  * zone of zones and zone of kegs are accounted separately.
  */
 #define	UMA_BOOT_ZONES	11
@@ -2404,8 +2424,6 @@ uma_startup(void *mem, int npages)
 	    sizeof(struct slabhead *) * UMA_HASH_SIZE_INIT,
 	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, UMA_ZFLAG_INTERNAL);
 
-	bucket_init();
-
 	booted = BOOT_STRAPPED;
 }
 
@@ -2426,8 +2444,9 @@ uma_startup2(void)
 #ifdef DIAGNOSTIC
 	printf("Entering %s with %d boot pages left\n", __func__, boot_pages);
 #endif
-	booted = BOOT_BUCKETS;
 	sx_init(&uma_reclaim_lock, "umareclaim");
+	bucket_init();
+	booted = BOOT_BUCKETS;
 	bucket_enable();
 }
 
@@ -4408,6 +4427,45 @@ sysctl_handle_uma_zone_frees(SYSCTL_HANDLER_ARGS)
 	return (sysctl_handle_64(oidp, &cur, 0, req));
 }
 
+static int
+sysctl_handle_uma_zone_flags(SYSCTL_HANDLER_ARGS)
+{
+	struct sbuf sbuf;
+	uma_zone_t zone = arg1;
+	int error;
+
+	sbuf_new_for_sysctl(&sbuf, NULL, 0, req);
+	if (zone->uz_flags != 0)
+		sbuf_printf(&sbuf, "0x%b", zone->uz_flags, PRINT_UMA_ZFLAGS);
+	else
+		sbuf_printf(&sbuf, "0");
+	error = sbuf_finish(&sbuf);
+	sbuf_delete(&sbuf);
+
+	return (error);
+}
+
+static int
+sysctl_handle_uma_slab_efficiency(SYSCTL_HANDLER_ARGS)
+{
+	uma_keg_t keg = arg1;
+	int avail, effpct, total;
+
+	total = keg->uk_ppera * PAGE_SIZE;
+	if ((keg->uk_flags & UMA_ZONE_OFFPAGE) != 0)
+		total += slab_sizeof(SLAB_MAX_SETSIZE);
+	/*
+	 * We consider the client's requested size and alignment here, not the
+	 * real size determination uk_rsize, because we also adjust the real
+	 * size for internal implementation reasons (max bitset size).
+	 */
+	avail = keg->uk_ipers * roundup2(keg->uk_size, keg->uk_align + 1);
+	if ((keg->uk_flags & UMA_ZONE_PCPU) != 0)
+		avail *= mp_maxid + 1;
+	effpct = 100 * avail / total;
+	return (sysctl_handle_int(oidp, &effpct, 0, req));
+}
+
 #ifdef INVARIANTS
 static uma_slab_t
 uma_dbg_getslab(uma_zone_t zone, void *item)
@@ -4494,12 +4552,10 @@ uma_dbg_alloc(uma_zone_t zone, uma_slab_t slab, void *item)
 	keg = zone->uz_keg;
 	freei = slab_item_index(slab, keg, item);
 
-	if (BIT_ISSET(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree))
+	if (BIT_ISSET(keg->uk_ipers, freei, slab_dbg_bits(slab, keg)))
 		panic("Duplicate alloc of %p from zone %p(%s) slab %p(%d)\n",
 		    item, zone, zone->uz_name, slab, freei);
-	BIT_SET_ATOMIC(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree);
-
-	return;
+	BIT_SET_ATOMIC(keg->uk_ipers, freei, slab_dbg_bits(slab, keg));
 }
 
 /*
@@ -4530,11 +4586,11 @@ uma_dbg_free(uma_zone_t zone, uma_slab_t slab, void *item)
 		panic("Unaligned free of %p from zone %p(%s) slab %p(%d)\n",
 		    item, zone, zone->uz_name, slab, freei);
 
-	if (!BIT_ISSET(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree))
+	if (!BIT_ISSET(keg->uk_ipers, freei, slab_dbg_bits(slab, keg)))
 		panic("Duplicate free of %p from zone %p(%s) slab %p(%d)\n",
 		    item, zone, zone->uz_name, slab, freei);
 
-	BIT_CLR_ATOMIC(SLAB_MAX_SETSIZE, freei, &slab->us_debugfree);
+	BIT_CLR_ATOMIC(keg->uk_ipers, freei, slab_dbg_bits(slab, keg));
 }
 #endif /* INVARIANTS */
 

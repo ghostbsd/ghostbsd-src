@@ -5932,7 +5932,7 @@ zfs_lock(ap)
 	znode_t *zp;
 	int err;
 
-	err = vop_stdlock(ap);
+	err = vop_lock(ap);
 	if (err == 0 && (ap->a_flags & LK_NOWAIT) == 0) {
 		vp = ap->a_vp;
 		zp = vp->v_data;
@@ -5989,8 +5989,13 @@ struct vop_vector zfs_vnodeops = {
 	.vop_vptocnp =		zfs_vptocnp,
 #ifdef DIAGNOSTIC
 	.vop_lock1 =		zfs_lock,
+#else
+	.vop_lock1 =		vop_lock,
 #endif
+	.vop_unlock =		vop_unlock,
+	.vop_islocked =		vop_islocked,
 };
+VFS_VOP_VECTOR_REGISTER(zfs_vnodeops);
 
 struct vop_vector zfs_fifoops = {
 	.vop_default =		&fifo_specops,
@@ -6008,6 +6013,7 @@ struct vop_vector zfs_fifoops = {
 	.vop_setacl =		zfs_freebsd_setacl,
 	.vop_aclcheck =		zfs_freebsd_aclcheck,
 };
+VFS_VOP_VECTOR_REGISTER(zfs_fifoops);
 
 /*
  * special share hidden files vnode operations template
@@ -6020,3 +6026,4 @@ struct vop_vector zfs_shareops = {
 	.vop_fid =		zfs_freebsd_fid,
 	.vop_pathconf =		zfs_freebsd_pathconf,
 };
+VFS_VOP_VECTOR_REGISTER(zfs_shareops);
