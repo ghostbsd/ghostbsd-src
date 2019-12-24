@@ -309,7 +309,9 @@ static int moea64_decode_kernel_ptr(mmu_t mmu, vm_offset_t addr,
     int *is_user, vm_offset_t *decoded_addr);
 static size_t moea64_scan_pmap(mmu_t mmu);
 static void *moea64_dump_pmap_init(mmu_t mmu, unsigned blkpgs);
+#ifdef __powerpc64__
 static void moea64_page_array_startup(mmu_t, long);
+#endif
 
 
 static mmu_method_t moea64_methods[] = {
@@ -349,7 +351,9 @@ static mmu_method_t moea64_methods[] = {
 	MMUMETHOD(mmu_page_set_memattr,	moea64_page_set_memattr),
 	MMUMETHOD(mmu_quick_enter_page, moea64_quick_enter_page),
 	MMUMETHOD(mmu_quick_remove_page, moea64_quick_remove_page),
+#ifdef __powerpc64__
 	MMUMETHOD(mmu_page_array_startup,	moea64_page_array_startup),
+#endif
 
 	/* Internal interfaces */
 	MMUMETHOD(mmu_mapdev,		moea64_mapdev),
@@ -1493,7 +1497,7 @@ out:
 	 * Flush the page from the instruction cache if this page is
 	 * mapped executable and cacheable.
 	 */
-	if (pmap != kernel_pmap && !(m->aflags & PGA_EXECUTABLE) &&
+	if (pmap != kernel_pmap && (m->a.flags & PGA_EXECUTABLE) == 0 &&
 	    (pte_lo & (LPTE_I | LPTE_G | LPTE_NOEXEC)) == 0) {
 		vm_page_aflag_set(m, PGA_EXECUTABLE);
 		moea64_syncicache(mmu, pmap, va, VM_PAGE_TO_PHYS(m), PAGE_SIZE);
@@ -2254,7 +2258,8 @@ moea64_pvo_protect(mmu_t mmu,  pmap_t pm, struct pvo_entry *pvo, vm_prot_t prot)
 	if (refchg < 0)
 		refchg = (oldprot & VM_PROT_WRITE) ? LPTE_CHG : 0;
 
-	if (pm != kernel_pmap && pg != NULL && !(pg->aflags & PGA_EXECUTABLE) &&
+	if (pm != kernel_pmap && pg != NULL &&
+	    (pg->a.flags & PGA_EXECUTABLE) == 0 &&
 	    (pvo->pvo_pte.pa & (LPTE_I | LPTE_G | LPTE_NOEXEC)) == 0) {
 		if ((pg->oflags & VPO_UNMANAGED) == 0)
 			vm_page_aflag_set(pg, PGA_EXECUTABLE);
@@ -2468,7 +2473,7 @@ moea64_remove_all(mmu_t mmu, vm_page_t m)
 		
 	}
 	KASSERT(!pmap_page_is_mapped(m), ("Page still has mappings"));
-	KASSERT(!(m->aflags & PGA_WRITEABLE), ("Page still writable"));
+	KASSERT((m->a.flags & PGA_WRITEABLE) == 0, ("Page still writable"));
 	PV_PAGE_UNLOCK(m);
 
 	/* Clean up UMA allocations */
@@ -3025,6 +3030,7 @@ moea64_dump_pmap_init(mmu_t mmu, unsigned blkpgs)
 
 #endif
 
+#ifdef __powerpc64__
 static void
 moea64_map_range(mmu_t mmu, vm_offset_t va, vm_paddr_t pa, vm_size_t npages)
 {
@@ -3118,3 +3124,4 @@ moea64_page_array_startup(mmu_t mmu, long pages)
 	vm_page_array = (vm_page_t)vm_page_base;
 	vm_page_array_size = pages;
 }
+#endif

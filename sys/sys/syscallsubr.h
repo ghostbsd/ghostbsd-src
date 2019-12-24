@@ -140,6 +140,7 @@ int	kern_getppid(struct thread *);
 int	kern_getpeername(struct thread *td, int fd, struct sockaddr **sa,
 	    socklen_t *alen);
 int	kern_getrusage(struct thread *td, int who, struct rusage *rup);
+int	kern_getsid(struct thread *td, pid_t pid);
 int	kern_getsockname(struct thread *td, int fd, struct sockaddr **sa,
 	    socklen_t *alen);
 int	kern_getsockopt(struct thread *td, int s, int level, int name,
@@ -155,6 +156,7 @@ int	kern_kevent_anonymous(struct thread *td, int nevents,
 int	kern_kevent_fp(struct thread *td, struct file *fp, int nchanges,
 	    int nevents, struct kevent_copyops *k_ops,
 	    const struct timespec *timeout);
+int	kern_kill(struct thread *td, pid_t pid, int signum);
 int	kern_kqueue(struct thread *td, int flags, struct filecaps *fcaps);
 int	kern_kldload(struct thread *td, const char *file, int *fileid);
 int	kern_kldstat(struct thread *td, int fileid, struct kld_file_stat *stat);
@@ -276,6 +278,7 @@ int	kern_statfs(struct thread *td, const char *path, enum uio_seg pathseg,
 	    struct statfs *buf);
 int	kern_symlinkat(struct thread *td, const char *path1, int fd,
 	    const char *path2, enum uio_seg segflg);
+int	kern_sync(struct thread *td);
 int	kern_ktimer_create(struct thread *td, clockid_t clock_id,
 	    struct sigevent *evp, int *timerid, int preset_id);
 int	kern_ktimer_delete(struct thread *, int);

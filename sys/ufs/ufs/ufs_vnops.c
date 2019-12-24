@@ -2742,6 +2742,7 @@ struct vop_vector ufs_vnodeops = {
 	.vop_markatime =	ufs_markatime,
 	.vop_mkdir =		ufs_mkdir,
 	.vop_mknod =		ufs_mknod,
+	.vop_need_inactive =	ufs_need_inactive,
 	.vop_open =		ufs_open,
 	.vop_pathconf =		ufs_pathconf,
 	.vop_poll =		vop_stdpoll,
@@ -2770,6 +2771,7 @@ struct vop_vector ufs_vnodeops = {
 	.vop_aclcheck =		ufs_aclcheck,
 #endif
 };
+VFS_VOP_VECTOR_REGISTER(ufs_vnodeops);
 
 struct vop_vector ufs_fifoops = {
 	.vop_default =		&fifo_specops,
@@ -2800,3 +2802,4 @@ struct vop_vector ufs_fifoops = {
 	.vop_aclcheck =		ufs_aclcheck,
 #endif
 };
+VFS_VOP_VECTOR_REGISTER(ufs_fifoops);

@@ -2291,6 +2291,42 @@ vm_map_entry_charge_object(vm_map_t map, vm_map_entry_t entry)
 }
 
 /*
+ *	vm_map_entry_clone
+ *
+ *	Create a duplicate map entry for clipping.
+ */
+static vm_map_entry_t
+vm_map_entry_clone(vm_map_t map, vm_map_entry_t entry)
+{
+	vm_map_entry_t new_entry;
+
+	VM_MAP_ASSERT_LOCKED(map);
+
+	/*
+	 * Create a backing object now, if none exists, so that more individual
+	 * objects won't be created after the map entry is split.
+	 */
+	vm_map_entry_charge_object(map, entry);
+
+	/* Clone the entry. */
+	new_entry = vm_map_entry_create(map);
+	*new_entry = *entry;
+	if (new_entry->cred != NULL)
+		crhold(entry->cred);
+	if ((entry->eflags & MAP_ENTRY_IS_SUB_MAP) == 0) {
+		vm_object_reference(new_entry->object.vm_object);
+		vm_map_entry_set_vnode_text(new_entry, true);
+		/*
+		 * The object->un_pager.vnp.writemappings for the object of
+		 * MAP_ENTRY_WRITECNT type entry shall be kept as is here.  The
+		 * virtual pages are re-distributed among the clipped entries,
+		 * so the sum is left the same.
+		 */
+	}
+	return (new_entry);
+}
+
+/*
  *	vm_map_clip_start:	[ internal use only ]
  *
  *	Asserts that the given entry begins at or after
@@ -2316,15 +2352,7 @@ _vm_map_clip_start(vm_map_t map, vm_map_entry_t entry, vm_offset_t start)
 	KASSERT(entry->end > start && entry->start < start,
 	    ("_vm_map_clip_start: invalid clip of entry %p", entry));
 
-	/*
-	 * Create a backing object now, if none exists, so that more individual
-	 * objects won't be created after the map entry is split.
-	 */
-	vm_map_entry_charge_object(map, entry);
-
-	/* Clone the entry. */
-	new_entry = vm_map_entry_create(map);
-	*new_entry = *entry;
+	new_entry = vm_map_entry_clone(map, entry);
 
 	/*
 	 * Split off the front portion.  Insert the new entry BEFORE this one,
@@ -2333,22 +2361,7 @@ _vm_map_clip_start(vm_map_t map, vm_map_entry_t entry, vm_offset_t start)
 	new_entry->end = start;
 	entry->offset += (start - entry->start);
 	entry->start = start;
-	if (new_entry->cred != NULL)
-		crhold(entry->cred);
-
 	vm_map_entry_link(map, new_entry);
-
-	if ((entry->eflags & MAP_ENTRY_IS_SUB_MAP) == 0) {
-		vm_object_reference(new_entry->object.vm_object);
-		vm_map_entry_set_vnode_text(new_entry, true);
-		/*
-		 * The object->un_pager.vnp.writemappings for the
-		 * object of MAP_ENTRY_WRITECNT type entry shall be
-		 * kept as is here.  The virtual pages are
-		 * re-distributed among the clipped entries, so the sum is
-		 * left the same.
-		 */
-	}
 }
 
 /*
@@ -2377,15 +2390,7 @@ _vm_map_clip_end(vm_map_t map, vm_map_entry_t entry, vm_offset_t end)
 	KASSERT(entry->start < end && entry->end > end,
 	    ("_vm_map_clip_end: invalid clip of entry %p", entry));
 
-	/*
-	 * Create a backing object now, if none exists, so that more individual
-	 * objects won't be created after the map entry is split.
-	 */
-	vm_map_entry_charge_object(map, entry);
-
-	/* Clone the entry. */
-	new_entry = vm_map_entry_create(map);
-	*new_entry = *entry;
+	new_entry = vm_map_entry_clone(map, entry);
 
 	/*
 	 * Split off the back portion.  Insert the new entry AFTER this one,
@@ -2393,15 +2398,7 @@ _vm_map_clip_end(vm_map_t map, vm_map_entry_t entry, vm_offset_t end)
 	 */
 	new_entry->start = entry->end = end;
 	new_entry->offset += (end - entry->start);
-	if (new_entry->cred != NULL)
-		crhold(entry->cred);
-
 	vm_map_entry_link(map, new_entry);
-
-	if ((entry->eflags & MAP_ENTRY_IS_SUB_MAP) == 0) {
-		vm_object_reference(new_entry->object.vm_object);
-		vm_map_entry_set_vnode_text(new_entry, true);
-	}
 }
 
 /*
@@ -3873,15 +3870,19 @@ vm_map_copy_swap_object(vm_map_entry_t src_entry, vm_map_entry_t dst_entry,
 	int charged;
 
 	src_object = src_entry->object.vm_object;
-	VM_OBJECT_WLOCK(src_object);
 	charged = ENTRY_CHARGED(src_entry);
-	vm_object_collapse(src_object);
-	if ((src_object->flags & OBJ_ONEMAPPING) != 0) {
-		vm_object_split(src_entry);
-		src_object = src_entry->object.vm_object;
-	}
-	vm_object_reference_locked(src_object);
-	vm_object_clear_flag(src_object, OBJ_ONEMAPPING);
+	if ((src_object->flags & OBJ_ANON) != 0) {
+		VM_OBJECT_WLOCK(src_object);
+		vm_object_collapse(src_object);
+		if ((src_object->flags & OBJ_ONEMAPPING) != 0) {
+			vm_object_split(src_entry);
+			src_object = src_entry->object.vm_object;
+		}
+		vm_object_reference_locked(src_object);
+		vm_object_clear_flag(src_object, OBJ_ONEMAPPING);
+		VM_OBJECT_WUNLOCK(src_object);
+	} else
+		vm_object_reference(src_object);
 	if (src_entry->cred != NULL &&
 	    !(src_entry->eflags & MAP_ENTRY_NEEDS_COPY)) {
 		KASSERT(src_object->cred == NULL,
@@ -3890,7 +3891,6 @@ vm_map_copy_swap_object(vm_map_entry_t src_entry, vm_map_entry_t dst_entry,
 		src_object->cred = src_entry->cred;
 		src_object->charge = size;
 	}
-	VM_OBJECT_WUNLOCK(src_object);
 	dst_entry->object.vm_object = src_object;
 	if (charged) {
 		cred = curthread->td_ucred;

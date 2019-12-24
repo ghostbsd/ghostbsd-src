@@ -432,7 +432,7 @@ gpiokeys_attach(device_t dev)
 #endif
 
 	if (bootverbose) {
-		genkbd_diag(kbd, 1);
+		kbdd_diag(kbd, 1);
 	}
 
 	total_keys = 0;
@@ -975,9 +975,7 @@ static keyboard_switch_t gpiokeyssw = {
 	.clear_state = &gpiokeys_clear_state,
 	.get_state = &gpiokeys_get_state,
 	.set_state = &gpiokeys_set_state,
-	.get_fkeystr = &genkbd_get_fkeystr,
 	.poll = &gpiokeys_poll,
-	.diag = &genkbd_diag,
 };
 
 KEYBOARD_DRIVER(gpiokeys, gpiokeyssw, gpiokeys_configure);
@@ -985,6 +983,8 @@ KEYBOARD_DRIVER(gpiokeys, gpiokeyssw, gpiokeys_configure);
 static int
 gpiokeys_driver_load(module_t mod, int what, void *arg)
 {
+
+#ifdef KLD_MODULE
 	switch (what) {
 	case MOD_LOAD:
 		kbd_add_driver(&gpiokeys_kbd_driver);
@@ -993,6 +993,7 @@ gpiokeys_driver_load(module_t mod, int what, void *arg)
 		kbd_delete_driver(&gpiokeys_kbd_driver);
 		break;
 	}
+#endif
 	return (0);
 }
 
