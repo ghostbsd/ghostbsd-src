@@ -1126,7 +1126,7 @@ vm_object_sync(vm_object_t object, vm_ooffset_t offset, vm_size_t size,
 		VM_OBJECT_WUNLOCK(object);
 		if (fsync_after)
 			error = VOP_FSYNC(vp, MNT_WAIT, curthread);
-		VOP_UNLOCK(vp, 0);
+		VOP_UNLOCK(vp);
 		vn_finished_write(mp);
 		if (error != 0)
 			res = FALSE;
@@ -1293,9 +1293,7 @@ next_page:
 			vm_page_busy_sleep(tm, "madvpo", false);
   			goto relookup;
 		}
-		vm_page_lock(tm);
 		vm_page_advise(tm, advice);
-		vm_page_unlock(tm);
 		vm_page_xunbusy(tm);
 		vm_object_madvise_freespace(tobject, advice, tm->pindex, 1);
 next_pindex:
@@ -2059,7 +2057,6 @@ wired:
 void
 vm_object_page_noreuse(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 {
-	struct mtx *mtx;
 	vm_page_t p, next;
 
 	VM_OBJECT_ASSERT_LOCKED(object);
@@ -2073,14 +2070,10 @@ vm_object_page_noreuse(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 	 * Here, the variable "p" is either (1) the page with the least pindex
 	 * greater than or equal to the parameter "start" or (2) NULL. 
 	 */
-	mtx = NULL;
 	for (; p != NULL && (p->pindex < end || end == 0); p = next) {
 		next = TAILQ_NEXT(p, listq);
-		vm_page_change_lock(p, &mtx);
 		vm_page_deactivate_noreuse(p);
 	}
-	if (mtx != NULL)
-		mtx_unlock(mtx);
 }
 
 /*

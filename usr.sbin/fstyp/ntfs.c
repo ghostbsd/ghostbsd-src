@@ -32,7 +32,9 @@
 __FBSDID("$FreeBSD$");
 
 #include <err.h>
+#ifdef WITH_ICONV
 #include <iconv.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,6 +96,7 @@ struct ntfs_bootfile {
 	uint32_t	bf_volsn;
 } __packed;
 
+#ifdef WITH_ICONV
 static void
 convert_label(const void *label /* LE */, size_t labellen, char *label_out,
     size_t label_sz)
@@ -125,23 +128,28 @@ convert_label(const void *label /* LE */, size_t labellen, char *label_out,
 
 	iconv_close(cd);
 }
+#endif
 
 int
 fstyp_ntfs(FILE *fp, char *label, size_t size)
 {
 	struct ntfs_bootfile *bf;
+	char *filerecp;
+#ifdef WITH_ICONV
 	struct ntfs_filerec *fr;
 	struct ntfs_attr *atr;
 	off_t voloff;
-	char *filerecp, *ap;
+	char *ap;
 	int8_t mftrecsz;
 	int recsize;
+#endif /* WITH_ICONV */
 
 	filerecp = NULL;
 
 	bf = (struct ntfs_bootfile *)read_buf(fp, 0, 512);
 	if (bf == NULL || strncmp(bf->bf_sysid, "NTFS    ", 8) != 0)
 		goto fail;
+#ifdef WITH_ICONV
 	if (!show_label)
 		goto ok;
 
@@ -171,6 +179,7 @@ fstyp_ntfs(FILE *fp, char *label, size_t size)
 	}
 
 ok:
+#endif /* WITH_ICONV */
 	free(bf);
 	free(filerecp);
 

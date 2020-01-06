@@ -38,7 +38,9 @@ __FBSDID("$FreeBSD$");
 #include <capsicum_helpers.h>
 #include <err.h>
 #include <errno.h>
+#ifdef WITH_ICONV
 #include <iconv.h>
+#endif
 #include <locale.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -67,6 +69,8 @@ static struct {
 	{ "exfat", &fstyp_exfat, false, EXFAT_ENC },
 	{ "ext2fs", &fstyp_ext2fs, false, NULL },
 	{ "geli", &fstyp_geli, true, NULL },
+	{ "hammer", &fstyp_hammer, true, NULL },
+	{ "hammer2", &fstyp_hammer2, true, NULL },
 	{ "hfs+", &fstyp_hfsp, false, NULL },
 	{ "msdosfs", &fstyp_msdosfs, false, NULL },
 	{ "ntfs", &fstyp_ntfs, false, NTFS_ENC },
@@ -199,6 +203,7 @@ main(int argc, char **argv)
 		err(1, "setlocale");
 	caph_cache_catpages();
 
+#ifdef WITH_ICONV
 	/* Cache iconv conversion data before entering capability mode. */
 	if (show_label) {
 		for (i = 0; i < nitems(fstypes); i++) {
@@ -214,6 +219,7 @@ main(int argc, char **argv)
 			iconv_close(cd);
 		}
 	}
+#endif
 
 	fp = fopen(path, "r");
 	if (fp == NULL)

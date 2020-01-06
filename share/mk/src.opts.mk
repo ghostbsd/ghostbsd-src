@@ -199,7 +199,11 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_EXTRAS \
     DTRACE_TESTS \
     EXPERIMENTAL \
+    GCC \
+    GCC_BOOTSTRAP \
+    GNUCXX \
     GNU_GREP_COMPAT \
+    GPL_DTC \
     HESIOD \
     HTTPD \
     LIBSOFT \
@@ -284,10 +288,6 @@ __LLVM_TARGET_FILT=	C/(amd64|i386)/x86/:S/sparc64/sparc/:S/arm64/aarch64/:S/powe
 # Default enable the given TARGET's LLVM_TARGET support
 .if ${__TT:${__LLVM_TARGET_FILT}} == ${__llt}
 __DEFAULT_YES_OPTIONS+=	LLVM_TARGET_${__llt:${__LLVM_TARGET_FILT}:tu}
-# Disable other targets for arm, to work around "relocation truncated
-# to fit" errors with BFD ld, since libllvm.a will get too large to link.
-.elif ${__T} == "arm"
-__DEFAULT_NO_OPTIONS+=LLVM_TARGET_${__llt:tu}
 # aarch64 needs arm for -m32 support.
 .elif ${__TT} == "arm64" && ${__llt} == "arm"
 __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_ARM/LLVM_TARGET_AARCH64
@@ -300,24 +300,22 @@ __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_${__llt:${__LLVM_TARGET_FILT}:tu}/LLVM
 __DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF
 
 .include <bsd.compiler.mk>
-# If the compiler is not C++11 capable, disable Clang and use GCC instead.
-# This means that architectures that have GCC 4.2 as default can not
-# build Clang without using an external compiler.
+# If the compiler is not C++11 capable, disable Clang.  External toolchain will
+# be required.
 
-.if ${COMPILER_FEATURES:Mc++11} && (${__T} == "aarch64" || \
-    ${__T} == "amd64" || ${__TT} == "arm" || ${__T} == "i386")
+.if ${COMPILER_FEATURES:Mc++11} && (${__TT} != "mips" && \
+    ${__TT} != "riscv" && ${__TT} != "sparc64")
 # Clang is enabled, and will be installed as the default /usr/bin/cc.
 __DEFAULT_YES_OPTIONS+=CLANG CLANG_BOOTSTRAP CLANG_IS_CC LLD
-__DEFAULT_NO_OPTIONS+=GCC GCC_BOOTSTRAP GNUCXX GPL_DTC
 .elif ${COMPILER_FEATURES:Mc++11} && ${__T} != "sparc64"
 # If an external compiler that supports C++11 is used as ${CC} and Clang
-# supports the target, then Clang is enabled but GCC is installed as the
+# supports the target, then Clang is enabled but we still require an external
+# toolchain.
 # default /usr/bin/cc.
-__DEFAULT_YES_OPTIONS+=CLANG GCC GCC_BOOTSTRAP GNUCXX GPL_DTC LLD
+__DEFAULT_YES_OPTIONS+=CLANG LLD
 __DEFAULT_NO_OPTIONS+=CLANG_BOOTSTRAP CLANG_IS_CC
 .else
 # Everything else disables Clang, and uses GCC instead.
-__DEFAULT_YES_OPTIONS+=GCC GCC_BOOTSTRAP GNUCXX GPL_DTC
 __DEFAULT_NO_OPTIONS+=CLANG CLANG_BOOTSTRAP CLANG_IS_CC LLD
 .endif
 # In-tree binutils/gcc are older versions without modern architecture support.
@@ -327,14 +325,13 @@ BROKEN_OPTIONS+=BINUTILS BINUTILS_BOOTSTRAP GCC GCC_BOOTSTRAP GDB
 .if ${__T:Mriscv*} != ""
 BROKEN_OPTIONS+=OFED
 .endif
-.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "i386" || \
-    ${__T:Mriscv*} != "" || ${__TT} == "mips"
+.if ${__T} != "armv6" && ${__T} != "armv7" && ${__T} != "sparc64"
 __DEFAULT_YES_OPTIONS+=LLVM_LIBUNWIND
 .else
 __DEFAULT_NO_OPTIONS+=LLVM_LIBUNWIND
 .endif
-.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "armv6" || \
-    ${__T} == "armv7" || ${__T} == "i386"
+.if ${__TT} != "mips" && ${__T} != "powerpc" && ${__T} != "powerpcspe" && \
+    ${__TT} != "riscv" && ${__T} != "sparc64"
 __DEFAULT_YES_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
 .else
 __DEFAULT_NO_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
@@ -343,10 +340,6 @@ __DEFAULT_NO_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
 __DEFAULT_YES_OPTIONS+=LLDB
 .else
 __DEFAULT_NO_OPTIONS+=LLDB
-.endif
-# LLVM lacks support for FreeBSD 64-bit atomic operations for ARMv4/ARMv5
-.if ${__T} == "arm"
-BROKEN_OPTIONS+=LLDB
 .endif
 # GDB in base is generally less functional than GDB in ports.  Ports GDB
 # sparc64 kernel support has not been tested.
@@ -484,11 +477,20 @@ MK_KERBEROS:=	no
 .if ${MK_CXX} == "no"
 MK_CLANG:=	no
 MK_GNUCXX:=	no
+MK_GOOGLETEST:=	no
 MK_TESTS:=	no
 .endif
 
 .if ${MK_DIALOG} == "no"
 MK_BSDINSTALL:=	no
+.endif
+
+.if ${MK_FILE} == "no"
+MK_SVNLITE:=	no
+.endif
+
+.if (${__TT} == "mips" || ${__TT} == "sparc64") && ${MK_GCC} == "no"
+MK_BINUTILS_BOOTSTRAP:=	no
 .endif
 
 .if ${MK_MAIL} == "no"

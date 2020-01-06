@@ -1926,7 +1926,7 @@ softdep_flushworklist(oldmnt, countp, td)
 		*countp += count;
 		vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
 		error = VOP_FSYNC(devvp, MNT_WAIT, td);
-		VOP_UNLOCK(devvp, 0);
+		VOP_UNLOCK(devvp);
 		if (error != 0)
 			break;
 	}
@@ -1956,7 +1956,7 @@ softdep_waitidle(struct mount *mp, int flags __unused)
 		    "softdeps", 10 * hz);
 		vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
 		error = VOP_FSYNC(devvp, MNT_WAIT, td);
-		VOP_UNLOCK(devvp, 0);
+		VOP_UNLOCK(devvp);
 		ACQUIRE_LOCK(ump);
 		if (error != 0)
 			break;
@@ -8052,7 +8052,9 @@ handle_complete_freeblocks(freeblks, flags)
 		    flags, &vp, FFSV_FORCEINSMQ) != 0)
 			return (EBUSY);
 		ip = VTOI(vp);
-		if (DIP(ip, i_modrev) == freeblks->fb_modrev) {
+		if (ip->i_mode == 0) {
+			vgone(vp);
+		} else if (DIP(ip, i_modrev) == freeblks->fb_modrev) {
 			DIP_SET(ip, i_blocks, DIP(ip, i_blocks) - spare);
 			ip->i_flag |= IN_CHANGE;
 			/*
@@ -9835,6 +9837,7 @@ handle_workitem_remove(dirrem, flags)
 	if (ffs_vgetf(mp, oldinum, flags, &vp, FFSV_FORCEINSMQ) != 0)
 		return (EBUSY);
 	ip = VTOI(vp);
+	MPASS(ip->i_mode != 0);
 	ACQUIRE_LOCK(ump);
 	if ((inodedep_lookup(mp, oldinum, 0, &inodedep)) == 0)
 		panic("handle_workitem_remove: lost inodedep");
@@ -12527,9 +12530,10 @@ restart:
 			 * Unmount cannot proceed after unlock because
 			 * caller must have called vn_start_write().
 			 */
-			VOP_UNLOCK(vp, 0);
+			VOP_UNLOCK(vp);
 			error = ffs_vgetf(mp, parentino, LK_EXCLUSIVE,
 			    &pvp, FFSV_FORCEINSMQ);
+			MPASS(VTOI(pvp)->i_mode != 0);
 			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 			if (VN_IS_DOOMED(vp)) {
 				if (error == 0)
@@ -13172,6 +13176,7 @@ restart:
 			if ((error = ffs_vgetf(mp, inum, LK_EXCLUSIVE, &vp,
 			    FFSV_FORCEINSMQ)))
 				break;
+			MPASS(VTOI(vp)->i_mode != 0);
 			error = flush_newblk_dep(vp, mp, 0);
 			/*
 			 * If we still have the dependency we might need to
@@ -13236,6 +13241,7 @@ retry:
 			if ((error = ffs_vgetf(mp, inum, LK_EXCLUSIVE, &vp,
 			    FFSV_FORCEINSMQ)))
 				break;
+			MPASS(VTOI(vp)->i_mode != 0);
 			error = ffs_update(vp, 1);
 			vput(vp);
 			if (error)
@@ -13529,7 +13535,7 @@ softdep_request_cleanup_flush(mp, ump)
 	lvp = ump->um_devvp;
 	if (vn_lock(lvp, LK_EXCLUSIVE | LK_NOWAIT) == 0) {
 		VOP_FSYNC(lvp, MNT_NOWAIT, td);
-		VOP_UNLOCK(lvp, 0);
+		VOP_UNLOCK(lvp);
 	}
 	return (failed_vnode);
 }
@@ -13830,6 +13836,7 @@ clear_remove(mp)
 				softdep_error("clear_remove: vget", error);
 				goto finish_write;
 			}
+			MPASS(VTOI(vp)->i_mode != 0);
 			if ((error = ffs_syncvnode(vp, MNT_NOWAIT, 0)))
 				softdep_error("clear_remove: fsync", error);
 			bo = &vp->v_bufobj;
@@ -13911,7 +13918,9 @@ clear_inodedeps(mp)
 			return;
 		}
 		vfs_unbusy(mp);
-		if (ino == lastino) {
+		if (VTOI(vp)->i_mode == 0) {
+			vgone(vp);
+		} else if (ino == lastino) {
 			if ((error = ffs_syncvnode(vp, MNT_WAIT, 0)))
 				softdep_error("clear_inodedeps: fsync1", error);
 		} else {

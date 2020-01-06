@@ -1845,8 +1845,9 @@ kvm_size(SYSCTL_HANDLER_ARGS)
 
 	return sysctl_handle_long(oidp, &ksize, 0, req);
 }
-SYSCTL_PROC(_vm, OID_AUTO, kvm_size, CTLTYPE_LONG|CTLFLAG_RD,
-    0, 0, kvm_size, "LU", "Size of KVM");
+SYSCTL_PROC(_vm, OID_AUTO, kvm_size, CTLTYPE_LONG | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    0, 0, kvm_size, "LU",
+    "Size of KVM");
 
 static int
 kvm_free(SYSCTL_HANDLER_ARGS)
@@ -1855,8 +1856,9 @@ kvm_free(SYSCTL_HANDLER_ARGS)
 
 	return sysctl_handle_long(oidp, &kfree, 0, req);
 }
-SYSCTL_PROC(_vm, OID_AUTO, kvm_free, CTLTYPE_LONG|CTLFLAG_RD,
-    0, 0, kvm_free, "LU", "Amount of KVM free");
+SYSCTL_PROC(_vm, OID_AUTO, kvm_free, CTLTYPE_LONG | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    0, 0, kvm_free, "LU",
+    "Amount of KVM free");
 
 /*
  * grow the number of kernel page table entries, if needed
@@ -3449,8 +3451,10 @@ havel3:
 			 */
 			if (pmap_pte_dirty(orig_l3))
 				vm_page_dirty(om);
-			if ((orig_l3 & ATTR_AF) != 0)
+			if ((orig_l3 & ATTR_AF) != 0) {
+				pmap_invalidate_page(pmap, va);
 				vm_page_aflag_set(om, PGA_REFERENCED);
+			}
 			CHANGE_PV_LIST_LOCK_TO_PHYS(&lock, opa);
 			pv = pmap_pvh_remove(&om->md, pmap, va);
 			if ((m->oflags & VPO_UNMANAGED) != 0)
@@ -3460,8 +3464,11 @@ havel3:
 			    ((om->flags & PG_FICTITIOUS) != 0 ||
 			    TAILQ_EMPTY(&pa_to_pvh(opa)->pv_list)))
 				vm_page_aflag_clear(om, PGA_WRITEABLE);
+		} else {
+			KASSERT((orig_l3 & ATTR_AF) != 0,
+			    ("pmap_enter: unmanaged mapping lacks ATTR_AF"));
+			pmap_invalidate_page(pmap, va);
 		}
-		pmap_invalidate_page(pmap, va);
 		orig_l3 = 0;
 	} else {
 		/*
@@ -3510,8 +3517,7 @@ validate:
 		KASSERT(opa == pa, ("pmap_enter: invalid update"));
 		if ((orig_l3 & ~ATTR_AF) != (new_l3 & ~ATTR_AF)) {
 			/* same PA, different attributes */
-			/* XXXMJ need to reload orig_l3 for hardware DBM. */
-			pmap_load_store(l3, new_l3);
+			orig_l3 = pmap_load_store(l3, new_l3);
 			pmap_invalidate_page(pmap, va);
 			if ((orig_l3 & ATTR_SW_MANAGED) != 0 &&
 			    pmap_pte_dirty(orig_l3))
