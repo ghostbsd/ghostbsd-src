@@ -261,15 +261,14 @@ static void random_fortuna_read(uint8_t *, size_t);
 static bool random_fortuna_seeded(void);
 static bool random_fortuna_seeded_internal(void);
 static void random_fortuna_process_event(struct harvest_event *);
-static void random_fortuna_init_alg(void *);
-static void random_fortuna_deinit_alg(void *);
 
 static void random_fortuna_reseed_internal(uint32_t *entropy_data, u_int blockcount);
 
-struct random_algorithm random_alg_context = {
+#ifdef RANDOM_LOADABLE
+static
+#endif
+const struct random_algorithm random_alg_context = {
 	.ra_ident = "Fortuna",
-	.ra_init_alg = random_fortuna_init_alg,
-	.ra_deinit_alg = random_fortuna_deinit_alg,
 	.ra_pre_read = random_fortuna_pre_read,
 	.ra_read = random_fortuna_read,
 	.ra_seeded = random_fortuna_seeded,
@@ -284,6 +283,10 @@ random_fortuna_init_alg(void *unused __unused)
 	int i;
 #ifdef _KERNEL
 	struct sysctl_oid *random_fortuna_o;
+#endif
+
+#ifdef RANDOM_LOADABLE
+	p_random_alg_context = &random_alg_context;
 #endif
 
 	RANDOM_RESEED_INIT_LOCK();
@@ -330,18 +333,8 @@ random_fortuna_init_alg(void *unused __unused)
 	fortuna_state.fs_counter = UINT128_ZERO;
 	explicit_bzero(&fortuna_state.fs_key, sizeof(fortuna_state.fs_key));
 }
-
-/* ARGSUSED */
-static void
-random_fortuna_deinit_alg(void *unused __unused)
-{
-
-	RANDOM_RESEED_DEINIT_LOCK();
-	explicit_bzero(&fortuna_state, sizeof(fortuna_state));
-#ifdef _KERNEL
-	sysctl_ctx_free(&random_clist);
-#endif
-}
+SYSINIT(random_alg, SI_SUB_RANDOM, SI_ORDER_SECOND, random_fortuna_init_alg,
+    NULL);
 
 /*-
  * FS&K - AddRandomEvent()
@@ -365,6 +358,13 @@ random_fortuna_process_event(struct harvest_event *event)
 	 * during accumulation/reseeding and reading/regating.
 	 */
 	pl = event->he_destination % RANDOM_FORTUNA_NPOOLS;
+	/*
+	 * If a VM generation ID changes (clone and play or VM rewind), we want
+	 * to incorporate that as soon as possible.  Override destingation pool
+	 * for immediate next use.
+	 */
+	if (event->he_source == RANDOM_PURE_VMGENID)
+		pl = 0;
 	/*
 	 * We ignore low entropy static/counter fields towards the end of the
 	 * he_event structure in order to increase measurable entropy when

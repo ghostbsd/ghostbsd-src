@@ -580,9 +580,7 @@ ctl_be_block_flush_file(struct ctl_be_block_lun *be_lun,
 	DPRINTF("entered\n");
 
 	binuptime(&beio->ds_t0);
-	mtx_lock(&be_lun->io_lock);
 	devstat_start_transaction(beio->lun->disk_stats, &beio->ds_t0);
-	mtx_unlock(&be_lun->io_lock);
 
 	(void) vn_start_write(be_lun->vn, &mountpoint, V_WAIT);
 
@@ -594,7 +592,7 @@ ctl_be_block_flush_file(struct ctl_be_block_lun *be_lun,
 	vn_lock(be_lun->vn, lock_flags | LK_RETRY);
 	error = VOP_FSYNC(be_lun->vn, beio->io_arg ? MNT_NOWAIT : MNT_WAIT,
 	    curthread);
-	VOP_UNLOCK(be_lun->vn, 0);
+	VOP_UNLOCK(be_lun->vn);
 
 	vn_finished_write(mountpoint);
 
@@ -663,9 +661,7 @@ ctl_be_block_dispatch_file(struct ctl_be_block_lun *be_lun,
 	}
 
 	binuptime(&beio->ds_t0);
-	mtx_lock(&be_lun->io_lock);
 	devstat_start_transaction(beio->lun->disk_stats, &beio->ds_t0);
-	mtx_unlock(&be_lun->io_lock);
 
 	if (beio->bio_cmd == BIO_READ) {
 		vn_lock(be_lun->vn, LK_SHARED | LK_RETRY);
@@ -689,7 +685,7 @@ ctl_be_block_dispatch_file(struct ctl_be_block_lun *be_lun,
 		 */
 		error = VOP_READ(be_lun->vn, &xuio, flags, file_data->cred);
 
-		VOP_UNLOCK(be_lun->vn, 0);
+		VOP_UNLOCK(be_lun->vn);
 		SDT_PROBE0(cbb, , read, file_done);
 		if (error == 0 && xuio.uio_resid > 0) {
 			/*
@@ -736,7 +732,7 @@ ctl_be_block_dispatch_file(struct ctl_be_block_lun *be_lun,
 		 * cache before returning.
 		 */
 		error = VOP_WRITE(be_lun->vn, &xuio, flags, file_data->cred);
-		VOP_UNLOCK(be_lun->vn, 0);
+		VOP_UNLOCK(be_lun->vn);
 
 		vn_finished_write(mountpoint);
 		SDT_PROBE0(cbb, , write, file_done);
@@ -814,7 +810,7 @@ ctl_be_block_gls_file(struct ctl_be_block_lun *be_lun,
 			off = be_lun->size_bytes;
 		}
 	}
-	VOP_UNLOCK(be_lun->vn, 0);
+	VOP_UNLOCK(be_lun->vn);
 
 	data = (struct scsi_get_lba_status_data *)io->scsiio.kern_data_ptr;
 	scsi_u64to8b(lbalen->lba, data->descr[0].addr);
@@ -849,7 +845,7 @@ ctl_be_block_getattr_file(struct ctl_be_block_lun *be_lun, const char *attrname)
 			val = statfs.f_bavail * statfs.f_bsize /
 			    be_lun->cbe_lun.blocksize;
 	}
-	VOP_UNLOCK(be_lun->vn, 0);
+	VOP_UNLOCK(be_lun->vn);
 	return (val);
 }
 
@@ -894,9 +890,7 @@ ctl_be_block_dispatch_zvol(struct ctl_be_block_lun *be_lun,
 	}
 
 	binuptime(&beio->ds_t0);
-	mtx_lock(&be_lun->io_lock);
 	devstat_start_transaction(beio->lun->disk_stats, &beio->ds_t0);
-	mtx_unlock(&be_lun->io_lock);
 
 	csw = devvn_refthread(be_lun->vn, &dev, &ref);
 	if (csw) {
@@ -1034,9 +1028,7 @@ ctl_be_block_flush_dev(struct ctl_be_block_lun *be_lun,
 	beio->send_complete = 1;
 
 	binuptime(&beio->ds_t0);
-	mtx_lock(&be_lun->io_lock);
 	devstat_start_transaction(be_lun->disk_stats, &beio->ds_t0);
-	mtx_unlock(&be_lun->io_lock);
 
 	csw = devvn_refthread(be_lun->vn, &dev, &ref);
 	if (csw) {
@@ -1107,9 +1099,7 @@ ctl_be_block_unmap_dev(struct ctl_be_block_lun *be_lun,
 	DPRINTF("entered\n");
 
 	binuptime(&beio->ds_t0);
-	mtx_lock(&be_lun->io_lock);
 	devstat_start_transaction(be_lun->disk_stats, &beio->ds_t0);
-	mtx_unlock(&be_lun->io_lock);
 
 	if (beio->io_offset == -1) {
 		beio->io_len = 0;
@@ -1186,11 +1176,9 @@ ctl_be_block_dispatch_dev(struct ctl_be_block_lun *be_lun,
 			beio->num_bios_sent++;
 		}
 	}
-	binuptime(&beio->ds_t0);
-	mtx_lock(&be_lun->io_lock);
-	devstat_start_transaction(be_lun->disk_stats, &beio->ds_t0);
 	beio->send_complete = 1;
-	mtx_unlock(&be_lun->io_lock);
+	binuptime(&beio->ds_t0);
+	devstat_start_transaction(be_lun->disk_stats, &beio->ds_t0);
 
 	/*
 	 * Fire off all allocated requests!
@@ -2200,7 +2188,7 @@ again:
 		snprintf(req->error_str, sizeof(req->error_str),
 			 "%s is not a disk or plain file", be_lun->dev_path);
 	}
-	VOP_UNLOCK(be_lun->vn, 0);
+	VOP_UNLOCK(be_lun->vn);
 
 	if (error != 0)
 		ctl_be_block_close(be_lun);
@@ -2616,7 +2604,7 @@ ctl_be_block_modify(struct ctl_be_block_softc *softc, struct ctl_lun_req *req)
 		else if (be_lun->vn->v_type == VREG) {
 			vn_lock(be_lun->vn, LK_SHARED | LK_RETRY);
 			error = ctl_be_block_open_file(be_lun, req);
-			VOP_UNLOCK(be_lun->vn, 0);
+			VOP_UNLOCK(be_lun->vn);
 		} else
 			error = EINVAL;
 		if ((cbe_lun->flags & CTL_LUN_FLAG_NO_MEDIA) &&

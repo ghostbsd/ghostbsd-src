@@ -763,8 +763,7 @@ SYSCTL_INT(_vm_pmap, OID_AUTO, invl_max_qlen, CTLFLAG_RD,
     "");
 #endif
 
-static struct lock_delay_config __read_frequently di_delay;
-LOCK_DELAY_SYSINIT_DEFAULT(di_delay);
+#define di_delay	locks_delay
 
 static void
 pmap_delayed_invl_start_u(void)
@@ -4073,8 +4072,9 @@ kvm_size(SYSCTL_HANDLER_ARGS)
 
 	return sysctl_handle_long(oidp, &ksize, 0, req);
 }
-SYSCTL_PROC(_vm, OID_AUTO, kvm_size, CTLTYPE_LONG|CTLFLAG_RD, 
-    0, 0, kvm_size, "LU", "Size of KVM");
+SYSCTL_PROC(_vm, OID_AUTO, kvm_size, CTLTYPE_LONG | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    0, 0, kvm_size, "LU",
+    "Size of KVM");
 
 static int
 kvm_free(SYSCTL_HANDLER_ARGS)
@@ -4083,8 +4083,9 @@ kvm_free(SYSCTL_HANDLER_ARGS)
 
 	return sysctl_handle_long(oidp, &kfree, 0, req);
 }
-SYSCTL_PROC(_vm, OID_AUTO, kvm_free, CTLTYPE_LONG|CTLFLAG_RD, 
-    0, 0, kvm_free, "LU", "Amount of KVM free");
+SYSCTL_PROC(_vm, OID_AUTO, kvm_free, CTLTYPE_LONG | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    0, 0, kvm_free, "LU",
+    "Amount of KVM free");
 
 /*
  * Allocate physical memory for the vm_page array and map it into KVA,
@@ -6131,8 +6132,10 @@ retry:
 			 */
 			if ((origpte & (PG_M | PG_RW)) == (PG_M | PG_RW))
 				vm_page_dirty(om);
-			if ((origpte & PG_A) != 0)
+			if ((origpte & PG_A) != 0) {
+				pmap_invalidate_page(pmap, va);
 				vm_page_aflag_set(om, PGA_REFERENCED);
+			}
 			CHANGE_PV_LIST_LOCK_TO_PHYS(&lock, opa);
 			pv = pmap_pvh_remove(&om->md, pmap, va);
 			KASSERT(pv != NULL,
@@ -6144,9 +6147,13 @@ retry:
 			    ((om->flags & PG_FICTITIOUS) != 0 ||
 			    TAILQ_EMPTY(&pa_to_pvh(opa)->pv_list)))
 				vm_page_aflag_clear(om, PGA_WRITEABLE);
-		}
-		if ((origpte & PG_A) != 0)
+		} else {
+			/*
+			 * Since this mapping is unmanaged, assume that PG_A
+			 * is set.
+			 */
 			pmap_invalidate_page(pmap, va);
+		}
 		origpte = 0;
 	} else {
 		/*

@@ -47,11 +47,20 @@ LIB32CPUFLAGS=	-mcpu=powerpc
 .else
 LIB32CPUFLAGS=	-mcpu=${COMPAT_CPUTYPE}
 .endif
+
+.if ${COMPAT_COMPILER_TYPE} == "gcc"
 LIB32CPUFLAGS+=	-m32
+.else
+LIB32CPUFLAGS+=	-target powerpc-unknown-freebsd13.0
+
+# Use BFD to workaround ld.lld issues on PowerPC 32 bit 
+LIB32CPUFLAGS+= -fuse-ld=${LD_BFD}
+.endif
+
 LIB32_MACHINE=	powerpc
 LIB32_MACHINE_ARCH=	powerpc
 LIB32WMAKEFLAGS=	\
-		LD="${XLD} -m elf32ppc_fbsd"
+		LD="${LD_BFD} -m elf32ppc_fbsd"
 
 .elif ${COMPAT_ARCH:Mmips64*} != ""
 HAS_COMPAT=32
@@ -70,10 +79,11 @@ LIB32CPUFLAGS=  -target mips-unknown-freebsd13.0
 .endif
 LIB32CPUFLAGS+= -mabi=32
 LIB32_MACHINE=	mips
-LIB32_MACHINE_ARCH=	mips
 .if ${COMPAT_ARCH:Mmips64el*} != ""
+LIB32_MACHINE_ARCH=	mipsel
 _EMULATION=	elf32ltsmip_fbsd
 .else
+LIB32_MACHINE_ARCH=	mips
 _EMULATION=	elf32btsmip_fbsd
 .endif
 LIB32WMAKEFLAGS= LD="${XLD} -m ${_EMULATION}"

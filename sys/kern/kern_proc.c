@@ -871,7 +871,7 @@ killjobc(void)
 			sx_xunlock(&proctree_lock);
 			if (vn_lock(ttyvp, LK_EXCLUSIVE) == 0) {
 				VOP_REVOKE(ttyvp, REVOKEALL);
-				VOP_UNLOCK(ttyvp, 0);
+				VOP_UNLOCK(ttyvp);
 			}
 			vrele(ttyvp);
 			sx_xlock(&proctree_lock);
@@ -1297,7 +1297,7 @@ pstats_free(struct pstats *ps)
  * it can be replaced by assignment of zero.
  */
 static inline uint32_t
-ptr32_trim(void *ptr)
+ptr32_trim(const void *ptr)
 {
 	uintptr_t uptr;
 

@@ -252,7 +252,7 @@ struct thread {
 	int		td_pflags;	/* (k) Private thread (TDP_*) flags. */
 	int		td_dupfd;	/* (k) Ret value from fdopen. XXX */
 	int		td_sqqueue;	/* (t) Sleepqueue queue blocked on. */
-	void		*td_wchan;	/* (t) Sleep address. */
+	const void	*td_wchan;	/* (t) Sleep address. */
 	const char	*td_wmesg;	/* (t) Reason for sleep. */
 	volatile u_char td_owepreempt;  /* (k*) Preempt on last critical_exit */
 	u_char		td_tsqueue;	/* (t) Turnstile queue blocked on. */
@@ -1144,6 +1144,7 @@ void	cpu_thread_swapin(struct thread *);
 void	cpu_thread_swapout(struct thread *);
 struct	thread *thread_alloc(int pages);
 int	thread_alloc_stack(struct thread *, int pages);
+int	thread_check_susp(struct thread *td, bool sleep);
 void	thread_cow_get_proc(struct thread *newtd, struct proc *p);
 void	thread_cow_get(struct thread *newtd, struct thread *td);
 void	thread_cow_free(struct thread *td);

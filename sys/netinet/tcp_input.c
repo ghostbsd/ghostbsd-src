@@ -522,14 +522,15 @@ cc_ecnpkt_handler(struct tcpcb *tp, struct tcphdr *th, uint8_t iptos)
 	if (CC_ALGO(tp)->ecnpkt_handler != NULL) {
 		switch (iptos & IPTOS_ECN_MASK) {
 		case IPTOS_ECN_CE:
-		    tp->ccv->flags |= CCF_IPHDR_CE;
-		    break;
+			tp->ccv->flags |= CCF_IPHDR_CE;
+			break;
 		case IPTOS_ECN_ECT0:
-		    tp->ccv->flags &= ~CCF_IPHDR_CE;
-		    break;
+			/* FALLTHROUGH */
 		case IPTOS_ECN_ECT1:
-		    tp->ccv->flags &= ~CCF_IPHDR_CE;
-		    break;
+			/* FALLTHROUGH */
+		case IPTOS_ECN_NOTECT:
+			tp->ccv->flags &= ~CCF_IPHDR_CE;
+			break;
 		}
 
 		if (th->th_flags & TH_CWR)
@@ -537,15 +538,12 @@ cc_ecnpkt_handler(struct tcpcb *tp, struct tcphdr *th, uint8_t iptos)
 		else
 			tp->ccv->flags &= ~CCF_TCPHDR_CWR;
 
-		if (tp->t_flags & TF_DELACK)
-			tp->ccv->flags |= CCF_DELACK;
-		else
-			tp->ccv->flags &= ~CCF_DELACK;
-
 		CC_ALGO(tp)->ecnpkt_handler(tp->ccv);
 
-		if (tp->ccv->flags & CCF_ACKNOW)
+		if (tp->ccv->flags & CCF_ACKNOW) {
 			tcp_timer_activate(tp, TT_DELACK, tcp_delacktime);
+			tp->t_flags |= TF_ACKNOW;
+		}
 	}
 }
 
