@@ -69,6 +69,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/elf.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
@@ -2384,7 +2385,7 @@ vm_map_pmap_enter(vm_map_t map, vm_offset_t addr, vm_prot_t prot,
 
 	psize = atop(size);
 	if (psize + pindex > object->size) {
-		if (object->size < pindex) {
+		if (pindex >= object->size) {
 			VM_OBJECT_RUNLOCK(object);
 			return;
 		}
@@ -2496,17 +2497,16 @@ again:
 			vm_map_unlock(map);
 			return (KERN_PROTECTION_FAILURE);
 		}
-		if ((entry->eflags & MAP_ENTRY_IN_TRANSITION) != 0)
-			in_tran = entry;
+		if ((current->eflags & MAP_ENTRY_IN_TRANSITION) != 0)
+			in_tran = current;
 	}
 
 	/*
-	 * Postpone the operation until all in transition map entries
-	 * are stabilized.  In-transition entry might already have its
-	 * pages wired and wired_count incremented, but
-	 * MAP_ENTRY_USER_WIRED flag not yet set, and visible to other
-	 * threads because the map lock is dropped.  In this case we
-	 * would miss our call to vm_fault_copy_entry().
+	 * Postpone the operation until all in-transition map entries have
+	 * stabilized.  An in-transition entry might already have its pages
+	 * wired and wired_count incremented, but not yet have its
+	 * MAP_ENTRY_USER_WIRED flag set.  In which case, we would fail to call
+	 * vm_fault_copy_entry() in the final loop below.
 	 */
 	if (in_tran != NULL) {
 		in_tran->eflags |= MAP_ENTRY_NEEDS_WAKEUP;
@@ -4115,7 +4115,8 @@ vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
 	    addrbos + max_ssize > vm_map_max(map) ||
 	    addrbos + max_ssize <= addrbos)
 		return (KERN_INVALID_ADDRESS);
-	sgp = (curproc->p_flag2 & P2_STKGAP_DISABLE) != 0 ? 0 :
+	sgp = ((curproc->p_flag2 & P2_STKGAP_DISABLE) != 0 ||
+	    (curproc->p_fctl0 & NT_FREEBSD_FCTL_STKGAP_DISABLE) != 0) ? 0 :
 	    (vm_size_t)stack_guard_page * PAGE_SIZE;
 	if (sgp >= max_ssize)
 		return (KERN_INVALID_ARGUMENT);
@@ -4252,7 +4253,8 @@ retry:
 	} else {
 		return (KERN_FAILURE);
 	}
-	guard = (curproc->p_flag2 & P2_STKGAP_DISABLE) != 0 ? 0 :
+	guard = ((curproc->p_flag2 & P2_STKGAP_DISABLE) != 0 ||
+	    (curproc->p_fctl0 & NT_FREEBSD_FCTL_STKGAP_DISABLE) != 0) ? 0 :
 	    gap_entry->next_read;
 	max_grow = gap_entry->end - gap_entry->start;
 	if (guard > max_grow)
@@ -4523,7 +4525,7 @@ vm_map_lookup(vm_map_t *var_map,		/* IN/OUT */
 	vm_map_entry_t entry;
 	vm_map_t map = *var_map;
 	vm_prot_t prot;
-	vm_prot_t fault_type = fault_typea;
+	vm_prot_t fault_type;
 	vm_object_t eobject;
 	vm_size_t size;
 	struct ucred *cred;
@@ -4567,7 +4569,7 @@ RetryLookupLocked:
 		    vm_map_growstack(map, vaddr, entry) == KERN_SUCCESS)
 			goto RetryLookupLocked;
 	}
-	fault_type &= VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+	fault_type = fault_typea & VM_PROT_ALL;
 	if ((fault_type & prot) != fault_type || prot == VM_PROT_NONE) {
 		vm_map_unlock_read(map);
 		return (KERN_PROTECTION_FAILURE);

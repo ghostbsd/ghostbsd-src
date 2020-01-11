@@ -246,6 +246,7 @@ struct xvnode {
 #define	VV_NOSYNC	0x0004	/* unlinked, stop syncing */
 #define	VV_ETERNALDEV	0x0008	/* device that is never destroyed */
 #define	VV_CACHEDLABEL	0x0010	/* Vnode has valid cached MAC label */
+#define	VV_VMSIZEVNLOCK	0x0020	/* object size check requires vnode lock */
 #define	VV_COPYONWRITE	0x0040	/* vnode is doing copy-on-write */
 #define	VV_SYSTEM	0x0080	/* vnode being used by kernel */
 #define	VV_PROCDEP	0x0100	/* vnode is process dependent */
@@ -576,6 +577,7 @@ typedef void vop_getpages_iodone_t(void *, vm_page_t *, int, int);
 #define	VN_OPEN_NOAUDIT		0x00000001
 #define	VN_OPEN_NOCAPCHECK	0x00000002
 #define	VN_OPEN_NAMECACHE	0x00000004
+#define	VN_OPEN_INVFS		0x00000008
 
 /*
  * Public vnode manipulation functions.

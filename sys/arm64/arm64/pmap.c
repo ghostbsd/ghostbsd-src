@@ -120,6 +120,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
+#include <sys/sbuf.h>
 #include <sys/sx.h>
 #include <sys/vmem.h>
 #include <sys/vmmeter.h>
@@ -1128,40 +1129,35 @@ vm_paddr_t
 pmap_kextract(vm_offset_t va)
 {
 	pt_entry_t *pte, tpte;
-	vm_paddr_t pa;
-	int lvl;
 
-	if (va >= DMAP_MIN_ADDRESS && va < DMAP_MAX_ADDRESS) {
-		pa = DMAP_TO_PHYS(va);
-	} else {
-		pa = 0;
-		pte = pmap_pte(kernel_pmap, va, &lvl);
-		if (pte != NULL) {
-			tpte = pmap_load(pte);
-			pa = tpte & ~ATTR_MASK;
-			switch(lvl) {
-			case 1:
-				KASSERT((tpte & ATTR_DESCR_MASK) == L1_BLOCK,
-				    ("pmap_kextract: Invalid L1 pte found: %lx",
-				    tpte & ATTR_DESCR_MASK));
-				pa |= (va & L1_OFFSET);
-				break;
-			case 2:
-				KASSERT((tpte & ATTR_DESCR_MASK) == L2_BLOCK,
-				    ("pmap_kextract: Invalid L2 pte found: %lx",
-				    tpte & ATTR_DESCR_MASK));
-				pa |= (va & L2_OFFSET);
-				break;
-			case 3:
-				KASSERT((tpte & ATTR_DESCR_MASK) == L3_PAGE,
-				    ("pmap_kextract: Invalid L3 pte found: %lx",
-				    tpte & ATTR_DESCR_MASK));
-				pa |= (va & L3_OFFSET);
-				break;
-			}
-		}
-	}
-	return (pa);
+	if (va >= DMAP_MIN_ADDRESS && va < DMAP_MAX_ADDRESS)
+		return (DMAP_TO_PHYS(va));
+	pte = pmap_l1(kernel_pmap, va);
+	if (pte == NULL)
+		return (0);
+
+	/*
+	 * A concurrent pmap_update_entry() will clear the entry's valid bit
+	 * but leave the rest of the entry unchanged.  Therefore, we treat a
+	 * non-zero entry as being valid, and we ignore the valid bit when
+	 * determining whether the entry maps a block, page, or table.
+	 */
+	tpte = pmap_load(pte);
+	if (tpte == 0)
+		return (0);
+	if ((tpte & ATTR_DESCR_TYPE_MASK) == ATTR_DESCR_TYPE_BLOCK)
+		return ((tpte & ~ATTR_MASK) | (va & L1_OFFSET));
+	pte = pmap_l1_to_l2(&tpte, va);
+	tpte = pmap_load(pte);
+	if (tpte == 0)
+		return (0);
+	if ((tpte & ATTR_DESCR_TYPE_MASK) == ATTR_DESCR_TYPE_BLOCK)
+		return ((tpte & ~ATTR_MASK) | (va & L2_OFFSET));
+	pte = pmap_l2_to_l3(&tpte, va);
+	tpte = pmap_load(pte);
+	if (tpte == 0)
+		return (0);
+	return ((tpte & ~ATTR_MASK) | (va & L3_OFFSET));
 }
 
 /***************************************************
@@ -1183,10 +1179,8 @@ pmap_kenter(vm_offset_t sva, vm_size_t size, vm_paddr_t pa, int mode)
 	KASSERT((size & PAGE_MASK) == 0,
 	    ("pmap_kenter: Mapping is not page-sized"));
 
-	attr = ATTR_DEFAULT | ATTR_IDX(mode) | L3_PAGE;
-	if (mode == DEVICE_MEMORY)
-		attr |= ATTR_XN;
-
+	attr = ATTR_DEFAULT | ATTR_AP(ATTR_AP_RW) | ATTR_XN | ATTR_IDX(mode) |
+	    L3_PAGE;
 	va = sva;
 	while (size != 0) {
 		pde = pmap_pde(kernel_pmap, va, &lvl);
@@ -1301,9 +1295,7 @@ pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 
 		m = ma[i];
 		pa = VM_PAGE_TO_PHYS(m) | ATTR_DEFAULT | ATTR_AP(ATTR_AP_RW) |
-		    ATTR_IDX(m->md.pv_memattr) | L3_PAGE;
-		if (m->md.pv_memattr == DEVICE_MEMORY)
-			pa |= ATTR_XN;
+		    ATTR_XN | ATTR_IDX(m->md.pv_memattr) | L3_PAGE;
 		pte = pmap_l2_to_l3(pde, va);
 		pmap_load_store(pte, pa);
 
@@ -3019,17 +3011,19 @@ pmap_update_entry(pmap_t pmap, pd_entry_t *pte, pd_entry_t newpte,
 	 * as they may make use of an address we are about to invalidate.
 	 */
 	intr = intr_disable();
-	critical_enter();
 
-	/* Clear the old mapping */
-	pmap_clear(pte);
+	/*
+	 * Clear the old mapping's valid bit, but leave the rest of the entry
+	 * unchanged, so that a lockless, concurrent pmap_kextract() can still
+	 * lookup the physical address.
+	 */
+	pmap_clear_bits(pte, ATTR_DESCR_VALID);
 	pmap_invalidate_range_nopin(pmap, va, va + size);
 
 	/* Create the new mapping */
 	pmap_store(pte, newpte);
 	dsb(ishst);
 
-	critical_exit();
 	intr_restore(intr);
 }
 
@@ -3425,8 +3419,7 @@ validate:
 	}
 
 #if VM_NRESERVLEVEL > 0
-	if (pmap != pmap_kernel() &&
-	    (mpte == NULL || mpte->wire_count == NL3PG) &&
+	if ((mpte == NULL || mpte->wire_count == NL3PG) &&
 	    pmap_ps_enabled(pmap) &&
 	    (m->flags & PG_FICTITIOUS) == 0 &&
 	    vm_reserv_level_iffullpop(m) == 0) {
@@ -3763,8 +3756,8 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	    ATTR_AP(ATTR_AP_RO) | L3_PAGE;
 	if ((prot & VM_PROT_EXECUTE) == 0 || m->md.pv_memattr == DEVICE_MEMORY)
 		l3_val |= ATTR_XN;
-	else if (va < VM_MAXUSER_ADDRESS)
-		l3_val |= ATTR_PXN;
+	if (va < VM_MAXUSER_ADDRESS)
+		l3_val |= ATTR_AP(ATTR_AP_USER) | ATTR_PXN;
 
 	/*
 	 * Now validate mapping with RO protection
@@ -4330,7 +4323,6 @@ pmap_remove_pages(pmap_t pmap)
 					    L2_BLOCK,
 					    ("Attempting to remove an invalid "
 					    "block: %lx", tpte));
-					tpte = pmap_load(pte);
 					break;
 				case 2:
 					pte = pmap_l2_to_l3(pde, pv->pv_va);
@@ -4448,17 +4440,15 @@ pmap_remove_pages(pmap_t pmap)
 			free_pv_chunk(pc);
 		}
 	}
-	pmap_invalidate_all(pmap);
 	if (lock != NULL)
 		rw_wunlock(lock);
+	pmap_invalidate_all(pmap);
 	PMAP_UNLOCK(pmap);
 	vm_page_free_pages_toq(&free, true);
 }
 
 /*
- * This is used to check if a page has been accessed or modified. As we
- * don't have a bit to see if it has been modified we have to assume it
- * has been if the page is read/write.
+ * This is used to check if a page has been accessed or modified.
  */
 static boolean_t
 pmap_page_test_mappings(vm_page_t m, boolean_t accessed, boolean_t modified)
@@ -5840,23 +5830,33 @@ pmap_fault(pmap_t pmap, uint64_t esr, uint64_t far)
 	case ISS_DATA_DFSC_TF_L1:
 	case ISS_DATA_DFSC_TF_L2:
 	case ISS_DATA_DFSC_TF_L3:
-		PMAP_LOCK(pmap);
-		/* Ask the MMU to check the address */
-		intr = intr_disable();
-		if (pmap == kernel_pmap)
-			par = arm64_address_translate_s1e1r(far);
-		else
-			par = arm64_address_translate_s1e0r(far);
-		intr_restore(intr);
-		PMAP_UNLOCK(pmap);
-
 		/*
-		 * If the translation was successful the address was invalid
-		 * due to a break-before-make sequence. We can unlock and
-		 * return success to the trap handler.
+		 * Retry the translation.  A break-before-make sequence can
+		 * produce a transient fault.
 		 */
-		if (PAR_SUCCESS(par))
-			rv = KERN_SUCCESS;
+		if (pmap == kernel_pmap) {
+			/*
+			 * The translation fault may have occurred within a
+			 * critical section.  Therefore, we must check the
+			 * address without acquiring the kernel pmap's lock.
+			 */
+			if (pmap_kextract(far) != 0)
+				rv = KERN_SUCCESS;
+		} else {
+			PMAP_LOCK(pmap);
+			/* Ask the MMU to check the address. */
+			intr = intr_disable();
+			par = arm64_address_translate_s1e0r(far);
+			intr_restore(intr);
+			PMAP_UNLOCK(pmap);
+
+			/*
+			 * If the translation was successful, then we can
+			 * return success to the trap handler.
+			 */
+			if (PAR_SUCCESS(par))
+				rv = KERN_SUCCESS;
+		}
 		break;
 	}
 
@@ -5969,3 +5969,212 @@ pmap_is_valid_memattr(pmap_t pmap __unused, vm_memattr_t mode)
 
 	return (mode >= VM_MEMATTR_DEVICE && mode <= VM_MEMATTR_WRITE_THROUGH);
 }
+
+/*
+ * Track a range of the kernel's virtual address space that is contiguous
+ * in various mapping attributes.
+ */
+struct pmap_kernel_map_range {
+	vm_offset_t sva;
+	pt_entry_t attrs;
+	int l3pages;
+	int l3contig;
+	int l2blocks;
+	int l1blocks;
+};
+
+static void
+sysctl_kmaps_dump(struct sbuf *sb, struct pmap_kernel_map_range *range,
+    vm_offset_t eva)
+{
+	const char *mode;
+	int index;
+
+	if (eva <= range->sva)
+		return;
+
+	index = range->attrs & ATTR_IDX_MASK;
+	switch (index) {
+	case ATTR_IDX(VM_MEMATTR_DEVICE):
+		mode = "DEV";
+		break;
+	case ATTR_IDX(VM_MEMATTR_UNCACHEABLE):
+		mode = "UC";
+		break;
+	case ATTR_IDX(VM_MEMATTR_WRITE_BACK):
+		mode = "WB";
+		break;
+	case ATTR_IDX(VM_MEMATTR_WRITE_THROUGH):
+		mode = "WT";
+		break;
+	default:
+		printf(
+		    "%s: unknown memory type %x for range 0x%016lx-0x%016lx\n",
+		    __func__, index, range->sva, eva);
+		mode = "??";
+		break;
+	}
+
+	sbuf_printf(sb, "0x%016lx-0x%016lx r%c%c%c %3s %d %d %d %d\n",
+	    range->sva, eva,
+	    (range->attrs & ATTR_AP_RW_BIT) == ATTR_AP_RW ? 'w' : '-',
+	    (range->attrs & ATTR_PXN) != 0 ? '-' : 'x',
+	    (range->attrs & ATTR_AP_USER) != 0 ? 'u' : 's',
+	    mode, range->l1blocks, range->l2blocks, range->l3contig,
+	    range->l3pages);
+
+	/* Reset to sentinel value. */
+	range->sva = 0xfffffffffffffffful;
+}
+
+/*
+ * Determine whether the attributes specified by a page table entry match those
+ * being tracked by the current range.
+ */
+static bool
+sysctl_kmaps_match(struct pmap_kernel_map_range *range, pt_entry_t attrs)
+{
+
+	return (range->attrs == attrs);
+}
+
+static void
+sysctl_kmaps_reinit(struct pmap_kernel_map_range *range, vm_offset_t va,
+    pt_entry_t attrs)
+{
+
+	memset(range, 0, sizeof(*range));
+	range->sva = va;
+	range->attrs = attrs;
+}
+
+/*
+ * Given a leaf PTE, derive the mapping's attributes.  If they do not match
+ * those of the current run, dump the address range and its attributes, and
+ * begin a new run.
+ */
+static void
+sysctl_kmaps_check(struct sbuf *sb, struct pmap_kernel_map_range *range,
+    vm_offset_t va, pd_entry_t l0e, pd_entry_t l1e, pd_entry_t l2e,
+    pt_entry_t l3e)
+{
+	pt_entry_t attrs;
+
+	attrs = l0e & (ATTR_AP_MASK | ATTR_XN);
+	attrs |= l1e & (ATTR_AP_MASK | ATTR_XN);
+	if ((l1e & ATTR_DESCR_MASK) == L1_BLOCK)
+		attrs |= l1e & ATTR_IDX_MASK;
+	attrs |= l2e & (ATTR_AP_MASK | ATTR_XN);
+	if ((l2e & ATTR_DESCR_MASK) == L2_BLOCK)
+		attrs |= l2e & ATTR_IDX_MASK;
+	attrs |= l3e & (ATTR_AP_MASK | ATTR_XN | ATTR_IDX_MASK);
+
+	if (range->sva > va || !sysctl_kmaps_match(range, attrs)) {
+		sysctl_kmaps_dump(sb, range, va);
+		sysctl_kmaps_reinit(range, va, attrs);
+	}
+}
+
+static int
+sysctl_kmaps(SYSCTL_HANDLER_ARGS)
+{
+	struct pmap_kernel_map_range range;
+	struct sbuf sbuf, *sb;
+	pd_entry_t l0e, *l1, l1e, *l2, l2e;
+	pt_entry_t *l3, l3e;
+	vm_offset_t sva;
+	vm_paddr_t pa;
+	int error, i, j, k, l;
+
+	error = sysctl_wire_old_buffer(req, 0);
+	if (error != 0)
+		return (error);
+	sb = &sbuf;
+	sbuf_new_for_sysctl(sb, NULL, PAGE_SIZE, req);
+
+	/* Sentinel value. */
+	range.sva = 0xfffffffffffffffful;
+
+	/*
+	 * Iterate over the kernel page tables without holding the kernel pmap
+	 * lock.  Kernel page table pages are never freed, so at worst we will
+	 * observe inconsistencies in the output.
+	 */
+	for (sva = 0xffff000000000000ul, i = pmap_l0_index(sva); i < Ln_ENTRIES;
+	    i++) {
+		if (i == pmap_l0_index(DMAP_MIN_ADDRESS))
+			sbuf_printf(sb, "\nDirect map:\n");
+		else if (i == pmap_l0_index(VM_MIN_KERNEL_ADDRESS))
+			sbuf_printf(sb, "\nKernel map:\n");
+
+		l0e = kernel_pmap->pm_l0[i];
+		if ((l0e & ATTR_DESCR_VALID) == 0) {
+			sysctl_kmaps_dump(sb, &range, sva);
+			sva += L0_SIZE;
+			continue;
+		}
+		pa = l0e & ~ATTR_MASK;
+		l1 = (pd_entry_t *)PHYS_TO_DMAP(pa);
+
+		for (j = pmap_l1_index(sva); j < Ln_ENTRIES; j++) {
+			l1e = l1[j];
+			if ((l1e & ATTR_DESCR_VALID) == 0) {
+				sysctl_kmaps_dump(sb, &range, sva);
+				sva += L1_SIZE;
+				continue;
+			}
+			if ((l1e & ATTR_DESCR_MASK) == L1_BLOCK) {
+				sysctl_kmaps_check(sb, &range, sva, l0e, l1e,
+				    0, 0);
+				range.l1blocks++;
+				sva += L1_SIZE;
+				continue;
+			}
+			pa = l1e & ~ATTR_MASK;
+			l2 = (pd_entry_t *)PHYS_TO_DMAP(pa);
+
+			for (k = pmap_l2_index(sva); k < Ln_ENTRIES; k++) {
+				l2e = l2[k];
+				if ((l2e & ATTR_DESCR_VALID) == 0) {
+					sysctl_kmaps_dump(sb, &range, sva);
+					sva += L2_SIZE;
+					continue;
+				}
+				if ((l2e & ATTR_DESCR_MASK) == L2_BLOCK) {
+					sysctl_kmaps_check(sb, &range, sva,
+					    l0e, l1e, l2e, 0);
+					range.l2blocks++;
+					sva += L2_SIZE;
+					continue;
+				}
+				pa = l2e & ~ATTR_MASK;
+				l3 = (pt_entry_t *)PHYS_TO_DMAP(pa);
+
+				for (l = pmap_l3_index(sva); l < Ln_ENTRIES;
+				    l++, sva += L3_SIZE) {
+					l3e = l3[l];
+					if ((l3e & ATTR_DESCR_VALID) == 0) {
+						sysctl_kmaps_dump(sb, &range,
+						    sva);
+						continue;
+					}
+					sysctl_kmaps_check(sb, &range, sva,
+					    l0e, l1e, l2e, l3e);
+					if ((l3e & ATTR_CONTIGUOUS) != 0)
+						range.l3contig += l % 16 == 0 ?
+						    1 : 0;
+					else
+						range.l3pages++;
+				}
+			}
+		}
+	}
+
+	error = sbuf_finish(sb);
+	sbuf_delete(sb);
+	return (error);
+}
+SYSCTL_OID(_vm_pmap, OID_AUTO, kernel_maps,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    NULL, 0, sysctl_kmaps, "A",
+    "Dump kernel address layout");

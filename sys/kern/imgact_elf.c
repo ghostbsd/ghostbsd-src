@@ -119,7 +119,8 @@ SYSCTL_INT(_debug, OID_AUTO, __elfN(legacy_coredump), CTLFLAG_RW,
 
 int __elfN(nxstack) =
 #if defined(__amd64__) || defined(__powerpc64__) /* both 64 and 32 bit */ || \
-    (defined(__arm__) && __ARM_ARCH >= 7) || defined(__aarch64__)
+    (defined(__arm__) && __ARM_ARCH >= 7) || defined(__aarch64__) || \
+    defined(__riscv)
 	1;
 #else
 	0;
@@ -767,8 +768,8 @@ __elfN(load_file)(struct proc *p, const char *file, u_long *addr,
 	imgp->proc = p;
 	imgp->attr = attr;
 
-	NDINIT(nd, LOOKUP, FOLLOW | LOCKSHARED | LOCKLEAF, UIO_SYSSPACE, file,
-	    curthread);
+	NDINIT(nd, LOOKUP, ISOPEN | FOLLOW | LOCKSHARED | LOCKLEAF,
+	    UIO_SYSSPACE, file, curthread);
 	if ((error = namei(nd)) != 0) {
 		nd->ni_vp = NULL;
 		goto fail;
@@ -2232,7 +2233,7 @@ __elfN(note_thrmisc)(void *arg, struct sbuf *sb, size_t *sizep)
 	td = (struct thread *)arg;
 	if (sb != NULL) {
 		KASSERT(*sizep == sizeof(thrmisc), ("invalid size"));
-		bzero(&thrmisc._pad, sizeof(thrmisc._pad));
+		bzero(&thrmisc, sizeof(thrmisc));
 		strcpy(thrmisc.pr_tname, td->td_name);
 		sbuf_bcat(sb, &thrmisc, sizeof(thrmisc));
 	}

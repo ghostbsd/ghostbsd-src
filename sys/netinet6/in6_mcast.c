@@ -1828,7 +1828,7 @@ ip6_getmoptions(struct inpcb *inp, struct sockopt *sopt)
  * Returns NULL if no ifp could be found.
  */
 static struct ifnet *
-in6p_lookup_mcast_ifp(const struct inpcb *in6p,
+in6p_lookup_mcast_ifp(const struct inpcb *inp,
     const struct sockaddr_in6 *gsin6)
 {
 	struct nhop6_basic	nh6;
@@ -1836,13 +1836,13 @@ in6p_lookup_mcast_ifp(const struct inpcb *in6p,
 	uint32_t		scopeid;
 	uint32_t		fibnum;
 
-	KASSERT(in6p->inp_vflag & INP_IPV6,
+	KASSERT(inp->inp_vflag & INP_IPV6,
 	    ("%s: not INP_IPV6 inpcb", __func__));
 	KASSERT(gsin6->sin6_family == AF_INET6,
 	    ("%s: not AF_INET6 group", __func__));
 
 	in6_splitscope(&gsin6->sin6_addr, &dst, &scopeid);
-	fibnum = in6p ? in6p->inp_inc.inc_fibnum : RT_DEFAULT_FIB;
+	fibnum = inp ? inp->inp_inc.inc_fibnum : RT_DEFAULT_FIB;
 	if (fib6_lookup_nh_basic(fibnum, &dst, scopeid, 0, 0, &nh6) != 0)
 		return (NULL);
 
@@ -2109,6 +2109,7 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 		 * NOTE: Refcount from in6_joingroup_locked()
 		 * is protecting membership.
 		 */
+		ip6_mfilter_insert(&imo->im6o_head, imf);
 	} else {
 		CTR1(KTR_MLD, "%s: merge inm state", __func__);
 		IN6_MULTI_LIST_LOCK();
@@ -2133,9 +2134,6 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 			goto out_in6p_locked;
 		}
 	}
-
-	if (is_new)
-		ip6_mfilter_insert(&imo->im6o_head, imf);
 
 	im6f_commit(imf);
 	imf = NULL;
@@ -2328,6 +2326,12 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	if (is_final) {
 		ip6_mfilter_remove(&imo->im6o_head, imf);
 		im6f_leave(imf);
+
+		/*
+		 * Give up the multicast address record to which
+		 * the membership points.
+		 */
+		(void)in6_leavegroup_locked(inm, imf);
 	} else {
 		if (imf->im6f_st[0] == MCAST_EXCLUDE) {
 			error = EADDRNOTAVAIL;
@@ -2384,14 +2388,8 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 out_in6p_locked:
 	INP_WUNLOCK(inp);
 
-	if (is_final && imf) {
-		/*
-		 * Give up the multicast address record to which
-		 * the membership points.
-		 */
-		(void)in6_leavegroup_locked(inm, imf);
+	if (is_final && imf)
 		ip6_mfilter_free(imf);
-	}
 
 	IN6_MULTI_UNLOCK();
 	return (error);

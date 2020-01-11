@@ -645,6 +645,7 @@ static int sysctl_fec(SYSCTL_HANDLER_ARGS);
 static int sysctl_autoneg(SYSCTL_HANDLER_ARGS);
 static int sysctl_handle_t4_reg64(SYSCTL_HANDLER_ARGS);
 static int sysctl_temperature(SYSCTL_HANDLER_ARGS);
+static int sysctl_vdd(SYSCTL_HANDLER_ARGS);
 static int sysctl_loadavg(SYSCTL_HANDLER_ARGS);
 static int sysctl_cctrl(SYSCTL_HANDLER_ARGS);
 static int sysctl_cim_ibq_obq(SYSCTL_HANDLER_ARGS);
@@ -1475,6 +1476,10 @@ t4_detach_common(device_t dev)
 		sc->cdev = NULL;
 	}
 
+	sx_xlock(&t4_list_lock);
+	SLIST_REMOVE(&t4_list, sc, adapter, link);
+	sx_xunlock(&t4_list_lock);
+
 	sc->flags &= ~CHK_MBOX_ACCESS;
 	if (sc->flags & FULL_INIT_DONE) {
 		if (!(sc->flags & IS_VF))
@@ -1568,12 +1573,6 @@ t4_detach_common(device_t dev)
 	free(sc->tids.tid_tab, M_CXGBE);
 	free(sc->tt.tls_rx_ports, M_CXGBE);
 	t4_destroy_dma_tag(sc);
-	if (mtx_initialized(&sc->sc_lock)) {
-		sx_xlock(&t4_list_lock);
-		SLIST_REMOVE(&t4_list, sc, adapter, link);
-		sx_xunlock(&t4_list_lock);
-		mtx_destroy(&sc->sc_lock);
-	}
 
 	callout_drain(&sc->sfl_callout);
 	if (mtx_initialized(&sc->tids.ftid_lock)) {
@@ -1582,12 +1581,8 @@ t4_detach_common(device_t dev)
 	}
 	if (mtx_initialized(&sc->tids.atid_lock))
 		mtx_destroy(&sc->tids.atid_lock);
-	if (mtx_initialized(&sc->sfl_lock))
-		mtx_destroy(&sc->sfl_lock);
 	if (mtx_initialized(&sc->ifp_lock))
 		mtx_destroy(&sc->ifp_lock);
-	if (mtx_initialized(&sc->reg_lock))
-		mtx_destroy(&sc->reg_lock);
 
 	if (rw_initialized(&sc->policy_lock)) {
 		rw_destroy(&sc->policy_lock);
@@ -1603,6 +1598,10 @@ t4_detach_common(device_t dev)
 		if (rw_initialized(&mw->mw_lock))
 			rw_destroy(&mw->mw_lock);
 	}
+
+	mtx_destroy(&sc->sfl_lock);
+	mtx_destroy(&sc->reg_lock);
+	mtx_destroy(&sc->sc_lock);
 
 	bzero(sc, sizeof(*sc));
 
@@ -6020,8 +6019,8 @@ t4_sysctls(struct adapter *sc)
 	    CTLFLAG_RD, sc, 0, sysctl_loadavg, "A",
 	    "microprocessor load averages (debug firmwares only)");
 
-	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "core_vdd", CTLFLAG_RD,
-	    &sc->params.core_vdd, 0, "core Vdd (in mV)");
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "core_vdd", CTLTYPE_INT |
+	    CTLFLAG_RD, sc, 0, sysctl_vdd, "I", "core Vdd (in mV)");
 
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "local_cpus",
 	    CTLTYPE_STRING | CTLFLAG_RD, sc, LOCAL_CPUS,
@@ -7152,6 +7151,31 @@ sysctl_temperature(SYSCTL_HANDLER_ARGS)
 
 	rc = sysctl_handle_int(oidp, &t, 0, req);
 	return (rc);
+}
+
+static int
+sysctl_vdd(SYSCTL_HANDLER_ARGS)
+{
+	struct adapter *sc = arg1;
+	int rc;
+	uint32_t param, val;
+
+	if (sc->params.core_vdd == 0) {
+		rc = begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK,
+		    "t4vdd");
+		if (rc)
+			return (rc);
+		param = V_FW_PARAMS_MNEM(FW_PARAMS_MNEM_DEV) |
+		    V_FW_PARAMS_PARAM_X(FW_PARAMS_PARAM_DEV_DIAG) |
+		    V_FW_PARAMS_PARAM_Y(FW_PARAM_DEV_DIAG_VDD);
+		rc = -t4_query_params(sc, sc->mbox, sc->pf, 0, 1, &param, &val);
+		end_synchronized_op(sc, 0);
+		if (rc)
+			return (rc);
+		sc->params.core_vdd = val;
+	}
+
+	return (sysctl_handle_int(oidp, &sc->params.core_vdd, 0, req));
 }
 
 static int

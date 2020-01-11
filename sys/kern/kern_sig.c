@@ -65,6 +65,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/procdesc.h>
+#include <sys/ptrace.h>
 #include <sys/posix4.h>
 #include <sys/pioctl.h>
 #include <sys/racct.h>
@@ -1252,11 +1253,13 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 	int error, sig, timo, timevalid = 0;
 	struct timespec rts, ets, ts;
 	struct timeval tv;
+	bool traced;
 
 	p = td->td_proc;
 	error = 0;
 	ets.tv_sec = 0;
 	ets.tv_nsec = 0;
+	traced = false;
 
 	if (timeout != NULL) {
 		if (timeout->tv_nsec >= 0 && timeout->tv_nsec < 1000000000) {
@@ -1309,6 +1312,11 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 			timo = 0;
 		}
 
+		if (traced) {
+			error = EINTR;
+			break;
+		}
+
 		error = msleep(ps, &p->p_mtx, PPAUSE|PCATCH, "sigwait", timo);
 
 		if (timeout != NULL) {
@@ -1320,6 +1328,16 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 				error = 0;
 			}
 		}
+
+		/*
+		 * If PTRACE_SCE or PTRACE_SCX were set after
+		 * userspace entered the syscall, return spurious
+		 * EINTR after wait was done.  Only do this as last
+		 * resort after rechecking for possible queued signals
+		 * and expired timeouts.
+		 */
+		if (error == 0 && (p->p_ptevents & PTRACE_SYSCALL) != 0)
+			traced = true;
 	}
 
 	new_block = saved_mask;
@@ -1532,6 +1550,14 @@ kern_sigsuspend(struct thread *td, sigset_t mask)
 			has_sig += postsig(sig);
 		}
 		mtx_unlock(&p->p_sigacts->ps_mtx);
+
+		/*
+		 * If PTRACE_SCE or PTRACE_SCX were set after
+		 * userspace entered the syscall, return spurious
+		 * EINTR.
+		 */
+		if ((p->p_ptevents & PTRACE_SYSCALL) != 0)
+			has_sig += 1;
 	}
 	PROC_UNLOCK(p);
 	td->td_errno = EINTR;
@@ -1653,6 +1679,36 @@ kern_sigaltstack(struct thread *td, stack_t *ss, stack_t *oss)
 	return (0);
 }
 
+struct killpg1_ctx {
+	struct thread *td;
+	ksiginfo_t *ksi;
+	int sig;
+	bool sent;
+	bool found;
+	int ret;
+};
+
+static void
+killpg1_sendsig(struct proc *p, bool notself, struct killpg1_ctx *arg)
+{
+	int err;
+
+	if (p->p_pid <= 1 || (p->p_flag & P_SYSTEM) != 0 ||
+	    (notself && p == arg->td->td_proc) || p->p_state == PRS_NEW)
+		return;
+	PROC_LOCK(p);
+	err = p_cansignal(arg->td, p, arg->sig);
+	if (err == 0 && arg->sig != 0)
+		pksignal(p, arg->sig, arg->ksi);
+	PROC_UNLOCK(p);
+	if (err != ESRCH)
+		arg->found = true;
+	if (err == 0)
+		arg->sent = true;
+	else if (arg->ret == 0 && err != ESRCH && err != EPERM)
+		arg->ret = err;
+}
+
 /*
  * Common code for kill process group/broadcast kill.
  * cp is calling process.
@@ -1662,30 +1718,21 @@ killpg1(struct thread *td, int sig, int pgid, int all, ksiginfo_t *ksi)
 {
 	struct proc *p;
 	struct pgrp *pgrp;
-	int err;
-	int ret;
+	struct killpg1_ctx arg;
 
-	ret = ESRCH;
+	arg.td = td;
+	arg.ksi = ksi;
+	arg.sig = sig;
+	arg.sent = false;
+	arg.found = false;
+	arg.ret = 0;
 	if (all) {
 		/*
 		 * broadcast
 		 */
 		sx_slock(&allproc_lock);
 		FOREACH_PROC_IN_SYSTEM(p) {
-			if (p->p_pid <= 1 || p->p_flag & P_SYSTEM ||
-			    p == td->td_proc || p->p_state == PRS_NEW) {
-				continue;
-			}
-			PROC_LOCK(p);
-			err = p_cansignal(td, p, sig);
-			if (err == 0) {
-				if (sig)
-					pksignal(p, sig, ksi);
-				ret = err;
-			}
-			else if (ret == ESRCH)
-				ret = err;
-			PROC_UNLOCK(p);
+			killpg1_sendsig(p, true, &arg);
 		}
 		sx_sunlock(&allproc_lock);
 	} else {
@@ -1705,25 +1752,14 @@ killpg1(struct thread *td, int sig, int pgid, int all, ksiginfo_t *ksi)
 		}
 		sx_sunlock(&proctree_lock);
 		LIST_FOREACH(p, &pgrp->pg_members, p_pglist) {
-			PROC_LOCK(p);
-			if (p->p_pid <= 1 || p->p_flag & P_SYSTEM ||
-			    p->p_state == PRS_NEW) {
-				PROC_UNLOCK(p);
-				continue;
-			}
-			err = p_cansignal(td, p, sig);
-			if (err == 0) {
-				if (sig)
-					pksignal(p, sig, ksi);
-				ret = err;
-			}
-			else if (ret == ESRCH)
-				ret = err;
-			PROC_UNLOCK(p);
+			killpg1_sendsig(p, false, &arg);
 		}
 		PGRP_UNLOCK(pgrp);
 	}
-	return (ret);
+	MPASS(arg.ret != 0 || arg.found || !arg.sent);
+	if (arg.ret == 0 && !arg.sent)
+		arg.ret = arg.found ? EPERM : ESRCH;
+	return (arg.ret);
 }
 
 #ifndef _SYS_SYSPROTO_H_

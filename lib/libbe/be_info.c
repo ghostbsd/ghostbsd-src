@@ -30,6 +30,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/zfs_context.h>
+
 #include "be.h"
 #include "be_impl.h"
 
@@ -257,7 +259,8 @@ static int
 snapshot_proplist_update(zfs_handle_t *hdl, prop_data_t *data)
 {
 
-	return (zfs_iter_snapshots_sorted(hdl, prop_list_builder_cb, data));
+	return (zfs_iter_snapshots_sorted(hdl, prop_list_builder_cb, data,
+	    0, 0));
 }
 
 

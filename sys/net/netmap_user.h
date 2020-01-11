@@ -981,7 +981,8 @@ nm_close(struct nm_desc *d)
 static int
 nm_mmap(struct nm_desc *d, const struct nm_desc *parent)
 {
-	//XXX TODO: check if mmap is already done
+	if (d->done_mmap)
+		return 0;
 
 	if (IS_NETMAP_DESC(parent) && parent->mem &&
 	    parent->req.nr_arg2 == d->req.nr_arg2) {
@@ -1116,7 +1117,7 @@ nm_dispatch(struct nm_desc *d, int cnt, nm_cb_t cb, u_char *arg)
 				slot = &ring->slot[i];
 				d->hdr.len += slot->len;
 				nbuf = (u_char *)NETMAP_BUF(ring, slot->buf_idx);
-				if (oldbuf != NULL && nbuf - oldbuf == ring->nr_buf_size &&
+				if (oldbuf != NULL && nbuf - oldbuf == (int)ring->nr_buf_size &&
 						oldlen == ring->nr_buf_size) {
 					d->hdr.caplen += slot->len;
 					oldbuf = nbuf;

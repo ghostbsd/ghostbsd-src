@@ -98,8 +98,6 @@ static void		pci_assign_interrupt(device_t bus, device_t dev,
 static int		pci_add_map(device_t bus, device_t dev, int reg,
 			    struct resource_list *rl, int force, int prefetch);
 static int		pci_probe(device_t dev);
-static int		pci_attach(device_t dev);
-static int		pci_detach(device_t dev);
 static void		pci_load_vendor_data(void);
 static int		pci_describe_parse_line(char **ptr, int *vendor,
 			    int *device, char **desc);
@@ -236,6 +234,7 @@ struct pci_quirk {
 #define	PCI_QUIRK_UNMAP_REG	4 /* Ignore PCI map register */
 #define	PCI_QUIRK_DISABLE_MSIX	5 /* MSI-X doesn't work */
 #define	PCI_QUIRK_MSI_INTX_BUG	6 /* PCIM_CMD_INTxDIS disables MSI */
+#define	PCI_QUIRK_REALLOC_BAR	7 /* Can't allocate memory at the default address */
 	int	arg1;
 	int	arg2;
 };
@@ -316,6 +315,12 @@ static const struct pci_quirk pci_quirks[] = {
 	{ 0x166b14e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5780S */
 	{ 0x167814e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5715 */
 	{ 0x167914e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5715S */
+
+	/*
+	 * HPE Gen 10 VGA has a memory range that can't be allocated in the
+	 * expected place.
+	 */
+	{ 0x98741002, PCI_QUIRK_REALLOC_BAR,	0, 	0 },
 
 	{ 0 }
 };
@@ -3295,7 +3300,9 @@ pci_add_map(device_t bus, device_t dev, int reg, struct resource_list *rl,
 	 */
 	res = resource_list_reserve(rl, bus, dev, type, &reg, start, end, count,
 	    flags);
-	if (pci_do_realloc_bars && res == NULL && (start != 0 || end != ~0)) {
+	if ((pci_do_realloc_bars
+		|| pci_has_quirk(pci_get_devid(dev), PCI_QUIRK_REALLOC_BAR))
+	    && res == NULL && (start != 0 || end != ~0)) {
 		/*
 		 * If the allocation fails, try to allocate a resource for
 		 * this BAR using any available range.  The firmware felt
@@ -4380,7 +4387,7 @@ pci_attach_common(device_t dev)
 	return (0);
 }
 
-static int
+int
 pci_attach(device_t dev)
 {
 	int busno, domain, error;
@@ -4401,7 +4408,7 @@ pci_attach(device_t dev)
 	return (bus_generic_attach(dev));
 }
 
-static int
+int
 pci_detach(device_t dev)
 {
 #ifdef PCI_RES_BUS

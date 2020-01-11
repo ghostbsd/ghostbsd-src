@@ -182,6 +182,7 @@ MAN=	aac.4 \
 	gpio.4 \
 	gpioiic.4 \
 	gpioled.4 \
+	gpioths.4 \
 	gre.4 \
 	h_ertt.4 \
 	hifn.4 \
@@ -236,6 +237,7 @@ MAN=	aac.4 \
 	ismt.4 \
 	isp.4 \
 	ispfw.4 \
+	${_itwd.4} \
 	iwi.4 \
 	iwifw.4 \
 	iwm.4 \
@@ -385,6 +387,7 @@ MAN=	aac.4 \
 	nmdm.4 \
 	nsp.4 \
 	${_ntb.4} \
+	${_ntb_hw_amd.4} \
 	${_ntb_hw_intel.4} \
 	${_ntb_hw_plx.4} \
 	${_ntb_transport.4} \
@@ -521,6 +524,7 @@ MAN=	aac.4 \
 	stf.4 \
 	stg.4 \
 	stge.4 \
+	${_superio.4} \
 	sym.4 \
 	syncache.4 \
 	syncer.4 \
@@ -665,6 +669,8 @@ MLINKS+=gem.4 if_gem.4
 MLINKS+=geom.4 GEOM.4
 MLINKS+=gif.4 if_gif.4
 MLINKS+=gpio.4 gpiobus.4
+MLINKS+=gpioths.4 dht11.4
+MLINKS+=gpioths.4 dht22.4
 MLINKS+=gre.4 if_gre.4
 MLINKS+=hme.4 if_hme.4
 MLINKS+=hpet.4 acpi_hpet.4
@@ -818,6 +824,7 @@ _if_wpi.4=	if_wpi.4
 _imcsmb.4=	imcsmb.4
 _ipmi.4=	ipmi.4
 _io.4=		io.4
+_itwd.4=	itwd.4
 _linux.4=	linux.4
 _nda.4=		nda.4
 _ndis.4=	ndis.4
@@ -830,6 +837,7 @@ _padlock.4=	padlock.4
 _rr232x.4=	rr232x.4
 _speaker.4=	speaker.4
 _spkr.4=	spkr.4
+_superio.4=	superio.4
 _tpm.4=		tpm.4
 _urtw.4=	urtw.4
 _viawd.4=	viawd.4
@@ -852,6 +860,7 @@ _xnb.4=		xnb.4
 _if_ntb.4=	if_ntb.4
 _ioat.4=	ioat.4
 _ntb.4=		ntb.4
+_ntb_hw_amd.4=	ntb_hw_amd.4
 _ntb_hw_intel.4=	ntb_hw_intel.4
 _ntb_hw_plx.4=	ntb_hw_plx.4
 _ntb_transport.4=ntb_transport.4

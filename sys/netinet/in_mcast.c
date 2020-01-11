@@ -2205,7 +2205,11 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
                             __func__);
 			goto out_inp_locked;
 		}
-		inm_acquire(imf->imf_inm);
+		/*
+		 * NOTE: Refcount from in_joingroup_locked()
+		 * is protecting membership.
+		 */
+		ip_mfilter_insert(&imo->imo_head, imf);
 	} else {
 		CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
 		IN_MULTI_LIST_LOCK();
@@ -2229,8 +2233,6 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 			goto out_inp_locked;
 		}
 	}
-	if (is_new)
-		ip_mfilter_insert(&imo->imo_head, imf);
 
 	imf_commit(imf);
 	imf = NULL;
@@ -2399,6 +2401,12 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	if (is_final) {
 		ip_mfilter_remove(&imo->imo_head, imf);
 		imf_leave(imf);
+
+		/*
+		 * Give up the multicast address record to which
+		 * the membership points.
+		 */
+		(void) in_leavegroup_locked(imf->imf_inm, imf);
 	} else {
 		if (imf->imf_st[0] == MCAST_EXCLUDE) {
 			error = EADDRNOTAVAIL;
@@ -2453,14 +2461,8 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 out_inp_locked:
 	INP_WUNLOCK(inp);
 
-	if (is_final && imf) {
-		/*
-		 * Give up the multicast address record to which
-		 * the membership points.
-		 */
-		(void) in_leavegroup_locked(imf->imf_inm, imf);
+	if (is_final && imf)
 		ip_mfilter_free(imf);
-	}
 
 	IN_MULTI_UNLOCK();
 	return (error);
