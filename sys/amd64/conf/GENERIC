@@ -347,6 +347,7 @@ device		snd_es137x		# Ensoniq AudioPCI ES137x
 device		snd_hda			# Intel High Definition Audio
 device		snd_ich			# Intel, NVidia and other ICH AC'97 Audio
 device		snd_via8233		# VIA VT8233x Audio
+device		snd_uaudio		# USB audio and MIDI device driver
 
 # MMC/SD
 device		mmc			# MMC/SD bus
