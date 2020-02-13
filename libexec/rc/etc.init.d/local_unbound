@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 
-command="/usr/sbin/unbound"
+command="/usr/sbin/local-unbound"
 name="local_unbound"
 description="Local caching forwarding resolver"
 pidfile="/var/run/${name}.pid"
@@ -32,7 +32,7 @@ do_as_unbound()
 #
 anchor()
 {
-	do_as_unbound /usr/sbin/unbound-anchor -a ${local_unbound_anchor}
+	do_as_unbound /usr/sbin/local-unbound-anchor -a ${local_unbound_anchor}
 	# we can't trust the exit code - check if the file exists
 	[ -f ${local_unbound_anchor} ]
 }
@@ -42,7 +42,7 @@ anchor()
 #
 configtest()
 {
-	do_as_unbound /usr/sbin/unbound-checkconf ${local_unbound_config}
+	do_as_unbound /usr/sbin/local-unbound-checkconf ${local_unbound_config}
 }
 
 #
