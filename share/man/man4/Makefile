@@ -212,8 +212,10 @@ MAN=	aac.4 \
 	ig4.4 \
 	igmp.4 \
 	iic.4 \
+	iic_gpiomux.4 \
 	iicbb.4 \
 	iicbus.4 \
+	iicmux.4 \
 	iicsmb.4 \
 	iir.4 \
 	${_imcsmb.4} \
@@ -267,6 +269,7 @@ MAN=	aac.4 \
 	lp.4 \
 	lpbb.4 \
 	lpt.4 \
+	ltc430x.4 \
 	mac.4 \
 	mac_biba.4 \
 	mac_bsdextended.4 \
@@ -749,7 +752,9 @@ MLINKS+=stf.4 if_stf.4
 MLINKS+=stge.4 if_stge.4
 MLINKS+=syncache.4 syncookies.4
 MLINKS+=syscons.4 sc.4
-MLINKS+=tap.4 if_tap.4
+MLINKS+=tap.4 if_tap.4 \
+	tap.4 vmnet.4 \
+	tap.4 if_vmnet.4
 MLINKS+=tdfx.4 tdfx_linux.4
 MLINKS+=ti.4 if_ti.4
 MLINKS+=tl.4 if_tl.4

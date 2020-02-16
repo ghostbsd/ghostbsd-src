@@ -18,6 +18,8 @@ SUBDIR_BOOTSTRAP= \
 	${_libcplusplus} \
 	${_libcxxrt} \
 	libelf \
+	libssp \
+	libssp_nonshared \
 	msun
 
 # The main list; please keep these sorted alphabetically.
@@ -108,7 +110,9 @@ SUBDIR_DEPEND_libarchive= libz libbz2 libexpat liblzma libmd
 SUBDIR_DEPEND_libauditdm= libbsm
 SUBDIR_DEPEND_libbsnmp= ${_libnetgraph}
 SUBDIR_DEPEND_libc++:= libcxxrt
-SUBDIR_DEPEND_libc= libcompiler_rt
+# libssp_nonshared doesn't need to be linked into libc on every arch, but it is
+# small enough to build that this bit of serialization is likely insignificant.
+SUBDIR_DEPEND_libc= libcompiler_rt libssp_nonshared
 SUBDIR_DEPEND_libcam= libsbuf
 SUBDIR_DEPEND_libcasper= libnv
 SUBDIR_DEPEND_libdevstat= libkvm
@@ -160,7 +164,8 @@ SUBDIR.${MK_LDNS}+=	libldns
 # built for certain architectures.
 .if ${MK_CLANG} != "no" && ${COMPILER_TYPE} == "clang" && \
     (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
-    ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "i386")
+    ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "i386" || \
+    ${MACHINE_CPUARCH} == "powerpc")
 _libclang_rt=	libclang_rt
 .endif
 
@@ -168,7 +173,6 @@ _libclang_rt=	libclang_rt
 _libcxxrt=	libcxxrt
 _libcplusplus=	libc++
 _libcplusplus+=	libc++experimental
-_libcplusplus+=	libc++fs
 .endif
 
 SUBDIR.${MK_EFI}+=	libefivar
@@ -202,7 +206,9 @@ _librtld_db=	librtld_db
 _libdl=		libdl
 .endif
 
+.if ${MACHINE_ARCH} != "powerpc"
 SUBDIR.${MK_OPENMP}+=	libomp
+.endif
 SUBDIR.${MK_OPENSSL}+=	libmp
 SUBDIR.${MK_PMC}+=	libpmc libpmcstat
 SUBDIR.${MK_RADIUS_SUPPORT}+=	libradius

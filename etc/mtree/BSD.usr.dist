@@ -37,8 +37,14 @@
         aout
         ..
         clang
-            8.0.1
+            9.0.1
                 include
+                    cuda_wrappers
+                    ..
+                    openmp_wrappers
+                    ..
+                    ppc_wrappers
+                    ..
                     sanitizer
                     ..
                 ..
@@ -192,6 +198,12 @@
             ru_RU.UTF-8
             ..
             uk_UA.KOI8-U
+            ..
+        ..
+        certs
+            blacklisted
+            ..
+            trusted
             ..
         ..
         dict
