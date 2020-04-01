@@ -2,7 +2,7 @@
 
 PACKAGE=runtime
 
-CONFS=          bootmisc fsck ipfw ldconfig localmount moused netmount powerd rarpd \
+CONFS=          bootmisc fsck ipfw ldconfig localmount moused powerd rarpd \
 		savecore staticroute swap syscons tmpfiles urandom
 
 NO_OBJ=
