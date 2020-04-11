@@ -677,7 +677,9 @@ struct sge_wrq {
 
 #define INVALID_NM_RXQ_CNTXT_ID ((uint16_t)(-1))
 struct sge_nm_rxq {
-	volatile int nm_state;	/* NM_OFF, NM_ON, or NM_BUSY */
+	/* Items used by the driver rx ithread are in this cacheline. */
+	volatile int nm_state __aligned(CACHE_LINE_SIZE);	/* NM_OFF, NM_ON, or NM_BUSY */
+	u_int nid;		/* netmap ring # for this queue */
 	struct vi_info *vi;
 
 	struct iq_desc *iq_desc;
@@ -686,19 +688,22 @@ struct sge_nm_rxq {
 	uint16_t iq_cidx;
 	uint16_t iq_sidx;
 	uint8_t iq_gen;
-
-	__be64  *fl_desc;
-	uint16_t fl_cntxt_id;
-	uint32_t fl_cidx;
-	uint32_t fl_pidx;
 	uint32_t fl_sidx;
+
+	/* Items used by netmap rxsync are in this cacheline. */
+	__be64  *fl_desc __aligned(CACHE_LINE_SIZE);
+	uint16_t fl_cntxt_id;
+	uint32_t fl_pidx;
+	uint32_t fl_sidx2;	/* copy of fl_sidx */
 	uint32_t fl_db_val;
+	u_int fl_db_saved;
 	u_int fl_hwidx:4;
 
-	u_int fl_db_saved;
-	u_int nid;		/* netmap ring # for this queue */
-
-	/* infrequently used items after this */
+	/*
+	 * fl_cidx is used by both the ithread and rxsync, the rest are not used
+	 * in the rx fast path.
+	 */
+	uint32_t fl_cidx __aligned(CACHE_LINE_SIZE);
 
 	bus_dma_tag_t iq_desc_tag;
 	bus_dmamap_t iq_desc_map;
@@ -708,7 +713,7 @@ struct sge_nm_rxq {
 	bus_dma_tag_t fl_desc_tag;
 	bus_dmamap_t fl_desc_map;
 	bus_addr_t fl_ba;
-} __aligned(CACHE_LINE_SIZE);
+};
 
 #define INVALID_NM_TXQ_CNTXT_ID ((u_int)(-1))
 struct sge_nm_txq {
@@ -724,6 +729,7 @@ struct sge_nm_txq {
 	u_int udb_qid;
 	u_int cntxt_id;
 	__be32 cpl_ctrl0;	/* for convenience */
+	__be32 op_pkd;		/* ditto */
 	u_int nid;		/* netmap ring # for this queue */
 
 	/* infrequently used items after this */
@@ -897,6 +903,7 @@ struct adapter {
 	int last_op_flags;
 
 	int swintr;
+	int sensor_resets;
 };
 
 #define ADAPTER_LOCK(sc)		mtx_lock(&(sc)->sc_lock)
