@@ -269,7 +269,7 @@ menu.welcome = {
 			alternate_name = color.highlight("U") ..
 				"nmute boot mute " .. color.highlight("[Enter]"),
 			func = function()
-				core.setSysconsDisable(true)
+				core.setUnmuteBoot(true)
 				core.boot()
 			end,
 			alias = {"d", "D"},
