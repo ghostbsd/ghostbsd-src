@@ -137,6 +137,32 @@ function core.setSingleUser(single_user)
 	core.su = single_user
 end
 
+function core.setSysconsDisable(syscons_disable)
+	if syscons_disable == nil then
+		syscons_disable = not core.sd
+	end
+
+	if syscons_disable then
+		loader.setenv("hw.syscons.disable", 1)
+	else
+		loader.unsetenv("hw.syscons.disable")
+	end
+	core.sd = syscons_disable
+end
+
+function core.setUnmuteBoot(unmute_boot)
+	if unmute_boot == nil then
+		unmute_boot = not core.ub
+	end
+
+	if unmute_boot then
+		loader.setenv("boot_mute", "NO")
+	else
+		loader.unsetenv("boot_mute")
+	end
+	core.ud = unmute_boot
+end
+
 function core.getACPIPresent(checking_system_defaults)
 	local c = loader.getenv("hint.acpi.0.rsdp")
 

@@ -248,6 +248,32 @@ menu.welcome = {
 			end,
 			alias = {"b", "B"},
 		},
+		-- disable syscons for amd
+		{
+			entry_type = core.MENU_ENTRY,
+			name = color.highlight("D") .. "isable syscons for AMD",
+			-- Not a standard menu entry function!
+			alternate_name = color.highlight("D") ..
+				"isable syscons " .. color.highlight("[Enter]"),
+			func = function()
+				core.setSysconsDisable(true)
+				core.boot()
+			end,
+			alias = {"d", "D"},
+		},
+		-- unmute boot mute
+		{
+			entry_type = core.MENU_ENTRY,
+			name = color.highlight("U") .. "nmute boot mute",
+			-- Not a standard menu entry function!
+			alternate_name = color.highlight("U") ..
+				"nmute boot mute " .. color.highlight("[Enter]"),
+			func = function()
+				core.setSysconsDisable(true)
+				core.boot()
+			end,
+			alias = {"d", "D"},
+		},
 		-- boot single user
 		{
 			entry_type = core.MENU_ENTRY,
