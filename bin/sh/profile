@@ -16,3 +16,8 @@
 # msgs -q
 # Allow terminal messages
 # mesg y
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin; export PATH
+CHARSET=UTF-8;	export CHARSET
+LANG=en_US.UTF-8;	export LANG
+LC_ALL=en_US.UTF-8; export LC_ALL

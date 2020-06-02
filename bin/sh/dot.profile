@@ -14,3 +14,7 @@ if [ -x /usr/bin/resizewin ] ; then /usr/bin/resizewin -z ; fi
 
 # Uncomment to display a random cookie on each login.
 # if [ -x /usr/bin/fortune ] ; then /usr/bin/fortune -s ; fi
+
+CHARSET=UTF-8;	export CHARSET
+LANG=en_US.UTF-8;	export LANG
+LC_ALL=en_US.UTF-8; export LC_ALL
