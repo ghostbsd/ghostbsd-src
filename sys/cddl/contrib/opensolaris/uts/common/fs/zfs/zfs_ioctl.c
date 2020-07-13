@@ -4323,6 +4323,15 @@ zfs_check_settable(const char *dsname, nvpair_t *pair, cred_t *cr)
 		}
 		break;
 
+	case ZFS_PROP_SPECIAL_SMALL_BLOCKS:
+		/*
+		 * This property could require the allocation classes
+		 * feature to be active for setting, however we allow
+		 * it so that tests of settable properties succeed.
+		 * The CLI will issue a warning in this case.
+		 */
+		break;
+
 	case ZFS_PROP_SHARESMB:
 		if (zpl_earlier_version(dsname, ZPL_VERSION_FUID))
 			return (SET_ERROR(ENOTSUP));
@@ -4359,16 +4368,7 @@ zfs_check_settable(const char *dsname, nvpair_t *pair, cred_t *cr)
 
 		if ((err = spa_open(dsname, &spa, FTAG)) != 0)
 			return (err);
-		/*
-		 * Salted checksums are not supported on root pools.
-		 */
-		if (spa_bootfs(spa) != 0 &&
-		    intval < ZIO_CHECKSUM_FUNCTIONS &&
-		    (zio_checksum_table[intval].ci_flags &
-		    ZCHECKSUM_FLAG_SALTED)) {
-			spa_close(spa, FTAG);
-			return (SET_ERROR(ERANGE));
-		}
+
 		if (!spa_feature_is_enabled(spa, feature)) {
 			spa_close(spa, FTAG);
 			return (SET_ERROR(ENOTSUP));
@@ -5131,6 +5131,13 @@ zfs_ioc_clear(zfs_cmd_t *zc)
 
 	if (error != 0)
 		return (error);
+
+	/*
+	 * If multihost is enabled, resuming I/O is unsafe as another
+	 * host may have imported the pool.
+	 */
+	if (spa_multihost(spa) && spa_suspended(spa))
+		return (SET_ERROR(EINVAL));
 
 	spa_vdev_state_enter(spa, SCL_NONE);
 
@@ -7138,7 +7145,6 @@ zfsdev_fini(void)
 }
 
 static struct root_hold_token *zfs_root_token;
-struct proc *zfsproc;
 
 #ifdef illumos
 int

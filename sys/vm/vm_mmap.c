@@ -298,10 +298,7 @@ kern_mmap_fpcheck(struct thread *td, uintptr_t addr0, size_t size, int prot,
 			return (EINVAL);
 
 		/* Address range must be all in user VM space. */
-		if (addr < vm_map_min(&vms->vm_map) ||
-		    addr + size > vm_map_max(&vms->vm_map))
-			return (EINVAL);
-		if (addr + size < addr)
+		if (!vm_map_range_valid(&vms->vm_map, addr, addr + size))
 			return (EINVAL);
 #ifdef MAP_32BIT
 		if (flags & MAP_32BIT && addr + size > MAP_32BIT_MAX_ADDR)
@@ -534,7 +531,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 	vm_map_entry_t entry;
 	bool pmc_handled;
 #endif
-	vm_offset_t addr;
+	vm_offset_t addr, end;
 	vm_size_t pageoff;
 	vm_map_t map;
 
@@ -546,15 +543,11 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 	addr -= pageoff;
 	size += pageoff;
 	size = (vm_size_t) round_page(size);
-	if (addr + size < addr)
+	end = addr + size;
+	map = &td->td_proc->p_vmspace->vm_map;
+	if (!vm_map_range_valid(map, addr, end))
 		return (EINVAL);
 
-	/*
-	 * Check for illegal addresses.  Watch out for address wrap...
-	 */
-	map = &td->td_proc->p_vmspace->vm_map;
-	if (addr < vm_map_min(map) || addr + size > vm_map_max(map))
-		return (EINVAL);
 	vm_map_lock(map);
 #ifdef HWPMC_HOOKS
 	pmc_handled = false;
@@ -566,7 +559,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 		 */
 		pkm.pm_address = (uintptr_t) NULL;
 		if (vm_map_lookup_entry(map, addr, &entry)) {
-			for (; entry->start < addr + size;
+			for (; entry->start < end;
 			    entry = entry->next) {
 				if (vm_map_check_protection(map, entry->start,
 					entry->end, VM_PROT_EXECUTE) == TRUE) {
@@ -578,7 +571,7 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 		}
 	}
 #endif
-	vm_map_delete(map, addr, addr + size);
+	vm_map_delete(map, addr, end);
 
 #ifdef HWPMC_HOOKS
 	if (__predict_false(pmc_handled)) {
@@ -715,9 +708,7 @@ kern_madvise(struct thread *td, uintptr_t addr0, size_t len, int behav)
 	 */
 	map = &td->td_proc->p_vmspace->vm_map;
 	addr = addr0;
-	if (addr < vm_map_min(map) || addr + len > vm_map_max(map))
-		return (EINVAL);
-	if ((addr + len) < addr)
+	if (!vm_map_range_valid(map, addr, addr + len))
 		return (EINVAL);
 
 	/*
@@ -1026,7 +1017,7 @@ kern_mlock(struct proc *proc, struct ucred *cred, uintptr_t addr0, size_t len)
 	if (last < addr || end < addr)
 		return (EINVAL);
 	npages = atop(end - start);
-	if (npages > vm_page_max_wired)
+	if ((u_int)npages > vm_page_max_user_wired)
 		return (ENOMEM);
 	map = &proc->p_vmspace->vm_map;
 	PROC_LOCK(proc);
@@ -1036,8 +1027,6 @@ kern_mlock(struct proc *proc, struct ucred *cred, uintptr_t addr0, size_t len)
 		return (ENOMEM);
 	}
 	PROC_UNLOCK(proc);
-	if (npages + vm_wire_count() > vm_page_max_wired)
-		return (EAGAIN);
 #ifdef RACCT
 	if (racct_enable) {
 		PROC_LOCK(proc);
@@ -1114,7 +1103,12 @@ sys_mlockall(struct thread *td, struct mlockall_args *uap)
 		 */
 		error = vm_map_wire(map, vm_map_min(map), vm_map_max(map),
 		    VM_MAP_WIRE_USER|VM_MAP_WIRE_HOLESOK);
-		error = (error == KERN_SUCCESS ? 0 : EAGAIN);
+		if (error == KERN_SUCCESS)
+			error = 0;
+		else if (error == KERN_RESOURCE_SHORTAGE)
+			error = ENOMEM;
+		else
+			error = EAGAIN;
 	}
 #ifdef RACCT
 	if (racct_enable && error != KERN_SUCCESS) {
@@ -1581,10 +1575,14 @@ vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
 		 * If the process has requested that all future mappings
 		 * be wired, then heed this.
 		 */
-		if (map->flags & MAP_WIREFUTURE) {
-			vm_map_wire(map, *addr, *addr + size,
-			    VM_MAP_WIRE_USER | ((flags & MAP_STACK) ?
-			    VM_MAP_WIRE_HOLESOK : VM_MAP_WIRE_NOHOLES));
+		if ((map->flags & MAP_WIREFUTURE) != 0) {
+			vm_map_lock(map);
+			if ((map->flags & MAP_WIREFUTURE) != 0)
+				(void)vm_map_wire_locked(map, *addr,
+				    *addr + size, VM_MAP_WIRE_USER |
+				    ((flags & MAP_STACK) ? VM_MAP_WIRE_HOLESOK :
+				    VM_MAP_WIRE_NOHOLES));
+			vm_map_unlock(map);
 		}
 	}
 	return (vm_mmap_to_errno(rv));

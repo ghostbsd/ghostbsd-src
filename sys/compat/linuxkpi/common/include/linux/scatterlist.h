@@ -36,6 +36,7 @@
 #include <linux/slab.h>
 #include <linux/mm.h>
 
+struct bus_dmamap;
 struct scatterlist {
 	unsigned long page_link;
 #define	SG_PAGE_LINK_CHAIN	0x1UL
@@ -43,7 +44,8 @@ struct scatterlist {
 #define	SG_PAGE_LINK_MASK	0x3UL
 	unsigned int offset;
 	unsigned int length;
-	dma_addr_t address;
+	dma_addr_t dma_address;
+	struct bus_dmamap *dma_map;	/* FreeBSD specific */
 };
 
 CTASSERT((sizeof(struct scatterlist) & SG_PAGE_LINK_MASK) == 0);
@@ -64,6 +66,10 @@ struct sg_page_iter {
 	} internal;
 };
 
+struct sg_dma_page_iter {
+	struct sg_page_iter base;
+};
+
 #define	SCATTERLIST_MAX_SEGMENT	(-1U & ~(PAGE_SIZE - 1))
 
 #define	SG_MAX_SINGLE_ALLOC	(PAGE_SIZE / sizeof(struct scatterlist))
@@ -77,12 +83,14 @@ struct sg_page_iter {
 #define	sg_chain_ptr(sg)	\
 	((struct scatterlist *) ((sg)->page_link & ~SG_PAGE_LINK_MASK))
 
-#define	sg_dma_address(sg)	(sg)->address
+#define	sg_dma_address(sg)	(sg)->dma_address
 #define	sg_dma_len(sg)		(sg)->length
 
 #define	for_each_sg_page(sgl, iter, nents, pgoffset)			\
 	for (_sg_iter_init(sgl, iter, nents, pgoffset);			\
 	     (iter)->sg; _sg_iter_next(iter))
+#define	for_each_sg_dma_page(sgl, iter, nents, pgoffset) 		\
+	for_each_sg_page(sgl, &(iter)->base, nents, pgoffset)
 
 #define	for_each_sg(sglist, sg, sgmax, iter)				\
 	for (iter = 0, sg = (sglist); iter < (sgmax); iter++, sg = sg_next(sg))
@@ -402,10 +410,14 @@ sg_page_count(struct scatterlist *sg)
 {
 	return (PAGE_ALIGN(sg->offset + sg->length) >> PAGE_SHIFT);
 }
+#define	sg_dma_page_count(sg) \
+	sg_page_count(sg)
 
 static inline bool
 __sg_page_iter_next(struct sg_page_iter *piter)
 {
+	unsigned int pgcount;
+
 	if (piter->internal.nents == 0)
 		return (0);
 	if (piter->sg == NULL)
@@ -414,8 +426,11 @@ __sg_page_iter_next(struct sg_page_iter *piter)
 	piter->sg_pgoffset += piter->internal.pg_advance;
 	piter->internal.pg_advance = 1;
 
-	while (piter->sg_pgoffset >= sg_page_count(piter->sg)) {
-		piter->sg_pgoffset -= sg_page_count(piter->sg);
+	while (1) {
+		pgcount = sg_page_count(piter->sg);
+		if (likely(piter->sg_pgoffset < pgcount))
+			break;
+		piter->sg_pgoffset -= pgcount;
 		piter->sg = sg_next(piter->sg);
 		if (--piter->internal.nents == 0)
 			return (0);
@@ -424,6 +439,8 @@ __sg_page_iter_next(struct sg_page_iter *piter)
 	}
 	return (1);
 }
+#define	__sg_page_iter_dma_next(itr) \
+	__sg_page_iter_next(&(itr)->base)
 
 static inline void
 _sg_iter_init(struct scatterlist *sgl, struct sg_page_iter *iter,
@@ -441,11 +458,20 @@ _sg_iter_init(struct scatterlist *sgl, struct sg_page_iter *iter,
 	}
 }
 
-static inline dma_addr_t
-sg_page_iter_dma_address(struct sg_page_iter *spi)
-{
-	return (spi->sg->address + (spi->sg_pgoffset << PAGE_SHIFT));
-}
+/*
+ * sg_page_iter_dma_address() is implemented as a macro because it
+ * needs to accept two different and identical structure types. This
+ * allows both old and new code to co-exist. The compile time assert
+ * adds some safety, that the structure sizes match.
+ */
+#define	sg_page_iter_dma_address(spi) ({		\
+	struct sg_page_iter *__spi = (void *)(spi);	\
+	dma_addr_t __dma_address;			\
+	CTASSERT(sizeof(*(spi)) == sizeof(*__spi));	\
+	__dma_address = __spi->sg->dma_address +	\
+	    (__spi->sg_pgoffset << PAGE_SHIFT);		\
+	__dma_address;					\
+})
 
 static inline struct page *
 sg_page_iter_page(struct sg_page_iter *piter)

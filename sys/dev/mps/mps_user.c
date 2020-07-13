@@ -75,6 +75,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/conf.h>
 #include <sys/bio.h>
+#include <sys/abi_compat.h>
 #include <sys/malloc.h>
 #include <sys/uio.h>
 #include <sys/sysctl.h>
@@ -179,16 +180,6 @@ static int mps_user_reg_access(struct mps_softc *sc, mps_reg_access_t *data);
 static int mps_user_btdh(struct mps_softc *sc, mps_btdh_mapping_t *data);
 
 MALLOC_DEFINE(M_MPSUSER, "mps_user", "Buffers for mps(4) ioctls");
-
-/* Macros from compat/freebsd32/freebsd32.h */
-#define	PTRIN(v)	(void *)(uintptr_t)(v)
-#define	PTROUT(v)	(uint32_t)(uintptr_t)(v)
-
-#define	CP(src,dst,fld) do { (dst).fld = (src).fld; } while (0)
-#define	PTRIN_CP(src,dst,fld)				\
-	do { (dst).fld = PTRIN((src).fld); } while (0)
-#define	PTROUT_CP(src,dst,fld) \
-	do { (dst).fld = PTROUT((src).fld); } while (0)
 
 int
 mps_attach_user(struct mps_softc *sc)
@@ -1045,10 +1036,12 @@ mps_user_pass_thru(struct mps_softc *sc, mps_pass_thru_t *data)
 			if (((MPI2_SCSI_IO_REPLY *)rpl)->SCSIState &
 			    MPI2_SCSI_STATE_AUTOSENSE_VALID) {
 				sense_len =
-				    MIN((le32toh(((MPI2_SCSI_IO_REPLY *)rpl)->SenseCount)),
-				    sizeof(struct scsi_sense_data));
+				    MIN((le32toh(((MPI2_SCSI_IO_REPLY *)rpl)->
+				    SenseCount)), sizeof(struct
+				    scsi_sense_data));
 				mps_unlock(sc);
-				copyout(cm->cm_sense, cm->cm_req + 64, sense_len);
+				copyout(cm->cm_sense, (PTRIN(data->PtrReply +
+				    sizeof(MPI2_SCSI_IO_REPLY))), sense_len);
 				mps_lock(sc);
 			}
 		}

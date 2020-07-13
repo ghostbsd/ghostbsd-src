@@ -91,6 +91,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
+#include <vm/vm_pageout.h>
 #include <vm/vm_object.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_kern.h>
@@ -1449,8 +1450,7 @@ vm_map_insert(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 	/*
 	 * Check that the start and end points are not bogus.
 	 */
-	if (start < vm_map_min(map) || end > vm_map_max(map) ||
-	    start >= end)
+	if (start == end || !vm_map_range_valid(map, start, end))
 		return (KERN_INVALID_ADDRESS);
 
 	/*
@@ -1985,9 +1985,7 @@ again:
 			goto done;
 		}
 	} else if ((cow & MAP_REMAP) != 0) {
-		if (*addr < vm_map_min(map) ||
-		    *addr + length > vm_map_max(map) ||
-		    *addr + length <= length) {
+		if (!vm_map_range_valid(map, *addr, *addr + length)) {
 			rv = KERN_INVALID_ADDRESS;
 			goto done;
 		}
@@ -2987,12 +2985,12 @@ done:
 
 		if (rv == KERN_SUCCESS && (!user_unwire ||
 		    (entry->eflags & MAP_ENTRY_USER_WIRED))) {
-			if (user_unwire)
-				entry->eflags &= ~MAP_ENTRY_USER_WIRED;
 			if (entry->wired_count == 1)
 				vm_map_entry_unwire(map, entry);
 			else
 				entry->wired_count--;
+			if (user_unwire)
+				entry->eflags &= ~MAP_ENTRY_USER_WIRED;
 		}
 		KASSERT((entry->eflags & MAP_ENTRY_IN_TRANSITION) != 0,
 		    ("vm_map_unwire: in-transition flag missing %p", entry));
@@ -3010,6 +3008,28 @@ done:
 	if (need_wakeup)
 		vm_map_wakeup(map);
 	return (rv);
+}
+
+static void
+vm_map_wire_user_count_sub(u_long npages)
+{
+
+	atomic_subtract_long(&vm_user_wire_count, npages);
+}
+
+static bool
+vm_map_wire_user_count_add(u_long npages)
+{
+	u_long wired;
+
+	wired = vm_user_wire_count;
+	do {
+		if (npages + wired > (u_long)vm_page_max_user_wired)
+			return (false);
+	} while (!atomic_fcmpset_long(&vm_user_wire_count, &wired,
+	    npages + wired));
+
+	return (true);
 }
 
 /*
@@ -3048,21 +3068,36 @@ vm_map_wire_entry_failure(vm_map_t map, vm_map_entry_t entry,
 	entry->wired_count = -1;
 }
 
+int
+vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end, int flags)
+{
+	int rv;
+
+	vm_map_lock(map);
+	rv = vm_map_wire_locked(map, start, end, flags);
+	vm_map_unlock(map);
+	return (rv);
+}
+
+
 /*
- *	vm_map_wire:
+ *	vm_map_wire_locked:
  *
- *	Implements both kernel and user wiring.
+ *	Implements both kernel and user wiring.  Returns with the map locked,
+ *	the map lock may be dropped.
  */
 int
-vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
-    int flags)
+vm_map_wire_locked(vm_map_t map, vm_offset_t start, vm_offset_t end, int flags)
 {
 	vm_map_entry_t entry, first_entry, tmp_entry;
 	vm_offset_t faddr, saved_end, saved_start;
-	unsigned int last_timestamp;
+	u_long npages;
+	u_int last_timestamp;
 	int rv;
 	boolean_t need_wakeup, result, user_wire;
 	vm_prot_t prot;
+
+	VM_MAP_ASSERT_LOCKED(map);
 
 	if (start == end)
 		return (KERN_SUCCESS);
@@ -3070,15 +3105,12 @@ vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
 	if (flags & VM_MAP_WIRE_WRITE)
 		prot |= VM_PROT_WRITE;
 	user_wire = (flags & VM_MAP_WIRE_USER) ? TRUE : FALSE;
-	vm_map_lock(map);
 	VM_MAP_RANGE_CHECK(map, start, end);
 	if (!vm_map_lookup_entry(map, start, &first_entry)) {
 		if (flags & VM_MAP_WIRE_HOLESOK)
 			first_entry = first_entry->next;
-		else {
-			vm_map_unlock(map);
+		else
 			return (KERN_INVALID_ADDRESS);
-		}
 	}
 	last_timestamp = map->timestamp;
 	entry = first_entry;
@@ -3112,7 +3144,6 @@ vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
 							/*
 							 * first_entry has been deleted.
 							 */
-							vm_map_unlock(map);
 							return (KERN_INVALID_ADDRESS);
 						}
 						end = saved_start;
@@ -3152,13 +3183,22 @@ vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
 		}
 		if (entry->wired_count == 0) {
 			entry->wired_count++;
-			saved_start = entry->start;
-			saved_end = entry->end;
+
+			npages = atop(entry->end - entry->start);
+			if (user_wire && !vm_map_wire_user_count_add(npages)) {
+				vm_map_wire_entry_failure(map, entry,
+				    entry->start);
+				end = entry->end;
+				rv = KERN_RESOURCE_SHORTAGE;
+				goto done;
+			}
 
 			/*
 			 * Release the map lock, relying on the in-transition
 			 * mark.  Mark the map busy for fork.
 			 */
+			saved_start = entry->start;
+			saved_end = entry->end;
 			vm_map_busy(map);
 			vm_map_unlock(map);
 
@@ -3207,6 +3247,8 @@ vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
 			last_timestamp = map->timestamp;
 			if (rv != KERN_SUCCESS) {
 				vm_map_wire_entry_failure(map, entry, faddr);
+				if (user_wire)
+					vm_map_wire_user_count_sub(npages);
 				end = entry->end;
 				goto done;
 			}
@@ -3272,9 +3314,12 @@ done:
 			 * Undo the wiring.  Wiring succeeded on this entry
 			 * but failed on a later entry.  
 			 */
-			if (entry->wired_count == 1)
+			if (entry->wired_count == 1) {
 				vm_map_entry_unwire(map, entry);
-			else
+				if (user_wire)
+					vm_map_wire_user_count_sub(
+					    atop(entry->end - entry->start));
+			} else
 				entry->wired_count--;
 		}
 	next_entry_done:
@@ -3291,7 +3336,6 @@ done:
 		}
 		vm_map_simplify_entry(map, entry);
 	}
-	vm_map_unlock(map);
 	if (need_wakeup)
 		vm_map_wakeup(map);
 	return (rv);
@@ -3409,13 +3453,18 @@ vm_map_sync(
 static void
 vm_map_entry_unwire(vm_map_t map, vm_map_entry_t entry)
 {
+	vm_size_t size;
 
 	VM_MAP_ASSERT_LOCKED(map);
 	KASSERT(entry->wired_count > 0,
 	    ("vm_map_entry_unwire: entry %p isn't wired", entry));
+
+	size = entry->end - entry->start;
+	if ((entry->eflags & MAP_ENTRY_USER_WIRED) != 0)
+		vm_map_wire_user_count_sub(atop(size));
 	pmap_unwire(map->pmap, entry->start, entry->end);
-	vm_object_unwire(entry->object.vm_object, entry->offset, entry->end -
-	    entry->start, PQ_ACTIVE);
+	vm_object_unwire(entry->object.vm_object, entry->offset, size,
+	    PQ_ACTIVE);
 	entry->wired_count = 0;
 }
 
@@ -4111,9 +4160,8 @@ vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
 	KASSERT(orient != (MAP_STACK_GROWS_DOWN | MAP_STACK_GROWS_UP),
 	    ("bi-dir stack"));
 
-	if (addrbos < vm_map_min(map) ||
-	    addrbos + max_ssize > vm_map_max(map) ||
-	    addrbos + max_ssize <= addrbos)
+	if (max_ssize == 0 ||
+	    !vm_map_range_valid(map, addrbos, addrbos + max_ssize))
 		return (KERN_INVALID_ADDRESS);
 	sgp = ((curproc->p_flag2 & P2_STKGAP_DISABLE) != 0 ||
 	    (curproc->p_fctl0 & NT_FREEBSD_FCTL_STKGAP_DISABLE) != 0) ? 0 :
@@ -4401,12 +4449,11 @@ retry:
 	 * Heed the MAP_WIREFUTURE flag if it was set for this process.
 	 */
 	if (rv == KERN_SUCCESS && (map->flags & MAP_WIREFUTURE) != 0) {
-		vm_map_unlock(map);
-		vm_map_wire(map, grow_start, grow_start + grow_amount,
+		rv = vm_map_wire_locked(map, grow_start,
+		    grow_start + grow_amount,
 		    VM_MAP_WIRE_USER | VM_MAP_WIRE_NOHOLES);
-		vm_map_lock_read(map);
-	} else
-		vm_map_lock_downgrade(map);
+	}
+	vm_map_lock_downgrade(map);
 
 out:
 #ifdef RACCT

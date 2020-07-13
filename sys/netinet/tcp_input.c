@@ -417,9 +417,15 @@ cc_cong_signal(struct tcpcb *tp, struct tcphdr *th, uint32_t type)
 		}
 		break;
 	case CC_ECN:
-		if (!IN_CONGRECOVERY(tp->t_flags)) {
+		if (!IN_CONGRECOVERY(tp->t_flags) ||
+		    /*
+		     * Allow ECN reaction on ACK to CWR, if
+		     * that data segment was also CE marked.
+		     */
+		    SEQ_GEQ(th->th_ack, tp->snd_recover)) {
+			EXIT_CONGRECOVERY(tp->t_flags);
 			TCPSTAT_INC(tcps_ecn_rcwnd);
-			tp->snd_recover = tp->snd_max;
+			tp->snd_recover = tp->snd_max + 1;
 			if (tp->t_flags & TF_ECN_PERMIT)
 				tp->t_flags |= TF_ECN_SND_CWR;
 		}
@@ -494,14 +500,15 @@ cc_ecnpkt_handler(struct tcpcb *tp, struct tcphdr *th, uint8_t iptos)
 	if (CC_ALGO(tp)->ecnpkt_handler != NULL) {
 		switch (iptos & IPTOS_ECN_MASK) {
 		case IPTOS_ECN_CE:
-		    tp->ccv->flags |= CCF_IPHDR_CE;
-		    break;
+			tp->ccv->flags |= CCF_IPHDR_CE;
+			break;
 		case IPTOS_ECN_ECT0:
-		    tp->ccv->flags &= ~CCF_IPHDR_CE;
-		    break;
+			/* FALLTHROUGH */
 		case IPTOS_ECN_ECT1:
-		    tp->ccv->flags &= ~CCF_IPHDR_CE;
-		    break;
+			/* FALLTHROUGH */
+		case IPTOS_ECN_NOTECT:
+			tp->ccv->flags &= ~CCF_IPHDR_CE;
+			break;
 		}
 
 		if (th->th_flags & TH_CWR)
@@ -1355,7 +1362,7 @@ tfo_socket_result:
 #endif
 		TCP_PROBE3(debug__input, tp, th, m);
 		tcp_dooptions(&to, optp, optlen, TO_SYN);
-		if (syncache_add(&inc, &to, th, inp, &so, m, NULL, NULL))
+		if (syncache_add(&inc, &to, th, inp, &so, m, NULL, NULL, iptos))
 			goto tfo_socket_result;
 
 		/*
@@ -1519,7 +1526,7 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
     struct tcpcb *tp, int drop_hdrlen, int tlen, uint8_t iptos)
 {
 	int thflags, acked, ourfinisacked, needoutput = 0, sack_changed;
-	int rstreason, todrop, win;
+	int rstreason, todrop, win, incforsyn = 0;
 	uint32_t tiwin;
 	uint16_t nsegs;
 	char *s;
@@ -1667,17 +1674,20 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		    (tp->t_flags & TF_REQ_SCALE)) {
 			tp->t_flags |= TF_RCVD_SCALE;
 			tp->snd_scale = to.to_wscale;
-		}
+		} else
+			tp->t_flags &= ~TF_REQ_SCALE;
 		/*
 		 * Initial send window.  It will be updated with
 		 * the next incoming segment to the scaled value.
 		 */
 		tp->snd_wnd = th->th_win;
-		if (to.to_flags & TOF_TS) {
+		if ((to.to_flags & TOF_TS) &&
+		    (tp->t_flags & TF_REQ_TSTMP)) {
 			tp->t_flags |= TF_RCVD_TSTMP;
 			tp->ts_recent = to.to_tsval;
 			tp->ts_recent_age = tcp_ts_getticks();
-		}
+		} else
+			tp->t_flags &= ~TF_REQ_TSTMP;
 		if (to.to_flags & TOF_MSS)
 			tcp_mss(tp, to.to_mss);
 		if ((tp->t_flags & TF_SACK_PERMIT) &&
@@ -2432,12 +2442,6 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (IS_FASTOPEN(tp->t_flags) && tp->t_tfo_pending) {
 			tcp_fastopen_decrement_counter(tp->t_tfo_pending);
 			tp->t_tfo_pending = NULL;
-
-			/*
-			 * Account for the ACK of our SYN prior to
-			 * regular ACK processing below.
-			 */ 
-			tp->snd_una++;
 		}
 		if (tp->t_flags & TF_NEEDFIN) {
 			tcp_state_change(tp, TCPS_FIN_WAIT_1);
@@ -2457,6 +2461,13 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 				cc_conn_init(tp);
 			tcp_timer_activate(tp, TT_KEEP, TP_KEEPIDLE(tp));
 		}
+		/*
+		 * Account for the ACK of our SYN prior to
+		 * regular ACK processing below, except for
+		 * simultaneous SYN, which is handled later.
+		 */
+		if (SEQ_GT(th->th_ack, tp->snd_una) && !(tp->t_flags & TF_NEEDSYN))
+			incforsyn = 1;
 		/*
 		 * If segment contains data or ACK, will call tcp_reass()
 		 * later; if not, do so now to pass queued data to user.
@@ -2751,6 +2762,15 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 process_ACK:
 		INP_WLOCK_ASSERT(tp->t_inpcb);
 
+		/*
+		 * Adjust for the SYN bit in sequence space,
+		 * but don't account for it in cwnd calculations.
+		 * This is for the SYN_RECEIVED, non-simultaneous
+		 * SYN case. SYN_SENT and simultaneous SYN are
+		 * treated elsewhere.
+		 */
+		if (incforsyn)
+			tp->snd_una++;
 		acked = BYTES_THIS_ACK(tp, th);
 		KASSERT(acked >= 0, ("%s: acked unexepectedly negative "
 		    "(tp->snd_una=%u, th->th_ack=%u, tp=%p, m=%p)", __func__,

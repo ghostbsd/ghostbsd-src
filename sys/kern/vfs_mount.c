@@ -2043,6 +2043,13 @@ kernel_vmount(int flags, ...)
 	return (error);
 }
 
+/*
+ * Convert the old export args format into new export args.
+ *
+ * The old export args struct does not have security flavors.  Otherwise, the
+ * structs are identical.  The default security flavor 'sys' is applied by
+ * vfs_export when .ex_numsecflavors is 0.
+ */
 void
 vfs_oexport_conv(const struct oexport_args *oexp, struct export_args *exp)
 {

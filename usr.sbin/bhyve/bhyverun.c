@@ -169,9 +169,11 @@ char *guest_uuid_str;
 
 int raw_stdio = 0;
 
+static int gdb_port = 0;
 static int guest_vmexit_on_hlt, guest_vmexit_on_pause;
 static int virtio_msix = 1;
 static int x2apic_mode = 0;	/* default is xAPIC */
+static int destroy_on_poweroff = 0;
 
 static int strictio;
 static int strictmsr = 1;
@@ -211,7 +213,7 @@ usage(int code)
 {
 
         fprintf(stderr,
-		"Usage: %s [-abehuwxACHPSWY]\n"
+		"Usage: %s [-abehuwxACDHPSWY]\n"
 		"       %*s [-c [[cpus=]numcpus][,sockets=n][,cores=n][,threads=n]]\n"
 		"       %*s [-g <gdb port>] [-l <lpc>]\n"
 		"       %*s [-m mem] [-p vcpu:hostcpu] [-s <pci>] [-U uuid] <vm>\n"
@@ -219,6 +221,7 @@ usage(int code)
 		"       -A: create ACPI tables\n"
 		"       -c: number of cpus and/or topology specification\n"
 		"       -C: include guest memory in core file\n"
+		"       -D: destroy on power-off\n"
 		"       -e: exit on unhandled I/O access\n"
 		"       -g: gdb port\n"
 		"       -h: help\n"
@@ -418,7 +421,8 @@ fbsdrun_start_thread(void *param)
 	snprintf(tname, sizeof(tname), "vcpu %d", vcpu);
 	pthread_set_name_np(mtp->mt_thr, tname);
 
-	gdb_cpu_add(vcpu);
+	if (gdb_port != 0)
+		gdb_cpu_add(vcpu);
 
 	vm_loop(mtp->mt_ctx, vcpu, vmexit[vcpu].rip);
 
@@ -692,8 +696,11 @@ vmexit_mtrap(struct vmctx *ctx, struct vm_exit *vmexit, int *pvcpu)
 
 	stats.vmexit_mtrap++;
 
+	if (gdb_port == 0) {
+		fprintf(stderr, "vm_loop: unexpected VMEXIT_MTRAP\n");
+		exit(4);
+	}
 	gdb_cpu_mtrap(*pvcpu);
-
 	return (VMEXIT_CONTINUE);
 }
 
@@ -756,6 +763,8 @@ vmexit_suspend(struct vmctx *ctx, struct vm_exit *vmexit, int *pvcpu)
 	case VM_SUSPEND_RESET:
 		exit(0);
 	case VM_SUSPEND_POWEROFF:
+		if (destroy_on_poweroff)
+			vm_destroy(ctx);
 		exit(1);
 	case VM_SUSPEND_HALT:
 		exit(2);
@@ -772,7 +781,23 @@ static int
 vmexit_debug(struct vmctx *ctx, struct vm_exit *vmexit, int *pvcpu)
 {
 
+	if (gdb_port == 0) {
+		fprintf(stderr, "vm_loop: unexpected VMEXIT_DEBUG\n");
+		exit(4);
+	}
 	gdb_cpu_suspend(*pvcpu);
+	return (VMEXIT_CONTINUE);
+}
+
+static int
+vmexit_breakpoint(struct vmctx *ctx, struct vm_exit *vmexit, int *pvcpu)
+{
+
+	if (gdb_port == 0) {
+		fprintf(stderr, "vm_loop: unexpected VMEXIT_DEBUG\n");
+		exit(4);
+	}
+	gdb_cpu_breakpoint(*pvcpu, vmexit);
 	return (VMEXIT_CONTINUE);
 }
 
@@ -791,6 +816,7 @@ static vmexit_handler_t handler[VM_EXITCODE_MAX] = {
 	[VM_EXITCODE_SUSPENDED] = vmexit_suspend,
 	[VM_EXITCODE_TASK_SWITCH] = vmexit_task_switch,
 	[VM_EXITCODE_DEBUG] = vmexit_debug,
+	[VM_EXITCODE_BPT] = vmexit_breakpoint,
 };
 
 static void
@@ -999,7 +1025,7 @@ main(int argc, char *argv[])
 	rtc_localtime = 1;
 	memflags = 0;
 
-	optstr = "abehuwxACHIPSWYp:g:G:c:s:m:l:U:";
+	optstr = "abehuwxACDHIPSWYp:g:G:c:s:m:l:U:";
 	while ((c = getopt(argc, argv, optstr)) != -1) {
 		switch (c) {
 		case 'a':
@@ -1010,6 +1036,9 @@ main(int argc, char *argv[])
 			break;
 		case 'b':
 			bvmcons = 1;
+			break;
+		case 'D':
+			destroy_on_poweroff = 1;
 			break;
 		case 'p':
                         if (pincpu_parse(optarg) != 0) {

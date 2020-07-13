@@ -1269,11 +1269,8 @@ pcib_pcie_cc_timeout(void *arg)
 	mtx_assert(&Giant, MA_OWNED);
 	sta = pcie_read_config(dev, PCIER_SLOT_STA, 2);
 	if (!(sta & PCIEM_SLOT_STA_CC)) {
-		device_printf(dev,
-		    "HotPlug Command Timed Out - forcing detach\n");
-		sc->flags &= ~(PCIB_HOTPLUG_CMD_PENDING | PCIB_DETACH_PENDING);
-		sc->flags |= PCIB_DETACHING;
-		pcib_pcie_hotplug_update(sc, 0, 0, true);
+		device_printf(dev, "HotPlug Command Timed Out\n");
+		sc->flags &= ~PCIB_HOTPLUG_CMD_PENDING;
 	} else {
 		device_printf(dev,
 	    "Missed HotPlug interrupt waiting for Command Completion\n");
@@ -1789,6 +1786,12 @@ pcib_resume(device_t dev)
 {
 
 	pcib_cfg_restore(device_get_softc(dev));
+
+	/*
+	 * Restore the Command register only after restoring the windows.
+	 * The bridge should not be claiming random windows.
+	 */
+	pci_write_config(dev, PCIR_COMMAND, pci_get_cmdreg(dev), 2);
 	return (bus_generic_resume(dev));
 }
 

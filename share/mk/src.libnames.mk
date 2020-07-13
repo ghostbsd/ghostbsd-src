@@ -41,6 +41,7 @@ _INTERNALLIBS=	\
 		fifolog \
 		ipf \
 		lpr \
+		lua \
 		netbsd \
 		ntp \
 		ntpevent \
@@ -297,6 +298,7 @@ _DP_memstat=	kvm
 _DP_magic=	z
 _DP_mt=		sbuf bsdxml
 _DP_ldns=	ssl crypto
+_DP_lua=	m
 .if ${MK_OPENSSL} != "no"
 _DP_fetch=	ssl crypto
 .else
@@ -338,7 +340,7 @@ _DP_heimipcs=	heimbase roken pthread
 _DP_kafs5=	asn1 krb5 roken
 _DP_krb5+=	asn1 com_err crypt crypto hx509 roken wind heimbase heimipcc
 _DP_gssapi_krb5+=	gssapi krb5 crypto roken asn1 com_err
-_DP_lzma=	pthread
+_DP_lzma=	md pthread
 _DP_ucl=	m
 _DP_vmmapi=	util
 _DP_opencsd=	cxxrt
@@ -468,6 +470,9 @@ LDADD+=		${LDADD_${_l}}
 # INTERNALLIB definitions.
 LIBELFTCDIR=	${OBJTOP}/lib/libelftc
 LIBELFTC?=	${LIBELFTCDIR}/libelftc${PIE_SUFFIX}.a
+
+LIBLUADIR=	${OBJTOP}/lib/liblua
+LIBLUA?=	${LIBLUADIR}/liblua${PIE_SUFFIX}.a
 
 LIBPEDIR=	${OBJTOP}/lib/libpe
 LIBPE?=		${LIBPEDIR}/libpe${PIE_SUFFIX}.a

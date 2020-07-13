@@ -94,6 +94,9 @@
 #define	BUILD_BUG_ON_NOT_POWER_OF_2(x)	BUILD_BUG_ON(!powerof2(x))
 #define	BUILD_BUG_ON_INVALID(expr)	while (0) { (void)(expr); }
 
+extern const volatile int lkpi_build_bug_on_zero;
+#define	BUILD_BUG_ON_ZERO(x)	((x) ? lkpi_build_bug_on_zero : 0)
+
 #define	BUG()			panic("BUG at %s:%d", __FILE__, __LINE__)
 #define	BUG_ON(cond)		do {				\
 	if (cond) {						\
@@ -107,6 +110,7 @@
       if (__ret) {						\
 		printf("WARNING %s failed at %s:%d\n",		\
 		    __stringify(cond), __FILE__, __LINE__);	\
+		linux_dump_stack();				\
       }								\
       unlikely(__ret);						\
 })
@@ -120,6 +124,7 @@
 		__warn_on_once = 1;				\
 		printf("WARNING %s failed at %s:%d\n",		\
 		    __stringify(cond), __FILE__, __LINE__);	\
+		linux_dump_stack();				\
       }								\
       unlikely(__ret);						\
 })
@@ -390,6 +395,21 @@ kstrtou32(const char *cp, unsigned int base, u32 *res)
 }
 
 static inline int
+kstrtou64(const char *cp, unsigned int base, u64 *res)
+{
+       char *end;
+
+       *res = strtouq(cp, &end, base);
+
+       /* skip newline character, if any */
+       if (*end == '\n')
+               end++;
+       if (*cp == 0 || *end != 0)
+               return (-EINVAL);
+       return (0);
+}
+
+static inline int
 kstrtobool(const char *s, bool *res)
 {
 	int len;
@@ -513,5 +533,14 @@ linux_ratelimited(linux_ratelimit_t *rl)
 {
 	return (ppsratecheck(&rl->lasttime, &rl->counter, 1));
 }
+
+#define	struct_size(ptr, field, num) ({ \
+	const size_t __size = offsetof(__typeof(*(ptr)), field); \
+	const size_t __max = (SIZE_MAX - __size) / sizeof((ptr)->field[0]); \
+	((num) > __max) ? SIZE_MAX : (__size + sizeof((ptr)->field[0]) * (num)); \
+})
+
+#define	__is_constexpr(x) \
+	__builtin_constant_p(x)
 
 #endif	/* _LINUX_KERNEL_H_ */

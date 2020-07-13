@@ -212,6 +212,7 @@ struct pci_driver {
 
 struct pci_bus {
 	struct pci_dev	*self;
+	int		domain;
 	int		number;
 };
 
@@ -226,7 +227,6 @@ struct pci_dev {
 	struct list_head	links;
 	struct pci_driver	*pdrv;
 	struct pci_bus		*bus;
-	uint64_t		dma_mask;
 	uint16_t		device;
 	uint16_t		vendor;
 	uint16_t		subsystem_vendor;
@@ -277,26 +277,6 @@ linux_pci_find_irq_dev(unsigned int irq)
 	}
 	spin_unlock(&pci_lock);
 	return (found);
-}
-
-static inline unsigned long
-pci_resource_start(struct pci_dev *pdev, int bar)
-{
-	struct resource_list_entry *rle;
-
-	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
-		return (0);
-	return rle->start;
-}
-
-static inline unsigned long
-pci_resource_len(struct pci_dev *pdev, int bar)
-{
-	struct resource_list_entry *rle;
-
-	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
-		return (0);
-	return rle->count;
 }
 
 static inline int
@@ -470,6 +450,9 @@ linux_pci_disable_msi(struct pci_dev *pdev)
 	pdev->irq = pdev->dev.irq;
 	pdev->msi_enabled = false;
 }
+
+unsigned long	pci_resource_start(struct pci_dev *pdev, int bar);
+unsigned long	pci_resource_len(struct pci_dev *pdev, int bar);
 
 static inline bus_addr_t
 pci_bus_address(struct pci_dev *pdev, int bar)
@@ -665,7 +648,7 @@ static inline int
 pci_channel_offline(struct pci_dev *pdev)
 {
 
-	return (pci_get_vendor(pdev->dev.bsddev) == PCIV_INVALID);
+	return (pci_read_config(pdev->dev.bsddev, PCIR_VENDOR, 2) == PCIV_INVALID);
 }
 
 static inline int pci_enable_sriov(struct pci_dev *dev, int nr_virtfn)
@@ -970,5 +953,57 @@ pcie_get_width_cap(struct pci_dev *dev)
 
 	return (PCIE_LNK_WIDTH_UNKNOWN);
 }
+
+static inline int
+pcie_get_mps(struct pci_dev *dev)
+{
+	return (pci_get_max_payload(dev->dev.bsddev));
+}
+
+static inline uint32_t
+PCIE_SPEED2MBS_ENC(enum pci_bus_speed spd)
+{
+
+	switch(spd) {
+	case PCIE_SPEED_16_0GT:
+		return (16000 * 128 / 130);
+	case PCIE_SPEED_8_0GT:
+		return (8000 * 128 / 130);
+	case PCIE_SPEED_5_0GT:
+		return (5000 * 8 / 10);
+	case PCIE_SPEED_2_5GT:
+		return (2500 * 8 / 10);
+	default:
+		return (0);
+	}
+}
+
+static inline uint32_t
+pcie_bandwidth_available(struct pci_dev *pdev,
+    struct pci_dev **limiting,
+    enum pci_bus_speed *speed,
+    enum pcie_link_width *width)
+{
+	enum pci_bus_speed nspeed = pcie_get_speed_cap(pdev);
+	enum pcie_link_width nwidth = pcie_get_width_cap(pdev);
+
+	if (speed)
+		*speed = nspeed;
+	if (width)
+		*width = nwidth;
+
+	return (nwidth * PCIE_SPEED2MBS_ENC(nspeed));
+}
+
+/*
+ * The following functions can be used to attach/detach the LinuxKPI's
+ * PCI device runtime. The pci_driver and pci_device_id pointer is
+ * allowed to be NULL. Other pointers must be all valid.
+ * The pci_dev structure should be zero-initialized before passed
+ * to the linux_pci_attach_device function.
+ */
+extern int linux_pci_attach_device(device_t, struct pci_driver *,
+    const struct pci_device_id *, struct pci_dev *);
+extern int linux_pci_detach_device(struct pci_dev *);
 
 #endif	/* _LINUX_PCI_H_ */

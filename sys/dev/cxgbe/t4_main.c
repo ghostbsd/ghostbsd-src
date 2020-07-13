@@ -71,7 +71,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #endif
-#include <crypto/rijndael/rijndael.h>
 #ifdef DDB
 #include <ddb/ddb.h>
 #include <ddb/db_lex.h>
@@ -1915,6 +1914,7 @@ cxgbe_ioctl(struct ifnet *ifp, unsigned long cmd, caddr_t data)
 
 			if (IFCAP_TSO4 & ifp->if_capenable &&
 			    !(IFCAP_TXCSUM & ifp->if_capenable)) {
+				mask &= ~IFCAP_TSO4;
 				ifp->if_capenable &= ~IFCAP_TSO4;
 				if_printf(ifp,
 				    "tso4 disabled due to -txcsum.\n");
@@ -1926,6 +1926,7 @@ cxgbe_ioctl(struct ifnet *ifp, unsigned long cmd, caddr_t data)
 
 			if (IFCAP_TSO6 & ifp->if_capenable &&
 			    !(IFCAP_TXCSUM_IPV6 & ifp->if_capenable)) {
+				mask &= ~IFCAP_TSO6;
 				ifp->if_capenable &= ~IFCAP_TSO6;
 				if_printf(ifp,
 				    "tso6 disabled due to -txcsum6.\n");
@@ -6732,17 +6733,17 @@ cxgbe_sysctls(struct port_info *pi)
 
 #undef SYSCTL_ADD_T4_PORTSTAT
 
-	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_tls_records",
-	    CTLFLAG_RD, &pi->tx_tls_records,
+	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_toe_tls_records",
+	    CTLFLAG_RD, &pi->tx_toe_tls_records,
 	    "# of TLS records transmitted");
-	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_tls_octets",
-	    CTLFLAG_RD, &pi->tx_tls_octets,
+	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "tx_toe_tls_octets",
+	    CTLFLAG_RD, &pi->tx_toe_tls_octets,
 	    "# of payload octets in transmitted TLS records");
-	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_tls_records",
-	    CTLFLAG_RD, &pi->rx_tls_records,
+	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_toe_tls_records",
+	    CTLFLAG_RD, &pi->rx_toe_tls_records,
 	    "# of TLS records received");
-	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_tls_octets",
-	    CTLFLAG_RD, &pi->rx_tls_octets,
+	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO, "rx_toe_tls_octets",
+	    CTLFLAG_RD, &pi->rx_toe_tls_octets,
 	    "# of payload octets in received TLS records");
 }
 
@@ -10849,44 +10850,6 @@ DB_FUNC(tcb, db_show_t4tcb, db_t4_table, CS_OWN, NULL)
 	t4_dump_tcb(device_get_softc(dev), tid);
 }
 #endif
-
-/*
- * Borrowed from cesa_prep_aes_key().
- *
- * NB: The crypto engine wants the words in the decryption key in reverse
- * order.
- */
-void
-t4_aes_getdeckey(void *dec_key, const void *enc_key, unsigned int kbits)
-{
-	uint32_t ek[4 * (RIJNDAEL_MAXNR + 1)];
-	uint32_t *dkey;
-	int i;
-
-	rijndaelKeySetupEnc(ek, enc_key, kbits);
-	dkey = dec_key;
-	dkey += (kbits / 8) / 4;
-
-	switch (kbits) {
-	case 128:
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 10 + i]);
-		break;
-	case 192:
-		for (i = 0; i < 2; i++)
-			*--dkey = htobe32(ek[4 * 11 + 2 + i]);
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 12 + i]);
-		break;
-	case 256:
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 13 + i]);
-		for (i = 0; i < 4; i++)
-			*--dkey = htobe32(ek[4 * 14 + i]);
-		break;
-	}
-	MPASS(dkey == dec_key);
-}
 
 static struct sx mlu;	/* mod load unload */
 SX_SYSINIT(cxgbe_mlu, &mlu, "cxgbe mod load/unload");

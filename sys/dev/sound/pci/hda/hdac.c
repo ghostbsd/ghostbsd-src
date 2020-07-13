@@ -66,7 +66,7 @@ static const struct {
 	const char *key;
 	uint32_t value;
 } hdac_quirks_tab[] = {
-	{ "64bit", HDAC_QUIRK_DMAPOS },
+	{ "64bit", HDAC_QUIRK_64BIT },
 	{ "dmapos", HDAC_QUIRK_DMAPOS },
 	{ "msi", HDAC_QUIRK_MSI },
 };
@@ -80,15 +80,19 @@ static const struct {
 	char		quirks_off;
 } hdac_devices[] = {
 	{ HDA_INTEL_OAK,     "Intel Oaktrail",	0, 0 },
+	{ HDA_INTEL_CMLKLP,  "Intel Comet Lake-LP",	0, 0 },
+	{ HDA_INTEL_CMLKH,   "Intel Comet Lake-H",	0, 0 },
 	{ HDA_INTEL_BAY,     "Intel BayTrail",	0, 0 },
 	{ HDA_INTEL_HSW1,    "Intel Haswell",	0, 0 },
 	{ HDA_INTEL_HSW2,    "Intel Haswell",	0, 0 },
 	{ HDA_INTEL_HSW3,    "Intel Haswell",	0, 0 },
 	{ HDA_INTEL_BDW1,    "Intel Broadwell",	0, 0 },
 	{ HDA_INTEL_BDW2,    "Intel Broadwell",	0, 0 },
+	{ HDA_INTEL_BXTNT,   "Intel Broxton-T",	0, 0 },
 	{ HDA_INTEL_CPT,     "Intel Cougar Point",	0, 0 },
 	{ HDA_INTEL_PATSBURG,"Intel Patsburg",  0, 0 },
 	{ HDA_INTEL_PPT1,    "Intel Panther Point",	0, 0 },
+	{ HDA_INTEL_BR,      "Intel Braswell",	0, 0 },
 	{ HDA_INTEL_LPT1,    "Intel Lynx Point",	0, 0 },
 	{ HDA_INTEL_LPT2,    "Intel Lynx Point",	0, 0 },
 	{ HDA_INTEL_WCPT,    "Intel Wildcat Point",	0, 0 },
@@ -102,16 +106,21 @@ static const struct {
 	{ HDA_INTEL_KBLK,    "Intel Kaby Lake",	0, 0 },
 	{ HDA_INTEL_KBLKH,   "Intel Kaby Lake-H",	0, 0 },
 	{ HDA_INTEL_CFLK,    "Intel Coffee Lake",	0, 0 },
+	{ HDA_INTEL_CMLKS,   "Intel Comet Lake-S",	0, 0 },
 	{ HDA_INTEL_CNLK,    "Intel Cannon Lake",	0, 0 },
 	{ HDA_INTEL_82801F,  "Intel 82801F",	0, 0 },
 	{ HDA_INTEL_63XXESB, "Intel 631x/632xESB",	0, 0 },
 	{ HDA_INTEL_82801G,  "Intel 82801G",	0, 0 },
 	{ HDA_INTEL_82801H,  "Intel 82801H",	0, 0 },
 	{ HDA_INTEL_82801I,  "Intel 82801I",	0, 0 },
+	{ HDA_INTEL_JLK,     "Intel Jasper Lake",	0, 0 },
 	{ HDA_INTEL_82801JI, "Intel 82801JI",	0, 0 },
 	{ HDA_INTEL_82801JD, "Intel 82801JD",	0, 0 },
 	{ HDA_INTEL_PCH,     "Intel Ibex Peak",	0, 0 },
 	{ HDA_INTEL_PCH2,    "Intel Ibex Peak",	0, 0 },
+	{ HDA_INTEL_ELLK,    "Intel Elkhart Lake",	0, 0 },
+	{ HDA_INTEL_JLK2,    "Intel Jasper Lake",	0, 0 },
+	{ HDA_INTEL_BXTNP,   "Intel Broxton-P",	0, 0 },
 	{ HDA_INTEL_SCH,     "Intel SCH",	0, 0 },
 	{ HDA_NVIDIA_MCP51,  "NVIDIA MCP51",	0, HDAC_QUIRK_MSI },
 	{ HDA_NVIDIA_MCP55,  "NVIDIA MCP55",	0, HDAC_QUIRK_MSI },
@@ -169,6 +178,10 @@ static const struct {
 	{ HDA_ATI_RV940,     "ATI RV940",	0, 0 },
 	{ HDA_ATI_RV970,     "ATI RV970",	0, 0 },
 	{ HDA_ATI_R1000,     "ATI R1000",	0, 0 },
+	{ HDA_AMD_X370,      "AMD X370",	0, 0 },
+	{ HDA_AMD_X570,      "AMD X570",	0, 0 },
+	{ HDA_AMD_STONEY,    "AMD Stoney",	0, 0 },
+	{ HDA_AMD_RAVEN,     "AMD Raven",	0, 0 },
 	{ HDA_AMD_HUDSON2,   "AMD Hudson-2",	0, 0 },
 	{ HDA_RDC_M3010,     "RDC M3010",	0, 0 },
 	{ HDA_VIA_VT82XX,    "VIA VT8251/8237A",0, 0 },
@@ -193,6 +206,7 @@ static const struct {
 } hdac_pcie_snoop[] = {
 	{  INTEL_VENDORID, 0x00, 0x00, 0x00 },
 	{    ATI_VENDORID, 0x42, 0xf8, 0x02 },
+	{    AMD_VENDORID, 0x42, 0xf8, 0x02 },
 	{ NVIDIA_VENDORID, 0x4e, 0xf0, 0x0f },
 };
 
@@ -277,10 +291,10 @@ hdac_config_fetch(struct hdac_softc *sc, uint32_t *on, uint32_t *off)
 			);
 			if (inv == 0) {
 				*on |= hdac_quirks_tab[k].value;
-				*on &= ~hdac_quirks_tab[k].value;
+				*off &= ~hdac_quirks_tab[k].value;
 			} else if (inv != 0) {
 				*off |= hdac_quirks_tab[k].value;
-				*off &= ~hdac_quirks_tab[k].value;
+				*on &= ~hdac_quirks_tab[k].value;
 			}
 			break;
 		}
@@ -996,7 +1010,8 @@ hdac_send_command(struct hdac_softc *sc, nid_t cad, uint32_t verb)
 	} while (sc->codecs[cad].pending != 0 && --timeout);
 
 	if (sc->codecs[cad].pending != 0) {
-		device_printf(sc->dev, "Command timeout on address %d\n", cad);
+		device_printf(sc->dev, "Command 0x%08x timeout on address %d\n",
+		    verb, cad);
 		sc->codecs[cad].pending = 0;
 	}
 
@@ -1525,7 +1540,7 @@ hdac_attach2(void *arg)
 			if (vendorid == HDA_INVALID &&
 			    revisionid == HDA_INVALID) {
 				device_printf(sc->dev,
-				    "CODEC is not responding!\n");
+				    "CODEC at address %d not responding!\n", i);
 				continue;
 			}
 			sc->codecs[i].vendor_id =

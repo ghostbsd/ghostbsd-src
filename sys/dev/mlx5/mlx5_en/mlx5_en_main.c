@@ -1035,6 +1035,15 @@ free_out:
 		mlx5_en_err(priv->ifp,
 		    "Updating FEC failed: %d\n", error);
 	}
+
+	/* Update temperature, if any */
+	if (priv->params_ethtool.hw_num_temp != 0) {
+		error = mlx5e_hw_temperature_update(priv);
+		if (error != 0 && error != EOPNOTSUPP) {
+			mlx5_en_err(priv->ifp,
+			    "Updating temperature failed: %d\n", error);
+		}
+	}
 }
 
 static void
@@ -3276,6 +3285,7 @@ mlx5e_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 
 			if (IFCAP_TSO4 & ifp->if_capenable &&
 			    !(IFCAP_TXCSUM & ifp->if_capenable)) {
+				mask &= ~IFCAP_TSO4;
 				ifp->if_capenable &= ~IFCAP_TSO4;
 				ifp->if_hwassist &= ~CSUM_IP_TSO;
 				mlx5_en_err(ifp,
@@ -3288,6 +3298,7 @@ mlx5e_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 
 			if (IFCAP_TSO6 & ifp->if_capenable &&
 			    !(IFCAP_TXCSUM_IPV6 & ifp->if_capenable)) {
+				mask &= ~IFCAP_TSO6;
 				ifp->if_capenable &= ~IFCAP_TSO6;
 				ifp->if_hwassist &= ~CSUM_IP6_TSO;
 				mlx5_en_err(ifp,

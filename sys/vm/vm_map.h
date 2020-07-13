@@ -250,6 +250,17 @@ vm_map_modflags(vm_map_t map, vm_flags_t set, vm_flags_t clear)
 {
 	map->flags = (map->flags | set) & ~clear;
 }
+
+static inline bool
+vm_map_range_valid(vm_map_t map, vm_offset_t start, vm_offset_t end)
+{
+	if (end < start)
+		return (false);
+	if (start < vm_map_min(map) || end > vm_map_max(map))
+		return (false);
+	return (true);
+}
+
 #endif	/* KLD_MODULE */
 #endif	/* _KERNEL */
 
@@ -427,7 +438,8 @@ int vm_map_madvise (vm_map_t, vm_offset_t, vm_offset_t, int);
 int vm_map_stack (vm_map_t, vm_offset_t, vm_size_t, vm_prot_t, vm_prot_t, int);
 int vm_map_unwire(vm_map_t map, vm_offset_t start, vm_offset_t end,
     int flags);
-int vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
+int vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end, int flags);
+int vm_map_wire_locked(vm_map_t map, vm_offset_t start, vm_offset_t end,
     int flags);
 long vmspace_swap_count(struct vmspace *vmspace);
 void vm_map_entry_set_vnode_text(vm_map_entry_t entry, bool add);
