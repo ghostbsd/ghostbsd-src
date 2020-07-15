@@ -37,6 +37,7 @@
 #include <sys/sx.h>
 
 #include <linux/spinlock.h>
+#include <asm/atomic.h>
 
 typedef struct mutex {
 	struct sx sx;
@@ -65,6 +66,18 @@ typedef struct mutex {
 	MUTEX_SKIP() ? 0 :			\
 	linux_mutex_lock_interruptible(_m);	\
 })
+
+/*
+ * Reuse the interruptable method since the SX
+ * lock handles both signals and interrupts:
+ */
+#define	mutex_lock_killable(_m) ({		\
+	MUTEX_SKIP() ? 0 :			\
+	linux_mutex_lock_interruptible(_m);	\
+})
+
+#define	mutex_lock_killable_nested(_m, _sub)	\
+	mutex_lock_killable(_m)
 
 #define	mutex_unlock(_m) do {			\
 	if (MUTEX_SKIP())			\
@@ -95,6 +108,9 @@ mutex_trylock_recursive(struct mutex *lock)
 #define	mutex_init(_m) \
 	linux_mutex_init(_m, mutex_name(#_m), SX_NOWITNESS)
 
+#define	__mutex_init(_m, _n, _l) \
+	linux_mutex_init(_m, _n, SX_NOWITNESS)
+
 #define	mutex_init_witness(_m) \
 	linux_mutex_init(_m, mutex_name(#_m), SX_DUPOK)
 
@@ -111,6 +127,16 @@ static inline bool
 mutex_is_owned(mutex_t *m)
 {
 	return (sx_xlocked(&m->sx));
+}
+
+static inline int atomic_dec_and_mutex_lock(atomic_t *cnt, struct mutex *m)
+{
+	if (atomic_dec_and_test(cnt)) {
+		mutex_lock(m);
+		return (1);
+	}
+
+	return (0);
 }
 
 #ifdef WITNESS_ALL

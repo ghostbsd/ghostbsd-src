@@ -797,8 +797,8 @@ intr_pic_register(device_t dev, intptr_t xref)
 	if (pic == NULL)
 		return (NULL);
 
-	debugf("PIC %p registered for %s <dev %p, xref %x>\n", pic,
-	    device_get_nameunit(dev), dev, xref);
+	debugf("PIC %p registered for %s <dev %p, xref %jx>\n", pic,
+	    device_get_nameunit(dev), dev, (uintmax_t)xref);
 	return (pic);
 }
 
@@ -1262,7 +1262,6 @@ void intr_free_intr_map_data(struct intr_map_data *data)
 	free(data, M_INTRNG);
 }
 
-
 /*
  *  Register a MSI/MSI-X interrupt controller
  */
@@ -1376,7 +1375,6 @@ intr_alloc_msix(device_t pci, device_t child, intptr_t xref, int *irq)
 	    ("%s: Found a non-MSI controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 
-
 	err = MSI_ALLOC_MSIX(pic->pic_dev, child, &pdev, &isrc);
 	if (err != 0)
 		return (err);
@@ -1444,7 +1442,6 @@ intr_map_msi(device_t pci, device_t child, intptr_t xref, int irq,
 	err = MSI_MAP_MSI(pic->pic_dev, child, isrc, addr, data);
 	return (err);
 }
-
 
 void dosoftints(void);
 void
@@ -1520,13 +1517,12 @@ intr_map_get_isrc(u_int res_id)
 {
 	struct intr_irqsrc *isrc;
 
+	isrc = NULL;
 	mtx_lock(&irq_map_lock);
-	if ((res_id >= irq_map_count) || (irq_map[res_id] == NULL)) {
-		mtx_unlock(&irq_map_lock);
-		return (NULL);
-	}
-	isrc = irq_map[res_id]->isrc;
+	if (res_id < irq_map_count && irq_map[res_id] != NULL)
+		isrc = irq_map[res_id]->isrc;
 	mtx_unlock(&irq_map_lock);
+
 	return (isrc);
 }
 
@@ -1535,11 +1531,8 @@ intr_map_set_isrc(u_int res_id, struct intr_irqsrc *isrc)
 {
 
 	mtx_lock(&irq_map_lock);
-	if ((res_id >= irq_map_count) || (irq_map[res_id] == NULL)) {
-		mtx_unlock(&irq_map_lock);
-		return;
-	}
-	irq_map[res_id]->isrc = isrc;
+	if (res_id < irq_map_count && irq_map[res_id] != NULL)
+		irq_map[res_id]->isrc = isrc;
 	mtx_unlock(&irq_map_lock);
 }
 
@@ -1594,7 +1587,6 @@ intr_map_copy_map_data(u_int res_id, device_t *map_dev, intptr_t *map_xref,
 	*map_xref = irq_map[res_id]->xref;
 	mtx_unlock(&irq_map_lock);
 }
-
 
 /*
  * Allocate and fill new entry in irq_map table.

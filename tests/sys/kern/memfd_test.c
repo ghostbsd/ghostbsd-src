@@ -30,6 +30,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 #include <atf-c.h>
 #include <errno.h>
@@ -38,18 +39,26 @@ __FBSDID("$FreeBSD$");
 ATF_TC_WITHOUT_HEAD(basic);
 ATF_TC_BODY(basic, tc)
 {
+	struct stat sb;
 	int fd;
 	char buf[8];
 
 	ATF_REQUIRE((fd = memfd_create("...", 0)) != -1);
 
-	/* File size should be initially 0 */
-	ATF_REQUIRE(write(fd, buf, sizeof(buf)) == 0);
+	/* write(2) should grow us out automatically. */
+	ATF_REQUIRE(write(fd, buf, sizeof(buf)) == sizeof(buf));
+	ATF_REQUIRE(fstat(fd, &sb) == 0);
+	ATF_REQUIRE(sb.st_size == sizeof(buf));
 
 	/* ftruncate(2) must succeed without seals */
-	ATF_REQUIRE(ftruncate(fd, sizeof(buf) - 1) == 0);
+	ATF_REQUIRE(ftruncate(fd, 2 * (sizeof(buf) - 1)) == 0);
 
-	ATF_REQUIRE(write(fd, buf, sizeof(buf)) == sizeof(buf) - 1);
+	/* write(2) again must not be limited by ftruncate(2) size. */
+	ATF_REQUIRE(write(fd, buf, sizeof(buf)) == sizeof(buf));
+
+	/* Sanity check. */
+	ATF_REQUIRE(fstat(fd, &sb) == 0);
+	ATF_REQUIRE(sb.st_size == 2 * sizeof(buf));
 
 	close(fd);
 }
@@ -108,7 +117,7 @@ ATF_TC_BODY(write_seal, tc)
 
 	ATF_REQUIRE(mmap(0, BUF_SIZE, (PROT_READ | PROT_WRITE), MAP_SHARED,
 	    fd, 0) == MAP_FAILED);
-	ATF_REQUIRE(errno == EPERM);
+	ATF_REQUIRE(errno == EACCES);
 
 	close(fd);
 }
@@ -136,13 +145,23 @@ ATF_TC_BODY(mmap_write_seal, tc)
 
 	ATF_REQUIRE(munmap(addr, BUF_SIZE) == 0);
 
+	/*
+	 * This should fail, because raddr still exists and it was spawned from
+	 * a r/w fd.
+	 */
+	ATF_REQUIRE(fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == -1);
+	ATF_REQUIRE(errno == EBUSY);
+
+	ATF_REQUIRE(munmap(raddr, BUF_SIZE) == 0);
+	/* This one should succeed; only the private mapping remains. */
 	ATF_REQUIRE(fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == 0);
 
 	ATF_REQUIRE(munmap(paddr, BUF_SIZE) == 0);
-	ATF_REQUIRE(munmap(raddr, BUF_SIZE) == 0);
 	ATF_REQUIRE(mmap(0, BUF_SIZE, (PROT_READ | PROT_WRITE), MAP_SHARED,
 	    fd, 0) == MAP_FAILED);
-	ATF_REQUIRE(errno == EPERM);
+	ATF_REQUIRE(errno == EACCES);
+
+	/* Make sure we can still map privately r/w or shared r/o. */
 	paddr = mmap(0, BUF_SIZE, (PROT_READ | PROT_WRITE), MAP_PRIVATE, fd, 0);
 	ATF_REQUIRE(paddr != MAP_FAILED);
 	raddr = mmap(0, BUF_SIZE, PROT_READ, MAP_SHARED, fd, 0);
@@ -227,7 +246,7 @@ ATF_TC_BODY(dup_seals, tc)
 
 	ATF_REQUIRE(mmap(0, BUF_SIZE, (PROT_READ | PROT_WRITE), MAP_SHARED,
 	    fdx, 0) == MAP_FAILED);
-	ATF_REQUIRE(errno == EPERM);
+	ATF_REQUIRE(errno == EACCES);
 
 	close(fd);
 	close(fdx);
@@ -259,7 +278,6 @@ ATF_TC_BODY(immutable_seals, tc)
 	    "Added duplicate grow seal after restricting seals");
 	close(fd);
 }
-
 
 ATF_TP_ADD_TCS(tp)
 {

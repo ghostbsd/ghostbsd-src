@@ -28,7 +28,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd December 11, 2019
+.Dd June 11, 2020
 .Dt SECURITY 7
 .Os
 .Sh NAME
@@ -272,8 +272,8 @@ also add an additional layer of protection to the key pair by password
 protecting the keypair when you create it with
 .Xr ssh-keygen 1 .
 Being able
-to *-out the passwords for staff accounts also guarantees that staff members
-can only log in through secure access methods that you have set up.
+to star-out the passwords for staff accounts also guarantees that staff
+members can only log in through secure access methods that you have set up.
 You can
 thus force all staff members to use secure, encrypted connections for
 all their sessions which closes an important hole used by many intruders: that
@@ -992,6 +992,13 @@ See also
 .Xr proccontrol 1
 mode
 .Dv kpti .
+.It Dv machdep.mitigations.flush_rsb_ctxsw
+amd64.
+Controls Return Stack Buffer flush on context switch, to prevent
+cross-process ret2spec attacks.
+Only needed, and only enabled by default, if the machine
+supports SMEP, otherwise IBRS would do necessary flushing on kernel
+entry anyway.
 .It Dv hw.mds_disable
 amd64 and i386.
 Controls Microarchitectural Data Sampling hardware information leak
@@ -1033,6 +1040,13 @@ page table format used by hypervisors on Intel CPUs to map the guest
 physical address space to machine physical memory.
 May be disabled to work around a CPU Erratum called
 Machine Check Error Avoidance on Page Size Change.
+.It Dv machdep.mitigations.rngds.enable
+amd64 and i386.
+Controls mitigation of Special Register Buffer Data Sampling versus
+optimization of the MCU access.
+When set to zero, the mitigation is disabled, and the RDSEED and RDRAND
+instructions do not incur serialization overhead for shared buffer accesses,
+and do not serialize off-core memory accessses.
 .It Dv kern.elf32.aslr.enable
 Controls system-global Address Space Layout Randomization (ASLR) for
 normal non-PIE (Position Independent Executable) 32bit binaries.

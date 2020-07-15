@@ -80,7 +80,8 @@ struct scsi_quirk_entry {
 
 static int cam_srch_hi = 0;
 static int sysctl_cam_search_luns(SYSCTL_HANDLER_ARGS);
-SYSCTL_PROC(_kern_cam, OID_AUTO, cam_srch_hi, CTLTYPE_INT | CTLFLAG_RWTUN, 0, 0,
+SYSCTL_PROC(_kern_cam, OID_AUTO, cam_srch_hi,
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT, 0, 0,
     sysctl_cam_search_luns, "I",
     "allow search above LUN 7 for SCSI3 and greater devices");
 
@@ -648,7 +649,7 @@ static struct xpt_proto scsi_proto = {
 CAM_XPT_PROTO(scsi_proto);
 
 static void
-probe_periph_init()
+probe_periph_init(void)
 {
 }
 

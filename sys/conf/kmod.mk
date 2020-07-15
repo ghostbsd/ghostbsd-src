@@ -88,11 +88,17 @@ __KLD_SHARED=no
 .if !empty(CFLAGS:M-O[23s]) && empty(CFLAGS:M-fno-strict-aliasing)
 CFLAGS+=	-fno-strict-aliasing
 .endif
-.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} < 50000
-WERROR?=	-Wno-error
-.else
 WERROR?=	-Werror
-.endif
+
+LINUXKPI_GENSRCS+= \
+	bus_if.h \
+	device_if.h \
+	pci_if.h \
+	pci_iov_if.h \
+	vnode_if.h \
+	usb_if.h \
+	opt_usb.h \
+	opt_stack.h
 
 CFLAGS+=	${WERROR}
 CFLAGS+=	-D_KERNEL
@@ -106,6 +112,9 @@ NOSTDINC=	-nostdinc
 CFLAGS:=	${CFLAGS:N-I*} ${NOSTDINC} ${INCLMAGIC} ${CFLAGS:M-I*}
 .if defined(KERNBUILDDIR)
 CFLAGS+=	-DHAVE_KERNEL_OPTION_HEADERS -include ${KERNBUILDDIR}/opt_global.h
+.else
+SRCS+=		opt_global.h
+CFLAGS+=	-include ${.OBJDIR}/opt_global.h
 .endif
 
 # Add -I paths for system headers.  Individual module makefiles don't
@@ -120,6 +129,13 @@ CFLAGS.gcc+= --param large-function-growth=1000
 
 # Disallow common variables, and if we end up with commons from
 # somewhere unexpected, allocate storage for them in the module itself.
+#
+# -fno-common is the default for src builds, but this should be left in place
+# until at least we catch up to GCC10/LLVM11 or otherwise enable -fno-common
+# in <bsd.sys.mk> instead.  For now, we will have duplicate -fno-common in
+# CFLAGS for in-tree module builds as they will also pick it up from
+# share/mk/src.sys.mk, but the following is important for out-of-tree modules
+# (e.g. ports).
 CFLAGS+=	-fno-common
 LDFLAGS+=	-d -warn-common
 
@@ -140,11 +156,7 @@ CFLAGS+=	-fPIC
 # Temporary workaround for PR 196407, which contains the fascinating details.
 # Don't allow clang to use fpu instructions or registers in kernel modules.
 .if ${MACHINE_CPUARCH} == arm
-.if ${COMPILER_VERSION} < 30800
-CFLAGS.clang+=	-mllvm -arm-use-movt=0
-.else
 CFLAGS.clang+=	-mno-movt
-.endif
 CFLAGS.clang+=	-mfpu=none
 CFLAGS+=	-funwind-tables
 .endif
@@ -203,7 +215,7 @@ OBJS+=	${SRCS:N*.h:R:S/$/.o/g}
 PROG=	${KMOD}.ko
 .endif
 
-.if !defined(DEBUG_FLAGS)
+.if !defined(DEBUG_FLAGS) || ${MK_KERNEL_SYMBOLS} == "no"
 FULLPROG=	${PROG}
 .else
 FULLPROG=	${PROG}.full
@@ -263,10 +275,7 @@ ${FULLPROG}: ${OBJS}
 	${OBJCOPY} --strip-debug ${.TARGET}
 .endif
 
-.if ${COMPILER_TYPE} == "clang" || \
-    (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 60000)
 _MAP_DEBUG_PREFIX= yes
-.endif
 
 _ILINKS=machine
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
@@ -310,7 +319,7 @@ ${_ILINKS}:
 
 CLEANFILES+= ${PROG} ${KMOD}.kld ${OBJS}
 
-.if defined(DEBUG_FLAGS)
+.if defined(DEBUG_FLAGS) && ${MK_KERNEL_SYMBOLS} != "no"
 CLEANFILES+= ${FULLPROG} ${PROG}.debug
 .endif
 
@@ -329,7 +338,7 @@ _kmodinstall: .PHONY
 	${INSTALL} -T release -o ${KMODOWN} -g ${KMODGRP} -m ${KMODMODE} \
 	    ${_INSTALLFLAGS} ${PROG} ${DESTDIR}${KMODDIR}/
 .if defined(DEBUG_FLAGS) && !defined(INSTALL_NODEBUG) && ${MK_KERNEL_SYMBOLS} != "no"
-	${INSTALL} -T debug -o ${KMODOWN} -g ${KMODGRP} -m ${KMODMODE} \
+	${INSTALL} -T dbg -o ${KMODOWN} -g ${KMODGRP} -m ${KMODMODE} \
 	    ${_INSTALLFLAGS} ${PROG}.debug ${DESTDIR}${KERN_DEBUGDIR}${KMODDIR}/
 .endif
 
@@ -504,13 +513,13 @@ assym.inc: ${SYSDIR}/kern/genassym.sh
 	sh ${SYSDIR}/kern/genassym.sh genassym.o > ${.TARGET}
 genassym.o: ${SYSDIR}/${MACHINE}/${MACHINE}/genassym.c offset.inc
 genassym.o: ${SRCS:Mopt_*.h}
-	${CC} -c ${CFLAGS:N-flto:N-fno-common} \
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} -fcommon \
 	    ${SYSDIR}/${MACHINE}/${MACHINE}/genassym.c
 offset.inc: ${SYSDIR}/kern/genoffset.sh genoffset.o
 	sh ${SYSDIR}/kern/genoffset.sh genoffset.o > ${.TARGET}
 genoffset.o: ${SYSDIR}/kern/genoffset.c
 genoffset.o: ${SRCS:Mopt_*.h}
-	${CC} -c ${CFLAGS:N-flto:N-fno-common} \
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} -fcommon \
 	    ${SYSDIR}/kern/genoffset.c
 
 CLEANDEPENDFILES+=	${_ILINKS}

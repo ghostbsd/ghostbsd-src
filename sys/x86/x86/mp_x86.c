@@ -31,10 +31,12 @@ __FBSDID("$FreeBSD$");
 #include "opt_apic.h"
 #endif
 #include "opt_cpu.h"
+#include "opt_ddb.h"
 #include "opt_kstack_pages.h"
 #include "opt_pmap.h"
 #include "opt_sched.h"
 #include "opt_smp.h"
+#include "opt_stack.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -75,6 +77,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/psl.h>
 #include <machine/smp.h>
 #include <machine/specialreg.h>
+#include <machine/stack.h>
 #include <x86/ucode.h>
 
 static MALLOC_DEFINE(M_CPUS, "cpus", "CPU items");
@@ -515,7 +518,8 @@ topo_probe(void)
 
 	if (mp_ncpus <= 1)
 		; /* nothing */
-	else if (cpu_vendor_id == CPU_VENDOR_AMD)
+	else if (cpu_vendor_id == CPU_VENDOR_AMD ||
+	    cpu_vendor_id == CPU_VENDOR_HYGON)
 		topo_probe_amd();
 	else if (cpu_vendor_id == CPU_VENDOR_INTEL)
 		topo_probe_intel();
@@ -1083,6 +1087,11 @@ init_secondary_tail(void)
 
 	kcsan_cpu_init(cpuid);
 
+	/*
+	 * Assert that smp_after_idle_runnable condition is reasonable.
+	 */
+	MPASS(PCPU_GET(curpcb) == NULL);
+
 	sched_throw(NULL);
 
 	panic("scheduler returned us to %s", __func__);
@@ -1092,13 +1101,12 @@ init_secondary_tail(void)
 static void
 smp_after_idle_runnable(void *arg __unused)
 {
-	struct thread *idle_td;
+	struct pcpu *pc;
 	int cpu;
 
 	for (cpu = 1; cpu < mp_ncpus; cpu++) {
-		idle_td = pcpu_find(cpu)->pc_idlethread;
-		while (atomic_load_int(&idle_td->td_lastcpu) == NOCPU &&
-		    atomic_load_int(&idle_td->td_oncpu) == NOCPU)
+		pc = pcpu_find(cpu);
+		while (atomic_load_ptr(&pc->pc_curpcb) == NULL)
 			cpu_spinwait();
 		kmem_free((vm_offset_t)bootstacks[cpu], kstack_pages *
 		    PAGE_SIZE);
@@ -1142,7 +1150,8 @@ set_interrupt_apic_ids(void)
 u_int xhits_gbl[MAXCPU];
 u_int xhits_pg[MAXCPU];
 u_int xhits_rng[MAXCPU];
-static SYSCTL_NODE(_debug, OID_AUTO, xhits, CTLFLAG_RW, 0, "");
+static SYSCTL_NODE(_debug, OID_AUTO, xhits, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "");
 SYSCTL_OPAQUE(_debug_xhits, OID_AUTO, global, CTLFLAG_RW, &xhits_gbl,
     sizeof(xhits_gbl), "IU", "");
 SYSCTL_OPAQUE(_debug_xhits, OID_AUTO, page, CTLFLAG_RW, &xhits_pg,
@@ -1233,7 +1242,8 @@ ipi_send_cpu(int cpu, u_int ipi)
 	u_int bitmap, old, new;
 	u_int *cpu_bitmap;
 
-	KASSERT(cpu_apic_ids[cpu] != -1, ("IPI to non-existent CPU %d", cpu));
+	KASSERT((u_int)cpu < MAXCPU && cpu_apic_ids[cpu] != -1,
+	    ("IPI to non-existent CPU %d", cpu));
 
 	if (IPI_IS_BITMAPED(ipi)) {
 		bitmap = 1 << ipi;
@@ -1278,6 +1288,10 @@ ipi_bitmap_handler(struct trapframe frame)
 	td->td_intr_nesting_level++;
 	oldframe = td->td_intr_frame;
 	td->td_intr_frame = &frame;
+#if defined(STACK) || defined(DDB)
+	if (ipi_bitmap & (1 << IPI_TRACE))
+		stack_capture_intr();
+#endif
 	if (ipi_bitmap & (1 << IPI_PREEMPT)) {
 #ifdef COUNT_IPIS
 		(*ipi_preempt_counts[cpu])++;
@@ -1459,7 +1473,7 @@ cpustop_handler(void)
 		 * again, and might as well save power / release resources
 		 * (e.g., overprovisioned VM infrastructure).
 		 */
-		while (__predict_false(!IS_BSP() && panicstr != NULL))
+		while (__predict_false(!IS_BSP() && KERNEL_PANICKED()))
 			halt();
 	}
 
@@ -1579,28 +1593,6 @@ cpususpend_handler(void)
 	CPU_CLR_ATOMIC(cpu, &toresume_cpus);
 }
 
-
-void
-invlcache_handler(void)
-{
-	uint32_t generation;
-
-#ifdef COUNT_IPIS
-	(*ipi_invlcache_counts[PCPU_GET(cpuid)])++;
-#endif /* COUNT_IPIS */
-
-	/*
-	 * Reading the generation here allows greater parallelism
-	 * since wbinvd is a serializing instruction.  Without the
-	 * temporary, we'd wait for wbinvd to complete, then the read
-	 * would execute, then the dependent write, which must then
-	 * complete before return from interrupt.
-	 */
-	generation = smp_tlb_generation;
-	wbinvd();
-	PCPU_SET(smp_tlb_done, generation);
-}
-
 /*
  * This is called once the rest of the system is up and running and we're
  * ready to let the AP's out of the pen.
@@ -1648,197 +1640,3 @@ mp_ipi_intrcnt(void *dummy)
 }
 SYSINIT(mp_ipi_intrcnt, SI_SUB_INTR, SI_ORDER_MIDDLE, mp_ipi_intrcnt, NULL);
 #endif
-
-/*
- * Flush the TLB on other CPU's
- */
-
-/* Variables needed for SMP tlb shootdown. */
-vm_offset_t smp_tlb_addr1, smp_tlb_addr2;
-pmap_t smp_tlb_pmap;
-volatile uint32_t smp_tlb_generation;
-
-#ifdef __amd64__
-#define	read_eflags() read_rflags()
-#endif
-
-static void
-smp_targeted_tlb_shootdown(cpuset_t mask, u_int vector, pmap_t pmap,
-    vm_offset_t addr1, vm_offset_t addr2)
-{
-	cpuset_t other_cpus;
-	volatile uint32_t *p_cpudone;
-	uint32_t generation;
-	int cpu;
-
-	/* It is not necessary to signal other CPUs while in the debugger. */
-	if (kdb_active || panicstr != NULL)
-		return;
-
-	/*
-	 * Check for other cpus.  Return if none.
-	 */
-	if (CPU_ISFULLSET(&mask)) {
-		if (mp_ncpus <= 1)
-			return;
-	} else {
-		CPU_CLR(PCPU_GET(cpuid), &mask);
-		if (CPU_EMPTY(&mask))
-			return;
-	}
-
-	if (!(read_eflags() & PSL_I))
-		panic("%s: interrupts disabled", __func__);
-	mtx_lock_spin(&smp_ipi_mtx);
-	smp_tlb_addr1 = addr1;
-	smp_tlb_addr2 = addr2;
-	smp_tlb_pmap = pmap;
-	generation = ++smp_tlb_generation;
-	if (CPU_ISFULLSET(&mask)) {
-		ipi_all_but_self(vector);
-		other_cpus = all_cpus;
-		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
-	} else {
-		other_cpus = mask;
-		while ((cpu = CPU_FFS(&mask)) != 0) {
-			cpu--;
-			CPU_CLR(cpu, &mask);
-			CTR3(KTR_SMP, "%s: cpu: %d ipi: %x", __func__,
-			    cpu, vector);
-			ipi_send_cpu(cpu, vector);
-		}
-	}
-	while ((cpu = CPU_FFS(&other_cpus)) != 0) {
-		cpu--;
-		CPU_CLR(cpu, &other_cpus);
-		p_cpudone = &cpuid_to_pcpu[cpu]->pc_smp_tlb_done;
-		while (*p_cpudone != generation)
-			ia32_pause();
-	}
-	mtx_unlock_spin(&smp_ipi_mtx);
-}
-
-void
-smp_masked_invltlb(cpuset_t mask, pmap_t pmap)
-{
-
-	if (smp_started) {
-		smp_targeted_tlb_shootdown(mask, IPI_INVLTLB, pmap, 0, 0);
-#ifdef COUNT_XINVLTLB_HITS
-		ipi_global++;
-#endif
-	}
-}
-
-void
-smp_masked_invlpg(cpuset_t mask, vm_offset_t addr, pmap_t pmap)
-{
-
-	if (smp_started) {
-		smp_targeted_tlb_shootdown(mask, IPI_INVLPG, pmap, addr, 0);
-#ifdef COUNT_XINVLTLB_HITS
-		ipi_page++;
-#endif
-	}
-}
-
-void
-smp_masked_invlpg_range(cpuset_t mask, vm_offset_t addr1, vm_offset_t addr2,
-    pmap_t pmap)
-{
-
-	if (smp_started) {
-		smp_targeted_tlb_shootdown(mask, IPI_INVLRNG, pmap,
-		    addr1, addr2);
-#ifdef COUNT_XINVLTLB_HITS
-		ipi_range++;
-		ipi_range_size += (addr2 - addr1) / PAGE_SIZE;
-#endif
-	}
-}
-
-void
-smp_cache_flush(void)
-{
-
-	if (smp_started) {
-		smp_targeted_tlb_shootdown(all_cpus, IPI_INVLCACHE, NULL,
-		    0, 0);
-	}
-}
-
-/*
- * Handlers for TLB related IPIs
- */
-void
-invltlb_handler(void)
-{
-	uint32_t generation;
-  
-#ifdef COUNT_XINVLTLB_HITS
-	xhits_gbl[PCPU_GET(cpuid)]++;
-#endif /* COUNT_XINVLTLB_HITS */
-#ifdef COUNT_IPIS
-	(*ipi_invltlb_counts[PCPU_GET(cpuid)])++;
-#endif /* COUNT_IPIS */
-
-	/*
-	 * Reading the generation here allows greater parallelism
-	 * since invalidating the TLB is a serializing operation.
-	 */
-	generation = smp_tlb_generation;
-	if (smp_tlb_pmap == kernel_pmap)
-		invltlb_glob();
-#ifdef __amd64__
-	else
-		invltlb();
-#endif
-	PCPU_SET(smp_tlb_done, generation);
-}
-
-void
-invlpg_handler(void)
-{
-	uint32_t generation;
-
-#ifdef COUNT_XINVLTLB_HITS
-	xhits_pg[PCPU_GET(cpuid)]++;
-#endif /* COUNT_XINVLTLB_HITS */
-#ifdef COUNT_IPIS
-	(*ipi_invlpg_counts[PCPU_GET(cpuid)])++;
-#endif /* COUNT_IPIS */
-
-	generation = smp_tlb_generation;	/* Overlap with serialization */
-#ifdef __i386__
-	if (smp_tlb_pmap == kernel_pmap)
-#endif
-		invlpg(smp_tlb_addr1);
-	PCPU_SET(smp_tlb_done, generation);
-}
-
-void
-invlrng_handler(void)
-{
-	vm_offset_t addr, addr2;
-	uint32_t generation;
-
-#ifdef COUNT_XINVLTLB_HITS
-	xhits_rng[PCPU_GET(cpuid)]++;
-#endif /* COUNT_XINVLTLB_HITS */
-#ifdef COUNT_IPIS
-	(*ipi_invlrng_counts[PCPU_GET(cpuid)])++;
-#endif /* COUNT_IPIS */
-
-	addr = smp_tlb_addr1;
-	addr2 = smp_tlb_addr2;
-	generation = smp_tlb_generation;	/* Overlap with serialization */
-#ifdef __i386__
-	if (smp_tlb_pmap == kernel_pmap)
-#endif
-		do {
-			invlpg(addr);
-			addr += PAGE_SIZE;
-		} while (addr < addr2);
-
-	PCPU_SET(smp_tlb_done, generation);
-}

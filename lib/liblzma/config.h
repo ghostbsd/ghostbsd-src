@@ -38,6 +38,10 @@
    CoreFoundation framework. */
 /* #undef HAVE_CFLOCALECOPYCURRENT */
 
+/* Define to 1 if you have the Mac OS X function
+   CFLocaleCopyPreferredLanguages in the CoreFoundation framework. */
+/* #undef HAVE_CFLOCALECOPYPREFERREDLANGUAGES */
+
 /* Define to 1 if you have the Mac OS X function CFPreferencesCopyAppValue in
    the CoreFoundation framework. */
 /* #undef HAVE_CFPREFERENCESCOPYAPPVALUE */
@@ -207,16 +211,13 @@
 /* #undef HAVE_SHA256INIT */
 
 /* Define to 1 if the system has the type `SHA256_CTX'. */
-/* FreeBSD - disabled libmd SHA256 for now */
-/* #undef HAVE_SHA256_CTX */
+#define HAVE_SHA256_CTX 1
 
 /* Define to 1 if you have the <sha256.h> header file. */
-/* FreeBSD - disabled libmd SHA256 for now */
-/* #undef HAVE_SHA256_H */
+#define HAVE_SHA256_H 1
 
 /* Define to 1 if you have the `SHA256_Init' function. */
-/* FreeBSD - disabled libmd SHA256 for now */
-/* #undef HAVE_SHA256_INIT */
+#define HAVE_SHA256_INIT 1
 
 /* Define to 1 if the system has the type `SHA2_CTX'. */
 /* #undef HAVE_SHA2_CTX */
@@ -243,7 +244,7 @@
 #define HAVE_STRING_H 1
 
 /* Define to 1 if `st_atimensec' is a member of `struct stat'. */
-/* #undef HAVE_STRUCT_STAT_ST_ATIMENSEC */
+#define HAVE_STRUCT_STAT_ST_ATIMENSEC 1
 
 /* Define to 1 if `st_atimespec.tv_nsec' is a member of `struct stat'. */
 #define HAVE_STRUCT_STAT_ST_ATIMESPEC_TV_NSEC 1
@@ -308,6 +309,14 @@
 #define HAVE__MM_MOVEMASK_EPI8 1
 #endif
 
+/* Define to 1 if the GNU C extension __builtin_assume_aligned is supported.
+   */
+#define HAVE___BUILTIN_ASSUME_ALIGNED 1
+
+/* Define to 1 if the GNU C extensions __builtin_bswap16/32/64 are supported.
+   */
+#define HAVE___BUILTIN_BSWAPXX 1
+
 /* Define to the sub-directory where libtool stores uninstalled libraries. */
 #define LT_OBJDIR ".libs/"
 
@@ -335,7 +344,7 @@
 #define PACKAGE_NAME "XZ Utils"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "XZ Utils 5.2.4"
+#define PACKAGE_STRING "XZ Utils 5.2.5"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "xz"
@@ -344,7 +353,7 @@
 #define PACKAGE_URL "https://tukaani.org/xz/"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "5.2.4"
+#define PACKAGE_VERSION "5.2.5"
 
 /* Define to necessary symbol if this constant uses a non-standard name on
    your system. */
@@ -409,6 +418,11 @@
    sysinfo(). */
 /* #undef TUKLIB_PHYSMEM_SYSINFO */
 
+/* Define to 1 to use unsafe type punning, e.g. char *x = ...; *(int *)x =
+   123; which violates strict aliasing rules and thus is undefined behavior
+   and might result in broken code. */
+/* #undef TUKLIB_USE_UNSAFE_TYPE_PUNNING */
+
 /* Enable extensions on AIX 3, Interix.  */
 #ifndef _ALL_SOURCE
 # define _ALL_SOURCE 1
@@ -432,7 +446,7 @@
 
 
 /* Version number of package */
-#define VERSION "5.2.4"
+#define VERSION "5.2.5"
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

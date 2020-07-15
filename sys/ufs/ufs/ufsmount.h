@@ -45,6 +45,8 @@ struct ufs_args {
 
 #ifdef _KERNEL
 
+#include <sys/_task.h>
+
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_UFSMNT);
 MALLOC_DECLARE(M_TRIM);
@@ -65,6 +67,10 @@ struct inodedep;
 TAILQ_HEAD(inodedeplst, inodedep);
 LIST_HEAD(bmsafemaphd, bmsafemap);
 LIST_HEAD(trimlist_hashhead, ffs_blkfree_trim_params);
+struct fsfail_task {
+	struct task task;
+	fsid_t fsid;
+};
 
 /*
  * This structure describes the UFS specific mount structure data.
@@ -83,7 +89,8 @@ struct ufsmount {
 	struct	cdev *um_dev;			/* (r) device mounted */
 	struct	g_consumer *um_cp;		/* (r) GEOM access point */
 	struct	bufobj *um_bo;			/* (r) Buffer cache object */
-	struct	vnode *um_devvp;		/* (r) blk dev mounted vnode */
+	struct	vnode *um_odevvp;		/* (r) devfs dev vnode */
+	struct	vnode *um_devvp;		/* (r) mntfs private vnode */
 	u_long	um_fstype;			/* (c) type of filesystem */
 	struct	fs *um_fs;			/* (r) pointer to superblock */
 	struct	ufs_extattr_per_mount um_extattr; /* (c) extended attrs */
@@ -111,6 +118,7 @@ struct ufsmount {
 	struct	taskqueue *um_trim_tq;		/* (c) trim request queue */
 	struct	trimlist_hashhead *um_trimhash;	/* (i) trimlist hash table */
 	u_long	um_trimlisthashsize;		/* (i) trim hash table size-1 */
+	struct	fsfail_task *um_fsfail_task;	/* (i) task for fsfail cleanup*/
 						/* (c) - below function ptrs */
 	int	(*um_balloc)(struct vnode *, off_t, int, struct ucred *,
 		    int, struct buf **);
@@ -131,7 +139,9 @@ struct ufsmount {
  */
 #define UM_CANDELETE		0x00000001	/* devvp supports TRIM */
 #define UM_WRITESUSPENDED	0x00000002	/* suspension in progress */
-
+#define UM_CANSPEEDUP		0x00000004	/* devvp supports SPEEDUP */
+#define UM_FSFAIL_CLEANUP	0x00000008	/* need cleanup after
+						   unrecoverable error */
 /*
  * function prototypes
  */

@@ -2511,7 +2511,6 @@ ip_dn_init(void)
 {
 	if (dn_cfg.init_done)
 		return;
-	printf("DUMMYNET %p with IPv6 initialized (100409)\n", curvnet);
 	dn_cfg.init_done = 1;
 	/* Set defaults here. MSVC does not accept initializers,
 	 * and this is also useful for vimages
@@ -2550,7 +2549,7 @@ ip_dn_init(void)
 
 	DN_LOCK_INIT();
 
-	TASK_INIT(&dn_task, 0, dummynet_task, curvnet);
+	NET_TASK_INIT(&dn_task, 0, dummynet_task, curvnet);
 	dn_tq = taskqueue_create_fast("dummynet", M_WAITOK,
 	    taskqueue_thread_enqueue, &dn_tq);
 	taskqueue_start_threads(&dn_tq, 1, PI_NET, "dummynet");

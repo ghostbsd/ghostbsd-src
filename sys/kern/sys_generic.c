@@ -652,18 +652,19 @@ int
 sys_ioctl(struct thread *td, struct ioctl_args *uap)
 {
 	u_char smalldata[SYS_IOCTL_SMALL_SIZE] __aligned(SYS_IOCTL_SMALL_ALIGN);
-	u_long com;
+	uint32_t com;
 	int arg, error;
 	u_int size;
 	caddr_t data;
 
+#ifdef INVARIANTS
 	if (uap->com > 0xffffffff) {
 		printf(
 		    "WARNING pid %d (%s): ioctl sign-extension ioctl %lx\n",
 		    td->td_proc->p_pid, td->td_name, uap->com);
-		uap->com &= 0xffffffff;
 	}
-	com = uap->com;
+#endif
+	com = (uint32_t)uap->com;
 
 	/*
 	 * Interpret high order word to find amount of data to be
@@ -815,6 +816,47 @@ out:
 	}
 	if (fp != NULL)
 		fdrop(fp, td);
+	return (error);
+}
+
+int
+sys_posix_fallocate(struct thread *td, struct posix_fallocate_args *uap)
+{
+	int error;
+
+	error = kern_posix_fallocate(td, uap->fd, uap->offset, uap->len);
+	return (kern_posix_error(td, error));
+}
+
+int
+kern_posix_fallocate(struct thread *td, int fd, off_t offset, off_t len)
+{
+	struct file *fp;
+	int error;
+
+	AUDIT_ARG_FD(fd);
+	if (offset < 0 || len <= 0)
+		return (EINVAL);
+	/* Check for wrap. */
+	if (offset > OFF_MAX - len)
+		return (EFBIG);
+	AUDIT_ARG_FD(fd);
+	error = fget(td, fd, &cap_pwrite_rights, &fp);
+	if (error != 0)
+		return (error);
+	AUDIT_ARG_FILE(td->td_proc, fp);
+	if ((fp->f_ops->fo_flags & DFLAG_SEEKABLE) == 0) {
+		error = ESPIPE;
+		goto out;
+	}
+	if ((fp->f_flag & FWRITE) == 0) {
+		error = EBADF;
+		goto out;
+	}
+
+	error = fo_fallocate(fp, offset, len, td);
+ out:
+	fdrop(fp, td);
 	return (error);
 }
 
@@ -1204,7 +1246,7 @@ static __inline int
 getselfd_cap(struct filedesc *fdp, int fd, struct file **fpp)
 {
 
-	return (fget_unlocked(fdp, fd, &cap_event_rights, fpp, NULL));
+	return (fget_unlocked(fdp, fd, &cap_event_rights, fpp));
 }
 
 /*
@@ -1483,7 +1525,6 @@ pollrescan(struct thread *td)
 	td->td_retval[0] = n;
 	return (0);
 }
-
 
 static int
 pollout(struct thread *td, struct pollfd *fds, struct pollfd *ufds, u_int nfd)

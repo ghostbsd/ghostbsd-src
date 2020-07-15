@@ -279,9 +279,6 @@ struct nvme_controller {
 	struct resource		*res;
 	void			*tag;
 
-	bus_dma_tag_t		hw_desc_tag;
-	bus_dmamap_t		hw_desc_map;
-
 	/** maximum i/o size in bytes */
 	uint32_t		max_xfer_size;
 
@@ -324,6 +321,20 @@ struct nvme_controller {
 
 	bool				is_failed;
 	STAILQ_HEAD(, nvme_request)	fail_req;
+
+	/* Host Memory Buffer */
+	int				hmb_nchunks;
+	size_t				hmb_chunk;
+	bus_dma_tag_t			hmb_tag;
+	struct nvme_hmb_chunk {
+		bus_dmamap_t		hmbc_map;
+		void			*hmbc_vaddr;
+		uint64_t		hmbc_paddr;
+	} *hmb_chunks;
+	bus_dma_tag_t			hmb_desc_tag;
+	bus_dmamap_t			hmb_desc_map;
+	struct nvme_hmb_desc		*hmb_desc_vaddr;
+	uint64_t			hmb_desc_paddr;
 };
 
 #define nvme_mmio_offsetof(reg)						       \
@@ -452,20 +463,22 @@ int	nvme_detach(device_t dev);
  * Wait for a command to complete using the nvme_completion_poll_cb.
  * Used in limited contexts where the caller knows it's OK to block
  * briefly while the command runs. The ISR will run the callback which
- * will set status->done to true.usually within microseconds. A 1s
- * pause means something is seriously AFU and we should panic to
- * provide the proper context to diagnose.
+ * will set status->done to true, usually within microseconds. If not,
+ * then after one second timeout handler should reset the controller
+ * and abort all outstanding requests including this polled one. If
+ * still not after ten seconds, then something is wrong with the driver,
+ * and panic is the only way to recover.
  */
 static __inline
 void
 nvme_completion_poll(struct nvme_completion_poll_status *status)
 {
-	int sanity = hz * 1;
+	int sanity = hz * 10;
 
 	while (!atomic_load_acq_int(&status->done) && --sanity > 0)
 		pause("nvme", 1);
 	if (sanity <= 0)
-		panic("NVME polled command failed to complete within 1s.");
+		panic("NVME polled command failed to complete within 10s.");
 }
 
 static __inline void

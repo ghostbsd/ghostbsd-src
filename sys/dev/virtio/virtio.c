@@ -79,6 +79,7 @@ static struct virtio_feature_desc virtio_common_feature_desc[] = {
 	{ VIRTIO_RING_F_INDIRECT_DESC,	"RingIndirect"	},
 	{ VIRTIO_RING_F_EVENT_IDX,	"EventIdx"	},
 	{ VIRTIO_F_BAD_FEATURE,		"BadFeature"	},
+	{ VIRTIO_F_VERSION_1,		"Version1"	},
 
 	{ 0, NULL }
 };
@@ -157,12 +158,7 @@ virtio_describe(device_t dev, const char *msg,
 	if (n > 0)
 		sbuf_cat(&sb, ">");
 
-#if __FreeBSD_version < 900020
-	sbuf_finish(&sb);
-	if (sbuf_overflowed(&sb) == 0)
-#else
 	if (sbuf_finish(&sb) == 0)
-#endif
 		device_printf(dev, "%s\n", sbuf_data(&sb));
 
 	sbuf_delete(&sb);

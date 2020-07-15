@@ -274,7 +274,6 @@ acpi_timer_resume_handler(struct timecounter *newtc)
 			    "restoring timecounter, %s -> %s\n",
 			    tc->tc_name, newtc->tc_name);
 		(void)newtc->tc_get_timecount(newtc);
-		(void)newtc->tc_get_timecount(newtc);
 		timecounter = newtc;
 	}
 }
@@ -368,8 +367,10 @@ acpi_timer_sysctl_freq(SYSCTL_HANDLER_ARGS)
     return (error);
 }
  
-SYSCTL_PROC(_machdep, OID_AUTO, acpi_timer_freq, CTLTYPE_INT | CTLFLAG_RW,
-    0, sizeof(u_int), acpi_timer_sysctl_freq, "I", "ACPI timer frequency");
+SYSCTL_PROC(_machdep, OID_AUTO, acpi_timer_freq,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, 0, sizeof(u_int),
+    acpi_timer_sysctl_freq, "I",
+    "ACPI timer frequency");
 
 /*
  * Some ACPI timers are known or believed to suffer from implementation

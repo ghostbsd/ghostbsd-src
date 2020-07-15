@@ -61,7 +61,6 @@ int	ffs_balloc_ufs1(struct vnode *a_vp, off_t a_startoffset, int a_size,
             struct ucred *a_cred, int a_flags, struct buf **a_bpp);
 int	ffs_balloc_ufs2(struct vnode *a_vp, off_t a_startoffset, int a_size,
             struct ucred *a_cred, int a_flags, struct buf **a_bpp);
-int	ffs_blkatoff(struct vnode *, off_t, char **, struct buf **);
 void	ffs_blkfree(struct ufsmount *, struct fs *, struct vnode *,
 	    ufs2_daddr_t, long, ino_t, enum vtype, struct workhead *, u_long);
 ufs2_daddr_t ffs_blkpref_ufs1(struct inode *, ufs_lbn_t, int, ufs1_daddr_t *);
@@ -69,7 +68,6 @@ ufs2_daddr_t ffs_blkpref_ufs2(struct inode *, ufs_lbn_t, int, ufs2_daddr_t *);
 void	ffs_blkrelease_finish(struct ufsmount *, u_long);
 u_long	ffs_blkrelease_start(struct ufsmount *, struct vnode *, ino_t);
 uint32_t ffs_calc_sbhash(struct fs *);
-int	ffs_check_blkno(struct mount *, ino_t, ufs2_daddr_t, int);
 int	ffs_checkfreefile(struct fs *, struct vnode *, ino_t);
 void	ffs_clrblock(struct fs *, u_char *, ufs1_daddr_t);
 void	ffs_clusteracct(struct fs *, struct cg *, ufs1_daddr_t, int);
@@ -84,7 +82,6 @@ int	ffs_getcg(struct fs *, struct vnode *, u_int, int, struct buf **,
 	    struct cg **);
 int	ffs_isblock(struct fs *, u_char *, ufs1_daddr_t);
 int	ffs_isfreeblock(struct fs *, u_char *, ufs1_daddr_t);
-int	ffs_load_inode(struct buf *, struct inode *, struct fs *, ino_t);
 void	ffs_oldfscompat_write(struct fs *, struct ufsmount *);
 int	ffs_own_mount(const struct mount *mp);
 int	ffs_reallocblks(struct vop_reallocblks_args *);
@@ -116,6 +113,11 @@ int	ffs_vfree(struct vnode *, ino_t, int);
 vfs_vget_t ffs_vget;
 int	ffs_vgetf(struct mount *, ino_t, int, struct vnode **, int);
 void	process_deferred_inactive(struct mount *mp);
+int	ffs_fsfail_cleanup(struct ufsmount *, int);
+int	ffs_fsfail_cleanup_locked(struct ufsmount *, int);
+int	ffs_breadz(struct ufsmount *, struct vnode *, daddr_t, daddr_t, int,
+	    daddr_t *, int *, int, struct ucred *, int, void (*)(struct buf *),
+	    struct buf **);
 
 /*
  * Flags to ffs_vgetf
@@ -162,6 +164,7 @@ void	softdep_uninitialize(void);
 int	softdep_mount(struct vnode *, struct mount *, struct fs *,
 	    struct ucred *);
 void	softdep_unmount(struct mount *);
+void	softdep_handle_error(struct buf *);
 int	softdep_move_dependencies(struct buf *, struct buf *);
 int	softdep_flushworklist(struct mount *, int *, struct thread *);
 int	softdep_flushfiles(struct mount *, int, struct thread *);

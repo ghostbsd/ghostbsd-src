@@ -65,7 +65,6 @@ struct hdacc_softc {
 #define hdacc_lock(codec)	snd_mtxlock((codec)->lock)
 #define hdacc_unlock(codec)	snd_mtxunlock((codec)->lock)
 #define hdacc_lockassert(codec)	snd_mtxassert((codec)->lock)
-#define hdacc_lockowned(codec)	mtx_owned((codec)->lock)
 
 MALLOC_DEFINE(M_HDACC, "hdacc", "HDA CODEC");
 
@@ -78,14 +77,19 @@ static const struct {
 	{ HDA_CODEC_CS4206, 0,		"Cirrus Logic CS4206" },
 	{ HDA_CODEC_CS4207, 0,		"Cirrus Logic CS4207" },
 	{ HDA_CODEC_CS4210, 0,		"Cirrus Logic CS4210" },
+	{ HDA_CODEC_ALC215, 0,		"Realtek ALC215" },
 	{ HDA_CODEC_ALC221, 0,		"Realtek ALC221" },
+	{ HDA_CODEC_ALC222, 0,		"Realtek ALC222" },
 	{ HDA_CODEC_ALC225, 0,		"Realtek ALC225" },
 	{ HDA_CODEC_ALC231, 0,		"Realtek ALC231" },
 	{ HDA_CODEC_ALC233, 0,		"Realtek ALC233" },
 	{ HDA_CODEC_ALC234, 0,		"Realtek ALC234" },
 	{ HDA_CODEC_ALC235, 0,		"Realtek ALC235" },
+	{ HDA_CODEC_ALC236, 0,		"Realtek ALC236" },
+	{ HDA_CODEC_ALC245, 0,		"Realtek ALC245" },
 	{ HDA_CODEC_ALC255, 0,		"Realtek ALC255" },
 	{ HDA_CODEC_ALC256, 0,		"Realtek ALC256" },
+	{ HDA_CODEC_ALC257, 0,		"Realtek ALC257" },
 	{ HDA_CODEC_ALC260, 0,		"Realtek ALC260" },
 	{ HDA_CODEC_ALC262, 0,		"Realtek ALC262" },
 	{ HDA_CODEC_ALC267, 0,		"Realtek ALC267" },
@@ -106,6 +110,7 @@ static const struct {
 	{ HDA_CODEC_ALC285, 0,		"Realtek ALC285" },
 	{ HDA_CODEC_ALC286, 0,		"Realtek ALC286" },
 	{ HDA_CODEC_ALC288, 0,		"Realtek ALC288" },
+	{ HDA_CODEC_ALC289, 0,		"Realtek ALC289" },
 	{ HDA_CODEC_ALC290, 0,		"Realtek ALC290" },
 	{ HDA_CODEC_ALC292, 0,		"Realtek ALC292" },
 	{ HDA_CODEC_ALC293, 0,		"Realtek ALC293" },
@@ -113,8 +118,12 @@ static const struct {
 	{ HDA_CODEC_ALC295, 0,		"Realtek ALC295" },
 	{ HDA_CODEC_ALC298, 0,		"Realtek ALC298" },
 	{ HDA_CODEC_ALC299, 0,		"Realtek ALC299" },
+	{ HDA_CODEC_ALC300, 0,		"Realtek ALC300" },
+	{ HDA_CODEC_ALC623, 0,		"Realtek ALC623" },
 	{ HDA_CODEC_ALC660, 0,		"Realtek ALC660-VD" },
 	{ HDA_CODEC_ALC662, 0x0002,	"Realtek ALC662 rev2" },
+	{ HDA_CODEC_ALC662, 0x0101,	"Realtek ALC662 rev1" },
+	{ HDA_CODEC_ALC662, 0x0300,	"Realtek ALC662 rev3" },
 	{ HDA_CODEC_ALC662, 0,		"Realtek ALC662" },
 	{ HDA_CODEC_ALC663, 0,		"Realtek ALC663" },
 	{ HDA_CODEC_ALC665, 0,		"Realtek ALC665" },
@@ -140,6 +149,8 @@ static const struct {
 	{ HDA_CODEC_ALC892, 0,		"Realtek ALC892" },
 	{ HDA_CODEC_ALC899, 0,		"Realtek ALC899" },
 	{ HDA_CODEC_ALC1150, 0,		"Realtek ALC1150" },
+	{ HDA_CODEC_ALCS1200A, 0,	"Realtek ALCS1200A" },
+	{ HDA_CODEC_ALC1220_1, 0,	"Realtek ALC1220" },
 	{ HDA_CODEC_ALC1220, 0,		"Realtek ALC1220" },
 	{ HDA_CODEC_AD1882, 0,		"Analog Devices AD1882" },
 	{ HDA_CODEC_AD1882A, 0,		"Analog Devices AD1882A" },
@@ -369,6 +380,11 @@ static const struct {
 	{ HDA_CODEC_INTELBDW, 0,	"Intel Broadwell" },
 	{ HDA_CODEC_INTELSKLK, 0,	"Intel Skylake" },
 	{ HDA_CODEC_INTELKBLK, 0,	"Intel Kaby Lake" },
+	{ HDA_CODEC_INTELJLK, 0,	"Intel Jasper Lake" },
+	{ HDA_CODEC_INTELELLK, 0,	"Intel Elkhart Lake" },
+	{ HDA_CODEC_INTELCT, 0,		"Intel CedarTrail" },
+	{ HDA_CODEC_INTELVV2, 0,	"Intel Valleyview2" },
+	{ HDA_CODEC_INTELBR, 0,		"Intel Braswell" },
 	{ HDA_CODEC_INTELCL, 0,		"Intel Crestline" },
 	{ HDA_CODEC_INTELBXTN, 0,	"Intel Broxton" },
 	{ HDA_CODEC_INTELCNLK, 0,	"Intel Cannonlake" },
@@ -434,7 +450,8 @@ hdacc_probe(device_t dev)
 	int i;
 
 	id = ((uint32_t)hda_get_vendor_id(dev) << 16) + hda_get_device_id(dev);
-	revid = ((uint32_t)hda_get_revision_id(dev) << 8) + hda_get_stepping_id(dev);
+	revid = ((uint32_t)hda_get_revision_id(dev) << 8) +
+	    hda_get_stepping_id(dev);
 
 	for (i = 0; i < nitems(hdacc_codecs); i++) {
 		if (!HDA_DEV_MATCH(hdacc_codecs[i].id, id))
@@ -525,8 +542,7 @@ hdacc_detach(device_t dev)
 }
 
 static int
-hdacc_child_location_str(device_t dev, device_t child, char *buf,
-    size_t buflen)
+hdacc_child_location_str(device_t dev, device_t child, char *buf, size_t buflen)
 {
 	struct hdacc_fg *fg = device_get_ivars(child);
 
@@ -645,8 +661,8 @@ hdacc_stream_free(device_t dev, device_t child, int dir, int stream)
 }
 
 static int
-hdacc_stream_start(device_t dev, device_t child,
-    int dir, int stream, bus_addr_t buf, int blksz, int blkcnt)
+hdacc_stream_start(device_t dev, device_t child, int dir, int stream,
+    bus_addr_t buf, int blksz, int blkcnt)
 {
 
 	return (HDAC_STREAM_START(device_get_parent(dev), dev,

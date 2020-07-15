@@ -51,13 +51,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/ktr.h>
 #include <sys/taskqueue.h>
-#include <sys/gtaskqueue.h>
 #include <sys/tree.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 #include <net/vnet.h>
 
 #include <net/ethernet.h>
@@ -177,7 +177,8 @@ static int	inp_set_multicast_if(struct inpcb *, struct sockopt *);
 static int	inp_set_source_filters(struct inpcb *, struct sockopt *);
 static int	sysctl_ip_mcast_filters(SYSCTL_HANDLER_ARGS);
 
-static SYSCTL_NODE(_net_inet_ip, OID_AUTO, mcast, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_net_inet_ip, OID_AUTO, mcast,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "IPv4 multicast");
 
 static u_long in_mcast_maxgrpsrc = IP_MAX_GROUP_SRC_FILTER;
@@ -223,23 +224,16 @@ inm_is_ifp_detached(const struct in_multi *inm)
 }
 #endif
 
-static struct grouptask free_gtask;
-static struct in_multi_head inm_free_list;
-static void inm_release_task(void *arg __unused);
-static void inm_init(void)
+static struct task free_task;
+static struct in_multi_head inm_free_list = SLIST_HEAD_INITIALIZER();
+static void inm_release_task(void *arg __unused, int pending __unused);
+
+static void
+inm_init(void)
 {
-	SLIST_INIT(&inm_free_list);
-	taskqgroup_config_gtask_init(NULL, &free_gtask, inm_release_task, "inm release task");
+	TASK_INIT(&free_task, 0, inm_release_task, NULL);
 }
-
-#ifdef EARLY_AP_STARTUP
-SYSINIT(inm_init, SI_SUB_SMP + 1, SI_ORDER_FIRST,
-	inm_init, NULL);
-#else
-SYSINIT(inm_init, SI_SUB_ROOT_CONF - 1, SI_ORDER_FIRST,
-	inm_init, NULL);
-#endif
-
+SYSINIT(inm_init, SI_SUB_TASKQ, SI_ORDER_ANY, inm_init, NULL);
 
 void
 inm_release_list_deferred(struct in_multi_head *inmh)
@@ -250,7 +244,7 @@ inm_release_list_deferred(struct in_multi_head *inmh)
 	mtx_lock(&in_multi_free_mtx);
 	SLIST_CONCAT(&inm_free_list, inmh, in_multi, inm_nrele);
 	mtx_unlock(&in_multi_free_mtx);
-	GROUPTASK_ENQUEUE(&free_gtask);
+	taskqueue_enqueue(taskqueue_thread, &free_task);
 }
 
 void
@@ -303,7 +297,7 @@ inm_release_deferred(struct in_multi *inm)
 }
 
 static void
-inm_release_task(void *arg __unused)
+inm_release_task(void *arg __unused, int pending __unused)
 {
 	struct in_multi_head inm_free_tmp;
 	struct in_multi *inm, *tinm;
@@ -526,7 +520,7 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 	IN_MULTI_LIST_UNLOCK();
 	if (inm != NULL)
 		return (0);
-	
+
 	memset(&gsin, 0, sizeof(gsin));
 	gsin.sin_family = AF_INET;
 	gsin.sin_len = sizeof(struct sockaddr_in);
@@ -1909,7 +1903,7 @@ inp_lookup_mcast_ifp(const struct inpcb *inp,
 {
 	struct rm_priotracker in_ifa_tracker;
 	struct ifnet *ifp;
-	struct nhop4_basic nh4;
+	struct nhop_object *nh;
 	uint32_t fibnum;
 
 	KASSERT(gsin->sin_family == AF_INET, ("%s: not AF_INET", __func__));
@@ -1923,8 +1917,9 @@ inp_lookup_mcast_ifp(const struct inpcb *inp,
 		IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 	} else {
 		fibnum = inp ? inp->inp_inc.inc_fibnum : 0;
-		if (fib4_lookup_nh_basic(fibnum, gsin->sin_addr, 0, 0, &nh4)==0)
-			ifp = nh4.nh_ifp;
+		nh = fib4_lookup(fibnum, gsin->sin_addr, 0, 0, 0);
+		if (nh != NULL)
+			ifp = nh->nh_ifp;
 		else {
 			struct in_ifaddr *ia;
 			struct ifnet *mifp;
@@ -2207,7 +2202,7 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 			goto out_inp_unlocked;
 		}
 		if (error) {
-                        CTR1(KTR_IGMPV3, "%s: in_joingroup_locked failed", 
+                        CTR1(KTR_IGMPV3, "%s: in_joingroup_locked failed",
                             __func__);
 			goto out_inp_locked;
 		}
@@ -2627,7 +2622,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		int			 i;
 
 		INP_WUNLOCK(inp);
- 
+
 		CTR2(KTR_IGMPV3, "%s: loading %lu source list entries",
 		    __func__, (unsigned long)msfr.msfr_nsrcs);
 		kss = malloc(sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs,
@@ -2733,6 +2728,7 @@ inp_setmoptions(struct inpcb *inp, struct sockopt *sopt)
 {
 	struct ip_moptions	*imo;
 	int			 error;
+	struct epoch_tracker	et;
 
 	error = 0;
 
@@ -2839,7 +2835,9 @@ inp_setmoptions(struct inpcb *inp, struct sockopt *sopt)
 	case IP_ADD_SOURCE_MEMBERSHIP:
 	case MCAST_JOIN_GROUP:
 	case MCAST_JOIN_SOURCE_GROUP:
+		NET_EPOCH_ENTER(et);
 		error = inp_join_group(inp, sopt);
+		NET_EPOCH_EXIT(et);
 		break;
 
 	case IP_DROP_MEMBERSHIP:

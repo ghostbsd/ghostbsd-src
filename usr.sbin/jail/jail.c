@@ -87,6 +87,7 @@ static struct permspec perm_sysctl[] = {
 
 static const enum intparam startcommands[] = {
     IP__NULL,
+    IP_EXEC_PREPARE,
 #ifdef INET
     IP__IP4_IFADDR,
 #endif
@@ -126,6 +127,7 @@ static const enum intparam stopcommands[] = {
 #ifdef INET
     IP__IP4_IFADDR,
 #endif
+    IP_EXEC_RELEASE,
     IP__NULL
 };
 
@@ -1040,10 +1042,11 @@ usage(void)
 	(void)fprintf(stderr,
 	    "usage: jail [-dhilqv] [-J jid_file] [-u username] [-U username]\n"
 	    "            -[cmr] param=value ... [command=command ...]\n"
-	    "       jail [-dqv] [-f file] [-e separator] -[cmr] [jail]\n"
+	    "       jail [-dqv] [-f file] -[cmr] [jail]\n"
 	    "       jail [-qv] [-f file] -[rR] ['*' | jail ...]\n"
 	    "       jail [-dhilqv] [-J jid_file] [-u username] [-U username]\n"
 	    "            [-n jailname] [-s securelevel]\n"
-	    "            path hostname [ip[,...]] command ...\n");
+	    "            path hostname [ip[,...]] command ...\n"
+	    "       jail [-f file] -e separator\n");
 	exit(1);
 }

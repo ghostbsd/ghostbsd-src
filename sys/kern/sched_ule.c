@@ -1506,7 +1506,6 @@ sched_initticks(void *dummy)
 		sched_idlespinthresh = 2 * max(10000, 6 * hz) / realstathz;
 }
 
-
 /*
  * This is the core of the interactivity algorithm.  Determines a score based
  * on past behavior.  It is the ratio of sleep time to run time scaled to
@@ -2533,7 +2532,7 @@ sched_setpreempt(struct thread *td)
 	cpri = ctd->td_priority;
 	if (pri < cpri)
 		ctd->td_flags |= TDF_NEEDRESCHED;
-	if (panicstr != NULL || pri >= cpri || cold || TD_IS_INHIBITED(ctd))
+	if (KERNEL_PANICKED() || pri >= cpri || cold || TD_IS_INHIBITED(ctd))
 		return;
 	if (!sched_shouldpreempt(pri, cpri, 0))
 		return;
@@ -2606,15 +2605,17 @@ sched_add(struct thread *td, int flags)
 		sched_setpreempt(td);
 #else
 	tdq = TDQ_SELF();
-	TDQ_LOCK(tdq);
 	/*
 	 * Now that the thread is moving to the run-queue, set the lock
 	 * to the scheduler's lock.
 	 */
-	if ((flags & SRQ_HOLD) != 0)
-		td->td_lock = TDQ_LOCKPTR(tdq);
-	else
-		thread_lock_set(td, TDQ_LOCKPTR(tdq));
+	if (td->td_lock != TDQ_LOCKPTR(tdq)) {
+		TDQ_LOCK(tdq);
+		if ((flags & SRQ_HOLD) != 0)
+			td->td_lock = TDQ_LOCKPTR(tdq);
+		else
+			thread_lock_set(td, TDQ_LOCKPTR(tdq));
+	}
 	tdq_add(tdq, td, flags);
 	if (!(flags & SRQ_YIELDING))
 		sched_setpreempt(td);
@@ -2894,7 +2895,7 @@ sched_throw(struct thread *td)
 	struct thread *newtd;
 	struct tdq *tdq;
 
-	if (td == NULL) {
+	if (__predict_false(td == NULL)) {
 #ifdef SMP
 		PCPU_SET(sched, DPCPU_PTR(tdq));
 #endif
@@ -2912,13 +2913,18 @@ sched_throw(struct thread *td)
 		tdq_load_rem(tdq, td);
 		td->td_lastcpu = td->td_oncpu;
 		td->td_oncpu = NOCPU;
+		thread_lock_block(td);
 	}
 	newtd = choosethread();
 	spinlock_enter();
 	TDQ_UNLOCK(tdq);
 	KASSERT(curthread->td_md.md_spinlock_count == 1,
 	    ("invalid count %d", curthread->td_md.md_spinlock_count));
-	cpu_throw(td, newtd);		/* doesn't return */
+	/* doesn't return */
+	if (__predict_false(td == NULL))
+		cpu_throw(td, newtd);		/* doesn't return */
+	else
+		cpu_switch(td, newtd, TDQ_LOCKPTR(tdq));
 }
 
 /*
@@ -3077,11 +3083,13 @@ sysctl_kern_quantum(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_NODE(_kern, OID_AUTO, sched, CTLFLAG_RW, 0, "Scheduler");
+SYSCTL_NODE(_kern, OID_AUTO, sched, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Scheduler");
 SYSCTL_STRING(_kern_sched, OID_AUTO, name, CTLFLAG_RD, "ULE", 0,
     "Scheduler name");
-SYSCTL_PROC(_kern_sched, OID_AUTO, quantum, CTLTYPE_INT | CTLFLAG_RW,
-    NULL, 0, sysctl_kern_quantum, "I",
+SYSCTL_PROC(_kern_sched, OID_AUTO, quantum,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_quantum, "I",
     "Quantum for timeshare threads in microseconds");
 SYSCTL_INT(_kern_sched, OID_AUTO, slice, CTLFLAG_RW, &sched_slice, 0,
     "Quantum for timeshare threads in stathz ticks");
@@ -3120,4 +3128,5 @@ SYSCTL_PROC(_kern_sched, OID_AUTO, topology_spec, CTLTYPE_STRING |
 
 /* ps compat.  All cpu percentages from ULE are weighted. */
 static int ccpu = 0;
-SYSCTL_INT(_kern, OID_AUTO, ccpu, CTLFLAG_RD, &ccpu, 0, "");
+SYSCTL_INT(_kern, OID_AUTO, ccpu, CTLFLAG_RD, &ccpu, 0,
+    "Decay factor used for updating %CPU in 4BSD scheduler");

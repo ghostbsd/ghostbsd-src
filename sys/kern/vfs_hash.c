@@ -179,7 +179,6 @@ vfs_hash_insert(struct vnode *vp, u_int hash, int flags, struct thread *td,
 		}
 		if (vp2 == NULL)
 			break;
-			
 	}
 	vp->v_hash = hash;
 	LIST_INSERT_HEAD(vfs_hash_bucket(vp->v_mount, hash), vp, v_hashlist);
@@ -199,7 +198,7 @@ vfs_hash_rehash(struct vnode *vp, u_int hash)
 }
 
 void
-vfs_hash_changesize(int newmaxvnodes)
+vfs_hash_changesize(u_long newmaxvnodes)
 {
 	struct vfs_hash_head *vfs_hash_newtbl, *vfs_hash_oldtbl;
 	u_long vfs_hash_newmask, vfs_hash_oldmask;

@@ -39,11 +39,6 @@
 #ifndef _NETIPSEC_IPSEC_H_
 #define _NETIPSEC_IPSEC_H_
 
-#if defined(_KERNEL) && !defined(_LKM) && !defined(KLD_MODULE)
-#include "opt_inet.h"
-#include "opt_ipsec.h"
-#endif
-
 #include <net/pfkeyv2.h>
 #include <netipsec/keydb.h>
 
@@ -286,8 +281,6 @@ VNET_DECLARE(int, ip4_ipsec_ecn);
 VNET_DECLARE(int, crypto_support);
 VNET_DECLARE(int, async_crypto);
 VNET_DECLARE(int, natt_cksum_policy);
-
-extern struct timeval ipsec_warn_interval;
 
 #define	IPSECSTAT_INC(name)	\
     VNET_PCPUSTAT_ADD(struct ipsecstat, ipsec4stat, name, 1)

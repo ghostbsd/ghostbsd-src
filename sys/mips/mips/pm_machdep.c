@@ -147,12 +147,10 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		/* fill siginfo structure */
 		sf.sf_si = ksi->ksi_info;
 		sf.sf_si.si_signo = sig;
-		sf.sf_si.si_code = ksi->ksi_code;
-		sf.sf_si.si_addr = (void*)(intptr_t)regs->badvaddr;
 	} else {
 		/* Old FreeBSD-style arguments. */
 		regs->a1 = ksi->ksi_code;
-		regs->a3 = regs->badvaddr;
+		regs->a3 = (uintptr_t)ksi->ksi_addr;
 		/* sf.sf_ahu.sf_handler = catcher; */
 	}
 
@@ -443,10 +441,13 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	td->td_frame->t9 = imgp->entry_addr & ~3; /* abicall req */
 	td->td_frame->sr = MIPS_SR_KSU_USER | MIPS_SR_EXL | MIPS_SR_INT_IE |
 	    (mips_rd_status() & MIPS_SR_INT_MASK);
-#if defined(__mips_n32) 
+#if defined(__mips_n32) || defined(__mips_n64)
 	td->td_frame->sr |= MIPS_SR_PX;
-#elif  defined(__mips_n64)
-	td->td_frame->sr |= MIPS_SR_PX | MIPS_SR_UX | MIPS_SR_KX;
+#endif
+#if defined(__mips_n64)
+	if (SV_PROC_FLAG(td->td_proc, SV_LP64))
+		td->td_frame->sr |= MIPS_SR_UX;
+	td->td_frame->sr |= MIPS_SR_KX;
 #endif
 	/*
 	 * FREEBSD_DEVELOPERS_FIXME:
@@ -472,7 +473,15 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	    PCPU_SET(fpcurthread, (struct thread *)0);
 	td->td_md.md_ss_addr = 0;
 
-	td->td_md.md_tls_tcb_offset = TLS_TP_OFFSET + TLS_TCB_SIZE;
+	td->td_md.md_tls = NULL;
+#ifdef COMPAT_FREEBSD32
+	if (!SV_PROC_FLAG(td->td_proc, SV_LP64))
+		td->td_proc->p_md.md_tls_tcb_offset = TLS_TP_OFFSET +
+		    TLS_TCB_SIZE32;
+	else
+#endif
+		td->td_proc->p_md.md_tls_tcb_offset = TLS_TP_OFFSET +
+		    TLS_TCB_SIZE;
 }
 
 int

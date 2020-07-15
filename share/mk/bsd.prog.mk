@@ -39,10 +39,13 @@ MK_DEBUG_FILES=	no
 .if ${MK_BIND_NOW} != "no"
 LDFLAGS+= -Wl,-znow
 .endif
-.if ${MK_PIE} != "no" && (!defined(NO_SHARED) || ${NO_SHARED:tl} == "no")
+.if ${MK_PIE} != "no"
+# Static PIE is not yet supported/tested.
+.if !defined(NO_SHARED) || ${NO_SHARED:tl} == "no"
 CFLAGS+= -fPIE
 CXXFLAGS+= -fPIE
 LDFLAGS+= -pie
+.endif
 .endif
 .if ${MK_RETPOLINE} != "no"
 .if ${COMPILER_FEATURES:Mretpoline} && ${LINKER_FEATURES:Mretpoline}
@@ -55,6 +58,10 @@ LDFLAGS+= -Wl,-zretpolineplt
 .else
 .warning Retpoline requested but not supported by compiler or linker
 .endif
+.endif
+
+.if ${MACHINE_CPUARCH} == "riscv" && ${LINKER_FEATURES:Mriscv-relaxations} == ""
+CFLAGS += -mno-relax
 .endif
 
 .if defined(CRUNCH_CFLAGS)
@@ -266,9 +273,9 @@ _proginstall:
 	    ${_INSTALLFLAGS} ${PROG} ${DESTDIR}${BINDIR}/${PROGNAME}
 .if ${MK_DEBUG_FILES} != "no"
 .if defined(DEBUGMKDIR)
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},debug} -d ${DESTDIR}${DEBUGFILEDIR}/
+	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dbg} -d ${DESTDIR}${DEBUGFILEDIR}/
 .endif
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},debug} -o ${BINOWN} -g ${BINGRP} -m ${DEBUGMODE} \
+	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dbg} -o ${BINOWN} -g ${BINGRP} -m ${DEBUGMODE} \
 	    ${PROGNAME}.debug ${DESTDIR}${DEBUGFILEDIR}/${PROGNAME}.debug
 .endif
 .endif

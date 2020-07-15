@@ -182,7 +182,6 @@ struct kcov_info;
 struct kdtrace_proc;
 struct kdtrace_thread;
 struct mqueue_notifier;
-struct nlminfo;
 struct p_sched;
 struct proc;
 struct procdesc;
@@ -250,6 +249,7 @@ struct thread {
 	int		td_flags;	/* (t) TDF_* flags. */
 	int		td_inhibitors;	/* (t) Why can not run. */
 	int		td_pflags;	/* (k) Private thread (TDP_*) flags. */
+	int		td_pflags2;	/* (k) Private thread (TDP2_*) flags. */
 	int		td_dupfd;	/* (k) Ret value from fdopen. XXX */
 	int		td_sqqueue;	/* (t) Sleepqueue queue blocked on. */
 	const void	*td_wchan;	/* (t) Sleep address. */
@@ -267,7 +267,8 @@ struct thread {
 	struct lock_list_entry *td_sleeplocks; /* (k) Held sleep locks. */
 	int		td_intr_nesting_level; /* (k) Interrupt recursion. */
 	int		td_pinned;	/* (k) Temporary cpu pin count. */
-	struct ucred	*td_ucred;	/* (k) Reference to credentials. */
+	struct ucred	*td_realucred;	/* (k) Reference to credentials. */
+	struct ucred	*td_ucred;	/* (k) Used credentials, temporarily switchable. */
 	struct plimit	*td_limit;	/* (k) Resource limits. */
 	int		td_slptick;	/* (t) Time at sleep. */
 	int		td_blktick;	/* (t) Time spent blocked. */
@@ -297,7 +298,7 @@ struct thread {
 	struct osd	td_osd;		/* (k) Object specific data. */
 	struct vm_map_entry *td_map_def_user; /* (k) Deferred entries. */
 	pid_t		td_dbg_forked;	/* (c) Child pid for debugger. */
-	u_int		td_vp_reserv;	/* (k) Count of reserved vnodes. */
+	struct vnode	*td_vp_reserved;/* (k) Prealloated vnode. */
 	u_int		td_no_sleeping;	/* (k) Sleeping disabled count. */
 	void		*td_su;		/* (k) FFS SU private */
 	sbintime_t	td_sleeptimo;	/* (t) Sleep timeout. */
@@ -305,6 +306,7 @@ struct thread {
 	int		td_errno;	/* (k) Error from last syscall. */
 	size_t		td_vslock_sz;	/* (k) amount of vslock-ed space */
 	struct kcov_info *td_kcov_info;	/* (*) Kernel code coverage data */
+	u_int		td_ucredref;	/* (k) references on td_realucred */
 #define	td_endzero td_sigmask
 
 /* Copied during fork1() or create_thread(). */
@@ -322,6 +324,9 @@ struct thread {
 	uintptr_t	td_rb_inact;	/* (k) Current in-action mutex loc. */
 	struct syscall_args td_sa;	/* (kx) Syscall parameters. Copied on
 					   fork for child tracing. */
+	void		*td_sigblock_ptr; /* (k) uptr for fast sigblock. */
+	uint32_t	td_sigblock_val;  /* (k) fast sigblock value read at
+					     td_sigblock_ptr on kern entry */
 #define	td_endcopy td_pcb
 
 /*
@@ -345,7 +350,6 @@ struct thread {
 	/* LP64 hole */
 	struct callout	td_slpcallout;	/* (h) Callout for sleep. */
 	struct trapframe *td_frame;	/* (k) */
-	struct vm_object *td_kstack_obj;/* (a) Kstack object. */
 	vm_offset_t	td_kstack;	/* (a) Kernel VA of kstack. */
 	int		td_kstack_pages; /* (a) Size of the kstack. */
 	volatile u_int	td_critnest;	/* (k*) Critical section nest level. */
@@ -486,7 +490,7 @@ do {									\
 #define	TDP_ALTSTACK	0x00000020 /* Have alternate signal stack. */
 #define	TDP_DEADLKTREAT	0x00000040 /* Lock acquisition - deadlock treatment. */
 #define	TDP_NOFAULTING	0x00000080 /* Do not handle page faults. */
-#define	TDP_UNUSED9	0x00000100 /* --available-- */
+#define	TDP_SIGFASTBLOCK 0x00000100 /* Fast sigblock active */
 #define	TDP_OWEUPC	0x00000200 /* Call addupc() at next AST. */
 #define	TDP_ITHREAD	0x00000400 /* Thread is an interrupt thread. */
 #define	TDP_SYNCIO	0x00000800 /* Local override, disable async i/o. */
@@ -509,6 +513,9 @@ do {									\
 #define	TDP_UIOHELD	0x10000000 /* Current uio has pages held in td_ma */
 #define	TDP_FORKING	0x20000000 /* Thread is being created through fork() */
 #define	TDP_EXECVMSPC	0x40000000 /* Execve destroyed old vmspace */
+#define	TDP_SIGFASTPENDING 0x80000000 /* Pending signal due to sigfastblock */
+
+#define	TDP2_SBPAGES	0x00000001 /* Owns sbusy on some pages */
 
 /*
  * Reasons that the current thread can not be run yet.
@@ -637,12 +644,7 @@ struct proc {
 	struct sigiolst	p_sigiolst;	/* (c) List of sigio sources. */
 	int		p_sigparent;	/* (c) Signal to parent on exit. */
 	int		p_sig;		/* (n) For core dump/debugger XXX. */
-	u_int		p_stops;	/* (c) Stop event bitmask. */
-	u_int		p_stype;	/* (c) Stop event type. */
-	char		p_step;		/* (c) Process is stopped. */
-	u_char		p_pfsflags;	/* (c) Procfs flags. */
 	u_int		p_ptevents;	/* (c + e) ptrace() event mask. */
-	struct nlminfo	*p_nlminfo;	/* (?) Only used by/for lockd. */
 	struct kaioinfo	*p_aioinfo;	/* (y) ASYNC I/O info. */
 	struct thread	*p_singlethread;/* (c + j) If single threading this is it */
 	int		p_suspcount;	/* (j) Num threads in suspended mode. */
@@ -856,23 +858,6 @@ extern pid_t pid_max;
 
 #define	SESS_LEADER(p)	((p)->p_session->s_leader == (p))
 
-
-#define	STOPEVENT(p, e, v) do {						\
-	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,			\
- 	    "checking stopevent %d", (e));				\
-	if ((p)->p_stops & (e))	{					\
-		PROC_LOCK(p);						\
-		stopevent((p), (e), (v));				\
-		PROC_UNLOCK(p);						\
-	}								\
-} while (0)
-#define	_STOPEVENT(p, e, v) do {					\
-	PROC_LOCK_ASSERT(p, MA_OWNED);					\
-	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, &p->p_mtx.lock_object, \
- 	    "checking stopevent %d", (e));				\
-	if ((p)->p_stops & (e))						\
-		stopevent((p), (e), (v));				\
-} while (0)
 
 /* Lock and unlock a process. */
 #define	PROC_LOCK(p)	mtx_lock(&(p)->p_mtx)
@@ -1191,6 +1176,25 @@ curthread_pflags_restore(int save)
 {
 
 	curthread->td_pflags &= save;
+}
+
+static __inline int
+curthread_pflags2_set(int flags)
+{
+	struct thread *td;
+	int save;
+
+	td = curthread;
+	save = ~flags | (td->td_pflags2 & flags);
+	td->td_pflags2 |= flags;
+	return (save);
+}
+
+static __inline void
+curthread_pflags2_restore(int save)
+{
+
+	curthread->td_pflags2 &= save;
 }
 
 static __inline __pure2 struct td_sched *

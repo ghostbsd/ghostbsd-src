@@ -83,8 +83,7 @@ static VAR var[] = {
 	    CHAR, NULL, 0},
 	{"cow", "COW", NULL, "copy-on-write-faults", 0, kvar, KOFF(ki_cow),
 	    UINT, "u", 0},
-	{"cpu", "CPU", NULL, "cpu-usage", 0, kvar, KOFF(ki_estcpu), UINT, "d",
-	    0},
+	{"cpu", "C", NULL, "on-cpu", 0, cpunum, 0, CHAR, NULL, 0},
 	{"cputime", "", "time", NULL, 0, NULL, 0, CHAR, NULL, 0},
 	{"dsiz", "DSIZ", NULL, "data-size", 0, kvar, KOFF(ki_dsize), PGTOK,
 	    "ld", 0},
@@ -254,7 +253,7 @@ showkey(void)
 			i = len;
 			sep = "\n";
 		}
-		xo_emit("{P:/%s}{l:key/%s}", sep, p);
+		xo_emit("{P:/%hs}{l:key/%hs}", sep, p);
 		sep = " ";
 	}
 	xo_emit("\n");

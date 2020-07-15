@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_systm.h>
 
 #include <stand.h>
+#include <bootstrap.h>
 #include <net.h>
 
 #include <efi.h>
@@ -701,6 +702,8 @@ efihttp_fs_seek(struct open_file *f, off_t offset, int where)
 		return (0);
 	if (where == SEEK_SET && fh->offset < offset) {
 		buf = malloc(1500);
+		if (buf == NULL)
+			return (ENOMEM);
 		res = offset - fh->offset;
 		while (res > 0) {
 			err = _efihttp_fs_read(f, buf, min(1500, res), &res2);

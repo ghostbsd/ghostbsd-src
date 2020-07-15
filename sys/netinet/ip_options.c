@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 #include <net/netisr.h>
 #include <net/vnet.h>
 
@@ -75,8 +76,8 @@ SYSCTL_INT(_net_inet_ip, IPCTL_SOURCEROUTE, sourceroute,
 #define	V_ip_dosourceroute	VNET(ip_dosourceroute)
 
 VNET_DEFINE_STATIC(int,	ip_acceptsourceroute);
-SYSCTL_INT(_net_inet_ip, IPCTL_ACCEPTSOURCEROUTE, accept_sourceroute, 
-    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip_acceptsourceroute), 0, 
+SYSCTL_INT(_net_inet_ip, IPCTL_ACCEPTSOURCEROUTE, accept_sourceroute,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip_acceptsourceroute), 0,
     "Enable accepting source routed IP packets");
 #define	V_ip_acceptsourceroute	VNET(ip_acceptsourceroute)
 
@@ -107,7 +108,7 @@ ip_dooptions(struct mbuf *m, int pass)
 	int opt, optlen, cnt, off, code, type = ICMP_PARAMPROB, forward = 0;
 	struct in_addr *sin, dst;
 	uint32_t ntime;
-	struct nhop4_extended nh_ext;
+	struct nhop_object *nh;
 	struct	sockaddr_in ipaddr = { sizeof(ipaddr), AF_INET };
 
 	NET_EPOCH_ASSERT();
@@ -208,7 +209,7 @@ ip_dooptions(struct mbuf *m, int pass)
 					 * ICMP
 					 */
 nosourcerouting:
-					log(LOG_WARNING, 
+					log(LOG_WARNING,
 					    "attempted source route from %s "
 					    "to %s\n",
 					    inet_ntoa_r(ip->ip_src, srcbuf),
@@ -254,11 +255,12 @@ dropit:
 				    sizeof(struct in_addr));
 			} else {
 				/* XXX MRT 0 for routing */
-				if (fib4_lookup_nh_ext(M_GETFIB(m),
-				    ipaddr.sin_addr, 0, 0, &nh_ext) != 0)
+				nh = fib4_lookup(M_GETFIB(m), ipaddr.sin_addr,
+				     0, NHR_NONE, 0);
+				if (nh == NULL)
 					goto bad;
 
-				memcpy(cp + off, &nh_ext.nh_src,
+				memcpy(cp + off, &(IA_SIN(nh->nh_ifa)->sin_addr),
 				    sizeof(struct in_addr));
 			}
 
@@ -299,9 +301,9 @@ dropit:
 			if ((ia = (INA)ifa_ifwithaddr((SA)&ipaddr)) != NULL) {
 				memcpy(cp + off, &(IA_SIN(ia)->sin_addr),
 				    sizeof(struct in_addr));
-			} else if (fib4_lookup_nh_ext(M_GETFIB(m),
-			    ipaddr.sin_addr, 0, 0, &nh_ext) == 0) {
-				memcpy(cp + off, &nh_ext.nh_src,
+			} else if ((nh = fib4_lookup(M_GETFIB(m),
+			    ipaddr.sin_addr, 0, NHR_NONE, 0)) != NULL) {
+				memcpy(cp + off, &(IA_SIN(nh->nh_ifa)->sin_addr),
 				    sizeof(struct in_addr));
 			} else {
 				type = ICMP_UNREACH;

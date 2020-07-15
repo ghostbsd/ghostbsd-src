@@ -128,8 +128,9 @@ static int					ng_btsocket_hci_raw_curpps;
  
 /* Sysctl tree */
 SYSCTL_DECL(_net_bluetooth_hci_sockets);
-static SYSCTL_NODE(_net_bluetooth_hci_sockets, OID_AUTO, raw, CTLFLAG_RW,
-        0, "Bluetooth raw HCI sockets family");
+static SYSCTL_NODE(_net_bluetooth_hci_sockets, OID_AUTO, raw,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Bluetooth raw HCI sockets family");
 SYSCTL_UINT(_net_bluetooth_hci_sockets_raw, OID_AUTO, debug_level, CTLFLAG_RW,
         &ng_btsocket_hci_raw_debug_level, NG_BTSOCKET_WARN_LEVEL,
 	"Bluetooth raw HCI sockets debug level");
@@ -860,6 +861,7 @@ ng_btsocket_hci_raw_init(void)
 	bit_set(f, NG_HCI_OCF_READ_IAC_LAP - 1);
 	bit_set(f, NG_HCI_OCF_READ_PAGE_SCAN_PERIOD - 1);
 	bit_set(f, NG_HCI_OCF_READ_PAGE_SCAN - 1);
+	bit_set(f, NG_HCI_OCF_READ_LE_HOST_SUPPORTED -1);
 
 	/* Commands - Informational */
 	f = ng_btsocket_hci_raw_sec_filter->commands[NG_HCI_OGF_INFO - 1];
@@ -880,6 +882,11 @@ ng_btsocket_hci_raw_init(void)
 	bit_set(f, NG_HCI_OCF_READ_LOOPBACK_MODE - 1);
 	/*Commands - LE*/
 	f = ng_btsocket_hci_raw_sec_filter->commands[NG_HCI_OGF_LE -1];
+	bit_set(f, NG_HCI_OCF_LE_SET_SCAN_ENABLE - 1);
+	bit_set(f, NG_HCI_OCF_LE_SET_SCAN_PARAMETERS - 1);
+	bit_set(f, NG_HCI_OCF_LE_READ_LOCAL_SUPPORTED_FEATURES - 1);
+	bit_set(f, NG_HCI_OCF_LE_READ_BUFFER_SIZE - 1);
+	bit_set(f, NG_HCI_OCF_LE_READ_WHITE_LIST_SIZE - 1);
 
 } /* ng_btsocket_hci_raw_init */
 

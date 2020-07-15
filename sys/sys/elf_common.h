@@ -46,12 +46,14 @@
  * not include the padding.
  */
 
+#ifndef LOCORE
 typedef struct {
 	u_int32_t	n_namesz;	/* Length of name. */
 	u_int32_t	n_descsz;	/* Length of descriptor. */
 	u_int32_t	n_type;		/* Type of this note. */
 } Elf_Note;
 typedef Elf_Note Elf_Nhdr;
+#endif
 
 /*
  * Option kinds.
@@ -112,12 +114,14 @@ typedef Elf_Note Elf_Nhdr;
  * The header for GNU-style hash sections.
  */
 
+#ifndef LOCORE
 typedef struct {
 	u_int32_t	gh_nbuckets;	/* Number of hash buckets. */
 	u_int32_t	gh_symndx;	/* First visible symbol in .dynsym. */
 	u_int32_t	gh_maskwords;	/* #maskwords used in bloom filter. */
 	u_int32_t	gh_shift2;	/* Bloom filter shift count. */
 } Elf_GNU_Hash_Header;
+#endif
 
 /* Indexes into the e_ident array.  Keep synced with
    http://www.sco.com/developers/gabi/latest/ch4.eheader.html */
@@ -175,6 +179,7 @@ typedef struct {
 #define	ELFOSABI_AROS		15	/* Amiga Research OS */
 #define	ELFOSABI_FENIXOS	16	/* FenixOS */
 #define	ELFOSABI_CLOUDABI	17	/* Nuxi CloudABI */
+#define	ELFOSABI_OPENVOS	18	/* Stratus Technologies OpenVOS */
 #define	ELFOSABI_ARM_AEABI	64	/* ARM EABI */
 #define	ELFOSABI_ARM		97	/* ARM */
 #define	ELFOSABI_STANDALONE	255	/* Standalone (embedded) application */
@@ -542,6 +547,10 @@ typedef struct {
 #define	PT_LOPROC	0x70000000	/* First processor-specific type. */
 #define	PT_ARM_ARCHEXT	0x70000000	/* ARM arch compat information. */
 #define	PT_ARM_EXIDX	0x70000001	/* ARM exception unwind tables. */
+#define	PT_MIPS_REGINFO		0x70000000	/* MIPS register usage info */
+#define	PT_MIPS_RTPROC		0x70000001	/* MIPS runtime procedure tbl */
+#define	PT_MIPS_OPTIONS		0x70000002	/* MIPS e_flags value*/
+#define	PT_MIPS_ABIFLAGS	0x70000003	/* MIPS fp mode */
 #define	PT_HIPROC	0x7fffffff	/* Last processor-specific type. */
 
 #define	PT_OPENBSD_RANDOMIZE	0x65A3DBE6	/* OpenBSD random data segment */
@@ -759,6 +768,7 @@ typedef struct {
 #define	DF_1_ORIGIN	0x00000080	/* Process $ORIGIN */
 #define	DF_1_INTERPOSE	0x00000400	/* Interpose all objects but main */
 #define	DF_1_NODEFLIB	0x00000800	/* Do not search default paths */
+#define	DF_1_PIE	0x08000000	/* Is position-independent executable */
 
 /* Values for l_flags. */
 #define	LL_NONE			0x0	/* no flags */
@@ -785,6 +795,7 @@ typedef struct {
 #define	NT_FREEBSD_FCTL_ASLR_DISABLE	0x00000001
 #define	NT_FREEBSD_FCTL_PROTMAX_DISABLE	0x00000002
 #define	NT_FREEBSD_FCTL_STKGAP_DISABLE	0x00000004
+#define	NT_FREEBSD_FCTL_WXNEEDED	0x00000008
 
 /* Values for n_type.  Used in core files. */
 #define	NT_PRSTATUS	1	/* Process status. */
@@ -949,8 +960,14 @@ typedef struct {
 #define	AT_EHDRFLAGS	24	/* e_flags field from elf hdr */
 #define	AT_HWCAP	25	/* CPU feature flags. */
 #define	AT_HWCAP2	26	/* CPU feature flags 2. */
+#define	AT_BSDFLAGS	27	/* ELF BSD Flags. */
+#define	AT_ARGC		28	/* Argument count */
+#define	AT_ARGV		29	/* Argument vector */
+#define	AT_ENVC		30	/* Environment count */
+#define	AT_ENVV		31	/* Environment vector */
+#define	AT_PS_STRINGS	32	/* struct ps_strings */
 
-#define	AT_COUNT	27	/* Count of defined aux entry types. */
+#define	AT_COUNT	33	/* Count of defined aux entry types. */
 
 /*
  * Relocation types.
@@ -1330,6 +1347,8 @@ typedef struct {
 #define	R_RISCV_SET8		54
 #define	R_RISCV_SET16		55
 #define	R_RISCV_SET32		56
+#define	R_RISCV_32_PCREL	57
+#define	R_RISCV_IRELATIVE	58
 
 #define	R_SPARC_NONE		0
 #define	R_SPARC_8		1
@@ -1451,5 +1470,6 @@ typedef struct {
 #define	R_X86_64_TLSDESC	36
 #define	R_X86_64_IRELATIVE	37
 
+#define	ELF_BSDF_SIGFASTBLK	0x0001	/* Kernel supports fast sigblock */
 
 #endif /* !_SYS_ELF_COMMON_H_ */

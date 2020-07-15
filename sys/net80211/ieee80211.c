@@ -616,6 +616,12 @@ ieee80211_vap_setup(struct ieee80211com *ic, struct ieee80211vap *vap,
 	if (vap->iv_opmode == IEEE80211_M_HOSTAP &&
 	    (vap->iv_caps & IEEE80211_C_DFS))
 		vap->iv_flags_ext |= IEEE80211_FEXT_DFS;
+	/* NB: only flip on U-APSD for hostap/sta for now */
+	if ((vap->iv_opmode == IEEE80211_M_STA)
+	    || (vap->iv_opmode == IEEE80211_M_HOSTAP)) {
+		if (vap->iv_caps & IEEE80211_C_UAPSD)
+			vap->iv_flags_ext |= IEEE80211_FEXT_UAPSD;
+	}
 
 	vap->iv_des_chan = IEEE80211_CHAN_ANYC;		/* any channel is ok */
 	vap->iv_bmissthreshold = IEEE80211_HWBMISS_DEFAULT;
@@ -645,6 +651,7 @@ ieee80211_vap_setup(struct ieee80211com *ic, struct ieee80211vap *vap,
 	ieee80211_scan_vattach(vap);
 	ieee80211_regdomain_vattach(vap);
 	ieee80211_radiotap_vattach(vap);
+	ieee80211_vap_reset_erp(vap);
 	ieee80211_ratectl_set(vap, IEEE80211_RATECTL_NONE);
 
 	return 0;
@@ -2200,7 +2207,7 @@ ieee80211_setmode(struct ieee80211com *ic, enum ieee80211_phymode mode)
 		ieee80211_setbasicrates(&ic->ic_sup_rates[mode], mode);
 
 	ic->ic_curmode = mode;
-	ieee80211_reset_erp(ic);	/* reset ERP state */
+	ieee80211_reset_erp(ic);	/* reset global ERP state */
 
 	return 0;
 }

@@ -115,6 +115,9 @@ static struct syscall decoded_syscalls[] = {
 	  .args = { { Int, 0 }, { Int, 1 }, { CapRights | OUT, 2 } } },
 	{ .name = "__getcwd", .ret_type = 1, .nargs = 2,
 	  .args = { { Name | OUT, 0 }, { Int, 1 } } },
+	{ .name = "__realpathat", .ret_type = 1, .nargs = 5,
+	  .args = { { Atfd, 0 }, { Name | IN, 1 }, { Name | OUT, 2 },
+		    { Sizet, 3 }, { Int, 4} } },
 	{ .name = "_umtx_op", .ret_type = 1, .nargs = 5,
 	  .args = { { Ptr, 0 }, { Umtxop, 1 }, { LongHex, 2 }, { Ptr, 3 },
 		    { Ptr, 4 } } },
@@ -153,6 +156,8 @@ static struct syscall decoded_syscalls[] = {
 	{ .name = "clock_gettime", .ret_type = 1, .nargs = 2,
 	  .args = { { Int, 0 }, { Timespec | OUT, 1 } } },
 	{ .name = "close", .ret_type = 1, .nargs = 1,
+	  .args = { { Int, 0 } } },
+	{ .name = "closefrom", .ret_type = 1, .nargs = 1,
 	  .args = { { Int, 0 } } },
 	{ .name = "compat11.fstat", .ret_type = 1, .nargs = 2,
 	  .args = { { Int, 0 }, { Stat11 | OUT, 1 } } },
@@ -471,6 +476,9 @@ static struct syscall decoded_syscalls[] = {
 		    { Ptr | IN, 3 }, { Socklent, 4 } } },
 	{ .name = "shm_open", .ret_type = 1, .nargs = 3,
 	  .args = { { ShmName | IN, 0 }, { Open, 1 }, { Octal, 2 } } },
+	{ .name = "shm_open2", .ret_type = 1, .nargs = 5,
+	  .args = { { ShmName | IN, 0 }, { Open, 1 }, { Octal, 2 },
+		    { ShmFlags, 3 }, { Name | IN, 4 } } },
 	{ .name = "shm_rename", .ret_type = 1, .nargs = 3,
 	  .args = { { Name | IN, 0 }, { Name | IN, 1 }, { Hex, 2 } } },
 	{ .name = "shm_unlink", .ret_type = 1, .nargs = 1,
@@ -908,7 +916,7 @@ print_mask_arg32(bool (*decoder)(FILE *, uint32_t, uint32_t *), FILE *fp,
  * Add argument padding to subsequent system calls after Quad
  * syscall arguments as needed.  This used to be done by hand in the
  * decoded_syscalls table which was ugly and error prone.  It is
- * simpler to do the fixup of offsets at initalization time than when
+ * simpler to do the fixup of offsets at initialization time than when
  * decoding arguments.
  */
 static void
@@ -1569,12 +1577,35 @@ print_cmsgs(FILE *fp, pid_t pid, bool receive, struct msghdr *msghdr)
 }
 
 static void
-print_sysctl_oid(FILE *fp, int *oid, int len)
+print_sysctl_oid(FILE *fp, int *oid, size_t len)
 {
-	int i;
+	size_t i;
+	bool first;
 
-	for (i = 0; i < len; i++)
-		fprintf(fp, ".%d", oid[i]);
+	first = true;
+	fprintf(fp, "{ ");
+	for (i = 0; i < len; i++) {
+		fprintf(fp, "%s%d", first ? "" : ".", oid[i]);
+		first = false;
+	}
+	fprintf(fp, " }");
+}
+
+static void
+print_sysctl(FILE *fp, int *oid, size_t len)
+{
+	char name[BUFSIZ];
+	int qoid[CTL_MAXNAME + 2];
+	size_t i;
+
+	qoid[0] = CTL_SYSCTL;
+	qoid[1] = CTL_SYSCTL_NAME;
+	memcpy(qoid + 2, oid, len * sizeof(int));
+	i = sizeof(name);
+	if (sysctl(qoid, len + 2, name, &i, 0, 0) == -1)
+		print_sysctl_oid(fp, oid, len);
+	else
+		fprintf(fp, "%s", name);
 }
 
 /*
@@ -2009,6 +2040,9 @@ print_arg(struct syscall_args *sc, unsigned long *args, register_t *retval,
 	case Whence:
 		print_integer_arg(sysdecode_whence, fp, args[sc->offset]);
 		break;
+	case ShmFlags:
+		print_mask_arg(sysdecode_shmflags, fp, args[sc->offset]);
+		break;
 	case Sockdomain:
 		print_integer_arg(sysdecode_socketdomain, fp, args[sc->offset]);
 		break;
@@ -2287,9 +2321,8 @@ print_arg(struct syscall_args *sc, unsigned long *args, register_t *retval,
 		break;
 	case Sysctl: {
 		char name[BUFSIZ];
-		int oid[CTL_MAXNAME + 2], qoid[CTL_MAXNAME + 2];
-		size_t i;
-		int len;
+		int oid[CTL_MAXNAME + 2];
+		size_t len;
 
 		memset(name, 0, sizeof(name));
 		len = args[sc->offset + 1];
@@ -2303,39 +2336,35 @@ print_arg(struct syscall_args *sc, unsigned long *args, register_t *retval,
 					fprintf(fp, "debug");
 					break;
 				case CTL_SYSCTL_NAME:
-					fprintf(fp, "name");
+					fprintf(fp, "name ");
 					print_sysctl_oid(fp, oid + 2, len - 2);
 					break;
 				case CTL_SYSCTL_NEXT:
 					fprintf(fp, "next");
 					break;
 				case CTL_SYSCTL_NAME2OID:
-					fprintf(fp, "name2oid");
+					fprintf(fp, "name2oid %s",
+					    get_string(pid,
+					        args[sc->offset + 4],
+						args[sc->offset + 5]));
 					break;
 				case CTL_SYSCTL_OIDFMT:
-					fprintf(fp, "oidfmt");
-					print_sysctl_oid(fp, oid + 2, len - 2);
+					fprintf(fp, "oidfmt ");
+					print_sysctl(fp, oid + 2, len - 2);
 					break;
 				case CTL_SYSCTL_OIDDESCR:
-					fprintf(fp, "oiddescr");
-					print_sysctl_oid(fp, oid + 2, len - 2);
+					fprintf(fp, "oiddescr ");
+					print_sysctl(fp, oid + 2, len - 2);
 					break;
 				case CTL_SYSCTL_OIDLABEL:
-					fprintf(fp, "oidlabel");
-					print_sysctl_oid(fp, oid + 2, len - 2);
+					fprintf(fp, "oidlabel ");
+					print_sysctl(fp, oid + 2, len - 2);
 					break;
 				default:
-					print_sysctl_oid(fp, oid + 1, len - 1);
+					print_sysctl(fp, oid + 1, len - 1);
 				}
 			} else {
-				qoid[0] = CTL_SYSCTL;
-				qoid[1] = CTL_SYSCTL_NAME;
-				memcpy(qoid + 2, oid, len * sizeof(int));
-				i = sizeof(name);
-				if (sysctl(qoid, len + 2, name, &i, 0, 0) == -1)
-					print_sysctl_oid(fp, qoid + 2, len);
-				else
-					fprintf(fp, "%s", name);
+				print_sysctl(fp, oid, len);
 			}
 		    	fprintf(fp, "\"");
 		}

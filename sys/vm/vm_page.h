@@ -325,6 +325,9 @@ struct vm_page {
 
 #define	VPB_UNBUSIED		VPB_SHARERS_WORD(0)
 
+/* Freed lock blocks both shared and exclusive. */
+#define	VPB_FREED		(0xffffffff - VPB_BIT_SHARED)
+
 #define	PQ_NONE		255
 #define	PQ_INACTIVE	0
 #define	PQ_ACTIVE	1
@@ -588,6 +591,8 @@ bool vm_page_busy_acquire(vm_page_t m, int allocflags);
 void vm_page_busy_downgrade(vm_page_t m);
 int vm_page_busy_tryupgrade(vm_page_t m);
 void vm_page_busy_sleep(vm_page_t m, const char *msg, bool nonshared);
+void vm_page_busy_sleep_unlocked(vm_object_t obj, vm_page_t m,
+    vm_pindex_t pindex, const char *wmesg, bool nonshared);
 void vm_page_free(vm_page_t m);
 void vm_page_free_zero(vm_page_t m);
 
@@ -609,12 +614,16 @@ vm_page_t vm_page_alloc_freelist(int, int);
 vm_page_t vm_page_alloc_freelist_domain(int, int, int);
 void vm_page_bits_set(vm_page_t m, vm_page_bits_t *bits, vm_page_bits_t set);
 bool vm_page_blacklist_add(vm_paddr_t pa, bool verbose);
-void vm_page_change_lock(vm_page_t m, struct mtx **mtx);
-vm_page_t vm_page_grab (vm_object_t, vm_pindex_t, int);
+vm_page_t vm_page_grab(vm_object_t, vm_pindex_t, int);
+vm_page_t vm_page_grab_unlocked(vm_object_t, vm_pindex_t, int);
 int vm_page_grab_pages(vm_object_t object, vm_pindex_t pindex, int allocflags,
     vm_page_t *ma, int count);
+int vm_page_grab_pages_unlocked(vm_object_t object, vm_pindex_t pindex,
+    int allocflags, vm_page_t *ma, int count);
 int vm_page_grab_valid(vm_page_t *mp, vm_object_t object, vm_pindex_t pindex,
     int allocflags);
+int vm_page_grab_valid_unlocked(vm_page_t *mp, vm_object_t object,
+    vm_pindex_t pindex, int allocflags);
 void vm_page_deactivate(vm_page_t);
 void vm_page_deactivate_noreuse(vm_page_t);
 void vm_page_dequeue(vm_page_t m);
@@ -625,7 +634,7 @@ void vm_page_initfake(vm_page_t m, vm_paddr_t paddr, vm_memattr_t memattr);
 int vm_page_insert (vm_page_t, vm_object_t, vm_pindex_t);
 void vm_page_invalid(vm_page_t m);
 void vm_page_launder(vm_page_t m);
-vm_page_t vm_page_lookup (vm_object_t, vm_pindex_t);
+vm_page_t vm_page_lookup(vm_object_t, vm_pindex_t);
 vm_page_t vm_page_next(vm_page_t m);
 void vm_page_pqbatch_drain(void);
 void vm_page_pqbatch_submit(vm_page_t m, uint8_t queue);
@@ -644,6 +653,7 @@ void vm_page_reference(vm_page_t m);
 #define	VPR_NOREUSE	0x02
 void vm_page_release(vm_page_t m, int flags);
 void vm_page_release_locked(vm_page_t m, int flags);
+vm_page_t vm_page_relookup(vm_object_t, vm_pindex_t);
 bool vm_page_remove(vm_page_t);
 bool vm_page_remove_xbusy(vm_page_t);
 int vm_page_rename(vm_page_t, vm_object_t, vm_pindex_t);
@@ -701,9 +711,11 @@ void vm_page_lock_assert_KBI(vm_page_t m, int a, const char *file, int line);
 	    (m), __FILE__, __LINE__))
 
 #define	vm_page_assert_unbusied(m)					\
-	KASSERT(!vm_page_busied(m),					\
-	    ("vm_page_assert_unbusied: page %p busy @ %s:%d",		\
-	    (m), __FILE__, __LINE__))
+	KASSERT((m->busy_lock & ~VPB_BIT_WAITERS) != 			\
+	    VPB_CURTHREAD_EXCLUSIVE,					\
+	    ("vm_page_assert_xbusied: page %p busy_lock %#x owned"	\
+            " by me @ %s:%d",						\
+	    (m), (m)->busy_lock, __FILE__, __LINE__));			\
 
 #define	vm_page_assert_xbusied_unchecked(m) do {			\
 	KASSERT(vm_page_xbusied(m),					\
@@ -731,6 +743,9 @@ void vm_page_lock_assert_KBI(vm_page_t m, int a, const char *file, int line);
 #define	vm_page_xbusied(m)						\
 	(((m)->busy_lock & VPB_SINGLE_EXCLUSIVE) != 0)
 
+#define	vm_page_busy_freed(m)						\
+	((m)->busy_lock == VPB_FREED)
+
 #define	vm_page_xbusy(m) do {						\
 	if (!vm_page_tryxbusy(m))					\
 		panic("%s: page %p failed exclusive busying", __func__,	\
@@ -755,9 +770,14 @@ void vm_page_object_busy_assert(vm_page_t m);
 void vm_page_assert_pga_writeable(vm_page_t m, uint16_t bits);
 #define	VM_PAGE_ASSERT_PGA_WRITEABLE(m, bits)				\
 	vm_page_assert_pga_writeable(m, bits)
+#define	vm_page_xbusy_claim(m) do {					\
+	vm_page_assert_xbusied_unchecked((m));				\
+	(m)->busy_lock = VPB_CURTHREAD_EXCLUSIVE;			\
+} while (0)
 #else
 #define	VM_PAGE_OBJECT_BUSY_ASSERT(m)	(void)0
 #define	VM_PAGE_ASSERT_PGA_WRITEABLE(m, bits)	(void)0
+#define	vm_page_xbusy_claim(m)
 #endif
 
 #if BYTE_ORDER == BIG_ENDIAN
@@ -938,8 +958,8 @@ vm_page_drop(vm_page_t m, u_int val)
  *
  *	Perform a racy check to determine whether a reference prevents the page
  *	from being reclaimable.  If the page's object is locked, and the page is
- *	unmapped and unbusied or exclusively busied by the current thread, no
- *	new wirings may be created.
+ *	unmapped and exclusively busied by the current thread, no new wirings
+ *	may be created.
  */
 static inline bool
 vm_page_wired(vm_page_t m)

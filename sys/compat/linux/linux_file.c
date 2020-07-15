@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/filedesc.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
@@ -54,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/vnode.h>
 
 #ifdef COMPAT_LINUX32
+#include <compat/freebsd32/freebsd32_misc.h>
 #include <machine/../linux32/linux.h>
 #include <machine/../linux32/linux32_proto.h>
 #else
@@ -67,6 +69,36 @@ __FBSDID("$FreeBSD$");
 static int	linux_common_open(struct thread *, int, char *, int, int);
 static int	linux_getdents_error(struct thread *, int, int);
 
+static struct bsd_to_linux_bitmap seal_bitmap[] = {
+	BITMAP_1t1_LINUX(F_SEAL_SEAL),
+	BITMAP_1t1_LINUX(F_SEAL_SHRINK),
+	BITMAP_1t1_LINUX(F_SEAL_GROW),
+	BITMAP_1t1_LINUX(F_SEAL_WRITE),
+};
+
+#define	MFD_HUGETLB_ENTRY(_size)					\
+	{								\
+		.bsd_value = MFD_HUGE_##_size,				\
+		.linux_value = LINUX_HUGETLB_FLAG_ENCODE_##_size	\
+	}
+static struct bsd_to_linux_bitmap mfd_bitmap[] = {
+	BITMAP_1t1_LINUX(MFD_CLOEXEC),
+	BITMAP_1t1_LINUX(MFD_ALLOW_SEALING),
+	BITMAP_1t1_LINUX(MFD_HUGETLB),
+	MFD_HUGETLB_ENTRY(64KB),
+	MFD_HUGETLB_ENTRY(512KB),
+	MFD_HUGETLB_ENTRY(1MB),
+	MFD_HUGETLB_ENTRY(2MB),
+	MFD_HUGETLB_ENTRY(8MB),
+	MFD_HUGETLB_ENTRY(16MB),
+	MFD_HUGETLB_ENTRY(32MB),
+	MFD_HUGETLB_ENTRY(256MB),
+	MFD_HUGETLB_ENTRY(512MB),
+	MFD_HUGETLB_ENTRY(1GB),
+	MFD_HUGETLB_ENTRY(2GB),
+	MFD_HUGETLB_ENTRY(16GB),
+};
+#undef MFD_HUGETLB_ENTRY
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
@@ -113,7 +145,7 @@ linux_common_open(struct thread *td, int dirfd, char *path, int l_flags, int mod
 		bsd_flags |= O_CLOEXEC;
 	if (l_flags & LINUX_O_NONBLOCK)
 		bsd_flags |= O_NONBLOCK;
-	if (l_flags & LINUX_FASYNC)
+	if (l_flags & LINUX_O_ASYNC)
 		bsd_flags |= O_ASYNC;
 	if (l_flags & LINUX_O_CREAT)
 		bsd_flags |= O_CREAT;
@@ -820,7 +852,6 @@ linux_truncate(struct thread *td, struct linux_truncate_args *args)
 	int error;
 
 	LCONVPATHEXIST(td, args->path, &path);
-
 	error = kern_truncate(td, path, UIO_SYSSPACE, args->length);
 	LFREEPATH(path);
 	return (error);
@@ -831,11 +862,17 @@ int
 linux_truncate64(struct thread *td, struct linux_truncate64_args *args)
 {
 	char *path;
+	off_t length;
 	int error;
 
-	LCONVPATHEXIST(td, args->path, &path);
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	length = PAIR32TO64(off_t, args->length);
+#else
+	length = args->length;
+#endif
 
-	error = kern_truncate(td, path, UIO_SYSSPACE, args->length);
+	LCONVPATHEXIST(td, args->path, &path);
+	error = kern_truncate(td, path, UIO_SYSSPACE, length);
 	LFREEPATH(path);
 	return (error);
 }
@@ -847,6 +884,22 @@ linux_ftruncate(struct thread *td, struct linux_ftruncate_args *args)
 
 	return (kern_ftruncate(td, args->fd, args->length));
 }
+
+#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
+int
+linux_ftruncate64(struct thread *td, struct linux_ftruncate64_args *args)
+{
+	off_t length;
+
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	length = PAIR32TO64(off_t, args->length);
+#else
+	length = args->length;
+#endif
+
+	return (kern_ftruncate(td, args->fd, length));
+}
+#endif
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
@@ -908,8 +961,17 @@ linux_fdatasync(struct thread *td, struct linux_fdatasync_args *uap)
 int
 linux_sync_file_range(struct thread *td, struct linux_sync_file_range_args *uap)
 {
+	off_t nbytes, offset;
 
-	if (uap->offset < 0 || uap->nbytes < 0 ||
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	nbytes = PAIR32TO64(off_t, uap->nbytes);
+	offset = PAIR32TO64(off_t, uap->offset);
+#else
+	nbytes = uap->nbytes;
+	offset = uap->offset;
+#endif
+
+	if (offset < 0 || nbytes < 0 ||
 	    (uap->flags & ~(LINUX_SYNC_FILE_RANGE_WAIT_BEFORE |
 	    LINUX_SYNC_FILE_RANGE_WRITE |
 	    LINUX_SYNC_FILE_RANGE_WAIT_AFTER)) != 0) {
@@ -923,18 +985,23 @@ int
 linux_pread(struct thread *td, struct linux_pread_args *uap)
 {
 	struct vnode *vp;
+	off_t offset;
 	int error;
 
-	error = kern_pread(td, uap->fd, uap->buf, uap->nbyte, uap->offset);
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	offset = PAIR32TO64(off_t, uap->offset);
+#else
+	offset = uap->offset;
+#endif
+
+	error = kern_pread(td, uap->fd, uap->buf, uap->nbyte, offset);
 	if (error == 0) {
 		/* This seems to violate POSIX but Linux does it. */
 		error = fgetvp(td, uap->fd, &cap_pread_rights, &vp);
 		if (error != 0)
 			return (error);
-		if (vp->v_type == VDIR) {
-			vrele(vp);
-			return (EISDIR);
-		}
+		if (vp->v_type == VDIR)
+			error = EISDIR;
 		vrele(vp);
 	}
 	return (error);
@@ -943,8 +1010,15 @@ linux_pread(struct thread *td, struct linux_pread_args *uap)
 int
 linux_pwrite(struct thread *td, struct linux_pwrite_args *uap)
 {
+	off_t offset;
 
-	return (kern_pwrite(td, uap->fd, uap->buf, uap->nbyte, uap->offset));
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	offset = PAIR32TO64(off_t, uap->offset);
+#else
+	offset = uap->offset;
+#endif
+
+	return (kern_pwrite(td, uap->fd, uap->buf, uap->nbyte, offset));
 }
 
 int
@@ -1065,11 +1139,8 @@ out:
 int
 linux_oldumount(struct thread *td, struct linux_oldumount_args *args)
 {
-	struct linux_umount_args args2;
 
-	args2.path = args->path;
-	args2.flags = 0;
-	return (linux_umount(td, &args2));
+	return (kern_unmount(td, args->path, 0));
 }
 #endif /* __i386__ || (__amd64__ && COMPAT_LINUX32) */
 
@@ -1077,11 +1148,19 @@ linux_oldumount(struct thread *td, struct linux_oldumount_args *args)
 int
 linux_umount(struct thread *td, struct linux_umount_args *args)
 {
-	struct unmount_args bsd;
+	int flags;
 
-	bsd.path = args->path;
-	bsd.flags = args->flags;	/* XXX correct? */
-	return (sys_unmount(td, &bsd));
+	flags = 0;
+	if ((args->flags & LINUX_MNT_FORCE) != 0) {
+		args->flags &= ~LINUX_MNT_FORCE;
+		flags |= MNT_FORCE;
+	}
+	if (args->flags != 0) {
+		linux_msg(td, "unsupported umount2 flags %#x", args->flags);
+		return (EINVAL);
+	}
+
+	return (kern_unmount(td, args->path, flags));
 }
 #endif
 
@@ -1239,7 +1318,7 @@ fcntl_common(struct thread *td, struct linux_fcntl_args *args)
 		if (result & O_FSYNC)
 			td->td_retval[0] |= LINUX_O_SYNC;
 		if (result & O_ASYNC)
-			td->td_retval[0] |= LINUX_FASYNC;
+			td->td_retval[0] |= LINUX_O_ASYNC;
 #ifdef LINUX_O_NOFOLLOW
 		if (result & O_NOFOLLOW)
 			td->td_retval[0] |= LINUX_O_NOFOLLOW;
@@ -1258,7 +1337,7 @@ fcntl_common(struct thread *td, struct linux_fcntl_args *args)
 			arg |= O_APPEND;
 		if (args->arg & LINUX_O_SYNC)
 			arg |= O_FSYNC;
-		if (args->arg & LINUX_FASYNC)
+		if (args->arg & LINUX_O_ASYNC)
 			arg |= O_ASYNC;
 #ifdef LINUX_O_NOFOLLOW
 		if (args->arg & LINUX_O_NOFOLLOW)
@@ -1324,9 +1403,25 @@ fcntl_common(struct thread *td, struct linux_fcntl_args *args)
 
 	case LINUX_F_DUPFD_CLOEXEC:
 		return (kern_fcntl(td, args->fd, F_DUPFD_CLOEXEC, args->arg));
-	}
+	/*
+	 * Our F_SEAL_* values match Linux one for maximum compatibility.  So we
+	 * only needed to account for different values for fcntl(2) commands.
+	 */
+	case LINUX_F_GET_SEALS:
+		error = kern_fcntl(td, args->fd, F_GET_SEALS, 0);
+		if (error != 0)
+			return (error);
+		td->td_retval[0] = bsd_to_linux_bits(td->td_retval[0],
+		    seal_bitmap, 0);
+		return (0);
 
-	return (EINVAL);
+	case LINUX_F_ADD_SEALS:
+		return (kern_fcntl(td, args->fd, F_ADD_SEALS,
+		    linux_to_bsd_bits(args->arg, seal_bitmap, 0)));
+	default:
+		linux_msg(td, "unsupported fcntl cmd %d\n", args->cmd);
+		return (EINVAL);
+	}
 }
 
 int
@@ -1461,26 +1556,40 @@ convert_fadvice(int advice)
 int
 linux_fadvise64(struct thread *td, struct linux_fadvise64_args *args)
 {
+	off_t offset;
 	int advice;
+
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	offset = PAIR32TO64(off_t, args->offset);
+#else
+	offset = args->offset;
+#endif
 
 	advice = convert_fadvice(args->advice);
 	if (advice == -1)
 		return (EINVAL);
-	return (kern_posix_fadvise(td, args->fd, args->offset, args->len,
-	    advice));
+	return (kern_posix_fadvise(td, args->fd, offset, args->len, advice));
 }
 
 #if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
 int
 linux_fadvise64_64(struct thread *td, struct linux_fadvise64_64_args *args)
 {
+	off_t len, offset;
 	int advice;
+
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	len = PAIR32TO64(off_t, args->len);
+	offset = PAIR32TO64(off_t, args->offset);
+#else
+	len = args->len;
+	offset = args->offset;
+#endif
 
 	advice = convert_fadvice(args->advice);
 	if (advice == -1)
 		return (EINVAL);
-	return (kern_posix_fadvise(td, args->fd, args->offset, args->len,
-	    advice));
+	return (kern_posix_fadvise(td, args->fd, offset, len, advice));
 }
 #endif /* __i386__ || (__amd64__ && COMPAT_LINUX32) */
 
@@ -1554,6 +1663,7 @@ linux_dup3(struct thread *td, struct linux_dup3_args *args)
 int
 linux_fallocate(struct thread *td, struct linux_fallocate_args *args)
 {
+	off_t len, offset;
 
 	/*
 	 * We emulate only posix_fallocate system call for which
@@ -1562,8 +1672,15 @@ linux_fallocate(struct thread *td, struct linux_fallocate_args *args)
 	if (args->mode != 0)
 		return (ENOSYS);
 
-	return (kern_posix_fallocate(td, args->fd, args->offset,
-	    args->len));
+#if defined(__amd64__) && defined(COMPAT_LINUX32)
+	len = PAIR32TO64(off_t, args->len);
+	offset = PAIR32TO64(off_t, args->offset);
+#else
+	len = args->len;
+	offset = args->offset;
+#endif
+
+	return (kern_posix_fallocate(td, args->fd, offset, len));
 }
 
 int
@@ -1606,3 +1723,46 @@ linux_copy_file_range(struct thread *td, struct linux_copy_file_range_args
 	return (error);
 }
 
+#define	LINUX_MEMFD_PREFIX	"memfd:"
+
+int
+linux_memfd_create(struct thread *td, struct linux_memfd_create_args *args)
+{
+	char memfd_name[LINUX_NAME_MAX + 1];
+	int error, flags, shmflags, oflags;
+
+	/*
+	 * This is our clever trick to avoid the heap allocation to copy in the
+	 * uname.  We don't really need to go this far out of our way, but it
+	 * does keep the rest of this function fairly clean as they don't have
+	 * to worry about cleanup on the way out.
+	 */
+	error = copyinstr(args->uname_ptr,
+	    memfd_name + sizeof(LINUX_MEMFD_PREFIX) - 1,
+	    LINUX_NAME_MAX - sizeof(LINUX_MEMFD_PREFIX) - 1, NULL);
+	if (error != 0) {
+		if (error == ENAMETOOLONG)
+			error = EINVAL;
+		return (error);
+	}
+
+	memcpy(memfd_name, LINUX_MEMFD_PREFIX, sizeof(LINUX_MEMFD_PREFIX) - 1);
+	flags = linux_to_bsd_bits(args->flags, mfd_bitmap, 0);
+	if ((flags & ~(MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_HUGETLB |
+	    MFD_HUGE_MASK)) != 0)
+		return (EINVAL);
+	/* Size specified but no HUGETLB. */
+	if ((flags & MFD_HUGE_MASK) != 0 && (flags & MFD_HUGETLB) == 0)
+		return (EINVAL);
+	/* We don't actually support HUGETLB. */
+	if ((flags & MFD_HUGETLB) != 0)
+		return (ENOSYS);
+	oflags = O_RDWR;
+	shmflags = SHM_GROW_ON_WRITE;
+	if ((flags & MFD_CLOEXEC) != 0)
+		oflags |= O_CLOEXEC;
+	if ((flags & MFD_ALLOW_SEALING) != 0)
+		shmflags |= SHM_ALLOW_SEALING;
+	return (kern_shm_open2(td, SHM_ANON, oflags, 0, shmflags, NULL,
+	    memfd_name));
+}

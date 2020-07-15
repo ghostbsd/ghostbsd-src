@@ -125,9 +125,28 @@ elf_is_ifunc_reloc(Elf_Size r_info __unused)
 }
 
 static int
-elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
-    int type, int local, elf_lookup_fn lookup)
+reloc_instr_imm(Elf32_Addr *where, Elf_Addr val, u_int msb, u_int lsb)
 {
+
+	/* Check bounds: upper bits must be all ones or all zeros. */
+	if ((uint64_t)((int64_t)val >> (msb + 1)) + 1 > 1)
+		return (-1);
+	val >>= lsb;
+	val &= (1 << (msb - lsb + 1)) - 1;
+	*where |= (Elf32_Addr)val;
+	return (0);
+}
+
+/*
+ * Process a relocation.  Support for some static relocations is required
+ * in order for the -zifunc-noplt optimization to work.
+ */
+static int
+elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
+    int type, int flags, elf_lookup_fn lookup)
+{
+#define	ARM64_ELF_RELOC_LOCAL		(1 << 0)
+#define	ARM64_ELF_RELOC_LATE_IFUNC	(1 << 1)
 	Elf_Addr *where, addr, addend, val;
 	Elf_Word rtype, symidx;
 	const Elf_Rel *rel;
@@ -153,15 +172,45 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		panic("unknown reloc type %d\n", type);
 	}
 
-	if (local) {
+	if ((flags & ARM64_ELF_RELOC_LATE_IFUNC) != 0) {
+		KASSERT(type == ELF_RELOC_RELA,
+		    ("Only RELA ifunc relocations are supported"));
+		if (rtype != R_AARCH64_IRELATIVE)
+			return (0);
+	}
+
+	if ((flags & ARM64_ELF_RELOC_LOCAL) != 0) {
 		if (rtype == R_AARCH64_RELATIVE)
 			*where = elf_relocaddr(lf, relocbase + addend);
 		return (0);
 	}
 
+	error = 0;
 	switch (rtype) {
 	case R_AARCH64_NONE:
 	case R_AARCH64_RELATIVE:
+		break;
+	case R_AARCH64_TSTBR14:
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
+			return (-1);
+		error = reloc_instr_imm((Elf32_Addr *)where,
+		    addr + addend - (Elf_Addr)where, 15, 2);
+		break;
+	case R_AARCH64_CONDBR19:
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
+			return (-1);
+		error = reloc_instr_imm((Elf32_Addr *)where,
+		    addr + addend - (Elf_Addr)where, 20, 2);
+		break;
+	case R_AARCH64_JUMP26:
+	case R_AARCH64_CALL26:
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
+			return (-1);
+		error = reloc_instr_imm((Elf32_Addr *)where,
+		    addr + addend - (Elf_Addr)where, 27, 2);
 		break;
 	case R_AARCH64_ABS64:
 	case R_AARCH64_GLOB_DAT:
@@ -181,7 +230,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		printf("kldload: unexpected relocation type %d\n", rtype);
 		return (-1);
 	}
-	return (0);
+	return (error);
 }
 
 int
@@ -189,7 +238,8 @@ elf_reloc_local(linker_file_t lf, Elf_Addr relocbase, const void *data,
     int type, elf_lookup_fn lookup)
 {
 
-	return (elf_reloc_internal(lf, relocbase, data, type, 1, lookup));
+	return (elf_reloc_internal(lf, relocbase, data, type,
+	    ARM64_ELF_RELOC_LOCAL, lookup));
 }
 
 /* Process one elf relocation with addend. */
@@ -199,6 +249,15 @@ elf_reloc(linker_file_t lf, Elf_Addr relocbase, const void *data, int type,
 {
 
 	return (elf_reloc_internal(lf, relocbase, data, type, 0, lookup));
+}
+
+int
+elf_reloc_late(linker_file_t lf, Elf_Addr relocbase, const void *data,
+    int type, elf_lookup_fn lookup)
+{
+
+	return (elf_reloc_internal(lf, relocbase, data, type,
+	    ARM64_ELF_RELOC_LATE_IFUNC, lookup));
 }
 
 int
@@ -218,7 +277,7 @@ elf_cpu_unload_file(linker_file_t lf __unused)
 }
 
 int
-elf_cpu_parse_dynamic(linker_file_t lf __unused, Elf_Dyn *dynamic __unused)
+elf_cpu_parse_dynamic(caddr_t loadbase __unused, Elf_Dyn *dynamic __unused)
 {
 
 	return (0);

@@ -48,6 +48,7 @@
 #include <sys/mouse.h>
 #include <sys/terminal.h>
 #include <sys/sysctl.h>
+#include <sys/font.h>
 
 #include "opt_syscons.h"
 #include "opt_splash.h"
@@ -231,6 +232,7 @@ void vtbuf_scroll_mode(struct vt_buf *vb, int yes);
 void vtbuf_dirty(struct vt_buf *vb, const term_rect_t *area);
 void vtbuf_undirty(struct vt_buf *, term_rect_t *);
 void vtbuf_sethistory_size(struct vt_buf *, unsigned int);
+void vtbuf_clearhistory(struct vt_buf *);
 int vtbuf_iscursor(const struct vt_buf *vb, int row, int col);
 void vtbuf_cursor_visibility(struct vt_buf *, int);
 #ifndef SC_NO_CUTPASTE
@@ -398,30 +400,6 @@ void vt_upgrade(struct vt_device *vd);
 
 /* name argument is not used yet. */
 #define VT_DRIVER_DECLARE(name, drv) DATA_SET(vt_drv_set, drv)
-
-/*
- * Fonts.
- *
- * Remapping tables are used to map Unicode points to glyphs.  They need
- * to be sorted, because vtfont_lookup() performs a binary search.  Each
- * font has two remapping tables, for normal and bold.  When a character
- * is not present in bold, it uses a normal glyph.  When no glyph is
- * available, it uses glyph 0, which is normally equal to U+FFFD.
- */
-
-struct vt_font_map {
-	uint32_t		 vfm_src;
-	uint16_t		 vfm_dst;
-	uint16_t		 vfm_len;
-};
-
-struct vt_font {
-	struct vt_font_map	*vf_map[VFNT_MAPS];
-	uint8_t			*vf_bytes;
-	unsigned int		 vf_height, vf_width;
-	unsigned int		 vf_map_count[VFNT_MAPS];
-	unsigned int		 vf_refcount;
-};
 
 #ifndef SC_NO_CUTPASTE
 struct vt_mouse_cursor {

@@ -538,8 +538,8 @@ cpuctl_do_eval_cpu_features(int cpu, struct thread *td)
 	set_cpu(cpu, td);
 	identify_cpu1();
 	identify_cpu2();
-	hw_ibrs_recalculate();
 	restore_cpu(oldcpu, is_bound, td);
+	hw_ibrs_recalculate(true);
 	hw_ssb_recalculate(true);
 #ifdef __amd64__
 	amd64_syscall_ret_flush_l1d_recalc();
@@ -547,6 +547,7 @@ cpuctl_do_eval_cpu_features(int cpu, struct thread *td)
 #endif
 	hw_mds_recalculate();
 	x86_taa_recalculate();
+	x86_rngds_mitg_recalculate(true);
 	printcpuinfo();
 	return (0);
 }

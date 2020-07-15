@@ -41,7 +41,6 @@ __FBSDID("$FreeBSD$");
  * the nfs op functions. They do things like create the rpc header and
  * copy data between mbuf chains and uio lists.
  */
-#ifndef APPLEKEXT
 #include <fs/nfs/nfsport.h>
 
 extern struct nfsstatsv1 nfsstatsv1;
@@ -49,7 +48,6 @@ extern int ncl_mbuf_mlen;
 extern enum vtype newnv2tov_type[8];
 extern enum vtype nv34tov_type[8];
 NFSCLSTATEMUTEX;
-#endif	/* !APPLEKEXT */
 
 static nfsuint64 nfs_nullcookie = {{ 0, 0 }};
 
@@ -57,14 +55,14 @@ static nfsuint64 nfs_nullcookie = {{ 0, 0 }};
  * copies a uio scatter/gather list to an mbuf chain.
  * NOTE: can ony handle iovcnt == 1
  */
-APPLESTATIC void
+void
 nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 {
 	char *uiocp;
 	struct mbuf *mp, *mp2;
 	int xfer, left, mlen;
 	int uiosiz, clflg, rem;
-	char *cp, *tcp;
+	char *mcp, *tcp;
 
 	KASSERT(uiop->uio_iovcnt == 1, ("nfsm_uiotombuf: iovcnt != 1"));
 
@@ -74,42 +72,52 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 		clflg = 0;
 	rem = NFSM_RNDUP(siz) - siz;
 	mp = mp2 = nd->nd_mb;
+	mcp = nd->nd_bpos;
 	while (siz > 0) {
+		KASSERT((nd->nd_flag & ND_EXTPG) != 0 || mcp ==
+		    mtod(mp, char *) + mp->m_len, ("nfsm_uiombuf: mcp wrong"));
 		left = uiop->uio_iov->iov_len;
 		uiocp = uiop->uio_iov->iov_base;
 		if (left > siz)
 			left = siz;
 		uiosiz = left;
 		while (left > 0) {
-			mlen = M_TRAILINGSPACE(mp);
-			if (mlen == 0) {
-				if (clflg)
-					NFSMCLGET(mp, M_WAITOK);
-				else
-					NFSMGET(mp);
-				mbuf_setlen(mp, 0);
-				mbuf_setnext(mp2, mp);
-				mp2 = mp;
+			if ((nd->nd_flag & ND_EXTPG) != 0)
+				mlen = nd->nd_bextpgsiz;
+			else
 				mlen = M_TRAILINGSPACE(mp);
+			if (mlen == 0) {
+				if ((nd->nd_flag & ND_EXTPG) != 0) {
+					mp = nfsm_add_ext_pgs(mp,
+					    nd->nd_maxextsiz, &nd->nd_bextpg);
+					mcp = (char *)(void *)PHYS_TO_DMAP(
+					  mp->m_epg_pa[nd->nd_bextpg]);
+					nd->nd_bextpgsiz = PAGE_SIZE;
+				} else {
+					if (clflg)
+						NFSMCLGET(mp, M_WAITOK);
+					else
+						NFSMGET(mp);
+					mp->m_len = 0;
+					mlen = M_TRAILINGSPACE(mp);
+					mcp = mtod(mp, char *);
+					mp2->m_next = mp;
+					mp2 = mp;
+				}
 			}
 			xfer = (left > mlen) ? mlen : left;
-#ifdef notdef
-			/* Not Yet.. */
-			if (uiop->uio_iov->iov_op != NULL)
-				(*(uiop->uio_iov->iov_op))
-				(uiocp, NFSMTOD(mp, caddr_t) + mbuf_len(mp),
-				    xfer);
-			else
-#endif
 			if (uiop->uio_segflg == UIO_SYSSPACE)
-			    NFSBCOPY(uiocp, NFSMTOD(mp, caddr_t) + mbuf_len(mp),
-				xfer);
+				NFSBCOPY(uiocp, mcp, xfer);
 			else
-			    copyin(CAST_USER_ADDR_T(uiocp), NFSMTOD(mp, caddr_t)
-				+ mbuf_len(mp), xfer);
-			mbuf_setlen(mp, mbuf_len(mp) + xfer);
+				copyin(uiocp, mcp, xfer);
+			mp->m_len += xfer;
 			left -= xfer;
 			uiocp += xfer;
+			mcp += xfer;
+			if ((nd->nd_flag & ND_EXTPG) != 0) {
+				nd->nd_bextpgsiz -= xfer;
+				mp->m_epg_last_len += xfer;
+			}
 			uiop->uio_offset += xfer;
 			uiop->uio_resid -= xfer;
 		}
@@ -120,18 +128,29 @@ nfsm_uiombuf(struct nfsrv_descript *nd, struct uio *uiop, int siz)
 		siz -= uiosiz;
 	}
 	if (rem > 0) {
-		if (rem > M_TRAILINGSPACE(mp)) {
+		if ((nd->nd_flag & ND_EXTPG) == 0 && rem >
+		    M_TRAILINGSPACE(mp)) {
 			NFSMGET(mp);
-			mbuf_setlen(mp, 0);
-			mbuf_setnext(mp2, mp);
+			mp->m_len = 0;
+			mp2->m_next = mp;
+			mcp = mtod(mp, char *);
+		} else if ((nd->nd_flag & ND_EXTPG) != 0 && rem >
+		    nd->nd_bextpgsiz) {
+			mp = nfsm_add_ext_pgs(mp, nd->nd_maxextsiz,
+			    &nd->nd_bextpg);
+			mcp = (char *)(void *)
+			    PHYS_TO_DMAP(mp->m_epg_pa[nd->nd_bextpg]);
+			nd->nd_bextpgsiz = PAGE_SIZE;
 		}
-		cp = NFSMTOD(mp, caddr_t) + mbuf_len(mp);
 		for (left = 0; left < rem; left++)
-			*cp++ = '\0';
-		mbuf_setlen(mp, mbuf_len(mp) + rem);
-		nd->nd_bpos = cp;
-	} else
-		nd->nd_bpos = NFSMTOD(mp, caddr_t) + mbuf_len(mp);
+			*mcp++ = '\0';
+		mp->m_len += rem;
+		if ((nd->nd_flag & ND_EXTPG) != 0) {
+			nd->nd_bextpgsiz -= rem;
+			mp->m_epg_last_len += rem;
+		}
+	}
+	nd->nd_bpos = mcp;
 	nd->nd_mb = mp;
 }
 
@@ -159,7 +178,7 @@ nfsm_uiombuflist(struct uio *uiop, int siz, struct mbuf **mbp, char **cpp)
 		NFSMCLGET(mp, M_WAITOK);
 	else
 		NFSMGET(mp);
-	mbuf_setlen(mp, 0);
+	mp->m_len = 0;
 	firstmp = mp2 = mp;
 	while (siz > 0) {
 		left = uiop->uio_iov->iov_len;
@@ -174,19 +193,19 @@ nfsm_uiombuflist(struct uio *uiop, int siz, struct mbuf **mbp, char **cpp)
 					NFSMCLGET(mp, M_WAITOK);
 				else
 					NFSMGET(mp);
-				mbuf_setlen(mp, 0);
-				mbuf_setnext(mp2, mp);
+				mp->m_len = 0;
+				mp2->m_next = mp;
 				mp2 = mp;
 				mlen = M_TRAILINGSPACE(mp);
 			}
 			xfer = (left > mlen) ? mlen : left;
 			if (uiop->uio_segflg == UIO_SYSSPACE)
-				NFSBCOPY(uiocp, NFSMTOD(mp, caddr_t) +
-				    mbuf_len(mp), xfer);
+				NFSBCOPY(uiocp, mtod(mp, caddr_t) +
+				    mp->m_len, xfer);
 			else
-				copyin(uiocp, NFSMTOD(mp, caddr_t) +
-				    mbuf_len(mp), xfer);
-			mbuf_setlen(mp, mbuf_len(mp) + xfer);
+				copyin(uiocp, mtod(mp, caddr_t) +
+				    mp->m_len, xfer);
+			mp->m_len += xfer;
 			left -= xfer;
 			uiocp += xfer;
 			uiop->uio_offset += xfer;
@@ -199,7 +218,7 @@ nfsm_uiombuflist(struct uio *uiop, int siz, struct mbuf **mbp, char **cpp)
 		siz -= uiosiz;
 	}
 	if (cpp != NULL)
-		*cpp = NFSMTOD(mp, caddr_t) + mbuf_len(mp);
+		*cpp = mtod(mp, caddr_t) + mp->m_len;
 	if (mbp != NULL)
 		*mbp = mp;
 	return (firstmp);
@@ -209,7 +228,7 @@ nfsm_uiombuflist(struct uio *uiop, int siz, struct mbuf **mbp, char **cpp)
  * Load vnode attributes from the xdr file attributes.
  * Returns EBADRPC if they can't be parsed, 0 otherwise.
  */
-APPLESTATIC int
+int
 nfsm_loadattr(struct nfsrv_descript *nd, struct nfsvattr *nap)
 {
 	struct nfs_fattr *fp;
@@ -276,7 +295,7 @@ nfsmout:
  * This function finds the directory cookie that corresponds to the
  * logical byte offset given.
  */
-APPLESTATIC nfsuint64 *
+nfsuint64 *
 nfscl_getcookie(struct nfsnode *np, off_t off, int add)
 {
 	struct nfsdmap *dp, *dp2;
@@ -328,7 +347,7 @@ nfscl_getcookie(struct nfsnode *np, off_t off, int add)
  * the file handle and the file's attributes.
  * For V4, it assumes that Getfh and Getattr Op's results are here.
  */
-APPLESTATIC int
+int
 nfscl_mtofh(struct nfsrv_descript *nd, struct nfsfh **nfhpp,
     struct nfsvattr *nap, int *attrflagp)
 {
@@ -389,7 +408,7 @@ nfsmout:
 /*
  * Initialize the owner/delegation sleep lock.
  */
-APPLESTATIC void
+void
 nfscl_lockinit(struct nfsv4lock *lckp)
 {
 
@@ -401,7 +420,7 @@ nfscl_lockinit(struct nfsv4lock *lckp)
  * Get an exclusive lock. (Not needed for OpenBSD4, since there is only one
  * thread for each posix process in the kernel.)
  */
-APPLESTATIC void
+void
 nfscl_lockexcl(struct nfsv4lock *lckp, void *mutex)
 {
 	int igotlock;
@@ -414,7 +433,7 @@ nfscl_lockexcl(struct nfsv4lock *lckp, void *mutex)
 /*
  * Release an exclusive lock.
  */
-APPLESTATIC void
+void
 nfscl_lockunlock(struct nfsv4lock *lckp)
 {
 
@@ -424,7 +443,7 @@ nfscl_lockunlock(struct nfsv4lock *lckp)
 /*
  * Called to derefernce a lock on a stateid (delegation or open owner).
  */
-APPLESTATIC void
+void
 nfscl_lockderef(struct nfsv4lock *lckp)
 {
 

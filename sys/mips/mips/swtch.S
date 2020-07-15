@@ -383,8 +383,11 @@ sw2:
  * Note that this code is removed if the CPU doesn't support ULRI by
  * remove_userlocal_code() in cpu.c.
  */
+	.globl	cpu_switch_set_userlocal
+cpu_switch_set_userlocal:
 	PTR_L	t0, TD_MDTLS(a1)		# Get TLS pointer
-	PTR_L	t1, TD_MDTLS_TCB_OFFSET(a1)	# Get TLS/TCB offset
+	PTR_L	t1, TD_PROC(a1)
+	PTR_L	t1, P_MDTLS_TCB_OFFSET(t1)	# Get TLS/TCB offset
 	PTR_ADDU v0, t0, t1
 	MTC0	v0, MIPS_COP_0_USERLOCAL, 2	# write it to ULR for rdhwr
 

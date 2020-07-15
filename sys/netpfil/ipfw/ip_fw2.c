@@ -64,6 +64,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 #include <net/pfil.h>
 #include <net/vnet.h>
 
@@ -179,7 +180,8 @@ static int sysctl_ipfw_tables_sets(SYSCTL_HANDLER_ARGS);
 
 SYSBEGIN(f3)
 
-SYSCTL_NODE(_net_inet_ip, OID_AUTO, fw, CTLFLAG_RW, 0, "Firewall");
+SYSCTL_NODE(_net_inet_ip, OID_AUTO, fw, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Firewall");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, one_pass,
     CTLFLAG_VNET | CTLFLAG_RW | CTLFLAG_SECURE3, &VNET_NAME(fw_one_pass), 0,
     "Only do a single pass through ipfw when using dummynet(4)");
@@ -196,10 +198,11 @@ SYSCTL_UINT(_net_inet_ip_fw, OID_AUTO, default_rule, CTLFLAG_RD,
     &dummy_def, 0,
     "The default/max possible rule number.");
 SYSCTL_PROC(_net_inet_ip_fw, OID_AUTO, tables_max,
-    CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW, 0, 0, sysctl_ipfw_table_num, "IU",
+    CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    0, 0, sysctl_ipfw_table_num, "IU",
     "Maximum number of concurrently used tables");
 SYSCTL_PROC(_net_inet_ip_fw, OID_AUTO, tables_sets,
-    CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW,
+    CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     0, 0, sysctl_ipfw_tables_sets, "IU",
     "Use per-set namespace for tables");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, default_to_accept, CTLFLAG_RDTUN,
@@ -212,7 +215,8 @@ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, static_count,
 
 #ifdef INET6
 SYSCTL_DECL(_net_inet6_ip6);
-SYSCTL_NODE(_net_inet6_ip6, OID_AUTO, fw, CTLFLAG_RW, 0, "Firewall");
+SYSCTL_NODE(_net_inet6_ip6, OID_AUTO, fw, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Firewall");
 SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, deny_unknown_exthdrs,
     CTLFLAG_VNET | CTLFLAG_RW | CTLFLAG_SECURE,
     &VNET_NAME(fw_deny_unknown_exthdrs), 0,
@@ -463,9 +467,10 @@ verify_path(struct in_addr src, struct ifnet *ifp, u_int fib)
 #if defined(USERSPACE) || !defined(__FreeBSD__)
 	return 0;
 #else
-	struct nhop4_basic nh4;
+	struct nhop_object *nh;
 
-	if (fib4_lookup_nh_basic(fib, src, NHR_IFAIF, 0, &nh4) != 0)
+	nh = fib4_lookup(fib, src, 0, NHR_NONE, 0);
+	if (nh == NULL)
 		return (0);
 
 	/*
@@ -475,15 +480,15 @@ verify_path(struct in_addr src, struct ifnet *ifp, u_int fib)
 	 * routing entry (via lo0) for our own address
 	 * may exist, so we need to handle routing assymetry.
 	 */
-	if (ifp != NULL && ifp != nh4.nh_ifp)
+	if (ifp != NULL && ifp != nh->nh_aifp)
 		return (0);
 
 	/* if no ifp provided, check if rtentry is not default route */
-	if (ifp == NULL && (nh4.nh_flags & NHF_DEFAULT) != 0)
+	if (ifp == NULL && (nh->nh_flags & NHF_DEFAULT) != 0)
 		return (0);
 
 	/* or if this is a blackhole/reject route */
-	if (ifp == NULL && (nh4.nh_flags & (NHF_REJECT|NHF_BLACKHOLE)) != 0)
+	if (ifp == NULL && (nh->nh_flags & (NHF_REJECT|NHF_BLACKHOLE)) != 0)
 		return (0);
 
 	/* found valid route */
@@ -802,24 +807,25 @@ ipfw_localip6(struct in6_addr *in6)
 static int
 verify_path6(struct in6_addr *src, struct ifnet *ifp, u_int fib)
 {
-	struct nhop6_basic nh6;
+	struct nhop_object *nh;
 
 	if (IN6_IS_SCOPE_LINKLOCAL(src))
 		return (1);
 
-	if (fib6_lookup_nh_basic(fib, src, 0, NHR_IFAIF, 0, &nh6) != 0)
+	nh = fib6_lookup(fib, src, 0, NHR_NONE, 0);
+	if (nh == NULL)
 		return (0);
 
 	/* If ifp is provided, check for equality with route table. */
-	if (ifp != NULL && ifp != nh6.nh_ifp)
+	if (ifp != NULL && ifp != nh->nh_aifp)
 		return (0);
 
 	/* if no ifp provided, check if rtentry is not default route */
-	if (ifp == NULL && (nh6.nh_flags & NHF_DEFAULT) != 0)
+	if (ifp == NULL && (nh->nh_flags & NHF_DEFAULT) != 0)
 		return (0);
 
 	/* or if this is a blackhole/reject route */
-	if (ifp == NULL && (nh6.nh_flags & (NHF_REJECT|NHF_BLACKHOLE)) != 0)
+	if (ifp == NULL && (nh->nh_flags & (NHF_REJECT|NHF_BLACKHOLE)) != 0)
 		return (0);
 
 	/* found valid route */
@@ -934,7 +940,7 @@ send_reject6(struct ip_fw_args *args, int code, u_int hlen, struct ip6_hdr *ip6)
 				 * If the packet contains an ABORT chunk, don't
 				 * reply.
 				 * XXX: We should search through all chunks,
-				 *      but don't do to avoid attacks.
+				 * but do not do that to avoid attacks.
 				 */
 				v_tag = 0;
 				break;
@@ -1052,7 +1058,7 @@ send_reject(struct ip_fw_args *args, int code, int iplen, struct ip *ip)
 				 * If the packet contains an ABORT chunk, don't
 				 * reply.
 				 * XXX: We should search through all chunks,
-				 * but don't do to avoid attacks.
+				 * but do not do that to avoid attacks.
 				 */
 				v_tag = 0;
 				break;
@@ -2103,6 +2109,8 @@ do {								\
 					uint32_t v = 0;
 					match = ipfw_lookup_table(chain,
 					    cmd->arg1, 0, &args->f_id, &v);
+					if (!match)
+						break;
 					if (cmdlen == F_INSN_SIZE(ipfw_insn_u32))
 						match = ((ipfw_insn_u32 *)cmd)->d[0] ==
 						    TARG_VAL(chain, v, tag);
@@ -2220,7 +2228,7 @@ do {								\
 				break;
 
 			case O_IPVER:
-				match = (is_ipv4 &&
+				match = ((is_ipv4 || is_ipv6) &&
 				    cmd->arg1 == ip->ip_v);
 				break;
 

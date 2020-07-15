@@ -138,6 +138,7 @@ static fo_fill_kinfo_t	shm_fill_kinfo;
 static fo_mmap_t	shm_mmap;
 static fo_get_seals_t	shm_get_seals;
 static fo_add_seals_t	shm_add_seals;
+static fo_fallocate_t	shm_fallocate;
 
 /* File descriptor operations. */
 struct fileops shm_ops = {
@@ -157,6 +158,7 @@ struct fileops shm_ops = {
 	.fo_mmap = shm_mmap,
 	.fo_get_seals = shm_get_seals,
 	.fo_add_seals = shm_add_seals,
+	.fo_fallocate = shm_fallocate,
 	.fo_flags = DFLAG_PASSABLE | DFLAG_SEEKABLE
 };
 
@@ -174,23 +176,25 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 	offset = uio->uio_offset & PAGE_MASK;
 	tlen = MIN(PAGE_SIZE - offset, len);
 
-	VM_OBJECT_WLOCK(obj);
+	rv = vm_page_grab_valid_unlocked(&m, obj, idx,
+	    VM_ALLOC_SBUSY | VM_ALLOC_IGN_SBUSY | VM_ALLOC_NOCREAT);
+	if (rv == VM_PAGER_OK)
+		goto found;
 
 	/*
 	 * Read I/O without either a corresponding resident page or swap
 	 * page: use zero_region.  This is intended to avoid instantiating
 	 * pages on read from a sparse region.
 	 */
-	if (uio->uio_rw == UIO_READ && vm_page_lookup(obj, idx) == NULL &&
+	VM_OBJECT_WLOCK(obj);
+	m = vm_page_lookup(obj, idx);
+	if (uio->uio_rw == UIO_READ && m == NULL &&
 	    !vm_pager_has_page(obj, idx, NULL, NULL)) {
 		VM_OBJECT_WUNLOCK(obj);
 		return (uiomove(__DECONST(void *, zero_region), tlen, uio));
 	}
 
 	/*
-	 * Parallel reads of the page content from disk are prevented
-	 * by exclusive busy.
-	 *
 	 * Although the tmpfs vnode lock is held here, it is
 	 * nonetheless safe to sleep waiting for a free page.  The
 	 * pageout daemon does not need to acquire the tmpfs vnode
@@ -206,6 +210,8 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 		return (EIO);
 	}
 	VM_OBJECT_WUNLOCK(obj);
+
+found:
 	error = uiomove_fromphys(&m, offset, tlen, uio);
 	if (uio->uio_rw == UIO_WRITE && error == 0)
 		vm_page_set_dirty(m);
@@ -307,6 +313,7 @@ shm_write(struct file *fp, struct uio *uio, struct ucred *active_cred,
 	struct shmfd *shmfd;
 	void *rl_cookie;
 	int error;
+	off_t size;
 
 	shmfd = fp->f_data;
 #ifdef MAC
@@ -315,17 +322,42 @@ shm_write(struct file *fp, struct uio *uio, struct ucred *active_cred,
 		return (error);
 #endif
 	foffset_lock_uio(fp, uio, flags);
+	if (uio->uio_resid > OFF_MAX - uio->uio_offset) {
+		/*
+		 * Overflow is only an error if we're supposed to expand on
+		 * write.  Otherwise, we'll just truncate the write to the
+		 * size of the file, which can only grow up to OFF_MAX.
+		 */
+		if ((shmfd->shm_flags & SHM_GROW_ON_WRITE) != 0) {
+			foffset_unlock_uio(fp, uio, flags);
+			return (EFBIG);
+		}
+
+		size = shmfd->shm_size;
+	} else {
+		size = uio->uio_offset + uio->uio_resid;
+	}
 	if ((flags & FOF_OFFSET) == 0) {
 		rl_cookie = rangelock_wlock(&shmfd->shm_rl, 0, OFF_MAX,
 		    &shmfd->shm_mtx);
 	} else {
 		rl_cookie = rangelock_wlock(&shmfd->shm_rl, uio->uio_offset,
-		    uio->uio_offset + uio->uio_resid, &shmfd->shm_mtx);
+		    size, &shmfd->shm_mtx);
 	}
-	if ((shmfd->shm_seals & F_SEAL_WRITE) != 0)
+	if ((shmfd->shm_seals & F_SEAL_WRITE) != 0) {
 		error = EPERM;
-	else
-		error = uiomove_object(shmfd->shm_object, shmfd->shm_size, uio);
+	} else {
+		error = 0;
+		if ((shmfd->shm_flags & SHM_GROW_ON_WRITE) != 0 &&
+		    size > shmfd->shm_size) {
+			VM_OBJECT_WLOCK(shmfd->shm_object);
+			error = shm_dotruncate_locked(shmfd, size, rl_cookie);
+			VM_OBJECT_WUNLOCK(shmfd->shm_object);
+		}
+		if (error == 0)
+			error = uiomove_object(shmfd->shm_object,
+			    shmfd->shm_size, uio);
+	}
 	rangelock_unlock(&shmfd->shm_rl, rl_cookie, &shmfd->shm_mtx);
 	foffset_unlock_uio(fp, uio, flags);
 	return (error);
@@ -502,8 +534,12 @@ retry:
 				    VM_ALLOC_NORMAL | VM_ALLOC_WAITFAIL);
 				if (m == NULL)
 					goto retry;
+				vm_object_pip_add(object, 1);
+				VM_OBJECT_WUNLOCK(object);
 				rv = vm_pager_get_pages(object, &m, 1, NULL,
 				    NULL);
+				VM_OBJECT_WLOCK(object);
+				vm_object_pip_wakeup(object);
 				if (rv == VM_PAGER_OK) {
 					/*
 					 * Since the page was not resident,
@@ -530,14 +566,9 @@ retry:
 		}
 		delta = IDX_TO_OFF(object->size - nobjsize);
 
-		/* Toss in memory pages. */
 		if (nobjsize < object->size)
 			vm_object_page_remove(object, nobjsize, object->size,
 			    0);
-
-		/* Toss pages from swap. */
-		if (object->type == OBJT_SWAP)
-			swap_pager_freespace(object, nobjsize, delta);
 
 		/* Free the swap accounted for shm */
 		swap_release_by_cred(delta, object->cred);
@@ -743,7 +774,7 @@ kern_shm_open2(struct thread *td, const char *userpath, int flags, mode_t mode,
 	mode_t cmode;
 	int error, fd, initial_seals;
 
-	if ((shmflags & ~SHM_ALLOW_SEALING) != 0)
+	if ((shmflags & ~(SHM_ALLOW_SEALING | SHM_GROW_ON_WRITE)) != 0)
 		return (EINVAL);
 
 	initial_seals = F_SEAL_SEAL;
@@ -916,6 +947,7 @@ kern_shm_open2(struct thread *td, const char *userpath, int flags, mode_t mode,
 		}
 	}
 
+	shmfd->shm_flags = shmflags;
 	finit(fp, FFLAGS(flags & O_ACCMODE), DTYPE_SHM, shmfd, &shm_ops);
 
 	td->td_retval[0] = fd;
@@ -951,7 +983,7 @@ sys_shm_unlink(struct thread *td, struct shm_unlink_args *uap)
 	sx_xlock(&shm_dict_lock);
 	error = shm_remove(path, fnv, td->td_ucred);
 	sx_xunlock(&shm_dict_lock);
-	free(path, M_TEMP);
+	free(path, M_SHMFD);
 
 	return (error);
 }
@@ -1126,23 +1158,30 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 
 	/*
 	 * If FWRITE's set, we can allow VM_PROT_WRITE unless it's a shared
-	 * mapping with a write seal applied.
+	 * mapping with a write seal applied.  Private mappings are always
+	 * writeable.
 	 */
-	if ((fp->f_flag & FWRITE) != 0 && ((flags & MAP_SHARED) == 0 ||
-	    (shmfd->shm_seals & F_SEAL_WRITE) == 0))
+	if ((flags & MAP_SHARED) == 0) {
+		cap_maxprot |= VM_PROT_WRITE;
 		maxprot |= VM_PROT_WRITE;
+		writecnt = false;
+	} else {
+		if ((fp->f_flag & FWRITE) != 0 &&
+		    (shmfd->shm_seals & F_SEAL_WRITE) == 0)
+			maxprot |= VM_PROT_WRITE;
 
-	writecnt = (flags & MAP_SHARED) != 0 && (prot & VM_PROT_WRITE) != 0;
-
-	if (writecnt && (shmfd->shm_seals & F_SEAL_WRITE) != 0) {
-		error = EPERM;
-		goto out;
-	}
-
-	/* Don't permit shared writable mappings on read-only descriptors. */
-	if (writecnt && (maxprot & VM_PROT_WRITE) == 0) {
-		error = EACCES;
-		goto out;
+		/*
+		 * Any mappings from a writable descriptor may be upgraded to
+		 * VM_PROT_WRITE with mprotect(2), unless a write-seal was
+		 * applied between the open and subsequent mmap(2).  We want to
+		 * reject application of a write seal as long as any such
+		 * mapping exists so that the seal cannot be trivially bypassed.
+		 */
+		writecnt = (maxprot & VM_PROT_WRITE) != 0;
+		if (!writecnt && (prot & VM_PROT_WRITE) != 0) {
+			error = EACCES;
+			goto out;
+		}
 	}
 	maxprot &= cap_maxprot;
 
@@ -1435,6 +1474,42 @@ shm_get_seals(struct file *fp, int *seals)
 	shmfd = fp->f_data;
 	*seals = shmfd->shm_seals;
 	return (0);
+}
+
+static int
+shm_fallocate(struct file *fp, off_t offset, off_t len, struct thread *td)
+{
+	void *rl_cookie;
+	struct shmfd *shmfd;
+	size_t size;
+	int error;
+
+	/* This assumes that the caller already checked for overflow. */
+	error = 0;
+	shmfd = fp->f_data;
+	size = offset + len;
+
+	/*
+	 * Just grab the rangelock for the range that we may be attempting to
+	 * grow, rather than blocking read/write for regions we won't be
+	 * touching while this (potential) resize is in progress.  Other
+	 * attempts to resize the shmfd will have to take a write lock from 0 to
+	 * OFF_MAX, so this being potentially beyond the current usable range of
+	 * the shmfd is not necessarily a concern.  If other mechanisms are
+	 * added to grow a shmfd, this may need to be re-evaluated.
+	 */
+	rl_cookie = rangelock_wlock(&shmfd->shm_rl, offset, size,
+	    &shmfd->shm_mtx);
+	if (size > shmfd->shm_size) {
+		VM_OBJECT_WLOCK(shmfd->shm_object);
+		error = shm_dotruncate_locked(shmfd, size, rl_cookie);
+		VM_OBJECT_WUNLOCK(shmfd->shm_object);
+	}
+	rangelock_unlock(&shmfd->shm_rl, rl_cookie, &shmfd->shm_mtx);
+	/* Translate to posix_fallocate(2) return value as needed. */
+	if (error == ENOMEM)
+		error = ENOSPC;
+	return (error);
 }
 
 static int

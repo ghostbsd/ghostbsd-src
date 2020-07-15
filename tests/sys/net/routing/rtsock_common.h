@@ -37,12 +37,15 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <poll.h>
 
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/jail.h>
+#include <sys/linker.h>
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/route.h>
@@ -61,12 +64,16 @@
 #include <sysexits.h>
 
 #include <atf-c.h>
+#include "freebsd_test_suite/macros.h"
 
 #include "rtsock_print.h"
+#include "params.h"
 
 void rtsock_update_rtm_len(struct rt_msghdr *rtm);
 void rtsock_validate_message(char *buffer, ssize_t len);
 void rtsock_add_rtm_sa(struct rt_msghdr *rtm, int addr_type, struct sockaddr *sa);
+
+void file_append_line(char *fname, char *text);
 
 static int _rtm_seq = 42;
 
@@ -121,61 +128,40 @@ _check_cloner(char *name)
 	return (found);
 }
 
-/*
- * Tries to ensure if_tap is loaded.
- * Checks list of interface cloners first, then tries
- * to load the module.
- *
- * return nonzero on success.
- */
-static int
-_enforce_cloner_loaded(char *cloner_name)
-{
-	if (_check_cloner(cloner_name))
-		return (1);
-	/* need to load */
-	RLOG("trying to load %s driver", cloner_name);
-
-	char cmd[64];
-
-	snprintf(cmd, sizeof(cmd), "/sbin/kldload if_%s", cloner_name);
-	int ret = system(cmd);
-	if (ret != 0) {
-		RLOG("'%s' failed, error %d", cmd, ret);
-		return (0);
-	}
-
-	return (1);
-}
-
-static int
-iface_create_cloned(char *ifname_ptr)
+static char *
+iface_create(char *ifname_orig)
 {
 	struct ifreq ifr;
 	int s;
-	char prefix[IFNAMSIZ];
+	char prefix[IFNAMSIZ], ifname[IFNAMSIZ], *result;
 
 	char *src, *dst;
-	for (src = ifname_ptr, dst = prefix; *src && isalpha(*src); src++)
+	for (src = ifname_orig, dst = prefix; *src && isalpha(*src); src++)
 		*dst++ = *src;
 	*dst = '\0';
-
-	if (_enforce_cloner_loaded(prefix) == 0)
-		return (0);
 
 	memset(&ifr, 0, sizeof(struct ifreq));
 
 	s = socket(AF_LOCAL, SOCK_DGRAM, 0);
-	strlcpy(ifr.ifr_name, ifname_ptr, sizeof(ifr.ifr_name));
+	strlcpy(ifr.ifr_name, ifname_orig, sizeof(ifr.ifr_name));
 
 	RLOG("creating iface %s %s", prefix, ifr.ifr_name);
 	if (ioctl(s, SIOCIFCREATE2, &ifr) < 0)
 		err(1, "SIOCIFCREATE2");
 
-	strlcpy(ifname_ptr, ifr.ifr_name, IFNAMSIZ);
-	RLOG("created interface %s", ifname_ptr);
+	strlcpy(ifname, ifr.ifr_name, IFNAMSIZ);
+	RLOG("created interface %s", ifname);
 
-	return (1);
+	result = strdup(ifname);
+
+	file_append_line(IFACES_FNAME, ifname);
+	if (strstr(ifname, "epair") == ifname) {
+		/* call returned epairXXXa, need to add epairXXXb */
+		ifname[strlen(ifname) - 1] = 'b';
+		file_append_line(IFACES_FNAME, ifname);
+	}
+
+	return (result);
 }
 
 static int
@@ -183,7 +169,7 @@ iface_destroy(char *ifname)
 {
 	struct ifreq ifr;
 	int s;
-	
+
 	s = socket(AF_LOCAL, SOCK_DGRAM, 0);
 	strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 
@@ -315,6 +301,99 @@ iface_enable_ipv6(char *ifname)
 
 	return (0);
 }
+
+void
+file_append_line(char *fname, char *text)
+{
+	FILE *f;
+
+	f = fopen(fname, "a");
+	fputs(text, f);
+	fputs("\n", f);
+	fclose(f);
+}
+
+static int
+vnet_wait_interface(char *vnet_name, char *ifname)
+{
+	char buf[512], cmd[512], *line, *token;
+	FILE *fp;
+	int i;
+
+	snprintf(cmd, sizeof(cmd), "/usr/sbin/jexec %s /sbin/ifconfig -l", vnet_name);
+	for (int i = 0; i < 50; i++) {
+		fp = popen(cmd, "r");
+		line = fgets(buf, sizeof(buf), fp);
+		/* cut last\n */
+		if (line[0])
+			line[strlen(line)-1] = '\0';
+		while ((token = strsep(&line, " ")) != NULL) {
+			if (strcmp(token, ifname) == 0)
+				return (1);
+		}
+
+		/* sleep 100ms */
+		usleep(1000 * 100);
+	}
+
+	return (0);
+}
+
+void
+vnet_switch(char *vnet_name, char **ifnames, int count)
+{
+	char buf[512], cmd[512], *line;
+	FILE *fp;
+	int jid, len, ret;
+
+	RLOG("switching to vnet %s with interface(s) %s", vnet_name, ifnames[0]);
+	len = snprintf(cmd, sizeof(cmd),
+	    "/usr/sbin/jail -i -c name=%s persist vnet", vnet_name);
+	for (int i = 0; i < count && len < sizeof(cmd); i++) {
+		len += snprintf(&cmd[len], sizeof(cmd) - len,
+		    " vnet.interface=%s", ifnames[i]);
+	}
+	RLOG("jail cmd: \"%s\"\n", cmd);
+
+	fp = popen(cmd, "r");
+	if (fp == NULL)
+		atf_tc_fail("jail creation failed");
+	line = fgets(buf, sizeof(buf), fp);
+	if (line == NULL)
+		atf_tc_fail("empty output from jail(8)");
+	jid = strtol(line, NULL, 10);
+	if (jid <= 0) {
+		atf_tc_fail("invalid jail output: %s", line);
+	}
+
+	RLOG("created jail jid=%d", jid);
+	file_append_line(JAILS_FNAME, vnet_name);
+
+	/* Wait while interface appearsh inside vnet */
+	for (int i = 0; i < count; i++) {
+		if (vnet_wait_interface(vnet_name, ifnames[i]))
+			continue;
+		atf_tc_fail("unable to move interface %s to jail %s",
+		    ifnames[i], vnet_name);
+	}
+
+	if (jail_attach(jid) == -1) {
+		RLOG_ERRNO("jail %s attach failed: ret=%d", vnet_name, errno);
+		atf_tc_fail("jail attach failed");
+	}
+
+	RLOG("attached to the jail");
+}
+
+void
+vnet_switch_one(char *vnet_name, char *ifname)
+{
+	char *ifnames[1];
+
+	ifnames[0] = ifname;
+	vnet_switch(vnet_name, ifnames, 1);
+}
+
 
 #define	SA_F_IGNORE_IFNAME	0x01
 #define	SA_F_IGNORE_IFTYPE	0x02
@@ -586,7 +665,7 @@ rtsock_send_rtm(int fd, struct rt_msghdr *rtm)
 	RTSOCK_ATF_REQUIRE_MSG(rtm, len == rtm->rtm_msglen,
 	    "rtsock write failed: want %d got %zd (%s)",
 	    rtm->rtm_msglen, len, strerror(my_errno));
-	
+
 	return (len);
 }
 
@@ -594,6 +673,17 @@ struct rt_msghdr *
 rtsock_read_rtm(int fd, char *buffer, size_t buflen)
 {
 	ssize_t len;
+	struct pollfd pfd;
+	int poll_delay = 5 * 1000; /* 5 seconds */
+
+	/* Check for the data available to read first */
+	memset(&pfd, 0, sizeof(pfd));
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+
+	if (poll(&pfd, 1, poll_delay) == 0)
+		ATF_REQUIRE_MSG(1 == 0, "rtsock read timed out (%d seconds passed)",
+		    poll_delay / 1000);
 
 	len = read(fd, buffer, buflen);
 	int my_errno = errno;
@@ -607,15 +697,19 @@ struct rt_msghdr *
 rtsock_read_rtm_reply(int fd, char *buffer, size_t buflen, int seq)
 {
 	struct rt_msghdr *rtm;
+	int found = 0;
 
 	while (true) {
 		rtm = rtsock_read_rtm(fd, buffer, buflen);
-		if (rtm->rtm_pid != getpid())
-			continue;
-		if (rtm->rtm_seq != seq)
-			continue;
-
-		return (rtm);
+		if (rtm->rtm_pid == getpid() && rtm->rtm_seq == seq)
+			found = 1;
+		if (found)
+			RLOG("--- MATCHED RTSOCK MESSAGE ---");
+		else
+			RLOG("--- SKIPPED RTSOCK MESSAGE ---");
+		rtsock_print_rtm(rtm);
+		if (found)
+			return (rtm);
 	}
 
 	/* NOTREACHED */
@@ -706,35 +800,36 @@ rtsock_update_rtm_len(struct rt_msghdr *rtm)
 }
 
 static void
-_validate_route_message(struct rt_msghdr *rtm)
+_validate_message_sockaddrs(char *buffer, int rtm_len, size_t offset, int rtm_addrs)
 {
 	struct sockaddr *sa;
-	size_t parsed_len = sizeof(struct rt_msghdr);
-	int len = rtm->rtm_msglen;
+	size_t parsed_len = offset;
 
-	sa = (struct sockaddr *)(rtm + 1);
+	/* Offset denotes initial header size */
+	sa = (struct sockaddr *)(buffer + offset);
 
 	for (int i = 0; i < RTAX_MAX; i++) {
-		if ((rtm->rtm_addrs & (1 << i)) == 0)
+		if ((rtm_addrs & (1 << i)) == 0)
 			continue;
 		parsed_len += SA_SIZE(sa);
-		RTSOCK_ATF_REQUIRE_MSG(rtm, parsed_len <= len,
-		    "SA %d: len %d exceeds msg size %d", i, (int)sa->sa_len, len);
+		RTSOCK_ATF_REQUIRE_MSG((struct rt_msghdr *)buffer, parsed_len <= rtm_len,
+		    "SA %d: len %d exceeds msg size %d", i, (int)sa->sa_len, rtm_len);
 		if (sa->sa_family == AF_LINK) {
 			struct sockaddr_dl *sdl = (struct sockaddr_dl *)sa;
 			int data_len = sdl->sdl_nlen + sdl->sdl_alen;
 			data_len += offsetof(struct sockaddr_dl, sdl_data);
 
-			RTSOCK_ATF_REQUIRE_MSG(rtm, data_len <= len,
-			    "AF_LINK data size exceeds total len: %u vs %u",
-			    data_len, len);
+			RTSOCK_ATF_REQUIRE_MSG((struct rt_msghdr *)buffer,
+			    data_len <= rtm_len,
+			    "AF_LINK data size exceeds total len: %u vs %u, nlen=%d alen=%d",
+			    data_len, rtm_len, sdl->sdl_nlen, sdl->sdl_alen);
 		}
 		sa = (struct sockaddr *)((char *)sa + SA_SIZE(sa));
 	}
 
-	RTSOCK_ATF_REQUIRE_MSG(rtm, parsed_len == rtm->rtm_msglen,
+	RTSOCK_ATF_REQUIRE_MSG((struct rt_msghdr *)buffer, parsed_len == rtm_len,
 	    "message len != parsed len: expected %d parsed %d",
-	    rtm->rtm_msglen, (int)parsed_len);
+	    rtm_len, (int)parsed_len);
 }
 
 /*
@@ -758,9 +853,36 @@ rtsock_validate_message(char *buffer, ssize_t len)
 	case RTM_ADD:
 	case RTM_DELETE:
 	case RTM_CHANGE:
-		_validate_route_message(rtm);
+		_validate_message_sockaddrs(buffer, rtm->rtm_msglen,
+		    sizeof(struct rt_msghdr), rtm->rtm_addrs);
+		break;
+	case RTM_DELADDR:
+	case RTM_NEWADDR:
+		_validate_message_sockaddrs(buffer, rtm->rtm_msglen,
+		    sizeof(struct ifa_msghdr), ((struct ifa_msghdr *)buffer)->ifam_addrs);
 		break;
 	}
+}
+
+void
+rtsock_validate_pid_ours(struct rt_msghdr *rtm)
+{
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_pid == getpid(), "expected pid %d, got %d",
+	    getpid(), rtm->rtm_pid);
+}
+
+void
+rtsock_validate_pid_user(struct rt_msghdr *rtm)
+{
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_pid > 0, "expected non-zero pid, got %d",
+	    rtm->rtm_pid);
+}
+
+void
+rtsock_validate_pid_kernel(struct rt_msghdr *rtm)
+{
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_pid == 0, "expected zero pid, got %d",
+	    rtm->rtm_pid);
 }
 
 #endif

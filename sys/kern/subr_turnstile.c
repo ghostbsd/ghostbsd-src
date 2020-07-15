@@ -141,9 +141,10 @@ struct turnstile_chain {
 
 #ifdef TURNSTILE_PROFILING
 u_int turnstile_max_depth;
-static SYSCTL_NODE(_debug, OID_AUTO, turnstile, CTLFLAG_RD, 0,
+static SYSCTL_NODE(_debug, OID_AUTO, turnstile, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "turnstile profiling");
-static SYSCTL_NODE(_debug_turnstile, OID_AUTO, chains, CTLFLAG_RD, 0,
+static SYSCTL_NODE(_debug_turnstile, OID_AUTO, chains,
+    CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "turnstile chain stats");
 SYSCTL_UINT(_debug_turnstile, OID_AUTO, max_depth, CTLFLAG_RD,
     &turnstile_max_depth, 0, "maximum depth achieved of a single chain");
@@ -406,7 +407,8 @@ init_turnstile_profiling(void *arg)
 		snprintf(chain_name, sizeof(chain_name), "%d", i);
 		chain_oid = SYSCTL_ADD_NODE(NULL, 
 		    SYSCTL_STATIC_CHILDREN(_debug_turnstile_chains), OID_AUTO,
-		    chain_name, CTLFLAG_RD, NULL, "turnstile chain stats");
+		    chain_name, CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
+		    "turnstile chain stats");
 		SYSCTL_ADD_UINT(NULL, SYSCTL_CHILDREN(chain_oid), OID_AUTO,
 		    "depth", CTLFLAG_RD, &turnstile_chains[i].tc_depth, 0,
 		    NULL);
@@ -1178,17 +1180,21 @@ print_lockchain(struct thread *td, const char *prefix)
 	 * blocked on a lock that has an owner.
 	 */
 	while (!db_pager_quit) {
-		db_printf("%sthread %d (pid %d, %s) ", prefix, td->td_tid,
+		if (td == (void *)LK_KERNPROC) {
+			db_printf("%sdisowned (LK_KERNPROC)\n", prefix);
+			return;
+		}
+		db_printf("%sthread %d (pid %d, %s) is ", prefix, td->td_tid,
 		    td->td_proc->p_pid, td->td_name);
 		switch (td->td_state) {
 		case TDS_INACTIVE:
-			db_printf("is inactive\n");
+			db_printf("inactive\n");
 			return;
 		case TDS_CAN_RUN:
-			db_printf("can run\n");
+			db_printf("runnable\n");
 			return;
 		case TDS_RUNQ:
-			db_printf("is on a run queue\n");
+			db_printf("on a run queue\n");
 			return;
 		case TDS_RUNNING:
 			db_printf("running on CPU %d\n", td->td_oncpu);
@@ -1216,7 +1222,7 @@ print_lockchain(struct thread *td, const char *prefix)
 				td = owner;
 				break;
 			}
-			db_printf("inhibited\n");
+			db_printf("inhibited: %s\n", KTDSTATE(td));
 			return;
 		default:
 			db_printf("??? (%#x)\n", td->td_state);

@@ -90,8 +90,11 @@ struct cubic {
 	unsigned long	max_cwnd;
 	/* cwnd at the previous congestion event. */
 	unsigned long	prev_max_cwnd;
-	/* Number of congestion events. */
-	uint32_t	num_cong_events;
+	/* various flags */
+	uint32_t	flags;
+#define CUBICFLAG_CONG_EVENT	0x00000001	/* congestion experienced */
+#define CUBICFLAG_IN_SLOWSTART	0x00000002	/* in slow start */
+#define CUBICFLAG_IN_APPLIMIT	0x00000004	/* application limited */
 	/* Minimum observed rtt in ticks. */
 	int		min_rtt_ticks;
 	/* Mean observed rtt between congestion epochs. */
@@ -138,9 +141,10 @@ cubic_ack_received(struct cc_var *ccv, uint16_t type)
 	    (V_tcp_do_rfc3465 && ccv->flags & CCF_ABC_SENTAWND))) {
 		 /* Use the logic in NewReno ack_received() for slow start. */
 		if (CCV(ccv, snd_cwnd) <= CCV(ccv, snd_ssthresh) ||
-		    cubic_data->min_rtt_ticks == TCPTV_SRTTBASE)
+		    cubic_data->min_rtt_ticks == TCPTV_SRTTBASE) {
+			cubic_data->flags |= CUBICFLAG_IN_SLOWSTART;
 			newreno_cc_algo.ack_received(ccv, type);
-		else {
+		} else {
 			if ((ticks_since_cong =
 			    ticks - cubic_data->t_last_cong) < 0) {
 				/*
@@ -150,6 +154,13 @@ cubic_ack_received(struct cc_var *ccv, uint16_t type)
 				cubic_data->t_last_cong = ticks - INT_MAX;
 			}
 
+			if (cubic_data->flags & (CUBICFLAG_IN_SLOWSTART |
+						 CUBICFLAG_IN_APPLIMIT)) {
+				cubic_data->flags &= ~(CUBICFLAG_IN_SLOWSTART |
+						       CUBICFLAG_IN_APPLIMIT);
+				cubic_data->t_last_cong = ticks;
+				cubic_data->K = 0;
+			}
 			/*
 			 * The mean RTT is used to best reflect the equations in
 			 * the I-D. Using min_rtt in the tf_cwnd calculation
@@ -199,13 +210,16 @@ cubic_ack_received(struct cc_var *ccv, uint16_t type)
 			 * keep updating our current estimate of the
 			 * max_cwnd.
 			 */
-			if (cubic_data->num_cong_events == 0 &&
+			if (((cubic_data->flags & CUBICFLAG_CONG_EVENT) == 0) &&
 			    cubic_data->max_cwnd < CCV(ccv, snd_cwnd)) {
 				cubic_data->max_cwnd = CCV(ccv, snd_cwnd);
 				cubic_data->K = cubic_k(cubic_data->max_cwnd /
 				    CCV(ccv, t_maxseg));
 			}
 		}
+	} else if (type == CC_ACK && !IN_RECOVERY(CCV(ccv, t_flags)) &&
+	    !(ccv->flags & CCF_CWND_LIMITED)) {
+		cubic_data->flags |= CUBICFLAG_IN_APPLIMIT;
 	}
 }
 
@@ -270,9 +284,10 @@ cubic_cong_signal(struct cc_var *ccv, uint32_t type)
 		if (!IN_FASTRECOVERY(CCV(ccv, t_flags))) {
 			if (!IN_CONGRECOVERY(CCV(ccv, t_flags))) {
 				cubic_ssthresh_update(ccv);
-				cubic_data->num_cong_events++;
+				cubic_data->flags |= CUBICFLAG_CONG_EVENT;
 				cubic_data->prev_max_cwnd = cubic_data->max_cwnd;
 				cubic_data->max_cwnd = CCV(ccv, snd_cwnd);
+				cubic_data->K = cubic_k(cubic_data->max_cwnd / CCV(ccv, t_maxseg));
 			}
 			ENTER_RECOVERY(CCV(ccv, t_flags));
 		}
@@ -281,10 +296,11 @@ cubic_cong_signal(struct cc_var *ccv, uint32_t type)
 	case CC_ECN:
 		if (!IN_CONGRECOVERY(CCV(ccv, t_flags))) {
 			cubic_ssthresh_update(ccv);
-			cubic_data->num_cong_events++;
+			cubic_data->flags |= CUBICFLAG_CONG_EVENT;
 			cubic_data->prev_max_cwnd = cubic_data->max_cwnd;
 			cubic_data->max_cwnd = CCV(ccv, snd_cwnd);
 			cubic_data->t_last_cong = ticks;
+			cubic_data->K = cubic_k(cubic_data->max_cwnd / CCV(ccv, t_maxseg));
 			CCV(ccv, snd_cwnd) = CCV(ccv, snd_ssthresh);
 			ENTER_CONGRECOVERY(CCV(ccv, t_flags));
 		}
@@ -297,10 +313,15 @@ cubic_cong_signal(struct cc_var *ccv, uint32_t type)
 		 * timeout has fired more than once, as there is a reasonable
 		 * chance the first one is a false alarm and may not indicate
 		 * congestion.
+		 * This will put Cubic firmly into the concave / TCP friendly
+		 * region, for a slower ramp-up after two consecutive RTOs.
 		 */
 		if (CCV(ccv, t_rxtshift) >= 2) {
-			cubic_data->num_cong_events++;
+			cubic_data->flags |= CUBICFLAG_CONG_EVENT;
 			cubic_data->t_last_cong = ticks;
+			cubic_data->max_cwnd = CCV(ccv, snd_cwnd_prev);
+			cubic_data->K = cubic_k(cubic_data->max_cwnd /
+						CCV(ccv, t_maxseg));
 		}
 		break;
 	}
@@ -366,8 +387,9 @@ cubic_post_recovery(struct cc_var *ccv)
 			    CCV(ccv, t_maxseg);
 		else
 			/* Update cwnd based on beta and adjusted max_cwnd. */
-			CCV(ccv, snd_cwnd) = max(1, ((CUBIC_BETA *
-			    cubic_data->max_cwnd) >> CUBIC_SHIFT));
+			CCV(ccv, snd_cwnd) = max(((uint64_t)cubic_data->max_cwnd *
+			    CUBIC_BETA) >> CUBIC_SHIFT,
+			    2 * CCV(ccv, t_maxseg));
 	}
 	cubic_data->t_last_cong = ticks;
 
@@ -433,6 +455,7 @@ static void
 cubic_ssthresh_update(struct cc_var *ccv)
 {
 	struct cubic *cubic_data;
+	uint32_t ssthresh;
 
 	cubic_data = ccv->cc_data;
 
@@ -440,11 +463,12 @@ cubic_ssthresh_update(struct cc_var *ccv)
 	 * On the first congestion event, set ssthresh to cwnd * 0.5, on
 	 * subsequent congestion events, set it to cwnd * beta.
 	 */
-	if (cubic_data->num_cong_events == 0)
-		CCV(ccv, snd_ssthresh) = CCV(ccv, snd_cwnd) >> 1;
+	if ((cubic_data->flags & CUBICFLAG_CONG_EVENT) == 0)
+		ssthresh = CCV(ccv, snd_cwnd) >> 1;
 	else
-		CCV(ccv, snd_ssthresh) = ((u_long)CCV(ccv, snd_cwnd) *
+		ssthresh = ((uint64_t)CCV(ccv, snd_cwnd) *
 		    CUBIC_BETA) >> CUBIC_SHIFT;
+	CCV(ccv, snd_ssthresh) = max(ssthresh, 2 * CCV(ccv, t_maxseg));
 }
 
 

@@ -47,7 +47,8 @@ __FBSDID("$FreeBSD$");
 
 
 SYSCTL_DECL(_kern_geom);
-static SYSCTL_NODE(_kern_geom, OID_AUTO, nop, CTLFLAG_RW, 0, "GEOM_NOP stuff");
+static SYSCTL_NODE(_kern_geom, OID_AUTO, nop, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "GEOM_NOP stuff");
 static u_int g_nop_debug = 0;
 SYSCTL_UINT(_kern_geom_nop, OID_AUTO, debug, CTLFLAG_RW, &g_nop_debug, 0,
     "Debug level");
@@ -255,6 +256,9 @@ g_nop_start(struct bio *bp)
 	case BIO_FLUSH:
 		sc->sc_flushes++;
 		break;
+	case BIO_SPEEDUP:
+		sc->sc_speedups++;
+		break;
 	case BIO_CMD0:
 		sc->sc_cmd0s++;
 		break;
@@ -342,6 +346,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	struct g_geom *gp;
 	struct g_provider *newpp;
 	struct g_consumer *cp;
+	struct g_geom_alias *gap;
 	char name[64];
 	int error, n;
 	off_t explicitsize;
@@ -438,6 +443,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	sc->sc_deletes = 0;
 	sc->sc_getattrs = 0;
 	sc->sc_flushes = 0;
+	sc->sc_speedups = 0;
 	sc->sc_cmd0s = 0;
 	sc->sc_cmd1s = 0;
 	sc->sc_cmd2s = 0;
@@ -453,6 +459,8 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	newpp->sectorsize = secsize;
 	newpp->stripesize = stripesize;
 	newpp->stripeoffset = stripeoffset;
+	LIST_FOREACH(gap, &pp->aliases, ga_next)
+		g_provider_add_alias(newpp, "%s%s", gap->ga_alias, G_NOP_SUFFIX);
 
 	cp = g_new_consumer(gp);
 	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
@@ -668,8 +676,8 @@ g_nop_ctl_create(struct gctl_req *req, struct g_class *mp)
 			gctl_error(req, "No 'arg%d' argument", i);
 			return;
 		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
+		if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+			name += strlen(_PATH_DEV);
 		pp = g_provider_by_name(name);
 		if (pp == NULL) {
 			G_NOP_DEBUG(1, "Provider %s is invalid.", name);
@@ -779,8 +787,8 @@ g_nop_ctl_configure(struct gctl_req *req, struct g_class *mp)
 			gctl_error(req, "No 'arg%d' argument", i);
 			return;
 		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
+		if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+			name += strlen(_PATH_DEV);
 		pp = g_provider_by_name(name);
 		if (pp == NULL || pp->geom->class != mp) {
 			G_NOP_DEBUG(1, "Provider %s is invalid.", name);
@@ -849,8 +857,8 @@ g_nop_ctl_destroy(struct gctl_req *req, struct g_class *mp)
 			gctl_error(req, "No 'arg%d' argument", i);
 			return;
 		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
+		if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+			name += strlen(_PATH_DEV);
 		gp = g_nop_find_geom(mp, name);
 		if (gp == NULL) {
 			G_NOP_DEBUG(1, "Device %s is invalid.", name);
@@ -894,8 +902,8 @@ g_nop_ctl_reset(struct gctl_req *req, struct g_class *mp)
 			gctl_error(req, "No 'arg%d' argument", i);
 			return;
 		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
+		if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+			name += strlen(_PATH_DEV);
 		pp = g_provider_by_name(name);
 		if (pp == NULL || pp->geom->class != mp) {
 			G_NOP_DEBUG(1, "Provider %s is invalid.", name);
@@ -908,6 +916,7 @@ g_nop_ctl_reset(struct gctl_req *req, struct g_class *mp)
 		sc->sc_deletes = 0;
 		sc->sc_getattrs = 0;
 		sc->sc_flushes = 0;
+		sc->sc_speedups = 0;
 		sc->sc_cmd0s = 0;
 		sc->sc_cmd1s = 0;
 		sc->sc_cmd2s = 0;
@@ -978,6 +987,7 @@ g_nop_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 	sbuf_printf(sb, "%s<Deletes>%ju</Deletes>\n", indent, sc->sc_deletes);
 	sbuf_printf(sb, "%s<Getattrs>%ju</Getattrs>\n", indent, sc->sc_getattrs);
 	sbuf_printf(sb, "%s<Flushes>%ju</Flushes>\n", indent, sc->sc_flushes);
+	sbuf_printf(sb, "%s<Speedups>%ju</Speedups>\n", indent, sc->sc_speedups);
 	sbuf_printf(sb, "%s<Cmd0s>%ju</Cmd0s>\n", indent, sc->sc_cmd0s);
 	sbuf_printf(sb, "%s<Cmd1s>%ju</Cmd1s>\n", indent, sc->sc_cmd1s);
 	sbuf_printf(sb, "%s<Cmd2s>%ju</Cmd2s>\n", indent, sc->sc_cmd2s);

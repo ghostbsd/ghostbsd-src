@@ -72,7 +72,8 @@ static struct mtx ugidfw_mtx;
 
 SYSCTL_DECL(_security_mac);
 
-static SYSCTL_NODE(_security_mac, OID_AUTO, bsdextended, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_security_mac, OID_AUTO, bsdextended,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "TrustedBSD extended BSD MAC policy controls");
 
 static int	ugidfw_enabled = 1;
@@ -301,9 +302,8 @@ ugidfw_rulecheck(struct mac_bsdextended_rule *rule,
 	}
 
 	if (rule->mbr_object.mbo_flags & MBO_FSID_DEFINED) {
-		match = (bcmp(&(vp->v_mount->mnt_stat.f_fsid),
-		    &(rule->mbr_object.mbo_fsid),
-		    sizeof(rule->mbr_object.mbo_fsid)) == 0);
+		match = (fsidcmp(&vp->v_mount->mnt_stat.f_fsid,
+		    &rule->mbr_object.mbo_fsid) == 0);
 		if (rule->mbr_object.mbo_neg & MBO_FSID_DEFINED)
 			match = !match;
 		if (!match)

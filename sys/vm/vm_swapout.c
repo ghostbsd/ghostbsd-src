@@ -104,6 +104,7 @@ __FBSDID("$FreeBSD$");
 
 #include <vm/vm.h>
 #include <vm/vm_param.h>
+#include <vm/vm_kern.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_map.h>
@@ -218,7 +219,7 @@ vm_swapout_object_deactivate(pmap_t pmap, vm_object_t first_object,
 			goto unlock_return;
 		VM_OBJECT_ASSERT_LOCKED(object);
 		if ((object->flags & OBJ_UNMANAGED) != 0 ||
-		    REFCOUNT_COUNT(object->paging_in_progress) > 0)
+		    blockcount_read(&object->paging_in_progress) > 0)
 			goto unlock_return;
 
 		unmap = true;
@@ -526,23 +527,26 @@ again:
 static void
 vm_thread_swapout(struct thread *td)
 {
-	vm_object_t ksobj;
 	vm_page_t m;
+	vm_offset_t kaddr;
+	vm_pindex_t pindex;
 	int i, pages;
 
 	cpu_thread_swapout(td);
+	kaddr = td->td_kstack;
 	pages = td->td_kstack_pages;
-	ksobj = td->td_kstack_obj;
-	pmap_qremove(td->td_kstack, pages);
-	VM_OBJECT_WLOCK(ksobj);
+	pindex = atop(kaddr - VM_MIN_KERNEL_ADDRESS);
+	pmap_qremove(kaddr, pages);
+	VM_OBJECT_WLOCK(kstack_object);
 	for (i = 0; i < pages; i++) {
-		m = vm_page_lookup(ksobj, i);
+		m = vm_page_lookup(kstack_object, pindex + i);
 		if (m == NULL)
 			panic("vm_thread_swapout: kstack already missing?");
 		vm_page_dirty(m);
+		vm_page_xunbusy_unchecked(m);
 		vm_page_unwire(m, PQ_LAUNDRY);
 	}
-	VM_OBJECT_WUNLOCK(ksobj);
+	VM_OBJECT_WUNLOCK(kstack_object);
 }
 
 /*
@@ -551,39 +555,36 @@ vm_thread_swapout(struct thread *td)
 static void
 vm_thread_swapin(struct thread *td, int oom_alloc)
 {
-	vm_object_t ksobj;
 	vm_page_t ma[KSTACK_MAX_PAGES];
+	vm_offset_t kaddr;
 	int a, count, i, j, pages, rv;
 
+	kaddr = td->td_kstack;
 	pages = td->td_kstack_pages;
-	ksobj = td->td_kstack_obj;
-	VM_OBJECT_WLOCK(ksobj);
-	(void)vm_page_grab_pages(ksobj, 0, oom_alloc | VM_ALLOC_WIRED, ma,
-	    pages);
+	vm_thread_stack_back(td->td_domain.dr_policy, kaddr, ma, pages,
+	    oom_alloc);
 	for (i = 0; i < pages;) {
 		vm_page_assert_xbusied(ma[i]);
 		if (vm_page_all_valid(ma[i])) {
-			vm_page_xunbusy(ma[i]);
 			i++;
 			continue;
 		}
-		vm_object_pip_add(ksobj, 1);
+		vm_object_pip_add(kstack_object, 1);
 		for (j = i + 1; j < pages; j++)
 			if (vm_page_all_valid(ma[j]))
 				break;
-		rv = vm_pager_has_page(ksobj, ma[i]->pindex, NULL, &a);
+		VM_OBJECT_WLOCK(kstack_object);
+		rv = vm_pager_has_page(kstack_object, ma[i]->pindex, NULL, &a);
+		VM_OBJECT_WUNLOCK(kstack_object);
 		KASSERT(rv == 1, ("%s: missing page %p", __func__, ma[i]));
 		count = min(a + 1, j - i);
-		rv = vm_pager_get_pages(ksobj, ma + i, count, NULL, NULL);
+		rv = vm_pager_get_pages(kstack_object, ma + i, count, NULL, NULL);
 		KASSERT(rv == VM_PAGER_OK, ("%s: cannot get kstack for proc %d",
 		    __func__, td->td_proc->p_pid));
-		vm_object_pip_wakeup(ksobj);
-		for (j = i; j < i + count; j++)
-			vm_page_xunbusy(ma[j]);
+		vm_object_pip_wakeup(kstack_object);
 		i += count;
 	}
-	VM_OBJECT_WUNLOCK(ksobj);
-	pmap_qenter(td->td_kstack, ma, pages);
+	pmap_qenter(kaddr, ma, pages);
 	cpu_thread_swapin(td);
 }
 

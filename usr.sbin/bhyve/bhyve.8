@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd December 13, 2019
+.Dd Jun 25, 2020
 .Dt BHYVE 8
 .Os
 .Sh NAME
@@ -32,23 +32,41 @@
 .Nd "run a guest operating system inside a virtual machine"
 .Sh SYNOPSIS
 .Nm
-.Op Fl abehuwxACHPSWY
+.Op Fl AabCDeHhPSuWwxY
 .Oo
-.Fl c\~ Ns
+.Sm off
+.Fl c\~
 .Oo
-.Op Ar cpus= Ns
-.Ar numcpus Ns
-.Oc Ns
-.Op Ar ,sockets=n Ns
-.Op Ar ,cores=n Ns
-.Op Ar ,threads=n
+.Op Cm cpus=
+.Ar numcpus
 .Oc
-.Op Fl g Ar gdbport
-.Op Fl l Ar help|lpcdev Ns Op , Ns Ar conf
-.Op Fl m Ar memsize Ns Op Ar K|k|M|m|G|g|T|t
-.Op Fl p Ar vcpu:hostcpu
-.Op Fl s Ar help|slot,emulation Ns Op , Ns Ar conf
+.Op Cm ,sockets= Ar n
+.Op Cm ,cores= Ar n
+.Op Cm ,threads= Ar n
+.Oc
+.Sm on
 .Op Fl G Ar port
+.Op Fl g Ar gdbport
+.Oo Fl l
+.Sm off
+.Cm help | Ar lpcdev Op Cm \&, Ar conf
+.Sm on
+.Oc
+.Oo Fl m
+.Sm off
+.Ar memsize
+.Oo
+.Cm K No | Cm k No | Cm M No | Cm m No | Cm G No | Cm g No | Cm T No | Cm t
+.Oc
+.Sm on
+.Oc
+.Op Fl p Ar vcpu Ns Cm \&: Ns Ar hostcpu
+.Op Fl r Ar file
+.Oo Fl s
+.Sm off
+.Cm help | Ar slot Cm \&, Ar emulation Op Cm \&, Ar conf
+.Sm on
+.Oc
 .Op Fl U Ar uuid
 .Ar vmname
 .Sh DESCRIPTION
@@ -113,6 +131,8 @@ If a
 is specified more than once the last one has precedence.
 .It Fl C
 Include guest memory in core file.
+.It Fl D
+Destroy the VM on guest initiated power-off.
 .It Fl e
 Force
 .Nm
@@ -174,6 +194,21 @@ to
 .Em hostcpu .
 .It Fl P
 Force the guest virtual CPU to exit when a PAUSE instruction is detected.
+.It Fl r Ar file
+Resume a guest from a snapshot.
+The guest memory contents are restored from
+.Ar file ,
+and the guest device and vCPU state are restored from the file
+.Dq Ar file Ns .kern .
+.Pp
+Note that the current snapshot file format requires that the configuration of
+devices in the new VM match the VM from which the snapshot was taken by specifying the
+same
+.Op Fl s
+and
+.Op Fl l
+options.
+The count of vCPUs and memory configuration are read from the snapshot.
 .It Fl s Op Ar help|slot,emulation Ns Op , Ns Ar conf
 Configure a virtual PCI slot and function.
 .Pp
@@ -258,10 +293,11 @@ If
 is not specified, the device emulation has no backend and can be
 considered unconnected.
 .Pp
-Network devices:
+Network backends:
 .Bl -tag -width 10n
-.It Ar tapN Ns Op , Ns Ar mac=xx:xx:xx:xx:xx:xx
-.It Ar vmnetN Ns Op , Ns Ar mac=xx:xx:xx:xx:xx:xx
+.It Ar tapN Ns Oo , Ns Ar mac=xx:xx:xx:xx:xx:xx Oc Ns Oo , Ns Ar mtu=N Oc
+.It Ar vmnetN Ns Oo , Ns Ar mac=xx:xx:xx:xx:xx:xx Oc Ns Oo , Ns Ar mtu=N Oc
+.It Ar netgraph,path=ADDRESS,peerhook=HOOK Ns Oo , Ns Ar socket=NAME Oc Ns Oo , Ns Ar hook=HOOK Oc Ns Oo , Ns Ar mac=xx:xx:xx:xx:xx:xx Oc Ns Oo , Ns Ar mtu=N Oc
 .Pp
 If
 .Ar mac
@@ -272,6 +308,32 @@ the device name.
 The MAC address is an ASCII string in
 .Xr ethers 5
 format.
+.Pp
+With virtio-net devices, the
+.Ar mtu
+parameter can be specified to inform the guest about the largest MTU
+that should be allowed, expressed in bytes.
+.Pp
+With netgraph backend, the
+.Ar path
+and
+.Ar peerhook
+parameters must be specified to set the destination node and corresponding hook.
+The optional parameters
+.Ar socket
+and
+.Ar hook
+may be used to set the
+.Xr ng_socket 4
+node name and source hook.
+The
+.Ar ADDRESS ,
+.Ar HOOK
+and
+.Ar NAME
+must comply with
+.Xr netgraph 4
+addressing rules.
 .El
 .Pp
 Block storage devices:
@@ -632,6 +694,8 @@ bhyve -c 2 -m 4G -w -H \\
 .Ed
 .Sh SEE ALSO
 .Xr bhyve 4 ,
+.Xr netgraph 4 ,
+.Xr ng_socket 4 ,
 .Xr nmdm 4 ,
 .Xr vmm 4 ,
 .Xr ethers 5 ,

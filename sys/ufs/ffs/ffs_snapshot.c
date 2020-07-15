@@ -319,7 +319,7 @@ restart:
 		goto out;
 	ip->i_size = lblktosize(fs, (off_t)numblks);
 	DIP_SET(ip, i_size, ip->i_size);
-	ip->i_flag |= IN_CHANGE | IN_UPDATE;
+	UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
 	error = readblock(vp, bp, numblks - 1);
 	bawrite(bp);
 	if (error != 0)
@@ -401,7 +401,7 @@ restart:
 	 */
 	ip->i_flags |= SF_SNAPSHOT;
 	DIP_SET(ip, i_flags, ip->i_flags);
-	ip->i_flag |= IN_CHANGE | IN_UPDATE;
+	UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 	/*
 	 * Ensure that the snapshot is completely on disk.
 	 * Since we have marked it as a snapshot it is safe to
@@ -480,6 +480,8 @@ restart:
 	 */
 	copy_fs = malloc((u_long)fs->fs_bsize, M_UFSMNT, M_WAITOK);
 	bcopy(fs, copy_fs, fs->fs_sbsize);
+	copy_fs->fs_si = malloc(sizeof(struct fs_summary_info), M_UFSMNT,
+	    M_ZERO | M_WAITOK);
 	if ((fs->fs_flags & (FS_UNCLEAN | FS_NEEDSFSCK)) == 0)
 		copy_fs->fs_clean = 1;
 	size = fs->fs_bsize < SBLOCKSIZE ? fs->fs_bsize : SBLOCKSIZE;
@@ -501,6 +503,7 @@ restart:
 		    len, KERNCRED, &bp)) != 0) {
 			brelse(bp);
 			free(copy_fs->fs_csp, M_UFSMNT);
+			free(copy_fs->fs_si, M_UFSMNT);
 			free(copy_fs, M_UFSMNT);
 			copy_fs = NULL;
 			goto out1;
@@ -611,6 +614,7 @@ loop:
 		vdrop(xvp);
 		if (error) {
 			free(copy_fs->fs_csp, M_UFSMNT);
+			free(copy_fs->fs_si, M_UFSMNT);
 			free(copy_fs, M_UFSMNT);
 			copy_fs = NULL;
 			MNT_VNODE_FOREACH_ALL_ABORT(mp, mvp);
@@ -624,6 +628,7 @@ loop:
 		error = softdep_journal_lookup(mp, &xvp);
 		if (error) {
 			free(copy_fs->fs_csp, M_UFSMNT);
+			free(copy_fs->fs_si, M_UFSMNT);
 			free(copy_fs, M_UFSMNT);
 			copy_fs = NULL;
 			goto out1;
@@ -842,6 +847,7 @@ out1:
 	}
 done:
 	free(copy_fs->fs_csp, M_UFSMNT);
+	free(copy_fs->fs_si, M_UFSMNT);
 	free(copy_fs, M_UFSMNT);
 	copy_fs = NULL;
 out:
@@ -1215,7 +1221,7 @@ snapacct_ufs1(vp, oldblkp, lastblkp, fs, lblkno, expungetype)
 		lbn = fragstoblks(fs, blkno);
 		if (lbn < UFS_NDADDR) {
 			blkp = &ip->i_din1->di_db[lbn];
-			ip->i_flag |= IN_CHANGE | IN_UPDATE;
+			UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 		} else {
 			error = ffs_balloc_ufs1(vp, lblktosize(fs, (off_t)lbn),
 			    fs->fs_bsize, KERNCRED, BA_METAONLY, &ibp);
@@ -1501,7 +1507,7 @@ snapacct_ufs2(vp, oldblkp, lastblkp, fs, lblkno, expungetype)
 		lbn = fragstoblks(fs, blkno);
 		if (lbn < UFS_NDADDR) {
 			blkp = &ip->i_din2->di_db[lbn];
-			ip->i_flag |= IN_CHANGE | IN_UPDATE;
+			UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 		} else {
 			error = ffs_balloc_ufs2(vp, lblktosize(fs, (off_t)lbn),
 			    fs->fs_bsize, KERNCRED, BA_METAONLY, &ibp);
@@ -1724,7 +1730,7 @@ ffs_snapremove(vp)
 	 */
 	ip->i_flags &= ~SF_SNAPSHOT;
 	DIP_SET(ip, i_flags, ip->i_flags);
-	ip->i_flag |= IN_CHANGE | IN_UPDATE;
+	UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 	/*
 	 * The dirtied indirects must be written out before
 	 * softdep_setup_freeblocks() is called.  Otherwise indir_trunc()
@@ -1830,7 +1836,7 @@ retry:
 				panic("snapblkfree: inconsistent block type");
 			if (lbn < UFS_NDADDR) {
 				DIP_SET(ip, i_db[lbn], BLK_NOCOPY);
-				ip->i_flag |= IN_CHANGE | IN_UPDATE;
+				UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 			} else if (I_IS_UFS1(ip)) {
 				((ufs1_daddr_t *)(ibp->b_data))[indiroff] =
 				    BLK_NOCOPY;
@@ -1887,7 +1893,7 @@ retry:
 				bdwrite(ibp);
 			}
 			DIP_SET(ip, i_blocks, DIP(ip, i_blocks) + btodb(size));
-			ip->i_flag |= IN_CHANGE | IN_UPDATE;
+			UFS_INODE_SET_FLAG(ip, IN_CHANGE | IN_UPDATE);
 			lockmgr(vp->v_vnlock, LK_RELEASE, NULL);
 			return (1);
 		}
@@ -2580,18 +2586,10 @@ process_deferred_inactive(struct mount *mp)
 		ip = VTOI(vp);
 		if ((ip->i_flag & IN_LAZYACCESS) != 0) {
 			ip->i_flag &= ~IN_LAZYACCESS;
-			ip->i_flag |= IN_MODIFIED;
+			UFS_INODE_SET_FLAG(ip, IN_MODIFIED);
 		}
 		VI_LOCK(vp);
-		if ((vp->v_iflag & VI_OWEINACT) == 0 || vp->v_usecount > 0) {
-			VI_UNLOCK(vp);
-			VOP_UNLOCK(vp);
-			vdrop(vp);
-			continue;
-		}
 		vinactive(vp);
-		VNASSERT((vp->v_iflag & VI_OWEINACT) == 0, vp,
-			 ("process_deferred_inactive: got VI_OWEINACT"));
 		VI_UNLOCK(vp);
 		VOP_UNLOCK(vp);
 		vdrop(vp);

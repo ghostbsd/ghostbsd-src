@@ -2366,7 +2366,7 @@ local_input(
 			}
 			if (count)
 			{	/* simulate receive */
-				buf = get_free_recv_buffer();
+				buf = get_free_recv_buffer(TRUE);
 				if (buf != NULL) {
 					memmove((caddr_t)buf->recv_buffer,
 						(caddr_t)&parse->parseio.parse_dtime,
@@ -3069,6 +3069,7 @@ parse_start(
 
 	parse->generic->fudgetime2 = 0.0;
 	parse->ppsphaseadjust = parse->generic->fudgetime2;
+	parse->generic->fudgeminjitter = 0.0;
 
 	parse->generic->clockdesc  = parse->parse_type->cl_description;
 
@@ -3424,6 +3425,8 @@ parse_ctl(
 #endif
 		    }
 		}
+
+		parse->generic->fudgeminjitter = in->fudgeminjitter;
 	}
 }
 

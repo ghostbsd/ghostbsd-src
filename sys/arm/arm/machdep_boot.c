@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/ctype.h>
 #include <sys/linker.h>
+#include <sys/physmem.h>
 #include <sys/reboot.h>
 #include <sys/sysctl.h>
 #if defined(LINUX_BOOT_ABI)
@@ -46,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpu.h>
 #include <machine/machdep.h>
 #include <machine/metadata.h>
-#include <machine/physmem.h>
 #include <machine/vmparam.h>	/* For KERNVIRTADDR */
 
 #ifdef FDT
@@ -88,7 +88,8 @@ static char linux_command_line[LBABI_MAX_COMMAND_LINE + 1];
 static char atags[LBABI_MAX_COMMAND_LINE * 2];
 #endif /* defined(LINUX_BOOT_ABI) */
 
-SYSCTL_NODE(_hw, OID_AUTO, board, CTLFLAG_RD, 0, "Board attributes");
+SYSCTL_NODE(_hw, OID_AUTO, board, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "Board attributes");
 SYSCTL_UINT(_hw_board, OID_AUTO, revision, CTLFLAG_RD,
     &board_revision, 0, "Board revision");
 SYSCTL_STRING(_hw_board, OID_AUTO, serial, CTLFLAG_RD,
@@ -227,7 +228,7 @@ linux_parse_boot_param(struct arm_boot_params *abp)
 		case ATAG_CORE:
 			break;
 		case ATAG_MEM:
-			arm_physmem_hardware_region(walker->u.tag_mem.start,
+			physmem_hardware_region(walker->u.tag_mem.start,
 			    walker->u.tag_mem.size);
 			break;
 		case ATAG_INITRD2:
@@ -301,7 +302,7 @@ freebsd_parse_boot_param(struct arm_boot_params *abp)
 #ifdef DDB
 	ksym_start = MD_FETCH(kmdp, MODINFOMD_SSYM, uintptr_t);
 	ksym_end = MD_FETCH(kmdp, MODINFOMD_ESYM, uintptr_t);
-	db_fetch_ksymtab(ksym_start, ksym_end);
+	db_fetch_ksymtab(ksym_start, ksym_end, 0);
 #endif
 	return lastaddr;
 }
@@ -351,12 +352,11 @@ vm_offset_t
 fake_preload_metadata(struct arm_boot_params *abp __unused, void *dtb_ptr,
     size_t dtb_size)
 {
-#ifdef DDB
-	vm_offset_t zstart = 0, zend = 0;
-#endif
 	vm_offset_t lastaddr;
 	int i = 0;
 	static uint32_t fake_preload[35];
+
+	lastaddr = (vm_offset_t)&end;
 
 	fake_preload[i++] = MODINFO_NAME;
 	fake_preload[i++] = strlen("kernel") + 1;
@@ -372,21 +372,6 @@ fake_preload_metadata(struct arm_boot_params *abp __unused, void *dtb_ptr,
 	fake_preload[i++] = MODINFO_SIZE;
 	fake_preload[i++] = sizeof(uint32_t);
 	fake_preload[i++] = (uint32_t)&end - KERNVIRTADDR;
-#ifdef DDB
-	if (*(uint32_t *)KERNVIRTADDR == MAGIC_TRAMP_NUMBER) {
-		fake_preload[i++] = MODINFO_METADATA|MODINFOMD_SSYM;
-		fake_preload[i++] = sizeof(vm_offset_t);
-		fake_preload[i++] = *(uint32_t *)(KERNVIRTADDR + 4);
-		fake_preload[i++] = MODINFO_METADATA|MODINFOMD_ESYM;
-		fake_preload[i++] = sizeof(vm_offset_t);
-		fake_preload[i++] = *(uint32_t *)(KERNVIRTADDR + 8);
-		lastaddr = *(uint32_t *)(KERNVIRTADDR + 8);
-		zend = lastaddr;
-		zstart = *(uint32_t *)(KERNVIRTADDR + 4);
-		db_fetch_ksymtab(zstart, zend);
-	} else
-#endif
-		lastaddr = (vm_offset_t)&end;
 	if (dtb_ptr != NULL) {
 		/* Copy DTB to KVA space and insert it into module chain. */
 		lastaddr = roundup(lastaddr, sizeof(int));

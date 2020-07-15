@@ -53,6 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_types.h>
 #include <net/if_var.h>
 #include <net/bpf.h>
+#include <net/route.h>
 #include <net/vnet.h>
 
 #if defined(INET) || defined(INET6)
@@ -74,9 +75,17 @@ __FBSDID("$FreeBSD$");
 #include <net/if_lagg.h>
 #include <net/ieee8023ad_lacp.h>
 
+#ifdef INET6
+/*
+ * XXX: declare here to avoid to include many inet6 related files..
+ * should be more generalized?
+ */
+extern void	nd6_setmtu(struct ifnet *);
+#endif
+
 #define	LAGG_RLOCK()	struct epoch_tracker lagg_et; epoch_enter_preempt(net_epoch_preempt, &lagg_et)
 #define	LAGG_RUNLOCK()	epoch_exit_preempt(net_epoch_preempt, &lagg_et)
-#define	LAGG_RLOCK_ASSERT()	MPASS(in_epoch(net_epoch_preempt))
+#define	LAGG_RLOCK_ASSERT()	NET_EPOCH_ASSERT()
 #define	LAGG_UNLOCK_ASSERT()	MPASS(!in_epoch(net_epoch_preempt))
 
 #define	LAGG_SX_INIT(_sc)	sx_init(&(_sc)->sc_sx, "if_lagg sx")
@@ -259,7 +268,7 @@ static const struct lagg_proto {
 };
 
 SYSCTL_DECL(_net_link);
-SYSCTL_NODE(_net_link, OID_AUTO, lagg, CTLFLAG_RW, 0,
+SYSCTL_NODE(_net_link, OID_AUTO, lagg, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Link Aggregation");
 
 /* Allow input on any failover links */
@@ -910,7 +919,7 @@ lagg_port_destroy(struct lagg_port *lp, int rundelport)
 	 * free port and release it's ifnet reference after a grace period has
 	 * elapsed.
 	 */
-	epoch_call(net_epoch_preempt, &lp->lp_epoch_ctx, lagg_port_destroy_cb);
+	NET_EPOCH_CALL(lagg_port_destroy_cb, &lp->lp_epoch_ctx);
 	/* Update lagg capabilities */
 	lagg_capabilities(sc);
 	lagg_linkstate(sc);
@@ -1178,7 +1187,7 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	struct ifnet *tpif;
 	struct thread *td = curthread;
 	char *buf, *outbuf;
-	int count, buflen, len, error = 0;
+	int count, buflen, len, error = 0, oldmtu;
 
 	bzero(&rpbuf, sizeof(rpbuf));
 
@@ -1237,7 +1246,7 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			if (lsc->lsc_strict_mode != 0)
 				ro->ro_opts |= LAGG_OPT_LACP_STRICT;
 			if (lsc->lsc_fast_timeout != 0)
-				ro->ro_opts |= LAGG_OPT_LACP_TIMEOUT;
+				ro->ro_opts |= LAGG_OPT_LACP_FAST_TIMO;
 
 			ro->ro_active = sc->sc_active;
 		} else {
@@ -1257,21 +1266,18 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 		/*
 		 * The stride option was added without defining a corresponding
-		 * LAGG_OPT flag, so we must handle it before processing any
-		 * remaining options.
+		 * LAGG_OPT flag, so handle a non-zero value before checking
+		 * anything else to preserve compatibility.
 		 */
 		LAGG_XLOCK(sc);
-		if (ro->ro_bkt != 0) {
+		if (ro->ro_opts == 0 && ro->ro_bkt != 0) {
 			if (sc->sc_proto != LAGG_PROTO_ROUNDROBIN) {
 				LAGG_XUNLOCK(sc);
 				error = EINVAL;
 				break;
 			}
 			sc->sc_stride = ro->ro_bkt;
-		} else {
-			sc->sc_stride = 0;
 		}
-
 		if (ro->ro_opts == 0) {
 			LAGG_XUNLOCK(sc);
 			break;
@@ -1289,6 +1295,7 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		case LAGG_OPT_USE_NUMA:
 		case -LAGG_OPT_USE_NUMA:
 		case LAGG_OPT_FLOWIDSHIFT:
+		case LAGG_OPT_RR_LIMIT:
 			valid = 1;
 			lacp = 0;
 			break;
@@ -1298,8 +1305,8 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		case -LAGG_OPT_LACP_RXTEST:
 		case LAGG_OPT_LACP_STRICT:
 		case -LAGG_OPT_LACP_STRICT:
-		case LAGG_OPT_LACP_TIMEOUT:
-		case -LAGG_OPT_LACP_TIMEOUT:
+		case LAGG_OPT_LACP_FAST_TIMO:
+		case -LAGG_OPT_LACP_FAST_TIMO:
 			valid = lacp = 1;
 			break;
 		default:
@@ -1314,14 +1321,23 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			LAGG_XUNLOCK(sc);
 			break;	/* Return from SIOCSLAGGOPTS. */ 
 		}
+
 		/*
 		 * Store new options into sc->sc_opts except for
-		 * FLOWIDSHIFT and LACP options.
+		 * FLOWIDSHIFT, RR and LACP options.
 		 */
 		if (lacp == 0) {
 			if (ro->ro_opts == LAGG_OPT_FLOWIDSHIFT)
 				sc->flowid_shift = ro->ro_flowid_shift;
-			else if (ro->ro_opts > 0)
+			else if (ro->ro_opts == LAGG_OPT_RR_LIMIT) {
+				if (sc->sc_proto != LAGG_PROTO_ROUNDROBIN ||
+				    ro->ro_bkt == 0) {
+					error = EINVAL;
+					LAGG_XUNLOCK(sc);
+					break;
+				}
+				sc->sc_stride = ro->ro_bkt;
+			} else if (ro->ro_opts > 0)
 				sc->sc_opts |= ro->ro_opts;
 			else
 				sc->sc_opts &= ~ro->ro_opts;
@@ -1350,14 +1366,14 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			case -LAGG_OPT_LACP_STRICT:
 				lsc->lsc_strict_mode = 0;
 				break;
-			case LAGG_OPT_LACP_TIMEOUT:
+			case LAGG_OPT_LACP_FAST_TIMO:
 				LACP_LOCK(lsc);
         			LIST_FOREACH(lp, &lsc->lsc_ports, lp_next)
                         		lp->lp_state |= LACP_STATE_TIMEOUT;
 				LACP_UNLOCK(lsc);
 				lsc->lsc_fast_timeout = 1;
 				break;
-			case -LAGG_OPT_LACP_TIMEOUT:
+			case -LAGG_OPT_LACP_FAST_TIMO:
 				LACP_LOCK(lsc);
         			LIST_FOREACH(lp, &lsc->lsc_ports, lp_next)
                         		lp->lp_state &= ~LACP_STATE_TIMEOUT;
@@ -1446,10 +1462,23 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				    tpif->if_xname);
 		}
 #endif
+		oldmtu = ifp->if_mtu;
 		LAGG_XLOCK(sc);
 		error = lagg_port_create(sc, tpif);
 		LAGG_XUNLOCK(sc);
 		if_rele(tpif);
+
+		/*
+		 * LAGG MTU may change during addition of the first port.
+		 * If it did, do network layer specific procedure.
+		 */
+		if (ifp->if_mtu != oldmtu) {
+#ifdef INET6
+			nd6_setmtu(ifp);
+#endif
+			rt_updatemtu(ifp);
+		}
+
 		VLAN_CAPABILITIES(ifp);
 		break;
 	case SIOCSLAGGDELPORT:
@@ -1580,12 +1609,13 @@ mst_to_lst(struct m_snd_tag *mst)
  * contents.
  */
 static struct lagg_port *
-lookup_snd_tag_port(struct ifnet *ifp, uint32_t flowid, uint32_t flowtype)
+lookup_snd_tag_port(struct ifnet *ifp, uint32_t flowid, uint32_t flowtype,
+    uint8_t numa_domain)
 {
 	struct lagg_softc *sc;
 	struct lagg_port *lp;
 	struct lagg_lb *lb;
-	uint32_t p;
+	uint32_t hash, p;
 
 	sc = ifp->if_softc;
 
@@ -1605,7 +1635,8 @@ lookup_snd_tag_port(struct ifnet *ifp, uint32_t flowid, uint32_t flowtype)
 		if ((sc->sc_opts & LAGG_OPT_USE_FLOWID) == 0 ||
 		    flowtype == M_HASHTYPE_NONE)
 			return (NULL);
-		return (lacp_select_tx_port_by_hash(sc, flowid));
+		hash = flowid >> sc->flowid_shift;
+		return (lacp_select_tx_port_by_hash(sc, hash, numa_domain));
 	default:
 		return (NULL);
 	}
@@ -1625,7 +1656,8 @@ lagg_snd_tag_alloc(struct ifnet *ifp,
 	sc = ifp->if_softc;
 
 	LAGG_RLOCK();
-	lp = lookup_snd_tag_port(ifp, params->hdr.flowid, params->hdr.flowtype);
+	lp = lookup_snd_tag_port(ifp, params->hdr.flowid,
+	    params->hdr.flowtype, params->hdr.numa_domain);
 	if (lp == NULL) {
 		LAGG_RUNLOCK();
 		return (EOPNOTSUPP);
@@ -1842,10 +1874,6 @@ lagg_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	error = lagg_proto_start(sc, m);
 	LAGG_RUNLOCK();
-
-	if (error != 0)
-		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
-
 	return (error);
 }
 
@@ -2046,6 +2074,7 @@ static void
 lagg_rr_attach(struct lagg_softc *sc)
 {
 	sc->sc_seq = 0;
+	sc->sc_stride = 1;
 }
 
 static int
@@ -2055,9 +2084,7 @@ lagg_rr_start(struct lagg_softc *sc, struct mbuf *m)
 	uint32_t p;
 
 	p = atomic_fetchadd_32(&sc->sc_seq, 1);
-	if (sc->sc_stride > 0)
-		p /= sc->sc_stride;
-
+	p /= sc->sc_stride;
 	p %= sc->sc_count;
 	lp = CK_SLIST_FIRST(&sc->sc_ports);
 
@@ -2069,6 +2096,7 @@ lagg_rr_start(struct lagg_softc *sc, struct mbuf *m)
 	 * port if the link is down or the port is NULL.
 	 */
 	if ((lp = lagg_link_active(sc, lp)) == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}
@@ -2114,31 +2142,28 @@ lagg_bcast_start(struct lagg_softc *sc, struct mbuf *m)
 				errors++;
 				break;
 			}
-
-			ret = lagg_enqueue(last->lp_ifp, m0);
-			if (ret != 0)
-				errors++;
+			lagg_enqueue(last->lp_ifp, m0);
 		}
 		last = lp;
 	}
 
 	if (last == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENOENT);
 	}
 	if ((last = lagg_link_active(sc, last)) == NULL) {
+		errors++;
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, errors);
 		m_freem(m);
 		return (ENETDOWN);
 	}
 
 	ret = lagg_enqueue(last->lp_ifp, m);
-	if (ret != 0)
-		errors++;
+	if (errors != 0)
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, errors);
 
-	if (errors == 0)
-		return (ret);
-
-	return (0);
+	return (ret);
 }
 
 static struct mbuf*
@@ -2161,6 +2186,7 @@ lagg_fail_start(struct lagg_softc *sc, struct mbuf *m)
 
 	/* Use the master port if active or the next available port */
 	if ((lp = lagg_link_active(sc, sc->sc_primary)) == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}
@@ -2284,6 +2310,7 @@ lagg_lb_start(struct lagg_softc *sc, struct mbuf *m)
 	 * port if the link is down or the port is NULL.
 	 */
 	if ((lp = lagg_link_active(sc, lp)) == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}
@@ -2355,6 +2382,7 @@ lagg_lacp_start(struct lagg_softc *sc, struct mbuf *m)
 
 	lp = lacp_select_tx_port(sc, m);
 	if (lp == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENETDOWN);
 	}

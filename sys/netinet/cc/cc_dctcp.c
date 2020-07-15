@@ -154,10 +154,8 @@ dctcp_ack_received(struct cc_var *ccv, uint16_t type)
 		 * Update the fraction of marked bytes at the end of
 		 * current window size.
 		 */
-		if ((IN_FASTRECOVERY(CCV(ccv, t_flags)) &&
-		    SEQ_GEQ(ccv->curack, CCV(ccv, snd_recover))) ||
-		    (!IN_FASTRECOVERY(CCV(ccv, t_flags)) &&
-		    SEQ_GT(ccv->curack, dctcp_data->save_sndnxt)))
+		if (!IN_FASTRECOVERY(CCV(ccv, t_flags)) &&
+		    SEQ_GT(ccv->curack, dctcp_data->save_sndnxt))
 			dctcp_update_alpha(ccv);
 	} else
 		newreno_cc_algo.ack_received(ccv, type);
@@ -274,9 +272,9 @@ dctcp_cong_signal(struct cc_var *ccv, uint32_t type)
 					dctcp_data->bytes_total = 0;
 					dctcp_data->save_sndnxt = CCV(ccv, snd_nxt);
 				} else
-					CCV(ccv, snd_ssthresh) = 
+					CCV(ccv, snd_ssthresh) =
 					    max((cwin - (((uint64_t)cwin *
-					    dctcp_data->alpha) >> (DCTCP_SHIFT+1))), 
+					    dctcp_data->alpha) >> (DCTCP_SHIFT+1))),
 					    2 * mss);
 				CCV(ccv, snd_cwnd) = CCV(ccv, snd_ssthresh);
 				ENTER_CONGRECOVERY(CCV(ccv, t_flags));
@@ -284,7 +282,6 @@ dctcp_cong_signal(struct cc_var *ccv, uint32_t type)
 			dctcp_data->ece_curr = 1;
 			break;
 		case CC_RTO:
-			CCV(ccv, t_flags2) |= TF2_ECN_SND_CWR;
 			dctcp_update_alpha(ccv);
 			dctcp_data->save_sndnxt += CCV(ccv, t_maxseg);
 			dctcp_data->num_cong_events++;
@@ -447,22 +444,23 @@ dctcp_slowstart_handler(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_DECL(_net_inet_tcp_cc_dctcp);
-SYSCTL_NODE(_net_inet_tcp_cc, OID_AUTO, dctcp, CTLFLAG_RW, NULL,
+SYSCTL_NODE(_net_inet_tcp_cc, OID_AUTO, dctcp,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, NULL,
     "dctcp congestion control related settings");
 
 SYSCTL_PROC(_net_inet_tcp_cc_dctcp, OID_AUTO, alpha,
-    CTLFLAG_VNET|CTLTYPE_UINT|CTLFLAG_RW, &VNET_NAME(dctcp_alpha), 0,
-    &dctcp_alpha_handler,
-    "IU", "dctcp alpha parameter at start of session");
+    CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    &VNET_NAME(dctcp_alpha), 0, &dctcp_alpha_handler, "IU",
+    "dctcp alpha parameter at start of session");
 
 SYSCTL_PROC(_net_inet_tcp_cc_dctcp, OID_AUTO, shift_g,
-    CTLFLAG_VNET|CTLTYPE_UINT|CTLFLAG_RW, &VNET_NAME(dctcp_shift_g), 4,
-    &dctcp_shift_g_handler,
-    "IU", "dctcp shift parameter");
+    CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    &VNET_NAME(dctcp_shift_g), 4, &dctcp_shift_g_handler, "IU",
+    "dctcp shift parameter");
 
 SYSCTL_PROC(_net_inet_tcp_cc_dctcp, OID_AUTO, slowstart,
-    CTLFLAG_VNET|CTLTYPE_UINT|CTLFLAG_RW, &VNET_NAME(dctcp_slowstart), 0,
-    &dctcp_slowstart_handler,
-    "IU", "half CWND reduction after the first slow start");
+    CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    &VNET_NAME(dctcp_slowstart), 0, &dctcp_slowstart_handler, "IU",
+    "half CWND reduction after the first slow start");
 
 DECLARE_CC_MODULE(dctcp, &dctcp_cc_algo);

@@ -113,11 +113,13 @@ options 	SOC_ALLWINNER_A64
 options 	SOC_ALLWINNER_H5
 options 	SOC_ALLWINNER_H6
 options 	SOC_CAVM_THUNDERX
+options 	SOC_FREESCALE_IMX8
 options 	SOC_HISI_HI6220
 options 	SOC_INTEL_STRATIX10
 options 	SOC_BRCM_BCM2837
 options 	SOC_BRCM_BCM2838
 options 	SOC_MARVELL_8K
+options		SOC_NXP_LS
 options 	SOC_ROCKCHIP_RK3328
 options 	SOC_ROCKCHIP_RK3399
 options 	SOC_XILINX_ZYNQ
@@ -147,6 +149,7 @@ device		cpufreq
 
 # Bus drivers
 device		pci
+device		pci_n1sdp	# ARM Neoverse N1 SDP PCI
 device		al_pci		# Annapurna Alpine PCI-E
 options 	PCI_HP			# PCI-Express native HotPlug
 options 	PCI_IOV		# PCI SR-IOV support
@@ -169,6 +172,8 @@ device		vnic		# Cavium ThunderX NIC
 device		al_eth		# Annapurna Alpine Ethernet NIC
 device		dwc_rk		# Rockchip Designware
 device		dwc_socfpga	# Altera SOCFPGA Ethernet MAC
+device		genet		# Broadcom on RPi4
+device		ffec		# iMX FFEC
 
 # Etherswitch devices
 device		etherswitch	# Enable etherswitch support
@@ -202,6 +207,7 @@ device		rk_emmcphy
 
 # Serial (COM) ports
 device		uart		# Generic UART driver
+device		uart_imx	# iMX8 UART
 device		uart_msm	# Qualcomm MSM UART driver
 device		uart_mu		# RPI3 aux port
 device		uart_mvebu	# Armada 3700 UART driver
@@ -245,6 +251,7 @@ device		gpio
 device		gpioled
 device		fdt_pinctrl
 device		gpioregulator
+device		ls1046_gpio	# LS1046A GPIO controller
 device		mv_gpio		# Marvell GPIO controller
 device		mvebu_pinctrl	# Marvell Pinmux Controller
 device		rk_gpio		# RockChip GPIO Controller
@@ -260,6 +267,8 @@ device		twsi		# Allwinner I2C controller
 device		rk_i2c		# RockChip I2C controller
 device		syr827		# Silergy SYR827 PMIC
 device		sy8106a		# SY8106A Buck Regulator
+device		vf_i2c		# Freescale Vybrid I2C controller
+device		fsliic		# Freescale iMX I2C controller
 
 # Clock and reset controllers
 device		aw_ccu		# Allwinner clock controller
@@ -273,6 +282,9 @@ device		mv_ap806_sei	# Marvell AP806 SEI
 # Real-time clock support
 device		aw_rtc		# Allwinner Real-time Clock
 device		mv_rtc		# Marvell Real-time Clock
+
+# Crypto accelerators
+device		safexcel	# Inside Secure EIP-97
 
 # Watchdog controllers
 device		aw_wdog		# Allwinner Watchdog
@@ -297,6 +309,7 @@ device		rk_spi		# RockChip SPI controller
 # PWM
 device		pwm
 device		aw_pwm
+device		rk_pwm
 
 # Console
 device		vt
@@ -346,4 +359,4 @@ options 	FDT
 device		acpi
 
 # DTBs
-makeoptions	MODULES_EXTRA="dtb/allwinner dtb/mv dtb/rockchip dtb/rpi"
+makeoptions	MODULES_EXTRA="dtb/allwinner dtb/imx8 dtb/mv dtb/rockchip dtb/rpi"

@@ -38,7 +38,7 @@ cloudabi64_vdso_blob.o		optional	compat_cloudabi64	\
 #
 linux32_genassym.o		optional	compat_linux32		\
 	dependency 	"$S/amd64/linux32/linux32_genassym.c offset.inc"		\
-	compile-with	"${CC} ${CFLAGS:N-flto:N-fno-common} -c ${.IMPSRC}" \
+	compile-with	"${CC} ${CFLAGS:N-flto:N-fno-common} -fcommon -c ${.IMPSRC}" \
 	no-obj no-implicit-rule						\
 	clean		"linux32_genassym.o"
 #
@@ -62,7 +62,7 @@ linux32_vdso.so		optional	compat_linux32			\
 #
 ia32_genassym.o			standard				\
 	dependency 	"$S/compat/ia32/ia32_genassym.c offset.inc"		\
-	compile-with	"${CC} ${CFLAGS:N-flto:N-fno-common} -c ${.IMPSRC}" \
+	compile-with	"${CC} ${CFLAGS:N-flto:N-fno-common} -fcommon -c ${.IMPSRC}" \
 	no-obj no-implicit-rule						\
 	clean		"ia32_genassym.o"
 #
@@ -71,16 +71,6 @@ ia32_assym.h			standard				\
 	compile-with	"env NM='${NM}' NMFLAGS='${NMFLAGS}' sh $S/kern/genassym.sh ia32_genassym.o > ${.TARGET}" \
 	no-obj no-implicit-rule before-depend				\
 	clean		"ia32_assym.h"
-#
-font.h				optional	sc_dflt_font		\
-	compile-with	"uudecode < /usr/share/syscons/fonts/${SC_DFLT_FONT}-8x16.fnt && file2c 'static u_char dflt_font_16[16*256] = {' '};' < ${SC_DFLT_FONT}-8x16 > font.h && uudecode < /usr/share/syscons/fonts/${SC_DFLT_FONT}-8x14.fnt && file2c 'static u_char dflt_font_14[14*256] = {' '};' < ${SC_DFLT_FONT}-8x14 >> font.h && uudecode < /usr/share/syscons/fonts/${SC_DFLT_FONT}-8x8.fnt && file2c 'static u_char dflt_font_8[8*256] = {' '};' < ${SC_DFLT_FONT}-8x8 >> font.h"									\
-	no-obj no-implicit-rule before-depend				\
-	clean		"font.h ${SC_DFLT_FONT}-8x14 ${SC_DFLT_FONT}-8x16 ${SC_DFLT_FONT}-8x8"
-#
-atkbdmap.h			optional	atkbd_dflt_keymap	\
-	compile-with	"kbdcontrol -P ${S:S/sys$/share/}/vt/keymaps -P ${S:S/sys$/share/}/syscons/keymaps -L ${ATKBD_DFLT_KEYMAP} | sed -e 's/^static keymap_t.* = /static keymap_t key_map = /' -e 's/^static accentmap_t.* = /static accentmap_t accent_map = /' > atkbdmap.h"			\
-	no-obj no-implicit-rule before-depend				\
-	clean		"atkbdmap.h"
 #
 amd64/acpica/acpi_machdep.c	optional	acpi
 acpi_wakecode.o			optional	acpi			\
@@ -122,7 +112,9 @@ amd64/amd64/in_cksum.c		optional	inet | inet6
 amd64/amd64/initcpu.c		standard
 amd64/amd64/io.c		optional	io
 amd64/amd64/locore.S		standard	no-obj
-amd64/amd64/xen-locore.S	optional	xenhvm
+amd64/amd64/xen-locore.S	optional	xenhvm \
+	compile-with "${NORMAL_S} -g0" \
+	no-ctfconvert
 amd64/amd64/machdep.c		standard
 amd64/amd64/mem.c		optional	mem
 amd64/amd64/minidump_machdep.c	standard
@@ -144,9 +136,7 @@ amd64/pci/pci_cfgreg.c		optional	pci
 cddl/dev/dtrace/amd64/dtrace_asm.S			optional dtrace compile-with "${DTRACE_S}"
 cddl/dev/dtrace/amd64/dtrace_subr.c			optional dtrace compile-with "${DTRACE_C}"
 crypto/aesni/aeskeys_amd64.S	optional aesni
-crypto/blowfish/bf_enc.c	optional	crypto | ipsec | ipsec_support
-crypto/des/des_enc.c		optional	crypto | ipsec | \
-	ipsec_support | netsmb
+crypto/des/des_enc.c		optional	netsmb
 dev/acpi_support/acpi_wmi_if.m	standard
 dev/agp/agp_amd64.c		optional	agp
 dev/agp/agp_i810.c		optional	agp
@@ -154,11 +144,59 @@ dev/agp/agp_via.c		optional	agp
 dev/amdgpio/amdgpio.c		optional	amdgpio
 dev/hyperv/vmbus/amd64/hyperv_machdep.c			optional	hyperv
 dev/hyperv/vmbus/amd64/vmbus_vector.S			optional	hyperv
+dev/ice/if_ice_iflib.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_lib.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_osdep.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_resmgr.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_strings.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_iflib_recovery_txrx.c	optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_iflib_txrx.c	optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_common.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_controlq.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_dcb.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_flex_pipe.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_flow.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_nvm.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_sched.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_sriov.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_switch.c		optional	ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+ice_ddp.c			optional ice_ddp	\
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk ice_ddp.fw:ice_ddp:0x01030900 -mice_ddp -c${.TARGET}"	\
+	no-implicit-rule before-depend local		\
+	clean		"ice_ddp.c"
+ice_ddp.fwo			optional ice_ddp	\
+	dependency	"ice_ddp.fw"			\
+	compile-with	"${NORMAL_FWO}"			\
+	no-implicit-rule				\
+	clean		"ice_ddp.fwo"
+ice_ddp.fw			optional ice_ddp	\
+	dependency	"$S/contrib/dev/ice/ice-1.3.9.0.pkg" \
+	compile-with	"${CP} $S/contrib/dev/ice/ice-1.3.9.0.pkg ice_ddp.fw" \
+	no-obj no-implicit-rule				\
+	clean		"ice_ddp.fw"
 dev/ioat/ioat.c			optional	ioat pci
 dev/ioat/ioat_test.c		optional	ioat pci
 dev/ixl/if_ixl.c		optional	ixl pci \
 	compile-with "${NORMAL_C} -I$S/dev/ixl"
 dev/ixl/ixl_pf_main.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/ixl_pf_iflib.c		optional	ixl pci \
 	compile-with "${NORMAL_C} -I$S/dev/ixl"
 dev/ixl/ixl_pf_qmgr.c		optional	ixl pci \
 	compile-with "${NORMAL_C} -I$S/dev/ixl"

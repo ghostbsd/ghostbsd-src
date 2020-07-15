@@ -1171,7 +1171,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	regs->tf_cs = _ucodesel;
 
 	/* PS_STRINGS value for BSD/OS binaries.  It is 0 for non-BSD/OS. */
-	regs->tf_ebx = imgp->ps_strings;
+	regs->tf_ebx = (register_t)imgp->ps_strings;
 
         /*
          * Reset the hardware debug registers if they were in use.
@@ -1607,8 +1607,9 @@ DB_SHOW_COMMAND(sysregs, db_show_sysregs)
 	if (cpu_feature2 & (CPUID2_VMX | CPUID2_SMX))
 		db_printf("FEATURES_CTL\t0x%016llx\n",
 		    rdmsr(MSR_IA32_FEATURE_CONTROL));
-	if ((cpu_vendor_id == CPU_VENDOR_INTEL ||
-	    cpu_vendor_id == CPU_VENDOR_AMD) && CPUID_TO_FAMILY(cpu_id) >= 6)
+	if (((cpu_vendor_id == CPU_VENDOR_INTEL ||
+	    cpu_vendor_id == CPU_VENDOR_AMD) && CPUID_TO_FAMILY(cpu_id) >= 6) ||
+	    cpu_vendor_id == CPU_VENDOR_HYGON)
 		db_printf("DEBUG_CTL\t0x%016llx\n", rdmsr(MSR_DEBUGCTLMSR));
 	if (cpu_feature & CPUID_PAT)
 		db_printf("PAT\t0x%016llx\n", rdmsr(MSR_PAT));
@@ -1827,7 +1828,7 @@ getmemsize(int first)
 	 * Tell the physical memory allocator about pages used to store
 	 * the kernel and preloaded data.  See kmem_bootstrap_free().
 	 */
-	vm_phys_add_seg((vm_paddr_t)KERNLOAD, trunc_page(first));
+	vm_phys_early_add_seg((vm_paddr_t)KERNLOAD, trunc_page(first));
 
 	TUNABLE_INT_FETCH("hw.above4g_allow", &above4g_allow);
 	TUNABLE_INT_FETCH("hw.above24g_allow", &above24g_allow);
@@ -2179,7 +2180,7 @@ static void
 i386_kdb_init(void)
 {
 #ifdef DDB
-	db_fetch_ksymtab(bootinfo.bi_symtab, bootinfo.bi_esymtab);
+	db_fetch_ksymtab(bootinfo.bi_symtab, bootinfo.bi_esymtab, 0);
 #endif
 	kdb_init();
 #ifdef KDB
@@ -2665,8 +2666,10 @@ smap_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	}
 	return (error);
 }
-SYSCTL_PROC(_machdep, OID_AUTO, smap, CTLTYPE_OPAQUE|CTLFLAG_RD, NULL, 0,
-    smap_sysctl_handler, "S,bios_smap_xattr", "Raw BIOS SMAP data");
+SYSCTL_PROC(_machdep, OID_AUTO, smap,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    smap_sysctl_handler, "S,bios_smap_xattr",
+    "Raw BIOS SMAP data");
 
 void
 spinlock_enter(void)

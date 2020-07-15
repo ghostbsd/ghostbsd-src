@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (c) 2012 Hans Petter Selasky. All rights reserved.
+ * Copyright (c) 2012 Hans Petter Selasky.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -80,6 +80,20 @@ dwc_otg_probe(device_t dev)
 	return (BUS_PROBE_DEFAULT);
 }
 
+static int
+dwc_otg_irq_index(device_t dev, int *rid)
+{
+	int idx, rv;
+	phandle_t node;
+
+	node = ofw_bus_get_node(dev);
+	rv = ofw_bus_find_string_index(node, "interrupt-names", "usb", &idx);
+	if (rv != 0)
+		return (rv);
+	*rid = idx;
+	return (0);
+}
+
 int
 dwc_otg_attach(device_t dev)
 {
@@ -88,11 +102,7 @@ dwc_otg_attach(device_t dev)
 	int err;
 	int rid;
 
-	/* initialise some bus fields */
 	sc->sc_otg.sc_bus.parent = dev;
-	sc->sc_otg.sc_bus.devices = sc->sc_otg.sc_devices;
-	sc->sc_otg.sc_bus.devices_max = DWC_OTG_MAX_DEVICES;
-	sc->sc_otg.sc_bus.dma_bits = 32;
 
 	/* get USB mode, if any */
 	if (OF_getprop(ofw_bus_get_node(dev), "dr_mode",
@@ -111,29 +121,24 @@ dwc_otg_attach(device_t dev)
 		}
 	}
 
-	/* get all DMA memory */
-	if (usb_bus_mem_alloc_all(&sc->sc_otg.sc_bus,
-	    USB_GET_DMA_TAG(dev), NULL)) {
-		return (ENOMEM);
-	}
 	rid = 0;
 	sc->sc_otg.sc_io_res =
 	    bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
 
-	if (!(sc->sc_otg.sc_io_res)) {
-		err = ENOMEM;
+	if (!(sc->sc_otg.sc_io_res))
 		goto error;
-	}
-	sc->sc_otg.sc_io_tag = rman_get_bustag(sc->sc_otg.sc_io_res);
-	sc->sc_otg.sc_io_hdl = rman_get_bushandle(sc->sc_otg.sc_io_res);
-	sc->sc_otg.sc_io_size = rman_get_size(sc->sc_otg.sc_io_res);
-
 
 	/*
-	 * brcm,bcm2708-usb FDT provides two interrupts,
-	 * we need only second one (VC_USB)
+	 * brcm,bcm2708-usb FDT provides two interrupts, we need only the USB
+	 * interrupt (VC_USB).  The latest FDT for it provides an
+	 * interrupt-names property and swapped them around, while older ones
+	 * did not have interrupt-names and put the usb interrupt in the second
+	 * position.  We'll attempt to use interrupt-names first with a fallback
+	 * to the old method of assuming the index based on the compatible
+	 * string.
 	 */
-	rid = ofw_bus_is_compatible(dev, "brcm,bcm2708-usb") ? 1 : 0;
+	if (dwc_otg_irq_index(dev, &rid) != 0)
+		rid = ofw_bus_is_compatible(dev, "brcm,bcm2708-usb") ? 1 : 0;
 	sc->sc_otg.sc_irq_res =
 	    bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_ACTIVE);
 	if (sc->sc_otg.sc_irq_res == NULL)
@@ -143,21 +148,12 @@ dwc_otg_attach(device_t dev)
 	if (sc->sc_otg.sc_bus.bdev == NULL)
 		goto error;
 
-	device_set_ivars(sc->sc_otg.sc_bus.bdev, &sc->sc_otg.sc_bus);
-
-	err = bus_setup_intr(dev, sc->sc_otg.sc_irq_res, INTR_TYPE_TTY | INTR_MPSAFE,
-	    &dwc_otg_filter_interrupt, &dwc_otg_interrupt, sc, &sc->sc_otg.sc_intr_hdl);
-	if (err) {
-		sc->sc_otg.sc_intr_hdl = NULL;
-		goto error;
-	}
 	err = dwc_otg_init(&sc->sc_otg);
 	if (err == 0) {
 		err = device_probe_and_attach(sc->sc_otg.sc_bus.bdev);
 	}
 	if (err)
 		goto error;
-
 
 	return (0);
 

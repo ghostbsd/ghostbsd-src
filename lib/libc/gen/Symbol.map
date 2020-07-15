@@ -423,6 +423,7 @@ FBSD_1.5 {
 };
 
 FBSD_1.6 {
+	memalign;
 	sigandset;
 	sigisemptyset;
 	sigorset;
@@ -510,7 +511,6 @@ FBSDprivate_1.0 {
 	/* __pw_match_entry; */
 	/* __pw_parse_entry; */
 	__fdnlist;	/* used by libkvm */
-	/* __aout_fdnlist; */
 	/* __elf_is_okay__; */
 	/* __elf_fdnlist; */
 	__opendir2;

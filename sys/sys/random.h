@@ -92,7 +92,6 @@ enum random_entropy_source {
 	RANDOM_PURE_OCTEON = RANDOM_PURE_START,
 	RANDOM_PURE_SAFE,
 	RANDOM_PURE_GLXSB,
-	RANDOM_PURE_UBSEC,
 	RANDOM_PURE_HIFN,
 	RANDOM_PURE_RDRAND,
 	RANDOM_PURE_NEHEMIAH,
@@ -159,6 +158,7 @@ void random_harvest_deregister_source(enum random_entropy_source);
 
 #define GRND_NONBLOCK	0x1
 #define GRND_RANDOM	0x2
+#define GRND_INSECURE	0x4
 
 __BEGIN_DECLS
 ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);

@@ -53,7 +53,8 @@ __FBSDID("$FreeBSD$");
 FEATURE(geom_multipath, "GEOM multipath support");
 
 SYSCTL_DECL(_kern_geom);
-static SYSCTL_NODE(_kern_geom, OID_AUTO, multipath, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_kern_geom, OID_AUTO, multipath,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "GEOM_MULTIPATH tunables");
 static u_int g_multipath_debug = 0;
 SYSCTL_UINT(_kern_geom_multipath, OID_AUTO, debug, CTLFLAG_RW,
@@ -943,7 +944,7 @@ g_multipath_ctl_add_name(struct gctl_req *req, struct g_class *mp,
 	struct g_consumer *cp;
 	struct g_provider *pp;
 	const char *mpname;
-	static const char devpf[6] = "/dev/";
+	static const char devpf[6] = _PATH_DEV;
 	int error;
 
 	g_topology_assert();
@@ -1006,7 +1007,7 @@ g_multipath_ctl_prefer(struct gctl_req *req, struct g_class *mp)
 	struct g_multipath_softc *sc;
 	struct g_consumer *cp;
 	const char *name, *mpname;
-	static const char devpf[6] = "/dev/";
+	static const char devpf[6] = _PATH_DEV;
 	int *nargs;
 
 	g_topology_assert();

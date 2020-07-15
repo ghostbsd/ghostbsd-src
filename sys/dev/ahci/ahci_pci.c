@@ -90,6 +90,7 @@ static const struct {
 	{0x06221b21, 0x00, "ASMedia ASM106x",	AHCI_Q_NOCCS|AHCI_Q_NOAUX},
 	{0x06241b21, 0x00, "ASMedia ASM106x",	AHCI_Q_NOCCS|AHCI_Q_NOAUX},
 	{0x06251b21, 0x00, "ASMedia ASM106x",	AHCI_Q_NOCCS|AHCI_Q_NOAUX},
+	{0x79011d94, 0x00, "Hygon KERNCZ",	0},
 	{0x26528086, 0x00, "Intel ICH6",	AHCI_Q_NOFORCE},
 	{0x26538086, 0x00, "Intel ICH6M",	AHCI_Q_NOFORCE},
 	{0x26818086, 0x00, "Intel ESB2",	0},
@@ -246,6 +247,7 @@ static const struct {
 	{0x2365197b, 0x00, "JMicron JMB365",	AHCI_Q_NOFORCE},
 	{0x2366197b, 0x00, "JMicron JMB366",	AHCI_Q_NOFORCE},
 	{0x2368197b, 0x00, "JMicron JMB368",	AHCI_Q_NOFORCE},
+	{0x0585197b, 0x00, "JMicron JMB58x",	0},
 	{0x611111ab, 0x00, "Marvell 88SE6111",	AHCI_Q_NOFORCE | AHCI_Q_NOPMP |
 	    AHCI_Q_1CH | AHCI_Q_EDGEIS},
 	{0x612111ab, 0x00, "Marvell 88SE6121",	AHCI_Q_NOFORCE | AHCI_Q_NOPMP |
@@ -398,6 +400,7 @@ ahci_probe(device_t dev)
 		     !(ahci_ids[i].quirks & AHCI_Q_NOFORCE)))) {
 			/* Do not attach JMicrons with single PCI function. */
 			if (pci_get_vendor(dev) == 0x197b &&
+			    (ahci_ids[i].quirks & AHCI_Q_NOFORCE) &&
 			    (pci_read_config(dev, 0xdf, 1) & 0x40) == 0)
 				return (ENXIO);
 			snprintf(buf, sizeof(buf), "%s AHCI SATA controller",
@@ -467,6 +470,7 @@ ahci_pci_attach(device_t dev)
 	uint8_t revid = pci_get_revid(dev);
 	int msi_count, msix_count;
 	uint8_t table_bar = 0, pba_bar = 0;
+	uint32_t caps, pi;
 
 	msi_count = pci_msi_count(dev);
 	msix_count = pci_msix_count(dev);
@@ -601,9 +605,12 @@ ahci_pci_attach(device_t dev)
 
 	/* Setup MSI register parameters */
 	/* Process hints. */
+	caps = ATA_INL(ctlr->r_mem, AHCI_CAP);
+	pi = ATA_INL(ctlr->r_mem, AHCI_PI);
 	if (ctlr->quirks & AHCI_Q_NOMSI)
 		ctlr->msi = 0;
-	else if (ctlr->quirks & AHCI_Q_1MSI)
+	else if ((ctlr->quirks & AHCI_Q_1MSI) ||
+	    ((caps & (AHCI_CAP_NPMASK | AHCI_CAP_CCCS)) == 0 && pi == 1))
 		ctlr->msi = 1;
 	else
 		ctlr->msi = 2;

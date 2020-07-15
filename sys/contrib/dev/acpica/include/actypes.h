@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2019, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2020, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -683,11 +683,12 @@ typedef UINT64                          ACPI_INTEGER;
                                       strnlen (a, ACPI_NAMESEG_SIZE) == ACPI_NAMESEG_SIZE)
 
 /*
- * Algorithm to obtain access bit width.
- * Can be used with AccessWidth of ACPI_GENERIC_ADDRESS and AccessSize of
+ * Algorithm to obtain access bit or byte width.
+ * Can be used with AccessSize field of ACPI_GENERIC_ADDRESS and
  * ACPI_RESOURCE_GENERIC_REGISTER.
  */
-#define ACPI_ACCESS_BIT_WIDTH(size)     (1 << ((size) + 2))
+#define ACPI_ACCESS_BIT_WIDTH(AccessSize)   (1 << ((AccessSize) + 2))
+#define ACPI_ACCESS_BYTE_WIDTH(AccessSize)  (1 << ((AccessSize) - 1))
 
 
 /*******************************************************************************
@@ -967,8 +968,9 @@ typedef UINT8                           ACPI_ADR_SPACE_TYPE;
 #define ACPI_ADR_SPACE_GPIO             (ACPI_ADR_SPACE_TYPE) 8
 #define ACPI_ADR_SPACE_GSBUS            (ACPI_ADR_SPACE_TYPE) 9
 #define ACPI_ADR_SPACE_PLATFORM_COMM    (ACPI_ADR_SPACE_TYPE) 10
+#define ACPI_ADR_SPACE_PLATFORM_RT      (ACPI_ADR_SPACE_TYPE) 11
 
-#define ACPI_NUM_PREDEFINED_REGIONS     11
+#define ACPI_NUM_PREDEFINED_REGIONS     12
 
 /*
  * Special Address Spaces

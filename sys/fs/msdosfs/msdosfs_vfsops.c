@@ -190,7 +190,6 @@ static int
 msdosfs_cmount(struct mntarg *ma, void *data, uint64_t flags)
 {
 	struct msdosfs_args args;
-	struct export_args exp;
 	int error;
 
 	if (data == NULL)
@@ -198,10 +197,9 @@ msdosfs_cmount(struct mntarg *ma, void *data, uint64_t flags)
 	error = copyin(data, &args, sizeof args);
 	if (error)
 		return (error);
-	vfs_oexport_conv(&args.export, &exp);
 
 	ma = mount_argsu(ma, "from", args.fspec, MAXPATHLEN);
-	ma = mount_arg(ma, "export", &exp, sizeof(exp));
+	ma = mount_arg(ma, "export", &args.export, sizeof(args.export));
 	ma = mount_argf(ma, "uid", "%d", args.uid);
 	ma = mount_argf(ma, "gid", "%d", args.gid);
 	ma = mount_argf(ma, "mask", "%d", args.mask);
@@ -792,7 +790,7 @@ msdosfs_unmount(struct mount *mp, int mntflags)
 		vn_printf(vp,
 		    "msdosfs_umount(): just before calling VOP_CLOSE()\n");
 		printf("freef %p, freeb %p, mount %p\n",
-		    TAILQ_NEXT(vp, v_actfreelist), vp->v_actfreelist.tqe_prev,
+		    TAILQ_NEXT(vp, v_vnodelist), vp->v_vnodelist.tqe_prev,
 		    vp->v_mount);
 		printf("cleanblkhd %p, dirtyblkhd %p, numoutput %ld, type %d\n",
 		    TAILQ_FIRST(&vp->v_bufobj.bo_clean.bv_hd),

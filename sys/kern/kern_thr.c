@@ -64,7 +64,7 @@ __FBSDID("$FreeBSD$");
 
 #include <security/audit/audit.h>
 
-static SYSCTL_NODE(_kern, OID_AUTO, threads, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_kern, OID_AUTO, threads, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "thread allocation");
 
 static int max_threads_per_proc = 1500;
@@ -271,14 +271,12 @@ thread_create(struct thread *td, struct rtprio *rtp,
 
 	tidhash_add(newtd);
 
+	/* ignore timesharing class */
+	if (rtp != NULL && !(td->td_pri_class == PRI_TIMESHARE &&
+	    rtp->type == RTP_PRIO_NORMAL))
+		rtp_to_pri(rtp, newtd);
+
 	thread_lock(newtd);
-	if (rtp != NULL) {
-		if (!(td->td_pri_class == PRI_TIMESHARE &&
-		      rtp->type == RTP_PRIO_NORMAL)) {
-			rtp_to_pri(rtp, newtd);
-			sched_prio(newtd, newtd->td_user_pri);
-		} /* ignore timesharing class */
-	}
 	TD_SET_CAN_RUN(newtd);
 	sched_add(newtd, SRQ_BORING);
 

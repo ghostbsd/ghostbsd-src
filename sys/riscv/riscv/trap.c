@@ -41,7 +41,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/ktr.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
-#include <sys/pioctl.h>
 #include <sys/bus.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
@@ -148,6 +147,11 @@ dump_regs(struct trapframe *frame)
 	for (i = 0; i < n; i++)
 		printf("a[%d] == 0x%016lx\n", i, frame->tf_a[i]);
 
+	printf("ra == 0x%016lx\n", frame->tf_ra);
+	printf("sp == 0x%016lx\n", frame->tf_sp);
+	printf("gp == 0x%016lx\n", frame->tf_gp);
+	printf("tp == 0x%016lx\n", frame->tf_tp);
+
 	printf("sepc == 0x%016lx\n", frame->tf_sepc);
 	printf("sstatus == 0x%016lx\n", frame->tf_sstatus);
 }
@@ -245,12 +249,10 @@ void
 do_trap_supervisor(struct trapframe *frame)
 {
 	uint64_t exception;
-	uint64_t sstatus;
 
 	/* Ensure we came from supervisor mode, interrupts disabled */
-	__asm __volatile("csrr %0, sstatus" : "=&r" (sstatus));
-	KASSERT((sstatus & (SSTATUS_SPP | SSTATUS_SIE)) == SSTATUS_SPP,
-			("We must came from S mode with interrupts disabled"));
+	KASSERT((csr_read(sstatus) & (SSTATUS_SPP | SSTATUS_SIE)) ==
+	    SSTATUS_SPP, ("Came from S mode with interrupts enabled"));
 
 	exception = (frame->tf_scause & EXCP_MASK);
 	if (frame->tf_scause & EXCP_INTR) {
@@ -277,10 +279,9 @@ do_trap_supervisor(struct trapframe *frame)
 		break;
 	case EXCP_BREAKPOINT:
 #ifdef KDTRACE_HOOKS
-		if (dtrace_invop_jump_addr != 0) {
-			dtrace_invop_jump_addr(frame);
-			break;
-		}
+		if (dtrace_invop_jump_addr != NULL &&
+		    dtrace_invop_jump_addr(frame) == 0)
+				break;
 #endif
 #ifdef KDB
 		kdb_trap(exception, 0, frame);
@@ -305,7 +306,6 @@ do_trap_user(struct trapframe *frame)
 {
 	uint64_t exception;
 	struct thread *td;
-	uint64_t sstatus;
 	struct pcb *pcb;
 
 	td = curthread;
@@ -313,9 +313,8 @@ do_trap_user(struct trapframe *frame)
 	pcb = td->td_pcb;
 
 	/* Ensure we came from usermode, interrupts disabled */
-	__asm __volatile("csrr %0, sstatus" : "=&r" (sstatus));
-	KASSERT((sstatus & (SSTATUS_SPP | SSTATUS_SIE)) == 0,
-			("We must came from U mode with interrupts disabled"));
+	KASSERT((csr_read(sstatus) & (SSTATUS_SPP | SSTATUS_SIE)) == 0,
+	    ("Came from U mode with interrupts enabled"));
 
 	exception = (frame->tf_scause & EXCP_MASK);
 	if (frame->tf_scause & EXCP_INTR) {

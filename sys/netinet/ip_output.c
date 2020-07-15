@@ -67,9 +67,7 @@ __FBSDID("$FreeBSD$");
 #include <net/netisr.h>
 #include <net/pfil.h>
 #include <net/route.h>
-#ifdef RADIX_MPATH
-#include <net/radix_mpath.h>
-#endif
+#include <net/route/nhop.h>
 #include <net/rss_config.h>
 #include <net/vnet.h>
 
@@ -78,6 +76,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_kdtrace.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
+#include <netinet/in_fib.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_rss.h>
 #include <netinet/in_var.h>
@@ -87,7 +86,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
 
-#ifdef SCTP
+#if defined(SCTP) || defined(SCTP_SUPPORT)
 #include <netinet/sctp.h>
 #include <netinet/sctp_crc32.h>
 #endif
@@ -155,7 +154,7 @@ ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, int flags,
 			}
 			m->m_pkthdr.csum_flags |=
 				CSUM_IP_CHECKED | CSUM_IP_VALID;
-#ifdef SCTP
+#if defined(SCTP) || defined(SCTP_SUPPORT)
 			if (m->m_pkthdr.csum_flags & CSUM_SCTP)
 				m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
 #endif
@@ -186,7 +185,7 @@ ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, int flags,
 				CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 			m->m_pkthdr.csum_data = 0xffff;
 		}
-#ifdef SCTP
+#if defined(SCTP) || defined(SCTP_SUPPORT)
 		if (m->m_pkthdr.csum_flags & CSUM_SCTP)
 			m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
 #endif
@@ -231,7 +230,7 @@ ip_output_send(struct inpcb *inp, struct ifnet *ifp, struct mbuf *m,
 	 * dropping the mbuf's reference) in if_output.
 	 */
 	if (m->m_next != NULL && mbuf_has_tls_session(m->m_next)) {
-		tls = ktls_hold(m->m_next->m_ext.ext_pgs->tls);
+		tls = ktls_hold(m->m_next->m_epg_tls);
 		mst = tls->snd_tag;
 
 		/*
@@ -243,6 +242,10 @@ ip_output_send(struct inpcb *inp, struct ifnet *ifp, struct mbuf *m,
 			error = EAGAIN;
 			goto done;
 		}
+		/*
+		 * Always stamp tags that include NIC ktls.
+		 */
+		stamp_tag = true;
 	}
 #endif
 #ifdef RATELIMIT
@@ -287,6 +290,19 @@ done:
 	return (error);
 }
 
+/* rte<>ro_flags translation */
+static inline void
+rt_update_ro_flags(struct route *ro)
+{
+	int nh_flags = ro->ro_nh->nh_flags;
+
+	ro->ro_flags &= ~ (RT_REJECT|RT_BLACKHOLE|RT_HAS_GW);
+
+	ro->ro_flags |= (nh_flags & NHF_REJECT) ? RT_REJECT : 0;
+	ro->ro_flags |= (nh_flags & NHF_BLACKHOLE) ? RT_BLACKHOLE : 0;
+	ro->ro_flags |= (nh_flags & NHF_GATEWAY) ? RT_HAS_GW : 0;
+}
+
 /*
  * IP output.  The packet in mbuf chain m contains a skeletal IP
  * header (with len, off, ttl, proto, tos, src, dst).
@@ -304,7 +320,6 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
     struct ip_moptions *imo, struct inpcb *inp)
 {
 	struct rm_priotracker in_ifa_tracker;
-	struct epoch_tracker et;
 	struct ip *ip;
 	struct ifnet *ifp = NULL;	/* keep compiler happy */
 	struct mbuf *m0;
@@ -323,6 +338,7 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 #endif
 
 	M_ASSERTPKTHDR(m);
+	NET_EPOCH_ASSERT();
 
 	if (inp != NULL) {
 		INP_LOCK_ASSERT(inp);
@@ -368,21 +384,20 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		dst = (struct sockaddr_in *)&ro->ro_dst;
 	else
 		dst = &sin;
-	if (ro == NULL || ro->ro_rt == NULL) {
+	if (ro == NULL || ro->ro_nh == NULL) {
 		bzero(dst, sizeof(*dst));
 		dst->sin_family = AF_INET;
 		dst->sin_len = sizeof(*dst);
 		dst->sin_addr = ip->ip_dst;
 	}
 	gw = dst;
-	NET_EPOCH_ENTER(et);
 again:
 	/*
 	 * Validate route against routing table additions;
 	 * a better/more specific route might have been added.
 	 */
-	if (inp != NULL && ro != NULL && ro->ro_rt != NULL)
-		RT_VALIDATE(ro, &inp->inp_rt_cookie, fibnum);
+	if (inp != NULL && ro != NULL && ro->ro_nh != NULL)
+		NH_VALIDATE(ro, &inp->inp_rt_cookie, fibnum);
 	/*
 	 * If there is a cached route,
 	 * check that it is to the same destination
@@ -391,10 +406,8 @@ again:
 	 * cache with IPv6.
 	 * Also check whether routing cache needs invalidation.
 	 */
-	if (ro != NULL && ro->ro_rt != NULL &&
-	    ((ro->ro_rt->rt_flags & RTF_UP) == 0 ||
-	    ro->ro_rt->rt_ifp == NULL || !RT_LINK_IS_UP(ro->ro_rt->rt_ifp) ||
-	    dst->sin_family != AF_INET ||
+	if (ro != NULL && ro->ro_nh != NULL &&
+	    ((!NH_IS_VALID(ro->ro_nh)) || dst->sin_family != AF_INET ||
 	    dst->sin_addr.s_addr != ip->ip_dst.s_addr))
 		RO_INVALIDATE_CACHE(ro);
 	ia = NULL;
@@ -451,23 +464,22 @@ again:
 		else
 			src.s_addr = INADDR_ANY;
 	} else if (ro != NULL) {
-		if (ro->ro_rt == NULL) {
+		if (ro->ro_nh == NULL) {
 			/*
 			 * We want to do any cloning requested by the link
 			 * layer, as this is probably required in all cases
 			 * for correct operation (as it is for ARP).
 			 */
+			uint32_t flowid;
 #ifdef RADIX_MPATH
-			rtalloc_mpath_fib(ro,
-			    ntohl(ip->ip_src.s_addr ^ ip->ip_dst.s_addr),
-			    fibnum);
+			flowid = ntohl(ip->ip_src.s_addr ^ ip->ip_dst.s_addr);
 #else
-			in_rtalloc_ign(ro, 0, fibnum);
+			flowid = m->m_pkthdr.flowid;
 #endif
-			if (ro->ro_rt == NULL ||
-			    (ro->ro_rt->rt_flags & RTF_UP) == 0 ||
-			    ro->ro_rt->rt_ifp == NULL ||
-			    !RT_LINK_IS_UP(ro->ro_rt->rt_ifp)) {
+			ro->ro_nh = fib4_lookup(fibnum, dst->sin_addr, 0,
+			    NHR_REF, flowid);
+
+			if (ro->ro_nh == NULL || (!NH_IS_VALID(ro->ro_nh))) {
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 				/*
 				 * There is no route for this packet, but it is
@@ -482,29 +494,28 @@ again:
 				goto bad;
 			}
 		}
-		ia = ifatoia(ro->ro_rt->rt_ifa);
-		ifp = ro->ro_rt->rt_ifp;
-		counter_u64_add(ro->ro_rt->rt_pksent, 1);
+		ia = ifatoia(ro->ro_nh->nh_ifa);
+		ifp = ro->ro_nh->nh_ifp;
+		counter_u64_add(ro->ro_nh->nh_pksent, 1);
 		rt_update_ro_flags(ro);
-		if (ro->ro_rt->rt_flags & RTF_GATEWAY)
-			gw = (struct sockaddr_in *)ro->ro_rt->rt_gateway;
-		if (ro->ro_rt->rt_flags & RTF_HOST)
-			isbroadcast = (ro->ro_rt->rt_flags & RTF_BROADCAST);
+		if (ro->ro_nh->nh_flags & NHF_GATEWAY)
+			gw = &ro->ro_nh->gw4_sa;
+		if (ro->ro_nh->nh_flags & NHF_HOST)
+			isbroadcast = (ro->ro_nh->nh_flags & NHF_BROADCAST);
 		else if (ifp->if_flags & IFF_BROADCAST)
 			isbroadcast = in_ifaddr_broadcast(gw->sin_addr, ia);
 		else
 			isbroadcast = 0;
-		if (ro->ro_rt->rt_flags & RTF_HOST)
-			mtu = ro->ro_rt->rt_mtu;
+		if (ro->ro_nh->nh_flags & NHF_HOST)
+			mtu = ro->ro_nh->nh_mtu;
 		else
 			mtu = ifp->if_mtu;
 		src = IA_SIN(ia)->sin_addr;
 	} else {
-		struct nhop4_extended nh;
+		struct nhop_object *nh;
 
-		bzero(&nh, sizeof(nh));
-		if (fib4_lookup_nh_ext(M_GETFIB(m), ip->ip_dst, 0, 0, &nh) !=
-		    0) {
+		nh = fib4_lookup(M_GETFIB(m), ip->ip_dst, 0, NHR_NONE, 0);
+		if (nh == NULL) {
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 			/*
 			 * There is no route for this packet, but it is
@@ -518,8 +529,8 @@ again:
 			error = EHOSTUNREACH;
 			goto bad;
 		}
-		ifp = nh.nh_ifp;
-		mtu = nh.nh_mtu;
+		ifp = nh->nh_ifp;
+		mtu = nh->nh_mtu;
 		/*
 		 * We are rewriting here dst to be gw actually, contradicting
 		 * comment at the beginning of the function. However, in this
@@ -528,19 +539,20 @@ again:
 		 * function, the dst would be rewritten by ip_output_pfil().
 		 */
 		MPASS(dst == &sin);
-		dst->sin_addr = nh.nh_addr;
-		ia = nh.nh_ia;
-		src = nh.nh_src;
-		isbroadcast = (((nh.nh_flags & (NHF_HOST | NHF_BROADCAST)) ==
+		if (nh->nh_flags & NHF_GATEWAY)
+			dst->sin_addr = nh->gw4_sa.sin_addr;
+		ia = ifatoia(nh->nh_ifa);
+		src = IA_SIN(ia)->sin_addr;
+		isbroadcast = (((nh->nh_flags & (NHF_HOST | NHF_BROADCAST)) ==
 		    (NHF_HOST | NHF_BROADCAST)) ||
 		    ((ifp->if_flags & IFF_BROADCAST) &&
 		    in_ifaddr_broadcast(dst->sin_addr, ia)));
 	}
 
 	/* Catch a possible divide by zero later. */
-	KASSERT(mtu > 0, ("%s: mtu %d <= 0, ro=%p (rt_flags=0x%08x) ifp=%p",
+	KASSERT(mtu > 0, ("%s: mtu %d <= 0, ro=%p (nh_flags=0x%08x) ifp=%p",
 	    __func__, mtu, ro,
-	    (ro != NULL && ro->ro_rt != NULL) ? ro->ro_rt->rt_flags : 0, ifp));
+	    (ro != NULL && ro->ro_nh != NULL) ? ro->ro_nh->nh_flags : 0, ifp));
 
 	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
 		m->m_flags |= M_MCAST;
@@ -703,7 +715,7 @@ sendit:
 		case -1: /* Need to try again */
 			/* Reset everything for a new round */
 			if (ro != NULL) {
-				RO_RTFREE(ro);
+				RO_NHFREE(ro);
 				ro->ro_prepend = NULL;
 			}
 			gw = dst;
@@ -741,7 +753,7 @@ sendit:
 			goto bad;
 		}
 	}
-#ifdef SCTP
+#if defined(SCTP) || defined(SCTP_SUPPORT)
 	if (m->m_pkthdr.csum_flags & CSUM_SCTP & ~ifp->if_hwassist) {
 		m = mb_unmapped_to_ext(m);
 		if (m == NULL) {
@@ -837,7 +849,6 @@ sendit:
 		IPSTAT_INC(ips_fragmented);
 
 done:
-	NET_EPOCH_EXIT(et);
 	return (error);
  bad:
 	m_freem(m);
@@ -894,7 +905,7 @@ ip_fragment(struct ip *ip, struct mbuf **m_frag, int mtu,
 		in_delayed_cksum(m0);
 		m0->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
 	}
-#ifdef SCTP
+#if defined(SCTP) || defined(SCTP_SUPPORT)
 	if (m0->m_pkthdr.csum_flags & CSUM_SCTP) {
 		m0 = mb_unmapped_to_ext(m0);
 		if (m0 == NULL) {

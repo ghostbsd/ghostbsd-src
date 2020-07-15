@@ -80,6 +80,7 @@ struct vtnet_rxq {
 	struct taskqueue	*vtnrx_tq;
 	struct task		 vtnrx_intrtask;
 #ifdef DEV_NETMAP
+	uint32_t		 vtnrx_nm_refill;
 	struct virtio_net_hdr_mrg_rxbuf vtnrx_shrhdr;
 #endif  /* DEV_NETMAP */
 	char			 vtnrx_name[16];
@@ -136,6 +137,7 @@ struct vtnet_softc {
 	struct ifnet		*vtnet_ifp;
 	struct vtnet_rxq	*vtnet_rxqs;
 	struct vtnet_txq	*vtnet_txqs;
+	pfil_head_t		 vtnet_pfil;
 
 	uint32_t		 vtnet_flags;
 #define VTNET_FLAG_SUSPENDED	 0x0001
@@ -217,15 +219,20 @@ struct vtnet_softc {
  * When mergeable buffers are not negotiated, the vtnet_rx_header structure
  * below is placed at the beginning of the mbuf data. Use 4 bytes of pad to
  * both keep the VirtIO header and the data non-contiguous and to keep the
- * frame's payload 4 byte aligned.
+ * frame's payload 4 byte aligned. Note that non-legacy drivers still want
+ * room for a full mergeable buffer header.
  *
  * When mergeable buffers are negotiated, the host puts the VirtIO header in
  * the beginning of the first mbuf's data.
  */
 #define VTNET_RX_HEADER_PAD	4
 struct vtnet_rx_header {
-	struct virtio_net_hdr	vrh_hdr;
-	char			vrh_pad[VTNET_RX_HEADER_PAD];
+	union {
+		struct virtio_net_hdr		hdr;
+		struct virtio_net_hdr_mrg_rxbuf	mhdr;
+	} vrh_uhdr;
+
+	char	vrh_pad[VTNET_RX_HEADER_PAD];
 } __packed;
 
 /*
@@ -294,7 +301,8 @@ CTASSERT(sizeof(struct vtnet_mac_filter) <= PAGE_SIZE);
      VIRTIO_NET_F_MRG_RXBUF		| \
      VIRTIO_NET_F_MQ			| \
      VIRTIO_RING_F_EVENT_IDX		| \
-     VIRTIO_RING_F_INDIRECT_DESC)
+     VIRTIO_RING_F_INDIRECT_DESC	| \
+     VIRTIO_F_VERSION_1)
 
 /*
  * The VIRTIO_NET_F_HOST_TSO[46] features permit us to send the host
@@ -363,5 +371,11 @@ CTASSERT(((VTNET_MAX_TX_SEGS - 1) * MCLBYTES) >= VTNET_MAX_MTU);
     mtx_init(VTNET_CORE_MTX((_sc)), (_sc)->vtnet_mtx_name,		\
         "VTNET Core Lock", MTX_DEF);					\
 } while (0)
+
+/*
+ * Values for the init_mode argument of vtnet_init_locked().
+ */
+#define VTNET_INIT_NETMAP_ENTER		1
+#define VTNET_INIT_NETMAP_EXIT		2
 
 #endif /* _IF_VTNETVAR_H */

@@ -29,8 +29,11 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/types.h>
+#include <sys/eventhandler.h>
+#include <sys/reboot.h>
 
 #include <machine/md_var.h>
 #include <machine/sbi.h>
@@ -80,6 +83,13 @@ sbi_get_mimpid(void)
 	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_MIMPID));
 }
 
+static void
+sbi_shutdown_final(void *dummy __unused, int howto)
+{
+	if ((howto & RB_POWEROFF) != 0)
+		sbi_shutdown();
+}
+
 void
 sbi_print_version(void)
 {
@@ -111,6 +121,31 @@ sbi_print_version(void)
 	    SBI_SPEC_VERS_MAJOR_OFFSET;
 	minor = (sbi_spec_version & SBI_SPEC_VERS_MINOR_MASK);
 	printf("SBI Specification Version: %u.%u\n", major, minor);
+}
+
+int
+sbi_hsm_hart_start(u_long hart, u_long start_addr, u_long priv)
+{
+	struct sbi_ret ret;
+
+	ret = SBI_CALL3(SBI_EXT_ID_HSM, SBI_HSM_HART_START, hart, start_addr, priv);
+	return (ret.error != 0 ? (int)ret.error : 0);
+}
+
+void
+sbi_hsm_hart_stop(void)
+{
+	(void)SBI_CALL0(SBI_EXT_ID_HSM, SBI_HSM_HART_STOP);
+}
+
+int
+sbi_hsm_hart_status(u_long hart)
+{
+	struct sbi_ret ret;
+
+	ret = SBI_CALL1(SBI_EXT_ID_HSM, SBI_HSM_HART_STATUS, hart);
+
+	return (ret.error != 0 ? (int)ret.error : (int)ret.value);
 }
 
 void
@@ -162,3 +197,12 @@ sbi_init(void)
 	KASSERT(sbi_probe_extension(SBI_SHUTDOWN) != 0,
 	    ("SBI doesn't implement sbi_shutdown()"));
 }
+
+static void
+sbi_late_init(void *dummy __unused)
+{
+	EVENTHANDLER_REGISTER(shutdown_final, sbi_shutdown_final, NULL,
+	    SHUTDOWN_PRI_LAST);
+}
+
+SYSINIT(sbi, SI_SUB_KLD, SI_ORDER_ANY, sbi_late_init, NULL);

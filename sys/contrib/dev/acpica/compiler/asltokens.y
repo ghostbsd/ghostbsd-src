@@ -9,7 +9,7 @@ NoEcho('
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2019, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2020, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -422,6 +422,7 @@ NoEcho('
 %token <i> PARSEOP_REGIONSPACE_PCC
 %token <i> PARSEOP_REGIONSPACE_PCI
 %token <i> PARSEOP_REGIONSPACE_PCIBAR
+%token <i> PARSEOP_REGIONSPACE_PRM
 %token <i> PARSEOP_REGIONSPACE_SMBUS
 %token <i> PARSEOP_REGISTER
 %token <i> PARSEOP_RELEASE

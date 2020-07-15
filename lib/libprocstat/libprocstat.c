@@ -459,13 +459,15 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 {
 	struct file file;
 	struct filedesc filed;
+	struct pwd pwd;
+	unsigned long pwd_addr;
 	struct vm_map_entry vmentry;
 	struct vm_object object;
 	struct vmspace vmspace;
 	vm_map_entry_t entryp;
 	vm_object_t objp;
 	struct vnode *vp;
-	struct file **ofiles;
+	struct filedescent *ofiles;
 	struct filestat *entry;
 	struct filestat_list *head;
 	kvm_t *kd;
@@ -473,6 +475,7 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 	int i, fflags;
 	int prot, type;
 	unsigned int nfiles;
+	bool haspwd;
 
 	assert(procstat);
 	kd = procstat->kd;
@@ -485,6 +488,15 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 		warnx("can't read filedesc at %p", (void *)kp->ki_fd);
 		return (NULL);
 	}
+	haspwd = false;
+	pwd_addr = (unsigned long)(FILEDESC_KVM_LOAD_PWD(&filed));
+	if (pwd_addr != 0) {
+		if (!kvm_read_all(kd, pwd_addr, &pwd, sizeof(pwd))) {
+			warnx("can't read fd_pwd at %p", (void *)pwd_addr);
+			return (NULL);
+		}
+		haspwd = true;
+	}
 
 	/*
 	 * Allocate list head.
@@ -495,25 +507,27 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 	STAILQ_INIT(head);
 
 	/* root directory vnode, if one. */
-	if (filed.fd_rdir) {
-		entry = filestat_new_entry(filed.fd_rdir, PS_FST_TYPE_VNODE, -1,
-		    PS_FST_FFLAG_READ, PS_FST_UFLAG_RDIR, 0, 0, NULL, NULL);
-		if (entry != NULL)
-			STAILQ_INSERT_TAIL(head, entry, next);
-	}
-	/* current working directory vnode. */
-	if (filed.fd_cdir) {
-		entry = filestat_new_entry(filed.fd_cdir, PS_FST_TYPE_VNODE, -1,
-		    PS_FST_FFLAG_READ, PS_FST_UFLAG_CDIR, 0, 0, NULL, NULL);
-		if (entry != NULL)
-			STAILQ_INSERT_TAIL(head, entry, next);
-	}
-	/* jail root, if any. */
-	if (filed.fd_jdir) {
-		entry = filestat_new_entry(filed.fd_jdir, PS_FST_TYPE_VNODE, -1,
-		    PS_FST_FFLAG_READ, PS_FST_UFLAG_JAIL, 0, 0, NULL, NULL);
-		if (entry != NULL)
-			STAILQ_INSERT_TAIL(head, entry, next);
+	if (haspwd) {
+		if (pwd.pwd_rdir) {
+			entry = filestat_new_entry(pwd.pwd_rdir, PS_FST_TYPE_VNODE, -1,
+			    PS_FST_FFLAG_READ, PS_FST_UFLAG_RDIR, 0, 0, NULL, NULL);
+			if (entry != NULL)
+				STAILQ_INSERT_TAIL(head, entry, next);
+		}
+		/* current working directory vnode. */
+		if (pwd.pwd_cdir) {
+			entry = filestat_new_entry(pwd.pwd_cdir, PS_FST_TYPE_VNODE, -1,
+			    PS_FST_FFLAG_READ, PS_FST_UFLAG_CDIR, 0, 0, NULL, NULL);
+			if (entry != NULL)
+				STAILQ_INSERT_TAIL(head, entry, next);
+		}
+		/* jail root, if any. */
+		if (pwd.pwd_jdir) {
+			entry = filestat_new_entry(pwd.pwd_jdir, PS_FST_TYPE_VNODE, -1,
+			    PS_FST_FFLAG_READ, PS_FST_UFLAG_JAIL, 0, 0, NULL, NULL);
+			if (entry != NULL)
+				STAILQ_INSERT_TAIL(head, entry, next);
+		}
 	}
 	/* ktrace vnode, if one */
 	if (kp->ki_tracep) {
@@ -540,25 +554,25 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 	}
 
 	nfiles = filed.fd_lastfile + 1;
-	ofiles = malloc(nfiles * sizeof(struct file *));
+	ofiles = malloc(nfiles * sizeof(struct filedescent));
 	if (ofiles == NULL) {
-		warn("malloc(%zu)", nfiles * sizeof(struct file *));
+		warn("malloc(%zu)", nfiles * sizeof(struct filedescent));
 		goto do_mmapped;
 	}
 	if (!kvm_read_all(kd, (unsigned long)filed.fd_ofiles, ofiles,
-	    nfiles * sizeof(struct file *))) {
+	    nfiles * sizeof(struct filedescent))) {
 		warnx("cannot read file structures at %p",
 		    (void *)filed.fd_ofiles);
 		free(ofiles);
 		goto do_mmapped;
 	}
 	for (i = 0; i <= filed.fd_lastfile; i++) {
-		if (ofiles[i] == NULL)
+		if (ofiles[i].fde_file == NULL)
 			continue;
-		if (!kvm_read_all(kd, (unsigned long)ofiles[i], &file,
+		if (!kvm_read_all(kd, (unsigned long)ofiles[i].fde_file, &file,
 		    sizeof(struct file))) {
 			warnx("can't read file %d at %p", i,
-			    (void *)ofiles[i]);
+			    (void *)ofiles[i].fde_file);
 			continue;
 		}
 		switch (file.f_type) {
@@ -1278,10 +1292,10 @@ procstat_get_vnode_info_kvm(kvm_t *kd, struct filestat *fst,
 	vn->vn_type = vntype2psfsttype(vnode.v_type);
 	if (vnode.v_type == VNON || vnode.v_type == VBAD)
 		return (0);
-	error = kvm_read_all(kd, (unsigned long)vnode.v_tag, tagstr,
-	    sizeof(tagstr));
+	error = kvm_read_all(kd, (unsigned long)vnode.v_lock.lock_object.lo_name,
+	    tagstr, sizeof(tagstr));
 	if (error == 0) {
-		warnx("can't read v_tag at %p", (void *)vp);
+		warnx("can't read lo_name at %p", (void *)vp);
 		goto fail;
 	}
 	tagstr[sizeof(tagstr) - 1] = '\0';

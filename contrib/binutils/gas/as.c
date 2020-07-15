@@ -1108,6 +1108,7 @@ main (int argc, char ** argv)
   /* Call parse_args before any of the init/begin functions
      so that switches like --hash-size can be honored.  */
   parse_args (&argc, &argv);
+  fprintf (stderr, _("warning: GNU as %s is deprecated and will be removed\n"), BFD_VERSION_STRING);
   symbol_begin ();
   frag_init ();
   subsegs_begin ();

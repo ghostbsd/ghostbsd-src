@@ -79,7 +79,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_extern.h>
-#include <vm/vm_object.h>
 #include <vm/swap_pager.h>
 
 #ifdef COMPAT_LINUX32
@@ -133,8 +132,8 @@ struct l_sysinfo {
 	l_ulong		freeswap;	/* swap space still available */
 	l_ushort	procs;		/* Number of current processes */
 	l_ushort	pads;
-	l_ulong		totalbig;
-	l_ulong		freebig;
+	l_ulong		totalhigh;
+	l_ulong		freehigh;
 	l_uint		mem_unit;
 	char		_f[20-2*sizeof(l_long)-sizeof(l_int)];	/* padding */
 };
@@ -151,7 +150,6 @@ int
 linux_sysinfo(struct thread *td, struct linux_sysinfo_args *args)
 {
 	struct l_sysinfo sysinfo;
-	vm_object_t object;
 	int i, j;
 	struct timespec ts;
 
@@ -167,16 +165,15 @@ linux_sysinfo(struct thread *td, struct linux_sysinfo_args *args)
 		    LINUX_SYSINFO_LOADS_SCALE / averunnable.fscale;
 
 	sysinfo.totalram = physmem * PAGE_SIZE;
-	sysinfo.freeram = sysinfo.totalram - vm_wire_count() * PAGE_SIZE;
+	sysinfo.freeram = (u_long)vm_free_count() * PAGE_SIZE;
 
+	/*
+	 * sharedram counts pages allocated to named, swap-backed objects such
+	 * as shared memory segments and tmpfs files.  There is no cheap way to
+	 * compute this, so just leave the field unpopulated.  Linux itself only
+	 * started setting this field in the 3.x timeframe.
+	 */
 	sysinfo.sharedram = 0;
-	mtx_lock(&vm_object_list_mtx);
-	TAILQ_FOREACH(object, &vm_object_list, object_list)
-		if (object->shadow_count > 1)
-			sysinfo.sharedram += object->resident_page_count;
-	mtx_unlock(&vm_object_list_mtx);
-
-	sysinfo.sharedram *= PAGE_SIZE;
 	sysinfo.bufferram = 0;
 
 	swap_pager_status(&i, &j);
@@ -185,9 +182,13 @@ linux_sysinfo(struct thread *td, struct linux_sysinfo_args *args)
 
 	sysinfo.procs = nprocs;
 
-	/* The following are only present in newer Linux kernels. */
-	sysinfo.totalbig = 0;
-	sysinfo.freebig = 0;
+	/*
+	 * Platforms supported by the emulation layer do not have a notion of
+	 * high memory.
+	 */
+	sysinfo.totalhigh = 0;
+	sysinfo.freehigh = 0;
+
 	sysinfo.mem_unit = 1;
 
 	return (copyout(&sysinfo, args->info, sizeof(sysinfo)));
@@ -703,7 +704,17 @@ linux_newuname(struct thread *td, struct linux_newuname_args *args)
 			*p = '\0';
 			break;
 		}
+#if defined(__amd64__)
+	/*
+	 * On amd64, Linux uname(2) needs to return "x86_64"
+	 * for both 64-bit and 32-bit applications.  On 32-bit,
+	 * the string returned by getauxval(AT_PLATFORM) needs
+	 * to remain "i686", though.
+	 */
+	strlcpy(utsname.machine, "x86_64", LINUX_MAX_UTSNAME);
+#else
 	strlcpy(utsname.machine, linux_kplatform, LINUX_MAX_UTSNAME);
+#endif
 
 	return (copyout(&utsname, args->buf, sizeof(utsname)));
 }
@@ -1207,12 +1218,8 @@ linux_getitimer(struct thread *td, struct linux_getitimer_args *uap)
 int
 linux_nice(struct thread *td, struct linux_nice_args *args)
 {
-	struct setpriority_args bsd_args;
 
-	bsd_args.which = PRIO_PROCESS;
-	bsd_args.who = 0;		/* current process */
-	bsd_args.prio = args->inc;
-	return (sys_setpriority(td, &bsd_args));
+	return (kern_setpriority(td, PRIO_PROCESS, 0, args->inc));
 }
 #endif /* __i386__ || (__amd64__ && COMPAT_LINUX32) */
 
@@ -1423,6 +1430,33 @@ linux_sched_setscheduler(struct thread *td,
 	if (error)
 		return (error);
 
+	if (linux_map_sched_prio) {
+		switch (policy) {
+		case SCHED_OTHER:
+			if (sched_param.sched_priority != 0)
+				return (EINVAL);
+
+			sched_param.sched_priority =
+			    PRI_MAX_TIMESHARE - PRI_MIN_TIMESHARE;
+			break;
+		case SCHED_FIFO:
+		case SCHED_RR:
+			if (sched_param.sched_priority < 1 ||
+			    sched_param.sched_priority >= LINUX_MAX_RT_PRIO)
+				return (EINVAL);
+
+			/*
+			 * Map [1, LINUX_MAX_RT_PRIO - 1] to
+			 * [0, RTP_PRIO_MAX - RTP_PRIO_MIN] (rounding down).
+			 */
+			sched_param.sched_priority =
+			    (sched_param.sched_priority - 1) *
+			    (RTP_PRIO_MAX - RTP_PRIO_MIN + 1) /
+			    (LINUX_MAX_RT_PRIO - 1);
+			break;
+		}
+	}
+
 	tdt = linux_tdfind(td, args->pid, -1);
 	if (tdt == NULL)
 		return (ESRCH);
@@ -1466,6 +1500,20 @@ linux_sched_get_priority_max(struct thread *td,
 {
 	struct sched_get_priority_max_args bsd;
 
+	if (linux_map_sched_prio) {
+		switch (args->policy) {
+		case LINUX_SCHED_OTHER:
+			td->td_retval[0] = 0;
+			return (0);
+		case LINUX_SCHED_FIFO:
+		case LINUX_SCHED_RR:
+			td->td_retval[0] = LINUX_MAX_RT_PRIO - 1;
+			return (0);
+		default:
+			return (EINVAL);
+		}
+	}
+
 	switch (args->policy) {
 	case LINUX_SCHED_OTHER:
 		bsd.policy = SCHED_OTHER;
@@ -1487,6 +1535,20 @@ linux_sched_get_priority_min(struct thread *td,
     struct linux_sched_get_priority_min_args *args)
 {
 	struct sched_get_priority_min_args bsd;
+
+	if (linux_map_sched_prio) {
+		switch (args->policy) {
+		case LINUX_SCHED_OTHER:
+			td->td_retval[0] = 0;
+			return (0);
+		case LINUX_SCHED_FIFO:
+		case LINUX_SCHED_RR:
+			td->td_retval[0] = 1;
+			return (0);
+		default:
+			return (EINVAL);
+		}
+	}
 
 	switch (args->policy) {
 	case LINUX_SCHED_OTHER:
@@ -1617,12 +1679,9 @@ linux_nosys(struct thread *td, struct nosys_args *ignore)
 int
 linux_getpriority(struct thread *td, struct linux_getpriority_args *args)
 {
-	struct getpriority_args bsd_args;
 	int error;
 
-	bsd_args.which = args->which;
-	bsd_args.who = args->who;
-	error = sys_getpriority(td, &bsd_args);
+	error = kern_getpriority(td, args->which, args->who);
 	td->td_retval[0] = 20 - td->td_retval[0];
 	return (error);
 }
@@ -1871,7 +1930,7 @@ linux_sched_setparam(struct thread *td,
 {
 	struct sched_param sched_param;
 	struct thread *tdt;
-	int error;
+	int error, policy;
 
 	error = copyin(uap->param, &sched_param, sizeof(sched_param));
 	if (error)
@@ -1881,8 +1940,41 @@ linux_sched_setparam(struct thread *td,
 	if (tdt == NULL)
 		return (ESRCH);
 
+	if (linux_map_sched_prio) {
+		error = kern_sched_getscheduler(td, tdt, &policy);
+		if (error)
+			goto out;
+
+		switch (policy) {
+		case SCHED_OTHER:
+			if (sched_param.sched_priority != 0) {
+				error = EINVAL;
+				goto out;
+			}
+			sched_param.sched_priority =
+			    PRI_MAX_TIMESHARE - PRI_MIN_TIMESHARE;
+			break;
+		case SCHED_FIFO:
+		case SCHED_RR:
+			if (sched_param.sched_priority < 1 ||
+			    sched_param.sched_priority >= LINUX_MAX_RT_PRIO) {
+				error = EINVAL;
+				goto out;
+			}
+			/*
+			 * Map [1, LINUX_MAX_RT_PRIO - 1] to
+			 * [0, RTP_PRIO_MAX - RTP_PRIO_MIN] (rounding down).
+			 */
+			sched_param.sched_priority =
+			    (sched_param.sched_priority - 1) *
+			    (RTP_PRIO_MAX - RTP_PRIO_MIN + 1) /
+			    (LINUX_MAX_RT_PRIO - 1);
+			break;
+		}
+	}
+
 	error = kern_sched_setparam(td, tdt, &sched_param);
-	PROC_UNLOCK(tdt->td_proc);
+out:	PROC_UNLOCK(tdt->td_proc);
 	return (error);
 }
 
@@ -1892,17 +1984,45 @@ linux_sched_getparam(struct thread *td,
 {
 	struct sched_param sched_param;
 	struct thread *tdt;
-	int error;
+	int error, policy;
 
 	tdt = linux_tdfind(td, uap->pid, -1);
 	if (tdt == NULL)
 		return (ESRCH);
 
 	error = kern_sched_getparam(td, tdt, &sched_param);
-	PROC_UNLOCK(tdt->td_proc);
-	if (error == 0)
-		error = copyout(&sched_param, uap->param,
-		    sizeof(sched_param));
+	if (error) {
+		PROC_UNLOCK(tdt->td_proc);
+		return (error);
+	}
+
+	if (linux_map_sched_prio) {
+		error = kern_sched_getscheduler(td, tdt, &policy);
+		PROC_UNLOCK(tdt->td_proc);
+		if (error)
+			return (error);
+
+		switch (policy) {
+		case SCHED_OTHER:
+			sched_param.sched_priority = 0;
+			break;
+		case SCHED_FIFO:
+		case SCHED_RR:
+			/*
+			 * Map [0, RTP_PRIO_MAX - RTP_PRIO_MIN] to
+			 * [1, LINUX_MAX_RT_PRIO - 1] (rounding up).
+			 */
+			sched_param.sched_priority =
+			    (sched_param.sched_priority *
+			    (LINUX_MAX_RT_PRIO - 1) +
+			    (RTP_PRIO_MAX - RTP_PRIO_MIN - 1)) /
+			    (RTP_PRIO_MAX - RTP_PRIO_MIN) + 1;
+			break;
+		}
+	} else
+		PROC_UNLOCK(tdt->td_proc);
+
+	error = copyout(&sched_param, uap->param, sizeof(sched_param));
 	return (error);
 }
 
@@ -2361,7 +2481,7 @@ linux_getcpu(struct thread *td, struct linux_getcpu_args *args)
 
 	cpu = td->td_oncpu; /* Make sure it doesn't change during copyout(9) */
 	error = 0;
-	node = 0; /* XXX: Fake NUMA node 0 for now */
+	node = cpuid_to_pcpu[cpu]->pc_domain;
 
 	if (args->cpu != NULL)
 		error = copyout(&cpu, args->cpu, sizeof(l_int));

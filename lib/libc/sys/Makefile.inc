@@ -45,6 +45,7 @@ NOASM+= getdirentries.o
 PSEUDO+= _getdirentries.o
 
 SRCS+= brk.c
+SRCS+= closefrom.c
 SRCS+= pipe.c
 SRCS+= shm_open.c
 SRCS+= vadvise.c
@@ -79,6 +80,7 @@ INTERPOSED = \
 	sendmsg \
 	sendto \
 	setcontext \
+	sigaction \
 	sigprocmask \
 	sigsuspend \
 	sigtimedwait \
@@ -89,13 +91,6 @@ INTERPOSED = \
 	wait6 \
 	write \
 	writev
-
-.if ${MACHINE_CPUARCH} == "sparc64"
-SRCS+=	sigaction.c
-NOASM+=	sigaction.o
-.else
-INTERPOSED+= sigaction
-.endif
 
 SRCS+=	${INTERPOSED:S/$/.c/}
 NOASM+=	${INTERPOSED:S/$/.o/}
@@ -317,6 +312,7 @@ MAN+=	sctp_generic_recvmsg.2 \
 	shutdown.2 \
 	sigaction.2 \
 	sigaltstack.2 \
+	sigfastblock.2 \
 	sigpending.2 \
 	sigprocmask.2 \
 	sigqueue.2 \
@@ -376,6 +372,7 @@ MLINKS+=chown.2 fchown.2 \
 	chown.2 lchown.2
 MLINKS+=clock_gettime.2 clock_getres.2 \
 	clock_gettime.2 clock_settime.2
+MLINKS+=closefrom.2 close_range.2
 MLINKS+=nanosleep.2 clock_nanosleep.2
 MLINKS+=cpuset.2 cpuset_getid.2 \
 	cpuset.2 cpuset_setid.2

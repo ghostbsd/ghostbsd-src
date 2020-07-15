@@ -78,8 +78,8 @@ static  periph_dtor_t   enc_dtor;
 static void enc_async(void *, uint32_t, struct cam_path *, void *);
 static enctyp enc_type(struct ccb_getdev *);
 
-SYSCTL_NODE(_kern_cam, OID_AUTO, enc, CTLFLAG_RD, 0,
-            "CAM Enclosure Services driver");
+SYSCTL_NODE(_kern_cam, OID_AUTO, enc, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "CAM Enclosure Services driver");
 
 #if defined(DEBUG) || defined(ENC_DEBUG)
 int enc_verbose = 1;
@@ -489,6 +489,10 @@ enc_ioctl(struct cdev *dev, u_long cmd, caddr_t arg_addr, int flag,
 		cam_periph_lock(periph);
 		error = enc->enc_vec.handle_string(enc, &sstr, cmd);
 		cam_periph_unlock(periph);
+		if (error == 0 || error == ENOMEM)
+			(void)copyout(&sstr.bufsiz,
+			    &((encioc_string_t *)addr)->bufsiz,
+			    sizeof(sstr.bufsiz));
 		break;
 
 	case ENCIOC_GETELMSTAT:

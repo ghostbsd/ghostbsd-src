@@ -50,10 +50,6 @@ __FBSDID("$FreeBSD$");
 
 #include "g_part_if.h"
 
-#ifndef _PATH_DEV
-#define _PATH_DEV "/dev/"
-#endif
-
 static kobj_method_t g_part_null_methods[] = {
 	{ 0, 0 }
 };
@@ -133,7 +129,7 @@ struct g_part_alias_list {
 };
 
 SYSCTL_DECL(_kern_geom);
-SYSCTL_NODE(_kern_geom, OID_AUTO, part, CTLFLAG_RW, 0,
+SYSCTL_NODE(_kern_geom, OID_AUTO, part, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "GEOM_PART stuff");
 static u_int check_integrity = 1;
 SYSCTL_UINT(_kern_geom_part, OID_AUTO, check_integrity,
@@ -469,7 +465,6 @@ g_part_new_provider(struct g_geom *gp, struct g_part_table *table,
 {
 	struct g_consumer *cp;
 	struct g_provider *pp;
-	struct sbuf *sb;
 	struct g_geom_alias *gap;
 	off_t offset;
 
@@ -481,24 +476,16 @@ g_part_new_provider(struct g_geom *gp, struct g_part_table *table,
 		entry->gpe_offset = offset;
 
 	if (entry->gpe_pp == NULL) {
+		entry->gpe_pp = G_PART_NEW_PROVIDER(table, gp, entry, gp->name);
 		/*
-		 * Add aliases to the geom before we create the provider so that
-		 * geom_dev can taste it with all the aliases in place so all
-		 * the aliased dev_t instances get created for each partition
-		 * (eg foo5p7 gets created for bar5p7 when foo is an alias of bar).
+		 * If our parent provider had any aliases, then copy them to our
+		 * provider so when geom DEV tastes things later, they will be
+		 * there for it to create the aliases with those name used in
+		 * place of the geom's name we use to create the provider. The
+		 * kobj interface that generates names makes this awkward.
 		 */
-		LIST_FOREACH(gap, &table->gpt_gp->aliases, ga_next) {
-			sb = sbuf_new_auto();
-			G_PART_FULLNAME(table, entry, sb, gap->ga_alias);
-			sbuf_finish(sb);
-			g_geom_add_alias(gp, sbuf_data(sb));
-			sbuf_delete(sb);
-		}
-		sb = sbuf_new_auto();
-		G_PART_FULLNAME(table, entry, sb, gp->name);
-		sbuf_finish(sb);
-		entry->gpe_pp = g_new_providerf(gp, "%s", sbuf_data(sb));
-		sbuf_delete(sb);
+		LIST_FOREACH(gap, &pp->aliases, ga_next)
+			G_PART_ADD_ALIAS(table, entry->gpe_pp, entry, gap->ga_alias);
 		entry->gpe_pp->flags |= G_PF_DIRECT_SEND | G_PF_DIRECT_RECEIVE;
 		entry->gpe_pp->private = entry;		/* Close the circle. */
 	}
@@ -1968,7 +1955,6 @@ g_part_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 	struct g_part_entry *entry;
 	struct g_part_table *table;
 	struct root_hold_token *rht;
-	struct g_geom_alias *gap;
 	int attr, depth;
 	int error;
 
@@ -1985,8 +1971,6 @@ g_part_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 	 * to the provider.
 	 */
 	gp = g_new_geomf(mp, "%s", pp->name);
-	LIST_FOREACH(gap, &pp->geom->aliases, ga_next)
-		g_geom_add_alias(gp, gap->ga_alias);
 	cp = g_new_consumer(gp);
 	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
 	error = g_attach(cp, pp);
@@ -2272,6 +2256,7 @@ g_part_start(struct bio *bp)
 		bp2->bio_offset += entry->gpe_offset;
 		g_io_request(bp2, cp);
 		return;
+	case BIO_SPEEDUP:
 	case BIO_FLUSH:
 		break;
 	case BIO_GETATTR:

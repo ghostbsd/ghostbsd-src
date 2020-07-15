@@ -59,7 +59,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/procdesc.h>
-#include <sys/pioctl.h>
 #include <sys/ptrace.h>
 #include <sys/racct.h>
 #include <sys/resourcevar.h>
@@ -129,6 +128,7 @@ sys_pdfork(struct thread *td, struct pdfork_args *uap)
 	fr.fr_pidp = &pid;
 	fr.fr_pd_fd = &fd;
 	fr.fr_pd_flags = uap->flags;
+	AUDIT_ARG_FFLAGS(uap->flags);
 	/*
 	 * It is necessary to return fd by reference because 0 is a valid file
 	 * descriptor number, and the child needs to be able to distinguish
@@ -236,8 +236,10 @@ sysctl_kern_randompid(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
-SYSCTL_PROC(_kern, OID_AUTO, randompid, CTLTYPE_INT|CTLFLAG_RW,
-    0, 0, sysctl_kern_randompid, "I", "Random PID modulus. Special values: 0: disable, 1: choose random value");
+SYSCTL_PROC(_kern, OID_AUTO, randompid,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, 0, 0,
+    sysctl_kern_randompid, "I",
+    "Random PID modulus. Special values: 0: disable, 1: choose random value");
 
 extern bitstr_t proc_id_pidmap;
 extern bitstr_t proc_id_grpidmap;
@@ -563,7 +565,8 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 * been preserved.
 	 */
 	p2->p_flag |= p1->p_flag & P_SUGID;
-	td2->td_pflags |= (td->td_pflags & TDP_ALTSTACK) | TDP_FORKING;
+	td2->td_pflags |= (td->td_pflags & (TDP_ALTSTACK |
+	    TDP_SIGFASTBLOCK)) | TDP_FORKING;
 	SESS_LOCK(p1->p_session);
 	if (p1->p_session->s_ttyvp != NULL && p1->p_flag & P_CONTROLT)
 		p2->p_flag |= P_CONTROLT;
@@ -578,15 +581,6 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	LIST_INIT(&p2->p_orphans);
 
 	callout_init_mtx(&p2->p_itcallout, &p2->p_mtx, 0);
-
-	/*
-	 * If PF_FORK is set, the child process inherits the
-	 * procfs ioctl flags from its parent.
-	 */
-	if (p1->p_pfsflags & PF_FORK) {
-		p2->p_stops = p1->p_stops;
-		p2->p_pfsflags = p1->p_pfsflags;
-	}
 
 	/*
 	 * This begins the section where we must prevent the parent
@@ -916,6 +910,7 @@ fork1(struct thread *td, struct fork_req *fr)
 		    fr->fr_pd_flags, fr->fr_pd_fcaps);
 		if (error != 0)
 			goto fail2;
+		AUDIT_ARG_FD(*fr->fr_pd_fd);
 	}
 
 	mem_charged = 0;
@@ -966,7 +961,7 @@ fork1(struct thread *td, struct fork_req *fr)
 	 * XXX: This is ugly; when we copy resource usage, we need to bump
 	 *      per-cred resource counters.
 	 */
-	proc_set_cred_init(newproc, crhold(td->td_ucred));
+	proc_set_cred_init(newproc, td->td_ucred);
 
 	/*
 	 * Initialize resource accounting for the child process.
@@ -1003,8 +998,7 @@ fail0:
 #endif
 	racct_proc_exit(newproc);
 fail1:
-	crfree(newproc->p_ucred);
-	newproc->p_ucred = NULL;
+	proc_unset_cred(newproc);
 fail2:
 	if (vm2 != NULL)
 		vmspace_free(vm2);
@@ -1108,7 +1102,6 @@ fork_return(struct thread *td, struct trapframe *frame)
 		 */
 		PROC_LOCK(p);
 		td->td_dbgflags |= TDB_SCX;
-		_STOPEVENT(p, S_SCX, td->td_sa.code);
 		if ((p->p_ptevents & PTRACE_SCX) != 0 ||
 		    (td->td_dbgflags & TDB_BORN) != 0)
 			ptracestop(td, SIGTRAP, NULL);

@@ -93,6 +93,8 @@ __FBSDID("$FreeBSD$");
 #include <net/if_llatbl.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/route/route_ctl.h>
+#include <net/route/nhop.h>
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -400,6 +402,8 @@ icmp6_input(struct mbuf **mp, int *offp, int proto)
 	struct icmp6_hdr *icmp6, *nicmp6;
 	char ip6bufs[INET6_ADDRSTRLEN], ip6bufd[INET6_ADDRSTRLEN];
 	int code, error, icmp6len, ip6len, noff, off, sum;
+
+	NET_EPOCH_ASSERT();
 
 	m = *mp;
 	off = *offp;
@@ -2266,13 +2270,17 @@ icmp6_redirect_input(struct mbuf *m, int off)
 	}
     {
 	/* ip6->ip6_src must be equal to gw for icmp6->icmp6_reddst */
-	struct nhop6_basic nh6;
+	struct nhop_object *nh;
 	struct in6_addr kdst;
 	uint32_t scopeid;
 
 	in6_splitscope(&reddst6, &kdst, &scopeid);
-	if (fib6_lookup_nh_basic(ifp->if_fib, &kdst, scopeid, 0, 0,&nh6)==0){
-		if ((nh6.nh_flags & NHF_GATEWAY) == 0) {
+	NET_EPOCH_ASSERT();
+	nh = fib6_lookup(ifp->if_fib, &kdst, scopeid, 0, 0);
+	if (nh != NULL) {
+		struct in6_addr nh_addr;
+		nh_addr = ifatoia6(nh->nh_ifa)->ia_addr.sin6_addr;
+		if ((nh->nh_flags & NHF_GATEWAY) == 0) {
 			nd6log((LOG_ERR,
 			    "ICMP6 redirect rejected; no route "
 			    "with inet6 gateway found for redirect dst: %s\n",
@@ -2281,19 +2289,16 @@ icmp6_redirect_input(struct mbuf *m, int off)
 		}
 
 		/*
-		 * Embed scope zone id into next hop address, since
-		 * fib6_lookup_nh_basic() returns address without embedded
-		 * scope zone id.
+		 * Embed scope zone id into next hop address.
 		 */
-		if (in6_setscope(&nh6.nh_addr, m->m_pkthdr.rcvif, NULL))
-			goto freeit;
+		nh_addr = nh->gw6_sa.sin6_addr;
 
-		if (IN6_ARE_ADDR_EQUAL(&src6, &nh6.nh_addr) == 0) {
+		if (IN6_ARE_ADDR_EQUAL(&src6, &nh_addr) == 0) {
 			nd6log((LOG_ERR,
 			    "ICMP6 redirect rejected; "
 			    "not equal to gw-for-src=%s (must be same): "
 			    "%s\n",
-			    ip6_sprintf(ip6buf, &nh6.nh_addr),
+			    ip6_sprintf(ip6buf, &nh_addr),
 			    icmp6_redirect_diag(&src6, &reddst6, &redtgt6)));
 			goto bad;
 		}
@@ -2375,7 +2380,7 @@ icmp6_redirect_input(struct mbuf *m, int off)
 		sdst.sin6_len = ssrc.sin6_len = sizeof(struct sockaddr_in6);
 		bcopy(&reddst6, &sdst.sin6_addr, sizeof(struct in6_addr));
 		bcopy(&src6, &ssrc.sin6_addr, sizeof(struct in6_addr));
-		rt_flags = RTF_HOST;
+		rt_flags = 0;
 		if (is_router) {
 			bzero(&sgw, sizeof(sgw));
 			sgw.sin6_family = AF_INET6;
@@ -2387,9 +2392,9 @@ icmp6_redirect_input(struct mbuf *m, int off)
 		} else
 			gw = ifp->if_addr->ifa_addr;
 		for (fibnum = 0; fibnum < rt_numfibs; fibnum++)
-			in6_rtredirect((struct sockaddr *)&sdst, gw,
-			    (struct sockaddr *)NULL, rt_flags,
-			    (struct sockaddr *)&ssrc, fibnum);
+			rib_add_redirect(fibnum, (struct sockaddr *)&sdst, gw,
+			    (struct sockaddr *)&ssrc, ifp, rt_flags,
+			    V_icmp6_redirtimeout);
 	}
 	/* finally update cached route in each socket via pfctlinput */
     {
@@ -2412,7 +2417,7 @@ icmp6_redirect_input(struct mbuf *m, int off)
 }
 
 void
-icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
+icmp6_redirect_output(struct mbuf *m0, struct nhop_object *nh)
 {
 	struct ifnet *ifp;	/* my outgoing interface */
 	struct in6_addr *ifp_ll6;
@@ -2435,7 +2440,7 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 		goto fail;
 
 	/* sanity check */
-	if (!m0 || !rt || !(rt->rt_flags & RTF_UP) || !(ifp = rt->rt_ifp))
+	if (!m0 || !nh || !(NH_IS_VALID(nh)) || !(ifp = nh->nh_ifp))
 		goto fail;
 
 	/*
@@ -2469,7 +2474,7 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 	m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (m == NULL)
 		goto fail;
-	M_SETFIB(m, rt->rt_fibnum);
+	M_SETFIB(m, M_GETFIB(m0));
 	maxlen = M_TRAILINGSPACE(m);
 	maxlen = min(IPV6_MMTU, maxlen);
 	/* just for safety */
@@ -2491,9 +2496,9 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 	}
 
 	/* get ip6 linklocal address for the router. */
-	if (rt->rt_gateway && (rt->rt_flags & RTF_GATEWAY)) {
+	if (nh->nh_flags & NHF_GATEWAY) {
 		struct sockaddr_in6 *sin6;
-		sin6 = (struct sockaddr_in6 *)rt->rt_gateway;
+		sin6 = &nh->gw6_sa;
 		router_ll6 = &sin6->sin6_addr;
 		if (!IN6_IS_ADDR_LINKLOCAL(router_ll6))
 			router_ll6 = (struct in6_addr *)NULL;
@@ -2517,7 +2522,7 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 	nd_rd->nd_rd_type = ND_REDIRECT;
 	nd_rd->nd_rd_code = 0;
 	nd_rd->nd_rd_reserved = 0;
-	if (rt->rt_flags & RTF_GATEWAY) {
+	if (nh->nh_flags & NHF_GATEWAY) {
 		/*
 		 * nd_rd->nd_rd_target must be a link-local address in
 		 * better router cases.

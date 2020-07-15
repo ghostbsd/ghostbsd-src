@@ -71,7 +71,8 @@
 struct mtx zfs_debug_mtx;
 MTX_SYSINIT(zfs_debug_mtx, &zfs_debug_mtx, "zfs_debug", MTX_DEF);
 
-SYSCTL_NODE(_vfs, OID_AUTO, zfs, CTLFLAG_RW, 0, "ZFS file system");
+SYSCTL_NODE(_vfs, OID_AUTO, zfs, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "ZFS file system");
 
 int zfs_super_owner;
 SYSCTL_INT(_vfs_zfs, OID_AUTO, super_owner, CTLFLAG_RW, &zfs_super_owner, 0,
@@ -81,7 +82,8 @@ int zfs_debug_level;
 SYSCTL_INT(_vfs_zfs, OID_AUTO, debug, CTLFLAG_RWTUN, &zfs_debug_level, 0,
     "Debug level");
 
-SYSCTL_NODE(_vfs_zfs, OID_AUTO, version, CTLFLAG_RD, 0, "ZFS versions");
+SYSCTL_NODE(_vfs_zfs, OID_AUTO, version, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "ZFS versions");
 static int zfs_version_acl = ZFS_ACL_VERSION;
 SYSCTL_INT(_vfs_zfs_version, OID_AUTO, acl, CTLFLAG_RD, &zfs_version_acl, 0,
     "ZFS_ACL_VERSION");
@@ -99,8 +101,8 @@ static int zfs_root(vfs_t *vfsp, int flags, vnode_t **vpp);
 static int zfs_statfs(vfs_t *vfsp, struct statfs *statp);
 static int zfs_vget(vfs_t *vfsp, ino_t ino, int flags, vnode_t **vpp);
 static int zfs_sync(vfs_t *vfsp, int waitfor);
-static int zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, int *extflagsp,
-    struct ucred **credanonp, int *numsecflavors, int **secflavors);
+static int zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, uint64_t *extflagsp,
+    struct ucred **credanonp, int *numsecflavors, int *secflavors);
 static int zfs_fhtovp(vfs_t *vfsp, fid_t *fidp, int flags, vnode_t **vpp);
 static void zfs_objset_close(zfsvfs_t *zfsvfs);
 static void zfs_freevfs(vfs_t *vfsp);
@@ -265,7 +267,7 @@ zfs_quotactl(vfs_t *vfsp, int cmds, uid_t id, void *arg)
 		vfs_unbusy(vfsp);
 		break;
 	case Q_SETQUOTA:
-		error = copyin(&dqblk, arg, sizeof(dqblk));
+		error = copyin(arg, &dqblk, sizeof(dqblk));
 		if (error == 0)
 			error = zfs_set_userquota(zfsvfs, quota_type,
 						  "", id, dbtob(dqblk.dqb_bhardlimit));
@@ -293,7 +295,7 @@ zfs_sync(vfs_t *vfsp, int waitfor)
 	 * Data integrity is job one.  We don't want a compromised kernel
 	 * writing to the storage pool, so we never sync during panic.
 	 */
-	if (panicstr)
+	if (KERNEL_PANICKED())
 		return (0);
 
 	/*
@@ -1205,7 +1207,7 @@ zfsvfs_create_impl(zfsvfs_t **zfvp, zfsvfs_t *zfsvfs, objset_t *os)
 #else
 	rrm_init(&zfsvfs->z_teardown_lock, B_FALSE);
 #endif
-	rw_init(&zfsvfs->z_teardown_inactive_lock, NULL, RW_DEFAULT, NULL);
+	rms_init(&zfsvfs->z_teardown_inactive_lock, "zfs teardown inactive");
 	rw_init(&zfsvfs->z_fuid_lock, NULL, RW_DEFAULT, NULL);
 	for (int i = 0; i != ZFS_OBJ_MTX_SZ; i++)
 		mutex_init(&zfsvfs->z_hold_mtx[i], NULL, MUTEX_DEFAULT, NULL);
@@ -1322,7 +1324,7 @@ zfsvfs_free(zfsvfs_t *zfsvfs)
 	mutex_destroy(&zfsvfs->z_lock);
 	list_destroy(&zfsvfs->z_all_znodes);
 	rrm_destroy(&zfsvfs->z_teardown_lock);
-	rw_destroy(&zfsvfs->z_teardown_inactive_lock);
+	rms_destroy(&zfsvfs->z_teardown_inactive_lock);
 	rw_destroy(&zfsvfs->z_fuid_lock);
 	for (i = 0; i != ZFS_OBJ_MTX_SZ; i++)
 		mutex_destroy(&zfsvfs->z_hold_mtx[i]);
@@ -2055,7 +2057,7 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 		zfsvfs->z_log = NULL;
 	}
 
-	rw_enter(&zfsvfs->z_teardown_inactive_lock, RW_WRITER);
+	ZFS_WLOCK_TEARDOWN_INACTIVE(zfsvfs);
 
 	/*
 	 * If we are not unmounting (ie: online recv) and someone already
@@ -2063,7 +2065,7 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 	 * or a reopen of z_os failed then just bail out now.
 	 */
 	if (!unmounting && (zfsvfs->z_unmounted || zfsvfs->z_os == NULL)) {
-		rw_exit(&zfsvfs->z_teardown_inactive_lock);
+		ZFS_WUNLOCK_TEARDOWN_INACTIVE(zfsvfs);
 		rrm_exit(&zfsvfs->z_teardown_lock, FTAG);
 		return (SET_ERROR(EIO));
 	}
@@ -2091,7 +2093,7 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 	 */
 	if (unmounting) {
 		zfsvfs->z_unmounted = B_TRUE;
-		rw_exit(&zfsvfs->z_teardown_inactive_lock);
+		ZFS_WUNLOCK_TEARDOWN_INACTIVE(zfsvfs);
 		rrm_exit(&zfsvfs->z_teardown_lock, FTAG);
 	}
 
@@ -2266,8 +2268,8 @@ zfs_vget(vfs_t *vfsp, ino_t ino, int flags, vnode_t **vpp)
 }
 
 static int
-zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, int *extflagsp,
-    struct ucred **credanonp, int *numsecflavors, int **secflavors)
+zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, uint64_t *extflagsp,
+    struct ucred **credanonp, int *numsecflavors, int *secflavors)
 {
 	zfsvfs_t *zfsvfs = vfsp->vfs_data;
 
@@ -2437,7 +2439,7 @@ zfs_resume_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 	znode_t *zp;
 
 	ASSERT(RRM_WRITE_HELD(&zfsvfs->z_teardown_lock));
-	ASSERT(RW_WRITE_HELD(&zfsvfs->z_teardown_inactive_lock));
+	ASSERT(ZFS_TEARDOWN_INACTIVE_WLOCKED(zfsvfs));
 
 	/*
 	 * We already own this, so just update the objset_t, as the one we
@@ -2471,7 +2473,7 @@ zfs_resume_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 
 bail:
 	/* release the VOPs */
-	rw_exit(&zfsvfs->z_teardown_inactive_lock);
+	ZFS_WUNLOCK_TEARDOWN_INACTIVE(zfsvfs);
 	rrm_exit(&zfsvfs->z_teardown_lock, FTAG);
 
 	if (err) {

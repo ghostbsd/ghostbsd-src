@@ -87,6 +87,9 @@ restore_usersrs:
  */
 restore_kernsrs:
 	GET_CPUINFO(%r28)
+	lwz	%r29, PC_FLAGS(%r28)
+	mtcr	%r29
+	btlr	0
 	addi	%r28,%r28,PC_KERNSLB
 	ld	%r29,16(%r28)		/* One past USER_SLB_SLOT */
 	cmpdi	%r29,0
@@ -270,9 +273,13 @@ restore_kernsrs:
 	std	%r29,(savearea+CPUSAVE_R29)(%r3);			\
 	std	%r30,(savearea+CPUSAVE_R30)(%r3);			\
 	std	%r31,(savearea+CPUSAVE_R31)(%r3);			\
+	lwz	%r28,PC_FLAGS(%r3);					\
+	mtcr	%r28;							\
+	bt	0, 0f;	/* Check to skip restoring SRs. */		\
 	mflr	%r27;			/* preserve LR */		\
 	bl	restore_usersrs;	/* uses r28-r31 */		\
 	mtlr	%r27;							\
+0:									\
 	ld	%r31,(savearea+CPUSAVE_R31)(%r3);			\
 	ld	%r30,(savearea+CPUSAVE_R30)(%r3);			\
 	ld	%r29,(savearea+CPUSAVE_R29)(%r3);			\
@@ -446,7 +453,7 @@ CNAME(trapcode):
 	mtsprg1	%r1			/* save SP */
 	mflr	%r1			/* Save the old LR in r1 */
 	mtsprg2 %r1			/* And then in SPRG2 */
-	ld	%r1,TRAP_GENTRAP(0)
+	ld	%r1,TRAP_ENTRY(0)
 	mtlr	%r1
 	li	%r1, 0xe0		/* How to get the vector from LR */
 	blrl				/* Branch to generictrap */
@@ -493,7 +500,7 @@ CNAME(slbtrap):
 	mflr	%r1
 	/* 0x30 */
 	mtsprg2 %r1				/* save LR in SPRG2 */
-	ld	%r1,TRAP_GENTRAP(0)		/* real-mode &generictrap */
+	ld	%r1,TRAP_ENTRY(0)		/* real-mode &generictrap */
 	mtlr	%r1
 	li	%r1, 0x80		/* How to get the vector from LR */
 	/* 0x40 */
@@ -797,6 +804,8 @@ generictrap:
 	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
 	mfdar	%r30
 	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DAR)(%r1)
+	mfdsisr	%r30
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DSISR)(%r1)
 	mfsprg1	%r1			/* restore SP, in case of branch */
 	mfsprg2	%r28			/* save LR */
 	mfcr	%r29			/* save CR */
@@ -955,7 +964,7 @@ CNAME(dblow):
         mflr	%r1			/* save LR */
 	mtsprg2 %r1			/* And then in SPRG2 */
 
-	ld	%r1, TRAP_GENTRAP(0)	/* Get branch address */
+	ld	%r1, TRAP_ENTRY(0)	/* Get branch address */
 	mtlr	%r1
 	li	%r1, 0	 		/* How to get the vector from LR */
 	blrl				/* Branch to generictrap */

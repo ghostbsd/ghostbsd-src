@@ -379,11 +379,11 @@ ath_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m,
 		 * trying to sync / merge to BSSes that aren't
 		 * actually us.
 		 */
-		if (IEEE80211_ADDR_EQ(ni->ni_bssid, vap->iv_bss->ni_bssid)) {
+		if ((vap->iv_opmode != IEEE80211_M_HOSTAP) &&
+		    IEEE80211_ADDR_EQ(ni->ni_bssid, vap->iv_bss->ni_bssid)) {
 			/* update rssi statistics for use by the hal */
 			/* XXX unlocked check against vap->iv_bss? */
 			ATH_RSSI_LPF(sc->sc_halstats.ns_avgbrssi, rssi);
-
 
 			tsf_beacon = ((uint64_t) le32dec(ni->ni_tstamp.data + 4)) << 32;
 			tsf_beacon |= le32dec(ni->ni_tstamp.data);
@@ -427,8 +427,9 @@ ath_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m,
 				tsf_remainder = (tsf_beacon - tsf_beacon_old) % tsf_intval;
 			}
 
-			DPRINTF(sc, ATH_DEBUG_BEACON, "%s: old_tsf=%llu (%u), new_tsf=%llu (%u), target_tsf=%llu (%u), delta=%lld, bmiss=%d, remainder=%d\n",
+			DPRINTF(sc, ATH_DEBUG_BEACON, "%s: %s: old_tsf=%llu (%u), new_tsf=%llu (%u), target_tsf=%llu (%u), delta=%lld, bmiss=%d, remainder=%d\n",
 			    __func__,
+			    ieee80211_get_vap_ifname(vap),
 			    (unsigned long long) tsf_beacon_old,
 			    (unsigned int) (tsf_beacon_old >> 10),
 			    (unsigned long long) tsf_beacon,
@@ -439,17 +440,28 @@ ath_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m,
 			    tsf_delta_bmiss,
 			    tsf_remainder);
 
-			DPRINTF(sc, ATH_DEBUG_BEACON, "%s: tsf=%llu (%u), nexttbtt=%llu (%u), delta=%d\n",
+			DPRINTF(sc, ATH_DEBUG_BEACON, "%s: %s: ni=%6D bssid=%6D tsf=%llu (%u), nexttbtt=%llu (%u), delta=%d\n",
 			    __func__,
+			    ieee80211_get_vap_ifname(vap),
+			    ni->ni_bssid, ":",
+			    vap->iv_bss->ni_bssid, ":",
 			    (unsigned long long) tsf_beacon,
 			    (unsigned int) (tsf_beacon >> 10),
 			    (unsigned long long) nexttbtt,
 			    (unsigned int) (nexttbtt >> 10),
 			    (int32_t) tsf_beacon - (int32_t) nexttbtt + tsf_intval);
 
-			/* We only do syncbeacon on STA VAPs; not on IBSS */
+			/*
+			 * We only do syncbeacon on STA VAPs; not on IBSS;
+			 * but don't do it with swbmiss enabled or we
+			 * may end up overwriting AP mode beacon config.
+			 *
+			 * The driver (and net80211) should be smarter about
+			 * this..
+			 */
 			if (vap->iv_opmode == IEEE80211_M_STA &&
 			    sc->sc_syncbeacon &&
+			    (!sc->sc_swbmiss) &&
 			    ni == vap->iv_bss &&
 			    (vap->iv_state == IEEE80211_S_RUN || vap->iv_state == IEEE80211_S_SLEEP)) {
 				DPRINTF(sc, ATH_DEBUG_BEACON,
@@ -655,6 +667,8 @@ ath_rx_pkt(struct ath_softc *sc, struct ath_rx_status *rs, HAL_STATUS status,
 	struct ieee80211_node *ni;
 	int is_good = 0;
 	struct ath_rx_edma *re = &sc->sc_rxedma[qtype];
+
+	NET_EPOCH_ASSERT();
 
 	/*
 	 * Calculate the correct 64 bit TSF given
@@ -1074,6 +1088,8 @@ ath_rx_proc(struct ath_softc *sc, int resched)
 	int kickpcu = 0;
 	int ret;
 
+	NET_EPOCH_ASSERT();
+
 	/* XXX we must not hold the ATH_LOCK here */
 	ATH_UNLOCK_ASSERT(sc);
 	ATH_PCU_UNLOCK_ASSERT(sc);
@@ -1293,6 +1309,7 @@ static void
 ath_legacy_rx_tasklet(void *arg, int npending)
 {
 	struct ath_softc *sc = arg;
+	struct epoch_tracker et;
 
 	ATH_KTR(sc, ATH_KTR_RXPROC, 1, "ath_rx_proc: pending=%d", npending);
 	DPRINTF(sc, ATH_DEBUG_RX_PROC, "%s: pending %u\n", __func__, npending);
@@ -1305,14 +1322,18 @@ ath_legacy_rx_tasklet(void *arg, int npending)
 	}
 	ATH_PCU_UNLOCK(sc);
 
+	NET_EPOCH_ENTER(et);
 	ath_rx_proc(sc, 1);
+	NET_EPOCH_EXIT(et);
 }
 
 static void
 ath_legacy_flushrecv(struct ath_softc *sc)
 {
-
+	struct epoch_tracker et;
+	NET_EPOCH_ENTER(et);
 	ath_rx_proc(sc, 0);
+	NET_EPOCH_EXIT(et);
 }
 
 static void

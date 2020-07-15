@@ -130,7 +130,8 @@ static int mfi_check_command_pre(struct mfi_softc *sc, struct mfi_command *cm);
 static void mfi_check_command_post(struct mfi_softc *sc, struct mfi_command *cm);
 static int mfi_check_for_sscd(struct mfi_softc *sc, struct mfi_command *cm);
 
-SYSCTL_NODE(_hw, OID_AUTO, mfi, CTLFLAG_RD, 0, "MFI driver parameters");
+SYSCTL_NODE(_hw, OID_AUTO, mfi, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "MFI driver parameters");
 static int	mfi_event_locale = MFI_EVT_LOCALE_ALL;
 SYSCTL_INT(_hw_mfi, OID_AUTO, event_locale, CTLFLAG_RWTUN, &mfi_event_locale,
            0, "event message locale");
@@ -2152,7 +2153,9 @@ mfi_build_syspdio(struct mfi_softc *sc, struct bio *bio)
 		break;
 	default:
 		/* TODO: what about BIO_DELETE??? */
-		panic("Unsupported bio command %x\n", bio->bio_cmd);
+		biofinish(bio, NULL, EOPNOTSUPP);
+		mfi_enqueue_free(cm);
+		return (NULL);
 	}
 
 	/* Cheat with the sector length to avoid a non-constant division */
@@ -2211,7 +2214,9 @@ mfi_build_ldio(struct mfi_softc *sc, struct bio *bio)
 		break;
 	default:
 		/* TODO: what about BIO_DELETE??? */
-		panic("Unsupported bio command %x\n", bio->bio_cmd);
+		biofinish(bio, NULL, EOPNOTSUPP);
+		mfi_enqueue_free(cm);
+		return (NULL);
 	}
 
 	/* Cheat with the sector length to avoid a non-constant division */

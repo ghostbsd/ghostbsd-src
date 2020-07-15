@@ -26,6 +26,117 @@ NOTE TO PEOPLE WHO THINK THAT FreeBSD 13.x IS SLOW:
 	disable the most expensive debugging functionality run
 	"ln -s 'abort:false,junk:false' /etc/malloc.conf".)
 
+20200627:
+	A new implementation of bc and dc has been imorted in r362681. This
+	implementation corrects non-conformant behavior of the previous bc
+	and adds GNU bc compatible options. It offers a number of extensions,
+	is much faster on large values, and has support for message catalogs
+	(a number of languages are already supported, contributions of further
+	languages welcome). The option WITHOUT_GH_BC can be used to build the
+	world with the previous versions of bc and dc.
+
+20200625:
+	r362639 changed the internal API used between the NFS kernel modules.
+	As such, they all need to be rebuilt from sources.
+
+20200613:
+	r362158 changed the arguments for VFS_CHECKEXP().  As such, any
+	out of tree file systems need to be modified and rebuilt.
+	Also, any file systems that are modules must be rebuilt.
+
+20200604:
+	read(2) of a directory fd is now rejected by default.  root may
+	re-enable it for system root only on non-ZFS filesystems with the
+	security.bsd.allow_read_dir sysctl(8) MIB if
+	security.bsd.suser_enabled=1.
+
+	It may be advised to setup aliases for grep to default to `-d skip` if
+	commonly non-recursively grepping a list that includes directories and
+	the potential for the resulting stderr output is not tolerable.  Example
+	aliases are now installed, commented out, in /root/.cshrc and
+	/root/.shrc.
+
+20200523:
+	Clang, llvm, lld, lldb, compiler-rt, libc++, libunwind and openmp have
+	been upgraded to 10.0.1.  Please see the 20141231 entry below for
+	information about prerequisites and upgrading, if you are not already
+	using clang 3.5.0 or higher.
+
+20200512:
+	Support for obsolete compilers has been removed from the build system.
+	Clang 6 and GCC 6.4 are the minimum supported versions.
+
+20200424:
+	closefrom(2) has been moved under COMPAT12, and replaced in libc with a
+	stub that calls close_range(2).  If using a custom kernel configuration,
+	you may want to ensure that the COMPAT_FREEBSD12 option is included, as
+	a slightly older -CURRENT userland and older FreeBSD userlands may not
+	be functional without closefrom(2).
+
+20200414:
+	Upstream DTS from Linux 5.6 was merged and they now have the SID
+	and THS (Secure ID controller and THermal Sensor) node present.
+	The DTB overlays have now been removed from the tree for the H3/H5 and
+	A64 SoCs and the aw_sid and aw_thermal driver have been updated to
+	deal with upstream DTS. If you are using those overlays you need to
+	remove them from loader.conf and update the DTBs on the FAT partition.
+
+20200310:
+	Clang, llvm, lld, lldb, compiler-rt, libc++, libunwind and openmp have
+	been upgraded to 10.0.0.  Please see the 20141231 entry below for
+	information about prerequisites and upgrading, if you are not already
+	using clang 3.5.0 or higher.
+
+20200309:
+	The amd(8) automount daemon has been removed from the source tree.
+	As of FreeBSD 10.1 autofs(5) is the preferred tool for automounting.
+	amd is still available in the sysutils/am-utils port.
+
+20200301:
+	Removed brooktree driver (bktr.4) from the tree.
+
+20200229:
+	The WITH_GPL_DTC option has been removed.  The BSD-licenced device tree
+	compiler in usr.bin/dtc is used on all architectures which use dtc, and
+	the GPL dtc is available (if needed) from the sysutils/dtc port.
+
+20200229:
+	The WITHOUT_LLVM_LIBUNWIND option has been removed.  LLVM's libunwind
+	is used by all supported CPU architectures.
+
+20200229:
+	GCC 4.2.1 has been removed from the tree.  The WITH_GCC,
+	WITH_GCC_BOOTSTRAP, and WITH_GNUCXX options are no longer available.
+	Users who wish to build FreeBSD with GCC must use the external toolchain
+	ports or packages.
+
+20200220:
+	ncurses has been updated to a newer version (6.2-20200215). Given the ABI
+	has changed, users will have to rebuild all the ports that are linked to
+	ncurses.
+
+20200217:
+	The size of struct vnet and the magic cookie have changed.
+	Users need to recompile libkvm and all modules using VIMAGE
+	together with their new kernel.
+
+20200212:
+	Defining the long deprecated NO_CTF, NO_DEBUG_FILES, NO_INSTALLLIB,
+	NO_MAN, NO_PROFILE, and NO_WARNS variables is now an error.  Update
+	your Makefiles and scripts to define MK_<var>=no instead as required.
+
+	One exception to this is that program or library Makefiles should
+	define MAN to empty rather than setting MK_MAN=no.
+
+20200108:
+	Clang/LLVM is now the default compiler and LLD the default
+	linker for riscv64.
+
+20200107:
+	make universe no longer uses GCC 4.2.1 on any architectures.
+	Architectures not supported by in-tree Clang/LLVM require an
+	external toolchain package.
+
 20200104:
 	GCC 4.2.1 is now not built by default, as part of the GCC 4.2.1
 	retirement plan.  Specifically, the GCC, GCC_BOOTSTRAP, and GNUCXX
@@ -1980,6 +2091,12 @@ COMMON ITEMS:
 	anywhere in the most recent stable branch to head / current (or even the
 	last couple of stable branches). See the top of this file when there's
 	an exception.
+
+	The update process will emit an error on an attempt to perform a build
+	or install from a FreeBSD version below the earliest supported version.
+	When updating from an older version the update should be performed one
+	major release at a time, including running `make delete-old` at each
+	step.
 
 	When upgrading a live system, having a root shell around before
 	installing anything can help undo problems. Not having a root shell

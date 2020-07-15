@@ -151,7 +151,9 @@ fifo_open(ap)
 	if (fp == NULL || (ap->a_mode & FEXEC) != 0)
 		return (EINVAL);
 	if ((fip = vp->v_fifoinfo) == NULL) {
-		pipe_named_ctor(&fpipe, td);
+		error = pipe_named_ctor(&fpipe, td);
+		if (error != 0)
+			return (error);
 		fip = malloc(sizeof(*fip), M_VNODE, M_WAITOK);
 		fip->fi_pipe = fpipe;
 		fpipe->pipe_wgen = fip->fi_readers = fip->fi_writers = 0;
@@ -172,8 +174,10 @@ fifo_open(ap)
 		fip->fi_rgen++;
 		if (fip->fi_readers == 1) {
 			fpipe->pipe_state &= ~PIPE_EOF;
-			if (fip->fi_writers > 0)
+			if (fip->fi_writers > 0) {
 				wakeup(&fip->fi_writers);
+				pipeselwakeup(fpipe);
+			}
 		}
 		fp->f_pipegen = fpipe->pipe_wgen - fip->fi_writers;
 	}
@@ -188,8 +192,10 @@ fifo_open(ap)
 		fip->fi_wgen++;
 		if (fip->fi_writers == 1) {
 			fpipe->pipe_state &= ~PIPE_EOF;
-			if (fip->fi_readers > 0)
+			if (fip->fi_readers > 0) {
 				wakeup(&fip->fi_readers);
+				pipeselwakeup(fpipe);
+			}
 		}
 	}
 	if ((ap->a_mode & O_NONBLOCK) == 0) {
@@ -208,6 +214,7 @@ fifo_open(ap)
 					fpipe->pipe_state |= PIPE_EOF;
 					if (fpipe->pipe_state & PIPE_WANTW)
 						wakeup(fpipe);
+					pipeselwakeup(fpipe);
 					PIPE_UNLOCK(fpipe);
 					fifo_cleanup(vp);
 				}
@@ -236,6 +243,7 @@ fifo_open(ap)
 					if (fpipe->pipe_state & PIPE_WANTR)
 						wakeup(fpipe);
 					fpipe->pipe_wgen++;
+					pipeselwakeup(fpipe);
 					PIPE_UNLOCK(fpipe);
 					fifo_cleanup(vp);
 				}

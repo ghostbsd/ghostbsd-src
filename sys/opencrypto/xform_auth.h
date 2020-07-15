@@ -34,7 +34,6 @@
 #include <sys/malloc.h>
 #include <sys/errno.h>
 
-#include <sys/md5.h>
 #include <crypto/sha1.h>
 #include <crypto/sha2/sha224.h>
 #include <crypto/sha2/sha256.h>
@@ -45,7 +44,6 @@
 #include <opencrypto/cbc_mac.h>
 
 #include <opencrypto/cryptodev.h>
-#include <opencrypto/xform_userland.h>
 
 /* XXX use a define common with other hash stuff ! */
 #define	AH_ALEN_MAX	64	/* max authenticator hash length */
@@ -59,16 +57,13 @@ struct auth_hash {
 	u_int16_t ctxsize;
 	u_int16_t blocksize;
 	void (*Init) (void *);
-	void (*Setkey) (void *, const u_int8_t *, u_int16_t);
-	void (*Reinit) (void *, const u_int8_t *, u_int16_t);
-	int  (*Update) (void *, const u_int8_t *, u_int16_t);
+	void (*Setkey) (void *, const uint8_t *, u_int);
+	void (*Reinit) (void *, const uint8_t *, u_int);
+	int  (*Update) (void *, const void *, u_int);
 	void (*Final) (u_int8_t *, void *);
 };
 
 extern struct auth_hash auth_hash_null;
-extern struct auth_hash auth_hash_key_md5;
-extern struct auth_hash auth_hash_key_sha1;
-extern struct auth_hash auth_hash_hmac_md5;
 extern struct auth_hash auth_hash_hmac_sha1;
 extern struct auth_hash auth_hash_hmac_ripemd_160;
 extern struct auth_hash auth_hash_hmac_sha2_224;
@@ -91,7 +86,6 @@ extern struct auth_hash auth_hash_ccm_cbc_mac_192;
 extern struct auth_hash auth_hash_ccm_cbc_mac_256;
 
 union authctx {
-	MD5_CTX md5ctx;
 	SHA1_CTX sha1ctx;
 	RMD160_CTX rmd160ctx;
 	SHA224_CTX sha224ctx;

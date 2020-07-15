@@ -88,8 +88,7 @@ struct cfcs_softc {
  * handle physical addresses yet.  That would require mapping things in
  * order to do the copy.
  */
-#define	CFCS_BAD_CCB_FLAGS (CAM_DATA_ISPHYS | CAM_MSG_BUF_PHYS |	\
-	CAM_SNS_BUF_PHYS | CAM_CDB_PHYS | CAM_SENSE_PTR |		\
+#define	CFCS_BAD_CCB_FLAGS (CAM_DATA_ISPHYS | CAM_CDB_PHYS | CAM_SENSE_PTR |		\
 	CAM_SENSE_PHYS)
 
 static int cfcs_init(void);
@@ -109,8 +108,8 @@ struct cfcs_softc cfcs_softc;
  */
 static int cfcs_max_sense = sizeof(struct scsi_sense_data);
 
-SYSCTL_NODE(_kern_cam, OID_AUTO, ctl2cam, CTLFLAG_RD, 0,
-	    "CAM Target Layer SIM frontend");
+SYSCTL_NODE(_kern_cam, OID_AUTO, ctl2cam, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "CAM Target Layer SIM frontend");
 SYSCTL_INT(_kern_cam_ctl2cam, OID_AUTO, max_sense, CTLFLAG_RW,
            &cfcs_max_sense, 0, "Maximum sense data size");
 

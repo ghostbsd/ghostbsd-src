@@ -54,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/linker.h>
 #include <sys/msgbuf.h>
 #include <sys/pcpu.h>
+#include <sys/physmem.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/reboot.h>
@@ -77,27 +78,31 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_pager.h>
 
-#include <machine/riscvreg.h>
 #include <machine/cpu.h>
+#include <machine/intr.h>
 #include <machine/kdb.h>
 #include <machine/machdep.h>
+#include <machine/metadata.h>
 #include <machine/pcb.h>
+#include <machine/pte.h>
 #include <machine/reg.h>
+#include <machine/riscvreg.h>
+#include <machine/sbi.h>
 #include <machine/trap.h>
 #include <machine/vmparam.h>
-#include <machine/intr.h>
-#include <machine/sbi.h>
-
-#include <machine/asm.h>
 
 #ifdef FPE
 #include <machine/fpe.h>
 #endif
 
 #ifdef FDT
+#include <contrib/libfdt/libfdt.h>
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 #endif
+
+static void get_fpcontext(struct thread *td, mcontext_t *mcp);
+static void set_fpcontext(struct thread *td, mcontext_t *mcp);
 
 struct pcpu __pcpu[MAXCPU];
 
@@ -105,8 +110,6 @@ static struct trapframe proc0_tf;
 
 int early_boot = 1;
 int cold = 1;
-long realmem = 0;
-long Maxmem = 0;
 
 #define	DTB_SIZE_MAX	(1024 * 1024)
 
@@ -119,7 +122,9 @@ int64_t dcache_line_size;	/* The minimum D cache line size */
 int64_t icache_line_size;	/* The minimum I cache line size */
 int64_t idcache_line_size;	/* The minimum cache line size */
 
-uint32_t boot_hart;	/* The hart we booted on. */
+#define BOOT_HART_INVALID	0xffffffff
+uint32_t boot_hart = BOOT_HART_INVALID;	/* The hart we booted on. */
+
 cpuset_t all_harts;
 
 extern int *end;
@@ -352,6 +357,7 @@ get_mcontext(struct thread *td, mcontext_t *mcp, int clear_ret)
 	mcp->mc_gpregs.gp_tp = tf->tf_tp;
 	mcp->mc_gpregs.gp_sepc = tf->tf_sepc;
 	mcp->mc_gpregs.gp_sstatus = tf->tf_sstatus;
+	get_fpcontext(td, mcp);
 
 	return (0);
 }
@@ -363,6 +369,19 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 
 	tf = td->td_frame;
 
+	/*
+	 * Permit changes to the USTATUS bits of SSTATUS.
+	 *
+	 * Ignore writes to read-only bits (SD, XS).
+	 *
+	 * Ignore writes to the FS field as set_fpcontext() will set
+	 * it explicitly.
+	 */
+	if (((mcp->mc_gpregs.gp_sstatus ^ tf->tf_sstatus) &
+	    ~(SSTATUS_SD | SSTATUS_XS_MASK | SSTATUS_FS_MASK | SSTATUS_UPIE |
+	    SSTATUS_UIE)) != 0)
+		return (EINVAL);
+
 	memcpy(tf->tf_t, mcp->mc_gpregs.gp_t, sizeof(tf->tf_t));
 	memcpy(tf->tf_s, mcp->mc_gpregs.gp_s, sizeof(tf->tf_s));
 	memcpy(tf->tf_a, mcp->mc_gpregs.gp_a, sizeof(tf->tf_a));
@@ -372,6 +391,7 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	tf->tf_gp = mcp->mc_gpregs.gp_gp;
 	tf->tf_sepc = mcp->mc_gpregs.gp_sepc;
 	tf->tf_sstatus = mcp->mc_gpregs.gp_sstatus;
+	set_fpcontext(td, mcp);
 
 	return (0);
 }
@@ -413,7 +433,12 @@ set_fpcontext(struct thread *td, mcontext_t *mcp)
 {
 #ifdef FPE
 	struct pcb *curpcb;
+#endif
 
+	td->td_frame->tf_sstatus &= ~SSTATUS_FS_MASK;
+	td->td_frame->tf_sstatus |= SSTATUS_FS_OFF;
+
+#ifdef FPE
 	critical_enter();
 
 	if ((mcp->mc_flags & _MC_FP_VALID) != 0) {
@@ -423,6 +448,7 @@ set_fpcontext(struct thread *td, mcontext_t *mcp)
 		    sizeof(mcp->mc_fpregs));
 		curpcb->pcb_fcsr = mcp->mc_fpregs.fp_fcsr;
 		curpcb->pcb_fpflags = mcp->mc_fpregs.fp_flags & PCB_FP_USERMASK;
+		td->td_frame->tf_sstatus |= SSTATUS_FS_CLEAN;
 	}
 
 	critical_exit();
@@ -449,9 +475,16 @@ void
 cpu_halt(void)
 {
 
+	/*
+	 * Try to power down using the HSM SBI extension and fall back to a
+	 * simple wfi loop.
+	 */
 	intr_disable();
+	if (sbi_probe_extension(SBI_EXT_ID_HSM) != 0)
+		sbi_hsm_hart_stop();
 	for (;;)
 		__asm __volatile("wfi");
+	/* NOTREACHED */
 }
 
 /*
@@ -518,29 +551,15 @@ struct sigreturn_args {
 int
 sys_sigreturn(struct thread *td, struct sigreturn_args *uap)
 {
-	uint64_t sstatus;
 	ucontext_t uc;
 	int error;
 
-	if (uap == NULL)
-		return (EFAULT);
 	if (copyin(uap->sigcntxp, &uc, sizeof(uc)))
 		return (EFAULT);
-
-	/*
-	 * Make sure the processor mode has not been tampered with and
-	 * interrupts have not been disabled.
-	 * Supervisor interrupts in user mode are always enabled.
-	 */
-	sstatus = uc.uc_mcontext.mc_gpregs.gp_sstatus;
-	if ((sstatus & SSTATUS_SPP) != 0)
-		return (EINVAL);
 
 	error = set_mcontext(td, &uc.uc_mcontext);
 	if (error != 0)
 		return (error);
-
-	set_fpcontext(td, &uc.uc_mcontext);
 
 	/* Restore signal mask. */
 	kern_sigprocmask(td, SIG_SETMASK, &uc.uc_sigmask, NULL, 0);
@@ -559,15 +578,12 @@ void
 makectx(struct trapframe *tf, struct pcb *pcb)
 {
 
-	memcpy(pcb->pcb_t, tf->tf_t, sizeof(tf->tf_t));
 	memcpy(pcb->pcb_s, tf->tf_s, sizeof(tf->tf_s));
-	memcpy(pcb->pcb_a, tf->tf_a, sizeof(tf->tf_a));
 
-	pcb->pcb_ra = tf->tf_ra;
+	pcb->pcb_ra = tf->tf_sepc;
 	pcb->pcb_sp = tf->tf_sp;
 	pcb->pcb_gp = tf->tf_gp;
 	pcb->pcb_tp = tf->tf_tp;
-	pcb->pcb_sepc = tf->tf_sepc;
 }
 
 void
@@ -612,7 +628,6 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Fill in the frame to copy out */
 	bzero(&frame, sizeof(frame));
 	get_mcontext(td, &frame.sf_uc.uc_mcontext, 0);
-	get_fpcontext(td, &frame.sf_uc.uc_mcontext);
 	frame.sf_si = ksi->ksi_info;
 	frame.sf_uc.uc_sigmask = *mask;
 	frame.sf_uc.uc_stack = td->td_sigstk;
@@ -667,81 +682,21 @@ init_proc0(vm_offset_t kstack)
 	pcpup->pc_curpcb = thread0.td_pcb;
 }
 
-static int
-add_physmap_entry(uint64_t base, uint64_t length, vm_paddr_t *physmap,
-    u_int *physmap_idxp)
-{
-	u_int i, insert_idx, _physmap_idx;
-
-	_physmap_idx = *physmap_idxp;
-
-	if (length == 0)
-		return (1);
-
-	/*
-	 * Find insertion point while checking for overlap.  Start off by
-	 * assuming the new entry will be added to the end.
-	 */
-	insert_idx = _physmap_idx;
-	for (i = 0; i <= _physmap_idx; i += 2) {
-		if (base < physmap[i + 1]) {
-			if (base + length <= physmap[i]) {
-				insert_idx = i;
-				break;
-			}
-			if (boothowto & RB_VERBOSE)
-				printf(
-		    "Overlapping memory regions, ignoring second region\n");
-			return (1);
-		}
-	}
-
-	/* See if we can prepend to the next entry. */
-	if (insert_idx <= _physmap_idx &&
-	    base + length == physmap[insert_idx]) {
-		physmap[insert_idx] = base;
-		return (1);
-	}
-
-	/* See if we can append to the previous entry. */
-	if (insert_idx > 0 && base == physmap[insert_idx - 1]) {
-		physmap[insert_idx - 1] += length;
-		return (1);
-	}
-
-	_physmap_idx += 2;
-	*physmap_idxp = _physmap_idx;
-	if (_physmap_idx == PHYS_AVAIL_ENTRIES) {
-		printf(
-		"Too many segments in the physical address map, giving up\n");
-		return (0);
-	}
-
-	/*
-	 * Move the last 'N' entries down to make room for the new
-	 * entry if needed.
-	 */
-	for (i = _physmap_idx; i > insert_idx; i -= 2) {
-		physmap[i] = physmap[i - 2];
-		physmap[i + 1] = physmap[i - 1];
-	}
-
-	/* Insert the new entry. */
-	physmap[insert_idx] = base;
-	physmap[insert_idx + 1] = base + length;
-
-	printf("physmap[%d] = 0x%016lx\n", insert_idx, base);
-	printf("physmap[%d] = 0x%016lx\n", insert_idx + 1, base + length);
-	return (1);
-}
-
 #ifdef FDT
 static void
-try_load_dtb(caddr_t kmdp, vm_offset_t dtbp)
+try_load_dtb(caddr_t kmdp)
 {
+	vm_offset_t dtbp;
+
+	dtbp = MD_FETCH(kmdp, MODINFOMD_DTBP, vm_offset_t);
 
 #if defined(FDT_DTB_STATIC)
-	dtbp = (vm_offset_t)&fdt_static_dtb;
+	/*
+	 * In case the device tree blob was not retrieved (from metadata) try
+	 * to use the statically embedded one.
+	 */
+	if (dtbp == (vm_offset_t)NULL)
+		dtbp = (vm_offset_t)&fdt_static_dtb;
 #endif
 
 	if (dtbp == (vm_offset_t)NULL) {
@@ -770,60 +725,111 @@ cache_setup(void)
 
 /*
  * Fake up a boot descriptor table.
- * RISCVTODO: This needs to be done via loader (when it's available).
  */
-vm_offset_t
-fake_preload_metadata(struct riscv_bootparams *rvbp __unused)
+static void
+fake_preload_metadata(struct riscv_bootparams *rvbp)
 {
-	static uint32_t fake_preload[35];
-#ifdef DDB
-	vm_offset_t zstart = 0, zend = 0;
-#endif
+	static uint32_t fake_preload[48];
 	vm_offset_t lastaddr;
-	int i;
+	size_t fake_size, dtb_size;
 
-	i = 0;
+#define PRELOAD_PUSH_VALUE(type, value) do {			\
+	*(type *)((char *)fake_preload + fake_size) = (value);	\
+	fake_size += sizeof(type);				\
+} while (0)
 
-	fake_preload[i++] = MODINFO_NAME;
-	fake_preload[i++] = strlen("kernel") + 1;
-	strcpy((char*)&fake_preload[i++], "kernel");
-	i += 1;
-	fake_preload[i++] = MODINFO_TYPE;
-	fake_preload[i++] = strlen("elf64 kernel") + 1;
-	strcpy((char*)&fake_preload[i++], "elf64 kernel");
-	i += 3;
-	fake_preload[i++] = MODINFO_ADDR;
-	fake_preload[i++] = sizeof(vm_offset_t);
-	*(vm_offset_t *)&fake_preload[i++] =
-	    (vm_offset_t)(KERNBASE + KERNENTRY);
-	i += 1;
-	fake_preload[i++] = MODINFO_SIZE;
-	fake_preload[i++] = sizeof(vm_offset_t);
-	fake_preload[i++] = (vm_offset_t)&end -
-	    (vm_offset_t)(KERNBASE + KERNENTRY);
-	i += 1;
+#define PRELOAD_PUSH_STRING(str) do {				\
+	uint32_t ssize;						\
+	ssize = strlen(str) + 1;				\
+	PRELOAD_PUSH_VALUE(uint32_t, ssize);			\
+	strcpy(((char *)fake_preload + fake_size), str);	\
+	fake_size += ssize;					\
+	fake_size = roundup(fake_size, sizeof(u_long));		\
+} while (0)
+
+	fake_size = 0;
+	lastaddr = (vm_offset_t)&end;
+
+	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_NAME);
+	PRELOAD_PUSH_STRING("kernel");
+	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_TYPE);
+	PRELOAD_PUSH_STRING("elf kernel");
+
+	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_ADDR);
+	PRELOAD_PUSH_VALUE(uint32_t, sizeof(vm_offset_t));
+	PRELOAD_PUSH_VALUE(uint64_t, KERNBASE);
+
+	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_SIZE);
+	PRELOAD_PUSH_VALUE(uint32_t, sizeof(size_t));
+	PRELOAD_PUSH_VALUE(uint64_t, (size_t)((vm_offset_t)&end - KERNBASE));
+
+	/* Copy the DTB to KVA space. */
+	lastaddr = roundup(lastaddr, sizeof(int));
+	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_METADATA | MODINFOMD_DTBP);
+	PRELOAD_PUSH_VALUE(uint32_t, sizeof(vm_offset_t));
+	PRELOAD_PUSH_VALUE(vm_offset_t, lastaddr);
+	dtb_size = fdt_totalsize(rvbp->dtbp_virt);
+	memmove((void *)lastaddr, (const void *)rvbp->dtbp_virt, dtb_size);
+	lastaddr = roundup(lastaddr + dtb_size, sizeof(int));
+
+	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_METADATA | MODINFOMD_KERNEND);
+	PRELOAD_PUSH_VALUE(uint32_t, sizeof(vm_offset_t));
+	PRELOAD_PUSH_VALUE(vm_offset_t, lastaddr);
+
+	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_METADATA | MODINFOMD_HOWTO);
+	PRELOAD_PUSH_VALUE(uint32_t, sizeof(int));
+	PRELOAD_PUSH_VALUE(int, RB_VERBOSE);
+
+	/* End marker */
+	PRELOAD_PUSH_VALUE(uint32_t, 0);
+	PRELOAD_PUSH_VALUE(uint32_t, 0);
+	preload_metadata = (caddr_t)fake_preload;
+
+	/* Check if bootloader clobbered part of the kernel with the DTB. */
+	KASSERT(rvbp->dtbp_phys + dtb_size <= rvbp->kern_phys ||
+		rvbp->dtbp_phys >= rvbp->kern_phys + (lastaddr - KERNBASE),
+	    ("FDT (%lx-%lx) and kernel (%lx-%lx) overlap", rvbp->dtbp_phys,
+		rvbp->dtbp_phys + dtb_size, rvbp->kern_phys,
+		rvbp->kern_phys + (lastaddr - KERNBASE)));
+	KASSERT(fake_size < sizeof(fake_preload),
+	    ("Too many fake_preload items"));
+
+	if (boothowto & RB_VERBOSE)
+		printf("FDT phys (%lx-%lx), kernel phys (%lx-%lx)\n",
+		    rvbp->dtbp_phys, rvbp->dtbp_phys + dtb_size,
+		    rvbp->kern_phys, rvbp->kern_phys + (lastaddr - KERNBASE));
+}
+
+static vm_offset_t
+parse_metadata(void)
+{
+	caddr_t kmdp;
+	vm_offset_t lastaddr;
 #ifdef DDB
-#if 0
-	/* RISCVTODO */
-	if (*(uint32_t *)KERNVIRTADDR == MAGIC_TRAMP_NUMBER) {
-		fake_preload[i++] = MODINFO_METADATA|MODINFOMD_SSYM;
-		fake_preload[i++] = sizeof(vm_offset_t);
-		fake_preload[i++] = *(uint32_t *)(KERNVIRTADDR + 4);
-		fake_preload[i++] = MODINFO_METADATA|MODINFOMD_ESYM;
-		fake_preload[i++] = sizeof(vm_offset_t);
-		fake_preload[i++] = *(uint32_t *)(KERNVIRTADDR + 8);
-		lastaddr = *(uint32_t *)(KERNVIRTADDR + 8);
-		zend = lastaddr;
-		zstart = *(uint32_t *)(KERNVIRTADDR + 4);
-		db_fetch_ksymtab(zstart, zend);
-	} else
+	vm_offset_t ksym_start, ksym_end;
 #endif
-#endif
-		lastaddr = (vm_offset_t)&end;
-	fake_preload[i++] = 0;
-	fake_preload[i] = 0;
-	preload_metadata = (void *)fake_preload;
+	char *kern_envp;
 
+	/* Find the kernel address */
+	kmdp = preload_search_by_type("elf kernel");
+	if (kmdp == NULL)
+		kmdp = preload_search_by_type("elf64 kernel");
+	KASSERT(kmdp != NULL, ("No preload metadata found!"));
+
+	/* Read the boot metadata */
+	boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
+	lastaddr = MD_FETCH(kmdp, MODINFOMD_KERNEND, vm_offset_t);
+	kern_envp = MD_FETCH(kmdp, MODINFOMD_ENVP, char *);
+	if (kern_envp != NULL)
+		init_static_kenv(kern_envp, 0);
+#ifdef DDB
+	ksym_start = MD_FETCH(kmdp, MODINFOMD_SSYM, uintptr_t);
+	ksym_end = MD_FETCH(kmdp, MODINFOMD_ESYM, uintptr_t);
+	db_fetch_ksymtab(ksym_start, ksym_end);
+#endif
+#ifdef FDT
+	try_load_dtb(kmdp);
+#endif
 	return (lastaddr);
 }
 
@@ -832,20 +838,19 @@ initriscv(struct riscv_bootparams *rvbp)
 {
 	struct mem_region mem_regions[FDT_MEM_REGIONS];
 	struct pcpu *pcpup;
-	vm_offset_t rstart, rend;
-	vm_offset_t s, e;
 	int mem_regions_sz;
 	vm_offset_t lastaddr;
 	vm_size_t kernlen;
-	caddr_t kmdp;
-	int i;
+#ifdef FDT
+	phandle_t chosen;
+	uint32_t hart;
+#endif
 
 	TSRAW(&thread0, TS_ENTER, __func__, NULL);
 
 	/* Set the pcpu data, this is needed by pmap_bootstrap */
 	pcpup = &__pcpu[0];
 	pcpu_init(pcpup, 0, sizeof(struct pcpu));
-	pcpup->pc_hart = boot_hart;
 
 	/* Set the pcpu pointer */
 	__asm __volatile("mv tp, %0" :: "r"(pcpup));
@@ -855,47 +860,45 @@ initriscv(struct riscv_bootparams *rvbp)
 	/* Initialize SBI interface. */
 	sbi_init();
 
-	/* Set the module data location */
-	lastaddr = fake_preload_metadata(rvbp);
-
-	/* Find the kernel address */
-	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp == NULL)
-		kmdp = preload_search_by_type("elf64 kernel");
-
-	boothowto = RB_VERBOSE | RB_SINGLE;
-	boothowto = RB_VERBOSE;
-
-	kern_envp = NULL;
-
-#ifdef FDT
-	try_load_dtb(kmdp, rvbp->dtbp_virt);
-#endif
-
-	/* Load the physical memory ranges */
-	physmap_idx = 0;
-
-#ifdef FDT
-	/* Grab physical memory regions information from device tree. */
-	if (fdt_get_mem_regions(mem_regions, &mem_regions_sz, NULL) != 0)
-		panic("Cannot get physical memory regions");
-
-	s = rvbp->dtbp_phys;
-	e = s + DTB_SIZE_MAX;
-
-	for (i = 0; i < mem_regions_sz; i++) {
-		rstart = mem_regions[i].mr_start;
-		rend = (mem_regions[i].mr_start + mem_regions[i].mr_size);
-
-		if ((rstart < s) && (rend > e)) {
-			/* Exclude DTB region. */
-			add_physmap_entry(rstart, (s - rstart), physmap, &physmap_idx);
-			add_physmap_entry(e, (rend - e), physmap, &physmap_idx);
-		} else {
-			add_physmap_entry(mem_regions[i].mr_start,
-			    mem_regions[i].mr_size, physmap, &physmap_idx);
-		}
+	/* Parse the boot metadata. */
+	if (rvbp->modulep != 0) {
+		preload_metadata = (caddr_t)rvbp->modulep;
+	} else {
+		fake_preload_metadata(rvbp);
 	}
+	lastaddr = parse_metadata();
+
+#ifdef FDT
+	/*
+	 * Look for the boot hart ID. This was either passed in directly from
+	 * the SBI firmware and handled by locore, or was stored in the device
+	 * tree by an earlier boot stage.
+	 */
+	chosen = OF_finddevice("/chosen");
+	if (OF_getencprop(chosen, "boot-hartid", &hart, sizeof(hart)) != -1) {
+		boot_hart = hart;
+	}
+#endif
+	if (boot_hart == BOOT_HART_INVALID) {
+		panic("Boot hart ID was not properly set");
+	}
+	pcpup->pc_hart = boot_hart;
+
+#ifdef FDT
+	/*
+	 * Exclude reserved memory specified by the device tree. Typically,
+	 * this contains an entry for memory used by the runtime SBI firmware.
+	 */
+	if (fdt_get_reserved_mem(mem_regions, &mem_regions_sz) == 0) {
+		physmem_exclude_regions(mem_regions, mem_regions_sz,
+		    EXFLAG_NODUMP | EXFLAG_NOALLOC);
+	}
+
+	/* Grab physical memory regions information from device tree. */
+	if (fdt_get_mem_regions(mem_regions, &mem_regions_sz, NULL) != 0) {
+		panic("Cannot get physical memory regions");
+	}
+	physmem_hardware_regions(mem_regions, mem_regions_sz);
 #endif
 
 	/* Do basic tuning, hz etc */
@@ -905,7 +908,24 @@ initriscv(struct riscv_bootparams *rvbp)
 
 	/* Bootstrap enough of pmap to enter the kernel proper */
 	kernlen = (lastaddr - KERNBASE);
-	pmap_bootstrap(rvbp->kern_l1pt, mem_regions[0].mr_start, kernlen);
+	pmap_bootstrap(rvbp->kern_l1pt, rvbp->kern_phys, kernlen);
+
+#ifdef FDT
+	/*
+	 * XXX: Exclude the lowest 2MB of physical memory, if it hasn't been
+	 * already, as this area is assumed to contain the SBI firmware. This
+	 * is a little fragile, but it is consistent with the platforms we
+	 * support so far.
+	 *
+	 * TODO: remove this when the all regular booting methods properly
+	 * report their reserved memory in the device tree.
+	 */
+	if (mem_regions[0].mr_start == physmap[0]) {
+		physmem_exclude_region(mem_regions[0].mr_start, L2_SIZE,
+		    EXFLAG_NODUMP | EXFLAG_NOALLOC);
+	}
+#endif
+	physmem_init_kernel_globals();
 
 	/* Establish static device mappings */
 	devmap_bootstrap(0, NULL);
@@ -918,6 +938,9 @@ initriscv(struct riscv_bootparams *rvbp)
 	mutex_init();
 	init_param2(physmem);
 	kdb_init();
+
+	if (boothowto & RB_VERBOSE)
+		physmem_print_tables();
 
 	early_boot = 0;
 

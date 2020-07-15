@@ -173,7 +173,7 @@ cluster_read(struct vnode *vp, u_quad_t filesize, daddr_t lblkno, long size,
 					LK_EXCLUSIVE | LK_NOWAIT, NULL))) {
 					rbp->b_flags |= B_RAM;
 					BUF_UNLOCK(rbp);
-				}			
+				}
 			}
 			BO_RUNLOCK(bo);
 			if (i >= maxra) {
@@ -801,7 +801,6 @@ cluster_write(struct vnode *vp, struct buf *bp, u_quad_t filesize, int seqcount,
 	vp->v_lastw = lbn;
 	vp->v_lasta = bp->b_blkno;
 }
-
 
 /*
  * This is an awful lot like cluster_rbuild...wish they could be combined.

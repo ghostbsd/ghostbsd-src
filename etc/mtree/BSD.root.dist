@@ -58,8 +58,8 @@
 	..
 	init.d
         ..
-	local.d
-	..
+        kyua
+        ..
         mail
         ..
         mtree
@@ -149,7 +149,7 @@
     ..
     rescue
     ..
-    root
+    root            mode=0750
     ..
     sbin
     ..

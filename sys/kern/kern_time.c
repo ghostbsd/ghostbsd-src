@@ -118,7 +118,6 @@ int		itimespecfix(struct timespec *ts);
 
 SYSINIT(posix_timer, SI_SUB_P1003_1B, SI_ORDER_FIRST+4, itimer_start, NULL);
 
-
 static int
 settime(struct thread *td, struct timeval *tv)
 {
@@ -243,7 +242,7 @@ sys_clock_gettime(struct thread *td, struct clock_gettime_args *uap)
 	return (error);
 }
 
-static inline void 
+static inline void
 cputick2timespec(uint64_t runtime, struct timespec *ats)
 {
 	runtime = cputick2usec(runtime);
@@ -251,8 +250,8 @@ cputick2timespec(uint64_t runtime, struct timespec *ats)
 	ats->tv_nsec = runtime % 1000000 * 1000;
 }
 
-static void
-get_thread_cputime(struct thread *targettd, struct timespec *ats)
+void
+kern_thread_cputime(struct thread *targettd, struct timespec *ats)
 {
 	uint64_t runtime, curtime, switchtime;
 
@@ -264,6 +263,7 @@ get_thread_cputime(struct thread *targettd, struct timespec *ats)
 		critical_exit();
 		runtime += curtime - switchtime;
 	} else {
+		PROC_LOCK_ASSERT(targettd->td_proc, MA_OWNED);
 		thread_lock(targettd);
 		runtime = targettd->td_runtime;
 		thread_unlock(targettd);
@@ -271,12 +271,13 @@ get_thread_cputime(struct thread *targettd, struct timespec *ats)
 	cputick2timespec(runtime, ats);
 }
 
-static void
-get_process_cputime(struct proc *targetp, struct timespec *ats)
+void
+kern_process_cputime(struct proc *targetp, struct timespec *ats)
 {
 	uint64_t runtime;
 	struct rusage ru;
 
+	PROC_LOCK_ASSERT(targetp, MA_OWNED);
 	PROC_STATLOCK(targetp);
 	rufetch(targetp, &ru);
 	runtime = targetp->p_rux.rux_runtime;
@@ -301,14 +302,14 @@ get_cputime(struct thread *td, clockid_t clock_id, struct timespec *ats)
 		td2 = tdfind(tid, p->p_pid);
 		if (td2 == NULL)
 			return (EINVAL);
-		get_thread_cputime(td2, ats);
+		kern_thread_cputime(td2, ats);
 		PROC_UNLOCK(td2->td_proc);
 	} else {
 		pid = clock_id & CPUCLOCK_ID_MASK;
 		error = pget(pid, PGET_CANSEE, &p2);
 		if (error != 0)
 			return (EINVAL);
-		get_process_cputime(p2, ats);
+		kern_process_cputime(p2, ats);
 		PROC_UNLOCK(p2);
 	}
 	return (0);
@@ -361,11 +362,11 @@ kern_clock_gettime(struct thread *td, clockid_t clock_id, struct timespec *ats)
 		ats->tv_nsec = 0;
 		break;
 	case CLOCK_THREAD_CPUTIME_ID:
-		get_thread_cputime(NULL, ats);
+		kern_thread_cputime(NULL, ats);
 		break;
 	case CLOCK_PROCESS_CPUTIME_ID:
 		PROC_LOCK(p);
-		get_process_cputime(p, ats);
+		kern_process_cputime(p, ats);
 		PROC_UNLOCK(p);
 		break;
 	default:
@@ -624,20 +625,15 @@ user_clock_nanosleep(struct thread *td, clockid_t clock_id, int flags,
     const struct timespec *ua_rqtp, struct timespec *ua_rmtp)
 {
 	struct timespec rmt, rqt;
-	int error;
+	int error, error2;
 
 	error = copyin(ua_rqtp, &rqt, sizeof(rqt));
 	if (error)
 		return (error);
-	if (ua_rmtp != NULL && (flags & TIMER_ABSTIME) == 0 &&
-	    !useracc(ua_rmtp, sizeof(rmt), VM_PROT_WRITE))
-		return (EFAULT);
 	error = kern_clock_nanosleep(td, clock_id, flags, &rqt, &rmt);
 	if (error == EINTR && ua_rmtp != NULL && (flags & TIMER_ABSTIME) == 0) {
-		int error2;
-
 		error2 = copyout(&rmt, ua_rmtp, sizeof(rmt));
-		if (error2)
+		if (error2 != 0)
 			error = error2;
 	}
 	return (error);

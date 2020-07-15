@@ -422,6 +422,10 @@ in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
 			struct epoch_tracker et;
 
 			NET_EPOCH_ENTER(et);
+			if (ifp->if_afdata[AF_INET6] == NULL) {
+				NET_EPOCH_EXIT(et);
+				return (ENETDOWN);
+			}
 			sid = SID(ifp);
 			zoneid = sid->s6id_list[scope];
 			NET_EPOCH_EXIT(et);
@@ -463,6 +467,28 @@ in6_getscope(const struct in6_addr *in6)
 		return (in6->s6_addr16[1]);
 
 	return (0);
+}
+
+/*
+ * Returns scope zone id for the unicast address @in6.
+ *
+ * Returns 0 for global unicast and loopback addresses.
+ * Returns interface index for the link-local addresses.
+ */
+uint32_t
+in6_get_unicast_scopeid(const struct in6_addr *in6, const struct ifnet *ifp)
+{
+
+	if (IN6_IS_SCOPE_LINKLOCAL(in6))
+		return (ifp->if_index);
+	return (0);
+}
+
+void
+in6_set_unicast_scopeid(struct in6_addr *in6, uint32_t scopeid)
+{
+
+	in6->s6_addr16[1] = htons(scopeid & 0xffff);
 }
 
 /*

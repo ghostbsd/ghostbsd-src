@@ -385,6 +385,11 @@ void nd6_rem_ifa_lle(struct in6_ifaddr *, int);
 int nd6_output_ifp(struct ifnet *, struct ifnet *, struct mbuf *,
     struct sockaddr_in6 *, struct route *);
 
+struct rib_head;
+struct rib_cmd_info;
+void nd6_subscription_cb(struct rib_head *rnh, struct rib_cmd_info *rc,
+    void *arg);
+
 /* nd6_nbr.c */
 void nd6_na_input(struct mbuf *, int, int);
 void nd6_na_output(struct ifnet *, const struct in6_addr *,
@@ -401,8 +406,9 @@ void nd6_dad_stop(struct ifaddr *);
 void nd6_rs_input(struct mbuf *, int, int);
 void nd6_ra_input(struct mbuf *, int, int);
 void nd6_ifnet_link_event(void *, struct ifnet *, int);
-struct nd_defrouter *defrouter_lookup(struct in6_addr *, struct ifnet *);
-struct nd_defrouter *defrouter_lookup_locked(struct in6_addr *, struct ifnet *);
+struct nd_defrouter *defrouter_lookup(const struct in6_addr *, struct ifnet *);
+struct nd_defrouter *defrouter_lookup_locked(const struct in6_addr *,
+    struct ifnet *);
 void defrouter_reset(void);
 void defrouter_select_fib(int fibnum);
 void defrouter_rele(struct nd_defrouter *);
@@ -418,7 +424,6 @@ void nd6_prefix_unlink(struct nd_prefix *, struct nd_prhead *);
 void nd6_prefix_del(struct nd_prefix *);
 void nd6_prefix_ref(struct nd_prefix *);
 void nd6_prefix_rele(struct nd_prefix *);
-int nd6_prefix_onlink(struct nd_prefix *);
 int nd6_prefix_offlink(struct nd_prefix *);
 void pfxlist_onlink_check(void);
 struct nd_prefix *nd6_prefix_lookup(struct nd_prefixctl *);

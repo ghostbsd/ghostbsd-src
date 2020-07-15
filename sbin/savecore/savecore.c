@@ -157,6 +157,8 @@ printheader(xo_handle_t *xo, const struct kerneldumpheader *h,
 {
 	uint64_t dumplen;
 	time_t t;
+	struct tm tm;
+	char time_str[64];
 	const char *stat_str;
 	const char *comp_str;
 
@@ -189,7 +191,10 @@ printheader(xo_handle_t *xo, const struct kerneldumpheader *h,
 	}
 	xo_emit_h(xo, "{P:  }{Lwc:Compression}{:compression/%s}\n", comp_str);
 	t = dtoh64(h->dumptime);
-	xo_emit_h(xo, "{P:  }{Lwc:Dumptime}{:dumptime/%s}", ctime(&t));
+	localtime_r(&t, &tm);
+	if (strftime(time_str, sizeof(time_str), "%F %T %z", &tm) == 0)
+		time_str[0] = '\0';
+	xo_emit_h(xo, "{P:  }{Lwc:Dumptime}{:dumptime/%s}\n", time_str);
 	xo_emit_h(xo, "{P:  }{Lwc:Hostname}{:hostname/%s}\n", h->hostname);
 	xo_emit_h(xo, "{P:  }{Lwc:Magic}{:magic/%s}\n", h->magic);
 	xo_emit_h(xo, "{P:  }{Lwc:Version String}{:version_string/%s}",
@@ -968,6 +973,44 @@ closefd:
 	close(fddev);
 }
 
+/* Prepend "/dev/" to any arguments that don't already have it */
+static char **
+devify(int argc, char **argv)
+{
+	char **devs;
+	int i, l;
+
+	devs = malloc(argc * sizeof(*argv));
+	if (devs == NULL) {
+		logmsg(LOG_ERR, "malloc(): %m");
+		exit(1);
+	}
+	for (i = 0; i < argc; i++) {
+		if (strncmp(argv[i], _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
+			devs[i] = strdup(argv[i]);
+		else {
+			char *fullpath;
+
+			fullpath = malloc(PATH_MAX);
+			if (fullpath == NULL) {
+				logmsg(LOG_ERR, "malloc(): %m");
+				exit(1);
+			}
+			l = snprintf(fullpath, PATH_MAX, "%s%s", _PATH_DEV,
+			    argv[i]);
+			if (l < 0) {
+				logmsg(LOG_ERR, "snprintf(): %m");
+				exit(1);
+			} else if (l >= PATH_MAX) {
+				logmsg(LOG_ERR, "device name too long");
+				exit(1);
+			}
+			devs[i] = fullpath;
+		}
+	}
+	return (devs);
+}
+
 static char **
 enum_dumpdevs(int *argcp)
 {
@@ -1064,6 +1107,7 @@ main(int argc, char **argv)
 {
 	cap_rights_t rights;
 	const char *savedir;
+	char **devs;
 	int i, ch, error, savedirfd;
 
 	checkfor = compress = clear = force = keep = verbose = 0;
@@ -1127,7 +1171,9 @@ main(int argc, char **argv)
 		argv++;
 	}
 	if (argc == 0)
-		argv = enum_dumpdevs(&argc);
+		devs = enum_dumpdevs(&argc);
+	else
+		devs = devify(argc, argv);
 
 	savedirfd = open(savedir, O_RDONLY | O_DIRECTORY);
 	if (savedirfd < 0) {
@@ -1143,10 +1189,10 @@ main(int argc, char **argv)
 	}
 
 	/* Enter capability mode. */
-	init_caps(argc, argv);
+	init_caps(argc, devs);
 
 	for (i = 0; i < argc; i++)
-		DoFile(savedir, savedirfd, argv[i]);
+		DoFile(savedir, savedirfd, devs[i]);
 
 	/* Emit minimal output. */
 	if (nfound == 0) {

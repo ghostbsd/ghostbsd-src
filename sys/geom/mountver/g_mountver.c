@@ -49,7 +49,7 @@ __FBSDID("$FreeBSD$");
 
 
 SYSCTL_DECL(_kern_geom);
-static SYSCTL_NODE(_kern_geom, OID_AUTO, mountver, CTLFLAG_RW,
+static SYSCTL_NODE(_kern_geom, OID_AUTO, mountver, CTLFLAG_RW | CTLFLAG_MPSAFE,
     0, "GEOM_MOUNTVER stuff");
 static u_int g_mountver_debug = 0;
 static u_int g_mountver_check_ident = 1;
@@ -276,6 +276,7 @@ g_mountver_create(struct gctl_req *req, struct g_class *mp, struct g_provider *p
 	struct g_geom *gp;
 	struct g_provider *newpp;
 	struct g_consumer *cp;
+	struct g_geom_alias *gap;
 	char name[64];
 	int error;
 	int identsize = DISK_IDENT_SIZE;
@@ -309,6 +310,8 @@ g_mountver_create(struct gctl_req *req, struct g_class *mp, struct g_provider *p
 	newpp->mediasize = pp->mediasize;
 	newpp->sectorsize = pp->sectorsize;
 	newpp->flags |= G_PF_DIRECT_SEND | G_PF_DIRECT_RECEIVE;
+	LIST_FOREACH(gap, &pp->aliases, ga_next)
+		g_provider_add_alias(newpp, "%s%s", gap->ga_alias, G_MOUNTVER_SUFFIX);
 
 	if ((pp->flags & G_PF_ACCEPT_UNMAPPED) != 0) {
 		G_MOUNTVER_DEBUG(0, "Unmapped supported for %s.", gp->name);
@@ -423,8 +426,8 @@ g_mountver_ctl_create(struct gctl_req *req, struct g_class *mp)
 			gctl_error(req, "No 'arg%d' argument", i);
 			return;
 		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
+		if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+			name += strlen(_PATH_DEV);
 		pp = g_provider_by_name(name);
 		if (pp == NULL) {
 			G_MOUNTVER_DEBUG(1, "Provider %s is invalid.", name);
@@ -480,8 +483,8 @@ g_mountver_ctl_destroy(struct gctl_req *req, struct g_class *mp)
 			gctl_error(req, "No 'arg%d' argument", i);
 			return;
 		}
-		if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-			name += strlen("/dev/");
+		if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+			name += strlen(_PATH_DEV);
 		gp = g_mountver_find_geom(mp, name);
 		if (gp == NULL) {
 			G_MOUNTVER_DEBUG(1, "Device %s is invalid.", name);

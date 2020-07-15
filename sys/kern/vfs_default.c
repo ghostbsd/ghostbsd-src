@@ -513,7 +513,7 @@ vop_stdlock(ap)
 	struct mtx *ilk;
 
 	ilk = VI_MTX(vp);
-	return (lockmgr_lock_fast_path(vp->v_vnlock, ap->a_flags,
+	return (lockmgr_lock_flags(vp->v_vnlock, ap->a_flags,
 	    &ilk->lock_object, ap->a_file, ap->a_line));
 }
 
@@ -526,7 +526,7 @@ vop_stdunlock(ap)
 {
 	struct vnode *vp = ap->a_vp;
 
-	return (lockmgr_unlock_fast_path(vp->v_vnlock, 0, NULL));
+	return (lockmgr_unlock(vp->v_vnlock));
 }
 
 /* See above. */
@@ -573,7 +573,7 @@ vop_lock(ap)
 	}
 other:
 	ilk = VI_MTX(vp);
-	return (lockmgr_lock_fast_path(&vp->v_lock, flags,
+	return (lockmgr_lock_flags(&vp->v_lock, flags,
 	    &ilk->lock_object, ap->a_file, ap->a_line));
 }
 
@@ -765,7 +765,8 @@ vop_stdgetpages_async(struct vop_getpages_async_args *ap)
 
 	error = VOP_GETPAGES(ap->a_vp, ap->a_m, ap->a_count, ap->a_rbehind,
 	    ap->a_rahead);
-	ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
+	if (ap->a_iodone != NULL)
+		ap->a_iodone(ap->a_arg, ap->a_m, ap->a_count, error);
 	return (error);
 }
 
@@ -804,7 +805,7 @@ vop_stdvptocnp(struct vop_vptocnp_args *ap)
 	struct vnode **dvp = ap->a_vpp;
 	struct ucred *cred = ap->a_cred;
 	char *buf = ap->a_buf;
-	int *buflen = ap->a_buflen;
+	size_t *buflen = ap->a_buflen;
 	char *dirbuf, *cpos;
 	int i, error, eofflag, dirbuflen, flags, locked, len, covered;
 	off_t off;
@@ -1220,6 +1221,7 @@ static int
 vop_stdadd_writecount(struct vop_add_writecount_args *ap)
 {
 	struct vnode *vp;
+	struct mount *mp;
 	int error;
 
 	vp = ap->a_vp;
@@ -1229,6 +1231,11 @@ vop_stdadd_writecount(struct vop_add_writecount_args *ap)
 	} else {
 		VNASSERT(vp->v_writecount + ap->a_inc >= 0, vp,
 		    ("neg writecount increment %d", ap->a_inc));
+		if (vp->v_writecount == 0) {
+			mp = vp->v_mount;
+			if (mp != NULL && (mp->mnt_kern_flag & MNTK_NOMSYNC) == 0)
+				vlazy(vp);
+		}
 		vp->v_writecount += ap->a_inc;
 		error = 0;
 	}
@@ -1444,20 +1451,7 @@ vop_sigdefer(struct vop_vector *vop, struct vop_generic_args *a)
 	vop_bypass_t *bp;
 	int prev_stops, rc;
 
-	for (; vop != NULL; vop = vop->vop_default) {
-		bp = bp_by_off(vop, a);
-		if (bp != NULL)
-			break;
-
-		/*
-		 * Bypass is not really supported.  It is done for
-		 * fallback to unimplemented vops in the default
-		 * vector.
-		 */
-		bp = vop->vop_bypass;
-		if (bp != NULL)
-			break;
-	}
+	bp = bp_by_off(vop, a);
 	MPASS(bp != NULL);
 
 	prev_stops = sigdeferstop(SIGDEFERSTOP_SILENT);

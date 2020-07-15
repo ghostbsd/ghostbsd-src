@@ -111,7 +111,7 @@ sctp6_input_with_port(struct mbuf **i_pak, int *offp, uint16_t port)
 		}
 	}
 	ip6 = mtod(m, struct ip6_hdr *);
-	sh = (struct sctphdr *)(mtod(m, caddr_t) + iphlen);
+	sh = (struct sctphdr *)(mtod(m, caddr_t)+iphlen);
 	ch = (struct sctp_chunkhdr *)((caddr_t)sh + sizeof(struct sctphdr));
 	offset -= sizeof(struct sctp_chunkhdr);
 	memset(&src, 0, sizeof(struct sockaddr_in6));
@@ -179,9 +179,6 @@ sctp6_notify(struct sctp_inpcb *inp,
     uint8_t icmp6_code,
     uint32_t next_mtu)
 {
-#if defined(__APPLE__) || defined(SCTP_SO_LOCK_TESTING)
-	struct socket *so;
-#endif
 	int timer_stopped;
 
 	switch (icmp6_type) {
@@ -205,19 +202,8 @@ sctp6_notify(struct sctp_inpcb *inp,
 		/* Treat it like an ABORT. */
 		if (icmp6_code == ICMP6_PARAMPROB_NEXTHEADER) {
 			sctp_abort_notification(stcb, 1, 0, NULL, SCTP_SO_NOT_LOCKED);
-#if defined(__APPLE__) || defined(SCTP_SO_LOCK_TESTING)
-			so = SCTP_INP_SO(inp);
-			atomic_add_int(&stcb->asoc.refcnt, 1);
-			SCTP_TCB_UNLOCK(stcb);
-			SCTP_SOCKET_LOCK(so, 1);
-			SCTP_TCB_LOCK(stcb);
-			atomic_subtract_int(&stcb->asoc.refcnt, 1);
-#endif
 			(void)sctp_free_assoc(inp, stcb, SCTP_NORMAL_PROC,
 			    SCTP_FROM_SCTP_USRREQ + SCTP_LOC_2);
-#if defined(__APPLE__) || defined(SCTP_SO_LOCK_TESTING)
-			SCTP_SOCKET_UNLOCK(so, 1);
-#endif
 		} else {
 			SCTP_TCB_UNLOCK(stcb);
 		}
@@ -472,15 +458,17 @@ out:
 	return (error);
 }
 
-SYSCTL_PROC(_net_inet6_sctp6, OID_AUTO, getcred, CTLTYPE_OPAQUE | CTLFLAG_RW,
-    0, 0,
-    sctp6_getcred, "S,ucred", "Get the ucred of a SCTP6 connection");
+SYSCTL_PROC(_net_inet6_sctp6, OID_AUTO, getcred,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    0, 0, sctp6_getcred, "S,ucred",
+    "Get the ucred of a SCTP6 connection");
 
 
 /* This is the same as the sctp_abort() could be made common */
 static void
 sctp6_abort(struct socket *so)
 {
+	struct epoch_tracker et;
 	struct sctp_inpcb *inp;
 	uint32_t flags;
 
@@ -489,6 +477,7 @@ sctp6_abort(struct socket *so)
 		SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EINVAL);
 		return;
 	}
+	NET_EPOCH_ENTER(et);
 sctp_must_try_again:
 	flags = inp->sctp_flags;
 #ifdef SCTP_LOG_CLOSING
@@ -517,6 +506,7 @@ sctp_must_try_again:
 			goto sctp_must_try_again;
 		}
 	}
+	NET_EPOCH_EXIT(et);
 	return;
 }
 
@@ -776,9 +766,12 @@ connected_type:
 		 * optionaly switch back to this code (by changing back the
 		 * defininitions but this is not advisable.
 		 */
+		struct epoch_tracker et;
 		int ret;
 
+		NET_EPOCH_ENTER(et);
 		ret = sctp_output(inp, inp->pkt, addr, inp->control, p, flags);
+		NET_EPOCH_EXIT(et);
 		inp->pkt = NULL;
 		inp->control = NULL;
 		return (ret);
@@ -790,6 +783,7 @@ connected_type:
 static int
 sctp6_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 {
+	struct epoch_tracker et;
 	uint32_t vrf_id;
 	int error = 0;
 	struct sctp_inpcb *inp;
@@ -924,8 +918,10 @@ sctp6_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 	}
 	SCTP_SET_STATE(stcb, SCTP_STATE_COOKIE_WAIT);
 	(void)SCTP_GETTIME_TIMEVAL(&stcb->asoc.time_entered);
+	NET_EPOCH_ENTER(et);
 	sctp_send_initiate(inp, stcb, SCTP_SO_LOCKED);
 	SCTP_TCB_UNLOCK(stcb);
+	NET_EPOCH_EXIT(et);
 	return (error);
 }
 

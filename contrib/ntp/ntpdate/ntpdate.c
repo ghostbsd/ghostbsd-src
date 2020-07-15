@@ -339,7 +339,11 @@ ntpdatemain (
 	if (!ipv6_works)
 		ai_fam_templ = AF_INET;
 
-	errflg = 0;
+#ifdef HAVE_NETINFO
+	errflg = 0;		/* servers can come from netinfo */
+#else
+	errflg = (argc < 2);	/* need at least server on cmdline */
+#endif
 	progname = argv[0];
 	syslogit = 0;
 
@@ -1367,6 +1371,10 @@ addserver(
 #endif
 
 	error = getaddrinfo(serv, service, &hints, &addrResult);
+	if (error == EAI_SERVICE) {
+		strlcpy(service, "123", sizeof(service));
+		error = getaddrinfo(serv, service, &hints, &addrResult);
+	}
 	if (error != 0) {
 		/* Conduct more refined error analysis */
 		if (error == EAI_FAIL || error == EAI_AGAIN){
@@ -1703,7 +1711,12 @@ init_io(void)
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_socktype = SOCK_DGRAM;
 
-	if (getaddrinfo(NULL, service, &hints, &res) != 0) {
+	rc = getaddrinfo(NULL, service, &hints, &res);
+	if (rc == EAI_SERVICE) {
+		strlcpy(service, "123", sizeof(service));
+		rc = getaddrinfo(NULL, service, &hints, &res);
+	}
+	if (rc != 0) {
 		msyslog(LOG_ERR, "getaddrinfo() failed: %m");
 		exit(1);
 		/*NOTREACHED*/
@@ -1749,9 +1762,7 @@ init_io(void)
 		/* Restricts AF_INET6 socket to IPv6 communications (see RFC 2553bis-03) */
 		if (res->ai_family == AF_INET6)
 			if (setsockopt(fd[nbsock], IPPROTO_IPV6, IPV6_V6ONLY, (void*) &optval, sizeof(optval)) < 0) {
-				   msyslog(LOG_ERR, "setsockopt() IPV6_V6ONLY failed: %m");
-					exit(1);
-					/*NOTREACHED*/
+				msyslog(LOG_ERR, "setsockopt() IPV6_V6ONLY failed: %m");
 		}
 #endif
 
@@ -1973,7 +1984,7 @@ input_handler(void)
 			continue;
 		}
 
-		rb = get_free_recv_buffer();
+		rb = get_free_recv_buffer(TRUE);
 
 		fromlen = sizeof(rb->recv_srcadr);
 		rb->recv_length = recvfrom(fdc, (char *)&rb->recv_pkt,
@@ -2002,7 +2013,7 @@ l_adj_systime(
 	l_fp *ts
 	)
 {
-	struct timeval adjtv, oadjtv;
+	struct timeval adjtv;
 	int isneg = 0;
 	l_fp offset;
 #ifndef STEP_SLEW
@@ -2042,6 +2053,7 @@ l_adj_systime(
 		/* A time correction needs to be applied. */
 #if !defined SYS_WINNT && !defined SYS_CYGWIN32
 		/* Slew the time on systems that support this. */
+		struct timeval oadjtv;
 		if (adjtime(&adjtv, &oadjtv) < 0) {
 			msyslog(LOG_ERR, "Can't adjust the time of day: %m");
 			exit(1);

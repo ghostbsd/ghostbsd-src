@@ -31,18 +31,12 @@
 #ifndef _ARM64_LINUX_H_
 #define	_ARM64_LINUX_H_
 
+#include <sys/abi_compat.h>
+
 #include <compat/linux/linux.h>
 #include <arm64/linux/linux_syscall.h>
 
 #define	LINUX_DTRACE	linuxulator
-
-#define	PTRIN(v)	(void *)(v)
-#define	PTROUT(v)	(uintptr_t)(v)
-
-#define	CP(src,dst,fld) do { (dst).fld = (src).fld; } while (0)
-#define	CP2(src,dst,sfld,dfld) do { (dst).dfld = (src).sfld; } while (0)
-#define	PTRIN_CP(src,dst,fld) \
-	do { (dst).fld = PTRIN((src).fld); } while (0)
 
 /* Provide a separate set of types for the Linux types */
 typedef int32_t		l_int;
@@ -70,6 +64,7 @@ typedef l_ulong		l_size_t;
 typedef l_long		l_suseconds_t;
 typedef l_long		l_time_t;
 typedef l_int		l_timer_t;	/* XXX */
+typedef l_int		l_mqd_t;
 typedef l_ulong		l_fd_mask;
 
 typedef struct {

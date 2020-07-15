@@ -49,17 +49,20 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libedit \
 	libeinfo \
 	libelftc \
-	libevent \
+	libevent1 \
 	libexecinfo \
 	libexpat \
 	libfetch \
 	libfigpar \
+	libgcc_eh \
+	libgcc_s \
 	libgeom \
 	libifconfig \
 	libipsec \
 	libjail \
 	libkiconv \
 	libkvm \
+	liblua \
 	liblzma \
 	libmemstat \
 	libmd \
@@ -73,14 +76,14 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libpathconv \
 	libpcap \
 	libpjdlog \
-	${_libproc} \
+	libproc \
 	libprocstat \
 	librc \
 	libregex \
 	librpcsvc \
 	librss \
 	librt \
-	${_librtld_db} \
+	librtld_db \
 	libsbuf \
 	libsmb \
 	libsqlite3 \
@@ -179,8 +182,6 @@ _libcplusplus+=	libc++experimental
 SUBDIR.${MK_EFI}+=	libefivar
 SUBDIR.${MK_GOOGLETEST}+=	googletest
 SUBDIR.${MK_LIBTHR}+=	libthr
-SUBDIR.${MK_LLVM_LIBUNWIND}+=	libgcc_eh
-SUBDIR.${MK_LLVM_LIBUNWIND}+=	libgcc_s
 SUBDIR.${MK_NETGRAPH}+=	libnetgraph
 SUBDIR.${MK_NIS}+=	libypclnt
 
@@ -197,11 +198,6 @@ SUBDIR.${MK_PMC}+=	libipt
 SUBDIR.${MK_BHYVE}+=	libvmmapi
 .endif
 
-.if ${MACHINE_CPUARCH} != "sparc64"
-_libproc=	libproc
-_librtld_db=	librtld_db
-.endif
-
 .if ${MACHINE_ARCH} != "powerpc"
 SUBDIR.${MK_OPENMP}+=	libomp
 .endif
@@ -211,6 +207,8 @@ SUBDIR.${MK_RADIUS_SUPPORT}+=	libradius
 SUBDIR.${MK_SENDMAIL}+=	libmilter libsm libsmdb libsmutil
 SUBDIR.${MK_TELNET}+=	libtelnet
 SUBDIR.${MK_TESTS_SUPPORT}+=	atf
+SUBDIR.${MK_TESTS_SUPPORT}.${MK_CXX}+=	kyua
+SUBDIR.${MK_TESTS_SUPPORT}.${MK_CXX}+=	liblutok
 SUBDIR.${MK_TESTS}+=	tests
 SUBDIR.${MK_UNBOUND}+=	libunbound
 SUBDIR.${MK_USB}+=	libusbhid libusb

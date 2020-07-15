@@ -226,30 +226,29 @@ kernel-clean:
 # This is a hack.  BFD "optimizes" away dynamic mode if there are no
 # dynamic references.  We could probably do a '-Bforcedynamic' mode like
 # in the a.out ld.  For now, this works.
-HACK_EXTRA_FLAGS?= -shared
 hack.pico: Makefile
 	:> hack.c
-	${CC} ${HACK_EXTRA_FLAGS} -nostdlib hack.c -o hack.pico
+	${CC} -shared ${CFLAGS} -nostdlib hack.c -o hack.pico
 	rm -f hack.c
 
 offset.inc: $S/kern/genoffset.sh genoffset.o
 	NM='${NM}' NMFLAGS='${NMFLAGS}' sh $S/kern/genoffset.sh genoffset.o > ${.TARGET}
 
 genoffset.o: $S/kern/genoffset.c
-	${CC} -c ${CFLAGS:N-flto:N-fno-common} $S/kern/genoffset.c
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} -fcommon $S/kern/genoffset.c
 
 # genoffset_test.o is not actually used for anything - the point of compiling it
 # is to exercise the CTASSERT that checks that the offsets in the offset.inc
 # _lite struct(s) match those in the original(s). 
 genoffset_test.o: $S/kern/genoffset.c offset.inc
-	${CC} -c ${CFLAGS:N-flto:N-fno-common} -DOFFSET_TEST \
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} -fcommon -DOFFSET_TEST \
 	    $S/kern/genoffset.c -o ${.TARGET}
 
 assym.inc: $S/kern/genassym.sh genassym.o genoffset_test.o
 	NM='${NM}' NMFLAGS='${NMFLAGS}' sh $S/kern/genassym.sh genassym.o > ${.TARGET}
 
 genassym.o: $S/$M/$M/genassym.c  offset.inc
-	${CC} -c ${CFLAGS:N-flto:N-fno-common} $S/$M/$M/genassym.c
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} -fcommon $S/$M/$M/genassym.c
 
 OBJS_DEPEND_GUESS+= opt_global.h
 genoffset.o genassym.o vers.o: opt_global.h
@@ -346,10 +345,7 @@ ${__obj}: ${OBJS_DEPEND_GUESS.${__obj}}
 
 .depend: .PRECIOUS ${SRCS}
 
-.if ${COMPILER_TYPE} == "clang" || \
-    (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 60000)
 _MAP_DEBUG_PREFIX= yes
-.endif
 
 _ILINKS= machine
 .if ${MACHINE} != ${MACHINE_CPUARCH} && ${MACHINE} != "arm64"
@@ -389,7 +385,8 @@ kernel-cleandepend: .PHONY
 	rm -f .depend .depend.* ${_ILINKS}
 
 kernel-tags:
-	@[ -f .depend ] || { echo "you must make depend first"; exit 1; }
+	@ls .depend.* > /dev/null 2>&1 || \
+	    { echo "you must make all first"; exit 1; }
 	sh $S/conf/systags.sh
 
 kernel-install: .PHONY

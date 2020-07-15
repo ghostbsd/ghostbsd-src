@@ -2776,7 +2776,7 @@
 		    int jid
 		);
 	}
-509	AUE_CLOSEFROM	STD {
+509	AUE_CLOSEFROM	COMPAT12 {
 		int closefrom(
 		    int lowfd
 		);
@@ -3210,6 +3210,35 @@
 		    _In_z_ const char *path_from,
 		    _In_z_ const char *path_to,
 		    int flags
+		);
+	}
+573	AUE_NULL	STD {
+		int sigfastblock(
+		    int cmd,
+		    _Inout_opt_ uint32_t *ptr
+		);
+	}
+574	AUE_REALPATHAT	STD {
+		int __realpathat(
+		    int fd,
+		    _In_z_ const char *path,
+		    _Out_writes_z_(size) char *buf,
+		    size_t size,
+		    int flags
+		);
+	}
+575	AUE_CLOSERANGE	STD {
+		int close_range(
+		    u_int lowfd,
+		    u_int highfd,
+		    int flags
+		);
+	}
+; 576 is initialised by the krpc code, if present.
+576	AUE_NULL	NOSTD {
+		int rpctls_syscall(
+		    int op,
+		    _In_z_ const char *path
 		);
 	}
 

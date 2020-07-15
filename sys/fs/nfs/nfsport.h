@@ -98,16 +98,10 @@
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <machine/in_cksum.h>
-#include <crypto/des/des.h>
 #include <sys/md5.h>
 #include <rpc/rpc.h>
 #include <rpc/rpcsec_gss.h>
 
-/*
- * For Darwin, these functions should be "static" when built in a kext.
- * (This is always defined as nil otherwise.)
- */
-#define	APPLESTATIC
 #include <ufs/ufs/dir.h>
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>
@@ -115,8 +109,12 @@
 #include <ufs/ufs/ufsmount.h>
 #include <vm/uma.h>
 #include <vm/vm.h>
-#include <vm/vm_object.h>
+#include <vm/pmap.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_pageout.h>
+#include <vm/vm_param.h>
 #include <nfs/nfssvc.h>
 #include "opt_nfs.h"
 #include "opt_ufs.h"
@@ -172,7 +170,6 @@
 			MGETHDR((m), M_WAITOK, MT_DATA); 	\
 		} 						\
 	} while (0)
-#define	NFSMTOD	mtod
 
 /*
  * Client side constant for size of a lockowner name.
@@ -656,6 +653,7 @@ struct nfsvattr {
 #define	na_atime	na_vattr.va_atime
 #define	na_mtime	na_vattr.va_mtime
 #define	na_ctime	na_vattr.va_ctime
+#define	na_btime	na_vattr.va_birthtime
 #define	na_gen		na_vattr.va_gen
 #define	na_flags	na_vattr.va_flags
 #define	na_rdev		na_vattr.va_rdev
@@ -1059,11 +1057,6 @@ bool ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep);
 				    (n)->nm_minorvers > 0)
 
 /*
- * Gets the stats field out of the mount structure.
- */
-#define	vfs_statfs(m)	(&((m)->mnt_stat))
-
-/*
  * Set boottime.
  */
 #define	NFSSETBOOTTIME(b)	(getboottime(&b))
@@ -1086,6 +1079,11 @@ bool ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep);
 struct nfsex_args {
 	char	*fspec;
 	struct export_args	export;
+};
+
+struct nfsex_oldargs {
+	char	*fspec;
+	struct o2export_args	export;
 };
 
 /*

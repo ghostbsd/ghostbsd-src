@@ -1,10 +1,12 @@
 ChangeLog
 FILES
+LICENSE
 README
 auto.obj.mk
 autoconf.mk
 autodep.mk
 auto.dep.mk
+compiler.mk
 cython.mk
 dep.mk
 doc.mk
@@ -60,6 +62,7 @@ whats.mk
 yacc.mk
 dirdeps.mk
 dirdeps-options.mk
+dirdeps-targets.mk
 gendirdeps.mk
 install-new.mk
 meta2deps.py

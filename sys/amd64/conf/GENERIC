@@ -96,6 +96,7 @@ options 	GDB			# Support remote GDB.
 options 	DEADLKRES		# Enable the deadlock resolver
 options 	INVARIANTS		# Enable calls of extra sanity checking
 options 	INVARIANT_SUPPORT	# Extra sanity checks of internal structures, required by INVARIANTS
+options 	QUEUE_MACRO_DEBUG_TRASH	# Trash queue(2) internal pointers on invalidation
 options 	WITNESS			# Enable checks to detect deadlocks and cycles
 options 	WITNESS_SKIPSPIN	# Don't run witness on spinlocks for speed
 options 	MALLOC_DEBUG_MAXZONES=8	# Separate malloc(9) zones
@@ -244,6 +245,7 @@ device		ix			# Intel PRO/10GbE PCIE PF Ethernet
 device		ixv			# Intel PRO/10GbE PCIE VF Ethernet
 device		ixl			# Intel 700 Series Physical Function
 device		iavf			# Intel Adaptive Virtual Function
+device		ice			# Intel 800 Series Physical Function
 device		vmx			# VMware VMXNET3 Ethernet
 
 # PCI Ethernet NICs.

@@ -46,27 +46,26 @@
 	.globl	kernbase
 	.set	kernbase, KERNBASE
 
-	/* Trap entries */
 	.text
-
-	/* Reset vector */
-	.text
-	.globl _start
-_start:
-	/* Get the physical address kernel loaded to */
-	la	t0, virt_map
-	ld	t1, 0(t0)
-	sub	t1, t1, t0
-	li	t2, KERNBASE
-	sub	s9, t2, t1	/* s9 = physmem base */
-
-	/*
-	 * a0 = hart id
-	 * a1 = dtbp
-	 */
+/*
+ * Alternate entry point. Used when booting via SBI firmware. It must be placed
+ * at the beginning of the .text section. Arguments are as follows:
+ *  - a0 = hart ID
+ *  - a1 = dtbp
+ *
+ * Multiple CPUs might enter from this point, so we perform a hart lottery and
+ * send the losers to mpentry.
+ */
+	.globl _alt_start
+_alt_start:
+	/* Set the global pointer */
+.option push
+.option norelax
+	lla	gp, __global_pointer$
+.option pop
 
 	/* Pick a hart to run the boot process. */
-	la	t0, hart_lottery
+	lla	t0, hart_lottery
 	li	t1, 1
 	amoadd.w t0, t1, 0(t0)
 
@@ -76,14 +75,49 @@ _start:
 	 */
 	beqz	t0, 1f
 	j	mpentry
+1:
+	/* Store the boot hart */
+	lla	t0, boot_hart
+	sw	a0, 0(t0)
+
+	/* Load zero as modulep */
+	mv	a0, zero
+	j	pagetables
+
+/*
+ * Main entry point. This routine is marked as the ELF entry, and is where
+ * loader(8) will enter the kernel. Arguments are as follows:
+ *  - a0 = modulep
+ *  - a1 = ???
+ *
+ * It is expected that only a single CPU will enter here.
+ */
+	.globl _start
+_start:
+	/* Set the global pointer */
+.option push
+.option norelax
+	lla	gp, __global_pointer$
+.option pop
 
 	/*
-	 * Page tables
+	 * Zero a1 to indicate that we have no DTB pointer. It is already
+	 * included in the loader(8) metadata.
 	 */
-1:
+	mv	a1, zero
+
+	/*
+	 * Page tables setup
+	 *  a0 - modulep or zero
+	 *  a1 - zero or dtbp
+	 */
+pagetables:
+	/* Get the kernel's load address */
+	jal	get_physmem
+
 	/* Add L1 entry for kernel */
-	la	s1, pagetable_l1
-	la	s2, pagetable_l2	/* Link to next level PN */
+	lla	s1, pagetable_l1
+	lla	s2, pagetable_l2	/* Link to next level PN */
 	srli	s2, s2, PAGE_SHIFT
 
 	li	a5, KERNBASE
@@ -100,24 +134,24 @@ _start:
 	sd	t6, (t0)
 
 	/* Level 2 superpages (512 x 2MiB) */
-	la	s1, pagetable_l2
+	lla	s1, pagetable_l2
 	srli	t4, s9, 21		/* Div physmem base by 2 MiB */
 	li	t2, 512			/* Build 512 entries */
 	add	t3, t4, t2
 	li	t5, 0
-2:
 	li	t0, (PTE_KERN | PTE_X)
+1:
 	slli	t2, t4, PTE_PPN1_S	/* << PTE_PPN1_S */
 	or	t5, t0, t2
 	sd	t5, (s1)		/* Store PTE entry to position */
 	addi	s1, s1, PTE_SIZE
 
 	addi	t4, t4, 1
-	bltu	t4, t3, 2b
+	bltu	t4, t3, 1b
 
 	/* Create an L1 page for early devmap */
-	la	s1, pagetable_l1
-	la	s2, pagetable_l2_devmap	/* Link to next level PN */
+	lla	s1, pagetable_l1
+	lla	s2, pagetable_l2_devmap	/* Link to next level PN */
 	srli	s2, s2, PAGE_SHIFT
 
 	li	a5, (VM_MAX_KERNEL_ADDRESS - L2_SIZE)
@@ -133,10 +167,15 @@ _start:
 	add	t0, s1, a5
 	sd	t6, (t0)
 
+	/* Check if we have a DTB that needs to be mapped */
+	beqz	a1, 2f
+
 	/* Create an L2 page superpage for DTB */
-	la	s1, pagetable_l2_devmap
+	lla	s1, pagetable_l2_devmap
 	mv	s2, a1
 	srli	s2, s2, PAGE_SHIFT
+	/* Mask off any bits that aren't aligned */
+	andi	s2, s2, ~((1 << (PTE_PPN1_S - PTE_PPN0_S)) - 1)
 
 	li	t0, (PTE_KERN)
 	slli	t2, s2, PTE_PPN0_S	/* << PTE_PPN0_S */
@@ -152,14 +191,15 @@ _start:
 	/* Page tables END */
 
 	/* Setup supervisor trap vector */
-	la	t0, va
+2:
+	lla	t0, va
 	sub	t0, t0, s9
 	li	t1, KERNBASE
 	add	t0, t0, t1
 	csrw	stvec, t0
 
 	/* Set page tables base register */
-	la	s2, pagetable_l1
+	lla	s2, pagetable_l1
 	srli	s2, s2, PAGE_SHIFT
 	li	t0, SATP_MODE_SV39
 	or	s2, s2, t0
@@ -168,6 +208,11 @@ _start:
 
 	.align 2
 va:
+	/* Set the global pointer again, this time with the virtual address. */
+.option push
+.option norelax
+	lla	gp, __global_pointer$
+.option pop
 
 	/* Setup supervisor trap vector */
 	la	t0, cpu_exception_handler
@@ -176,12 +221,6 @@ va:
 	/* Ensure sscratch is zero */
 	li	t0, 0
 	csrw	sscratch, t0
-
-	/* Set the global pointer */
-.option push
-.option norelax
-	la	gp, __global_pointer$
-.option pop
 
 	/* Initialize stack pointer */
 	la	s3, initstack_end
@@ -198,12 +237,6 @@ va:
 	addi	s0, s0, 8
 	bltu	s0, s1, 1b
 
-#ifdef SMP
-	/* Store boot hart id. */
-	la	t0, boot_hart
-	sw	a0, 0(t0)
-#endif
-
 	/* Fill riscv_bootparams */
 	la	t0, pagetable_l1
 	sd	t0, RISCV_BOOTPARAMS_KERN_L1PT(sp)
@@ -212,13 +245,30 @@ va:
 	la	t0, initstack
 	sd	t0, RISCV_BOOTPARAMS_KERN_STACK(sp)
 
-	li	t0, (VM_MAX_KERNEL_ADDRESS - 2 * L2_SIZE)
+	li	t0, (VM_EARLY_DTB_ADDRESS)
+	/* Add offset of DTB within superpage */
+	li	t1, (L2_OFFSET)
+	and	t1, a1, t1
+	add	t0, t0, t1
 	sd	t0, RISCV_BOOTPARAMS_DTBP_VIRT(sp)
 	sd	a1, RISCV_BOOTPARAMS_DTBP_PHYS(sp)
+
+	sd	a0, RISCV_BOOTPARAMS_MODULEP(sp)
 
 	mv	a0, sp
 	call	_C_LABEL(initriscv)	/* Off we go */
 	call	_C_LABEL(mi_startup)
+
+/*
+ * Get the physical address the kernel is loaded to. Returned in s9.
+ */
+get_physmem:
+	lla	t0, virt_map	/* physical address of virt_map */
+	ld	t1, 0(t0)	/* virtual address of virt_map */
+	sub	t1, t1, t0	/* calculate phys->virt delta */
+	li	t2, KERNBASE
+	sub	s9, t2, t1	/* s9 = physmem base */
+	ret
 
 	.align  4
 initstack:
@@ -287,7 +337,7 @@ ENTRY(mpentry)
 	li	t1, 4
 	mulw	t1, t1, a0
 	/* Get the pointer */
-	la	t0, __riscv_boot_ap
+	lla	t0, __riscv_boot_ap
 	add	t0, t0, t1
 
 1:
@@ -296,24 +346,21 @@ ENTRY(mpentry)
 	beqz	t1, 1b
 
 	/* Setup stack pointer */
-	la	t0, secondary_stacks
-	li	t1, (PAGE_SIZE * KSTACK_PAGES)
-	mulw	t2, t1, a0
-	add	t0, t0, t2
-	add	t0, t0, t1
-	sub	t0, t0, s9
-	li	t1, KERNBASE
-	add	sp, t0, t1
+	lla	t0, bootstack
+	ld	sp, 0(t0)
+
+	/* Get the kernel's load address */
+	jal get_physmem
 
 	/* Setup supervisor trap vector */
-	la	t0, mpva
+	lla	t0, mpva
 	sub	t0, t0, s9
 	li	t1, KERNBASE
 	add	t0, t0, t1
 	csrw	stvec, t0
 
 	/* Set page tables base register */
-	la	s2, pagetable_l1
+	lla	s2, pagetable_l1
 	srli	s2, s2, PAGE_SHIFT
 	li	t0, SATP_MODE_SV39
 	or	s2, s2, t0
@@ -322,6 +369,12 @@ ENTRY(mpentry)
 
 	.align 2
 mpva:
+	/* Set the global pointer again, this time with the virtual address. */
+.option push
+.option norelax
+	lla	gp, __global_pointer$
+.option pop
+
 	/* Setup supervisor trap vector */
 	la	t0, cpu_exception_handler
 	csrw	stvec, t0
@@ -329,12 +382,6 @@ mpva:
 	/* Ensure sscratch is zero */
 	li	t0, 0
 	csrw	sscratch, t0
-
-	/* Set the global pointer */
-.option push
-.option norelax
-	la	gp, __global_pointer$
-.option pop
 
 	call	init_secondary
 END(mpentry)

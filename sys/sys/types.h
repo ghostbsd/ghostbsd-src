@@ -260,6 +260,7 @@ typedef	struct cap_rights	cap_rights_t;
 typedef	__uint64_t	kpaddr_t;
 typedef	__uint64_t	kvaddr_t;
 typedef	__uint64_t	ksize_t;
+typedef	__int64_t	kssize_t;
 
 typedef	__vm_offset_t	vm_offset_t;
 typedef	__uint64_t	vm_ooffset_t;
@@ -303,7 +304,7 @@ typedef	_Bool	bool;
 
 #define offsetof(type, field) __offsetof(type, field)
 
-#endif /* !_KERNEL */
+#endif /* _KERNEL */
 
 /*
  * The following are all things that really shouldn't exist in this header,

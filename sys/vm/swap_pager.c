@@ -156,7 +156,8 @@ static u_long swap_reserved;
 static u_long swap_total;
 static int sysctl_page_shift(SYSCTL_HANDLER_ARGS);
 
-static SYSCTL_NODE(_vm_stats, OID_AUTO, swap, CTLFLAG_RD, 0, "VM swap stats");
+static SYSCTL_NODE(_vm_stats, OID_AUTO, swap, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "VM swap stats");
 
 SYSCTL_PROC(_vm, OID_AUTO, swap_reserved, CTLTYPE_U64 | CTLFLAG_RD | CTLFLAG_MPSAFE,
     &swap_reserved, 0, sysctl_page_shift, "A", 
@@ -176,12 +177,12 @@ static unsigned long swap_maxpages;
 SYSCTL_ULONG(_vm, OID_AUTO, swap_maxpages, CTLFLAG_RD, &swap_maxpages, 0,
     "Maximum amount of swap supported");
 
-static counter_u64_t swap_free_deferred;
+static COUNTER_U64_DEFINE_EARLY(swap_free_deferred);
 SYSCTL_COUNTER_U64(_vm_stats_swap, OID_AUTO, free_deferred,
     CTLFLAG_RD, &swap_free_deferred,
     "Number of pages that deferred freeing swap space");
 
-static counter_u64_t swap_free_completed;
+static COUNTER_U64_DEFINE_EARLY(swap_free_completed);
 SYSCTL_COUNTER_U64(_vm_stats_swap, OID_AUTO, free_completed,
     CTLFLAG_RD, &swap_free_completed,
     "Number of deferred frees completed");
@@ -427,7 +428,7 @@ static int	swapoff_one(struct swdevt *sp, struct ucred *cred);
  * Swap bitmap functions
  */
 static void	swp_pager_freeswapspace(daddr_t blk, daddr_t npages);
-static daddr_t	swp_pager_getswapspace(int *npages, int limit);
+static daddr_t	swp_pager_getswapspace(int *npages);
 
 /*
  * Metadata functions
@@ -526,15 +527,6 @@ swap_pager_init(void)
 	sx_init(&swdev_syscall_lock, "swsysc");
 }
 
-static void
-swap_pager_counters(void)
-{
-
-	swap_free_deferred = counter_u64_alloc(M_WAITOK);
-	swap_free_completed = counter_u64_alloc(M_WAITOK);
-}
-SYSINIT(swap_counters, SI_SUB_CPU, SI_ORDER_ANY, swap_pager_counters, NULL);
-
 /*
  * SWAP_PAGER_SWAP_INIT() - swap pager initialization from pageout process
  *
@@ -585,11 +577,11 @@ swap_pager_swap_init(void)
 	n = maxswzone != 0 ? maxswzone / sizeof(struct swblk) :
 	    vm_cnt.v_page_count / 2;
 	swpctrie_zone = uma_zcreate("swpctrie", pctrie_node_size(), NULL, NULL,
-	    pctrie_zone_init, NULL, UMA_ALIGN_PTR, UMA_ZONE_VM);
+	    pctrie_zone_init, NULL, UMA_ALIGN_PTR, 0);
 	if (swpctrie_zone == NULL)
 		panic("failed to create swap pctrie zone.");
 	swblk_zone = uma_zcreate("swblk", sizeof(struct swblk), NULL, NULL,
-	    NULL, NULL, _Alignof(struct swblk) - 1, UMA_ZONE_VM);
+	    NULL, NULL, _Alignof(struct swblk) - 1, 0);
 	if (swblk_zone == NULL)
 		panic("failed to create swap blk zone.");
 	n2 = n;
@@ -741,10 +733,9 @@ swap_pager_dealloc(vm_object_t object)
 /*
  * SWP_PAGER_GETSWAPSPACE() -	allocate raw swap space
  *
- *	Allocate swap for up to the requested number of pages, and at
- *	least a minimum number of pages.  The starting swap block number
- *	(a page index) is returned or SWAPBLK_NONE if the allocation
- *	failed.
+ *	Allocate swap for up to the requested number of pages.  The
+ *	starting swap block number (a page index) is returned or
+ *	SWAPBLK_NONE if the allocation failed.
  *
  *	Also has the side effect of advising that somebody made a mistake
  *	when they configured swap and didn't configure enough.
@@ -754,12 +745,14 @@ swap_pager_dealloc(vm_object_t object)
  *	We allocate in round-robin fashion from the configured devices.
  */
 static daddr_t
-swp_pager_getswapspace(int *io_npages, int limit)
+swp_pager_getswapspace(int *io_npages)
 {
 	daddr_t blk;
 	struct swdevt *sp;
 	int mpages, npages;
 
+	KASSERT(*io_npages >= 1,
+	    ("%s: npages not positive", __func__));
 	blk = SWAPBLK_NONE;
 	mpages = *io_npages;
 	npages = imin(BLIST_MAX_ALLOC, mpages);
@@ -774,7 +767,7 @@ swp_pager_getswapspace(int *io_npages, int limit)
 			break;
 		sp = TAILQ_NEXT(sp, sw_list);
 		if (swdevhd == sp) {
-			if (npages <= limit)
+			if (npages == 1)
 				break;
 			mpages = npages - 1;
 			npages >>= 1;
@@ -937,7 +930,7 @@ swap_pager_reserve(vm_object_t object, vm_pindex_t start, vm_size_t size)
 	VM_OBJECT_WLOCK(object);
 	for (i = 0; i < size; i += n) {
 		n = size - i;
-		blk = swp_pager_getswapspace(&n, 1);
+		blk = swp_pager_getswapspace(&n);
 		if (blk == SWAPBLK_NONE) {
 			swp_pager_meta_free(object, start, i);
 			VM_OBJECT_WUNLOCK(object);
@@ -974,15 +967,12 @@ swp_pager_xfer_source(vm_object_t srcobject, vm_object_t dstobject,
 	 * Destination has no swapblk and is not resident, transfer source.
 	 * swp_pager_meta_build() can sleep.
 	 */
-	vm_object_pip_add(srcobject, 1);
 	VM_OBJECT_WUNLOCK(srcobject);
-	vm_object_pip_add(dstobject, 1);
 	dstaddr = swp_pager_meta_build(dstobject, pindex, addr);
 	KASSERT(dstaddr == SWAPBLK_NONE,
 	    ("Unexpected destination swapblk"));
-	vm_object_pip_wakeup(dstobject);
 	VM_OBJECT_WLOCK(srcobject);
-	vm_object_pip_wakeup(srcobject);
+
 	return (true);
 }
 
@@ -995,8 +985,7 @@ swp_pager_xfer_source(vm_object_t srcobject, vm_object_t dstobject,
  *	we keep the destination's.
  *
  *	This routine is allowed to sleep.  It may sleep allocating metadata
- *	indirectly through swp_pager_meta_build() or if paging is still in
- *	progress on the source.
+ *	indirectly through swp_pager_meta_build().
  *
  *	The source object contains no vm_page_t's (which is just as well)
  *
@@ -1019,18 +1008,14 @@ swap_pager_copy(vm_object_t srcobject, vm_object_t dstobject,
 	 */
 	if (destroysource && (srcobject->flags & OBJ_ANON) == 0 &&
 	    srcobject->handle != NULL) {
-		vm_object_pip_add(srcobject, 1);
 		VM_OBJECT_WUNLOCK(srcobject);
-		vm_object_pip_add(dstobject, 1);
 		VM_OBJECT_WUNLOCK(dstobject);
 		sx_xlock(&sw_alloc_sx);
 		TAILQ_REMOVE(NOBJLIST(srcobject->handle), srcobject,
 		    pager_object_list);
 		sx_xunlock(&sw_alloc_sx);
 		VM_OBJECT_WLOCK(dstobject);
-		vm_object_pip_wakeup(dstobject);
 		VM_OBJECT_WLOCK(srcobject);
-		vm_object_pip_wakeup(srcobject);
 	}
 
 	/*
@@ -1196,8 +1181,8 @@ swap_pager_unswapped(vm_page_t m)
  *	The pages in "ma" must be busied and will remain busied upon return.
  */
 static int
-swap_pager_getpages(vm_object_t object, vm_page_t *ma, int count, int *rbehind,
-    int *rahead)
+swap_pager_getpages_locked(vm_object_t object, vm_page_t *ma, int count,
+    int *rbehind, int *rahead)
 {
 	struct buf *bp;
 	vm_page_t bm, mpred, msucc, p;
@@ -1205,28 +1190,34 @@ swap_pager_getpages(vm_object_t object, vm_page_t *ma, int count, int *rbehind,
 	daddr_t blk;
 	int i, maxahead, maxbehind, reqcount;
 
+	VM_OBJECT_ASSERT_WLOCKED(object);
 	reqcount = count;
 
-	/*
-	 * Determine the final number of read-behind pages and
-	 * allocate them BEFORE releasing the object lock.  Otherwise,
-	 * there can be a problematic race with vm_object_split().
-	 * Specifically, vm_object_split() might first transfer pages
-	 * that precede ma[0] in the current object to a new object,
-	 * and then this function incorrectly recreates those pages as
-	 * read-behind pages in the current object.
-	 */
 	KASSERT(object->type == OBJT_SWAP,
 	    ("%s: object not swappable", __func__));
-	if (!swap_pager_haspage(object, ma[0]->pindex, &maxbehind, &maxahead))
+	if (!swap_pager_haspage(object, ma[0]->pindex, &maxbehind, &maxahead)) {
+		VM_OBJECT_WUNLOCK(object);
 		return (VM_PAGER_FAIL);
+	}
+
+	KASSERT(reqcount - 1 <= maxahead,
+	    ("page count %d extends beyond swap block", reqcount));
+
+	/*
+	 * Do not transfer any pages other than those that are xbusied
+	 * when running during a split or collapse operation.  This
+	 * prevents clustering from re-creating pages which are being
+	 * moved into another object.
+	 */
+	if ((object->flags & (OBJ_SPLIT | OBJ_DEAD)) != 0) {
+		maxahead = reqcount - 1;
+		maxbehind = 0;
+	}
 
 	/*
 	 * Clip the readahead and readbehind ranges to exclude resident pages.
 	 */
 	if (rahead != NULL) {
-		KASSERT(reqcount - 1 <= maxahead,
-		    ("page count %d extends beyond swap block", reqcount));
 		*rahead = imin(*rahead, maxahead - (reqcount - 1));
 		pindex = ma[reqcount - 1]->pindex;
 		msucc = TAILQ_NEXT(ma[reqcount - 1], listq);
@@ -1324,6 +1315,7 @@ swap_pager_getpages(vm_object_t object, vm_page_t *ma, int count, int *rbehind,
 	 * is set in the metadata for each page in the request.
 	 */
 	VM_OBJECT_WLOCK(object);
+	/* This could be implemented more efficiently with aflags */
 	while ((ma[0]->oflags & VPO_SWAPINPROG) != 0) {
 		ma[0]->oflags |= VPO_SWAPSLEEP;
 		VM_CNT_INC(v_intrans);
@@ -1334,6 +1326,7 @@ swap_pager_getpages(vm_object_t object, vm_page_t *ma, int count, int *rbehind,
 			    bp->b_bufobj, (intmax_t)bp->b_blkno, bp->b_bcount);
 		}
 	}
+	VM_OBJECT_WUNLOCK(object);
 
 	/*
 	 * If we had an unrecoverable read error pages will not be valid.
@@ -1352,6 +1345,15 @@ swap_pager_getpages(vm_object_t object, vm_page_t *ma, int count, int *rbehind,
 	 */
 }
 
+static int
+swap_pager_getpages(vm_object_t object, vm_page_t *ma, int count,
+    int *rbehind, int *rahead)
+{
+
+	VM_OBJECT_WLOCK(object);
+	return (swap_pager_getpages_locked(object, ma, count, rbehind, rahead));
+}
+
 /*
  * 	swap_pager_getpages_async():
  *
@@ -1365,7 +1367,6 @@ swap_pager_getpages_async(vm_object_t object, vm_page_t *ma, int count,
 	int r, error;
 
 	r = swap_pager_getpages(object, ma, count, rbehind, rahead);
-	VM_OBJECT_WUNLOCK(object);
 	switch (r) {
 	case VM_PAGER_OK:
 		error = 0;
@@ -1380,7 +1381,6 @@ swap_pager_getpages_async(vm_object_t object, vm_page_t *ma, int count,
 		panic("unhandled swap_pager_getpages() error %d", r);
 	}
 	(iodone)(arg, ma, count, error);
-	VM_OBJECT_WLOCK(object);
 
 	return (r);
 }
@@ -1446,18 +1446,6 @@ swap_pager_putpages(vm_object_t object, vm_page_t *ma, int count,
 		/* Maximum I/O size is limited by maximum swap block size. */
 		n = min(count - i, nsw_cluster_max);
 
-		/* Get a block of swap of size up to size n. */
-		blk = swp_pager_getswapspace(&n, 4);
-		if (blk == SWAPBLK_NONE) {
-			for (j = 0; j < n; ++j)
-				rtvals[i + j] = VM_PAGER_FAIL;
-			continue;
-		}
-
-		/*
-		 * All I/O parameters have been satisfied.  Build the I/O
-		 * request and assign the swap space.
-		 */
 		if (async) {
 			mtx_lock(&swbuf_mtx);
 			while (nsw_wcount_async == 0)
@@ -1466,6 +1454,33 @@ swap_pager_putpages(vm_object_t object, vm_page_t *ma, int count,
 			nsw_wcount_async--;
 			mtx_unlock(&swbuf_mtx);
 		}
+
+		/* Get a block of swap of size up to size n. */
+		VM_OBJECT_WLOCK(object);
+		blk = swp_pager_getswapspace(&n);
+		if (blk == SWAPBLK_NONE) {
+			VM_OBJECT_WUNLOCK(object);
+			mtx_lock(&swbuf_mtx);
+			if (++nsw_wcount_async == 1)
+				wakeup(&nsw_wcount_async);
+			mtx_unlock(&swbuf_mtx);
+			for (j = 0; j < n; ++j)
+				rtvals[i + j] = VM_PAGER_FAIL;
+			continue;
+		}
+		for (j = 0; j < n; ++j) {
+			mreq = ma[i + j];
+			vm_page_aflag_clear(mreq, PGA_SWAP_FREE);
+			addr = swp_pager_meta_build(mreq->object, mreq->pindex,
+			    blk + j);
+			if (addr != SWAPBLK_NONE)
+				swp_pager_update_freerange(&s_free, &n_free,
+				    addr);
+			MPASS(mreq->dirty == VM_PAGE_BITS_ALL);
+			mreq->oflags |= VPO_SWAPINPROG;
+		}
+		VM_OBJECT_WUNLOCK(object);
+
 		bp = uma_zalloc(swwbuf_zone, M_WAITOK);
 		if (async)
 			bp->b_flags = B_ASYNC;
@@ -1477,22 +1492,10 @@ swap_pager_putpages(vm_object_t object, vm_page_t *ma, int count,
 		bp->b_bcount = PAGE_SIZE * n;
 		bp->b_bufsize = PAGE_SIZE * n;
 		bp->b_blkno = blk;
-
-		VM_OBJECT_WLOCK(object);
-		for (j = 0; j < n; ++j) {
-			mreq = ma[i + j];
-			vm_page_aflag_clear(mreq, PGA_SWAP_FREE);
-			addr = swp_pager_meta_build(mreq->object, mreq->pindex,
-			    blk + j);
-			if (addr != SWAPBLK_NONE)
-				swp_pager_update_freerange(&s_free, &n_free,
-				    addr);
-			MPASS(mreq->dirty == VM_PAGE_BITS_ALL);
-			mreq->oflags |= VPO_SWAPINPROG;
-			bp->b_pages[j] = mreq;
-		}
-		VM_OBJECT_WUNLOCK(object);
+		for (j = 0; j < n; j++)
+			bp->b_pages[j] = ma[i + j];
 		bp->b_npages = n;
+
 		/*
 		 * Must set dirty range for NFS to work.
 		 */
@@ -1714,67 +1717,8 @@ swp_pager_force_dirty(vm_page_t m)
 {
 
 	vm_page_dirty(m);
-#ifdef INVARIANTS
-	if (!vm_page_wired(m) && m->a.queue == PQ_NONE)
-		panic("page %p is neither wired nor queued", m);
-#endif
-	vm_page_xunbusy(m);
 	swap_pager_unswapped(m);
-}
-
-static void
-swp_pager_force_launder(vm_page_t m)
-{
-
-	vm_page_dirty(m);
 	vm_page_launder(m);
-	vm_page_xunbusy(m);
-	swap_pager_unswapped(m);
-}
-
-/*
- * SWP_PAGER_FORCE_PAGEIN() - force swap blocks to be paged in
- *
- *	This routine dissociates pages starting at the given index within an
- *	object from their backing store, paging them in if they do not reside
- *	in memory.  Pages that are paged in are marked dirty and placed in the
- *	laundry queue.  Pages are marked dirty because they no longer have
- *	backing store.  They are placed in the laundry queue because they have
- *	not been accessed recently.  Otherwise, they would already reside in
- *	memory.
- */
-static void
-swp_pager_force_pagein(vm_object_t object, vm_pindex_t pindex, int npages)
-{
-	vm_page_t ma[npages];
-	int i, j;
-
-	KASSERT(npages > 0, ("%s: No pages", __func__));
-	KASSERT(npages <= MAXPHYS / PAGE_SIZE,
-	    ("%s: Too many pages: %d", __func__, npages));
-	KASSERT(object->type == OBJT_SWAP,
-	    ("%s: Object not swappable", __func__));
-	vm_object_pip_add(object, npages);
-	vm_page_grab_pages(object, pindex, VM_ALLOC_NORMAL, ma, npages);
-	for (i = j = 0;; i++) {
-		/* Count nonresident pages, to page-in all at once. */
-		if (i < npages && ma[i]->valid != VM_PAGE_BITS_ALL)
-			continue;
-		if (j < i) {
-			/* Page-in nonresident pages. Mark for laundering. */
-			if (swap_pager_getpages(object, &ma[j], i - j, NULL,
-			    NULL) != VM_PAGER_OK)
-				panic("%s: read from swap failed", __func__);
-			do {
-				swp_pager_force_launder(ma[j]);
-			} while (++j < i);
-		}
-		if (i == npages)
-			break;
-		/* Mark dirty a resident page. */
-		swp_pager_force_dirty(ma[j++]);
-	}
-	vm_object_pip_wakeupn(object, npages);
 }
 
 /*
@@ -1787,62 +1731,95 @@ static void
 swap_pager_swapoff_object(struct swdevt *sp, vm_object_t object)
 {
 	struct swblk *sb;
-	vm_pindex_t pi, s_pindex;
-	daddr_t blk, n_blks, s_blk;
-	int i;
+	vm_page_t m;
+	vm_pindex_t pi;
+	daddr_t blk;
+	int i, nv, rahead, rv;
 
 	KASSERT(object->type == OBJT_SWAP,
 	    ("%s: Object not swappable", __func__));
-	n_blks = 0;
+
 	for (pi = 0; (sb = SWAP_PCTRIE_LOOKUP_GE(
 	    &object->un_pager.swp.swp_blks, pi)) != NULL; ) {
+		if ((object->flags & OBJ_DEAD) != 0) {
+			/*
+			 * Make sure that pending writes finish before
+			 * returning.
+			 */
+			vm_object_pip_wait(object, "swpoff");
+			swp_pager_meta_free_all(object);
+			break;
+		}
 		for (i = 0; i < SWAP_META_PAGES; i++) {
-			blk = sb->d[i];
-			if (!swp_pager_isondev(blk, sp))
-				blk = SWAPBLK_NONE;
+			/*
+			 * Count the number of contiguous valid blocks.
+			 */
+			for (nv = 0; nv < SWAP_META_PAGES - i; nv++) {
+				blk = sb->d[i + nv];
+				if (!swp_pager_isondev(blk, sp) ||
+				    blk == SWAPBLK_NONE)
+					break;
+			}
+			if (nv == 0)
+				continue;
 
 			/*
-			 * If there are no blocks/pages accumulated, start a new
-			 * accumulation here.
+			 * Look for a page corresponding to the first
+			 * valid block and ensure that any pending paging
+			 * operations on it are complete.  If the page is valid,
+			 * mark it dirty and free the swap block.  Try to batch
+			 * this operation since it may cause sp to be freed,
+			 * meaning that we must restart the scan.  Avoid busying
+			 * valid pages since we may block forever on kernel
+			 * stack pages.
 			 */
-			if (n_blks == 0) {
-				if (blk != SWAPBLK_NONE) {
-					s_blk = blk;
-					s_pindex = sb->p + i;
-					n_blks = 1;
+			m = vm_page_lookup(object, sb->p + i);
+			if (m == NULL) {
+				m = vm_page_alloc(object, sb->p + i,
+				    VM_ALLOC_NORMAL | VM_ALLOC_WAITFAIL);
+				if (m == NULL)
+					break;
+			} else {
+				if ((m->oflags & VPO_SWAPINPROG) != 0) {
+					m->oflags |= VPO_SWAPSLEEP;
+					VM_OBJECT_SLEEP(object, &object->handle,
+					    PSWP, "swpoff", 0);
+					break;
 				}
-				continue;
+				if (vm_page_all_valid(m)) {
+					do {
+						swp_pager_force_dirty(m);
+					} while (--nv > 0 &&
+					    (m = vm_page_next(m)) != NULL &&
+					    vm_page_all_valid(m) &&
+					    (m->oflags & VPO_SWAPINPROG) == 0);
+					break;
+				}
+				if (!vm_page_busy_acquire(m, VM_ALLOC_WAITFAIL))
+					break;
 			}
 
-			/*
-			 * If the accumulation can be extended without breaking
-			 * the sequence of consecutive blocks and pages that
-			 * swp_pager_force_pagein() depends on, do so.
-			 */
-			if (n_blks < MAXPHYS / PAGE_SIZE &&
-			    s_blk + n_blks == blk &&
-			    s_pindex + n_blks == sb->p + i) {
-				++n_blks;
-				continue;
-			}
+			vm_object_pip_add(object, 1);
+			rahead = SWAP_META_PAGES;
+			rv = swap_pager_getpages_locked(object, &m, 1, NULL,
+			    &rahead);
+			if (rv != VM_PAGER_OK)
+				panic("%s: read from swap failed: %d",
+				    __func__, rv);
+			vm_object_pip_wakeupn(object, 1);
+			VM_OBJECT_WLOCK(object);
+			vm_page_xunbusy(m);
 
 			/*
-			 * The sequence of consecutive blocks and pages cannot
-			 * be extended, so page them all in here.  Then,
-			 * because doing so involves releasing and reacquiring
-			 * a lock that protects the swap block pctrie, do not
-			 * rely on the current swap block.  Break this loop and
-			 * re-fetch the same pindex from the pctrie again.
+			 * The object lock was dropped so we must restart the
+			 * scan of this swap block.  Pages paged in during this
+			 * iteration will be marked dirty in a future iteration.
 			 */
-			swp_pager_force_pagein(object, s_pindex, n_blks);
-			n_blks = 0;
 			break;
 		}
 		if (i == SWAP_META_PAGES)
 			pi = sb->p + SWAP_META_PAGES;
 	}
-	if (n_blks > 0)
-		swp_pager_force_pagein(object, s_pindex, n_blks);
 }
 
 /*
@@ -2078,7 +2055,7 @@ allocated:
 	 * Free the swblk if we end up with the empty page run.
 	 */
 	if (swapblk == SWAPBLK_NONE)
-	    swp_pager_free_empty_swblk(object, sb);
+		swp_pager_free_empty_swblk(object, sb);
 	return (prev_swapblk);
 }
 
@@ -2350,7 +2327,7 @@ swaponsomething(struct vnode *vp, void *id, u_long nblks,
     sw_strategy_t *strategy, sw_close_t *close, dev_t dev, int flags)
 {
 	struct swdevt *sp, *tsp;
-	swblk_t dvbase;
+	daddr_t dvbase;
 	u_long mblocks;
 
 	/*
@@ -2564,16 +2541,10 @@ swapoff_all(void)
 void
 swap_pager_status(int *total, int *used)
 {
-	struct swdevt *sp;
 
-	*total = 0;
-	*used = 0;
-	mtx_lock(&sw_dev_mtx);
-	TAILQ_FOREACH(sp, &swtailq, sw_list) {
-		*total += sp->sw_nblks;
-		*used += sp->sw_used;
-	}
-	mtx_unlock(&sw_dev_mtx);
+	*total = swap_total;
+	*used = swap_total - swap_pager_avail -
+	    nswapdev * howmany(BBSIZE, PAGE_SIZE);
 }
 
 int

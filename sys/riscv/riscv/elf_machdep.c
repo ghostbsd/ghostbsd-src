@@ -58,6 +58,8 @@ __FBSDID("$FreeBSD$");
 #include <machine/elf.h>
 #include <machine/md_var.h>
 
+static const char *riscv_machine_arch(struct proc *p);
+
 u_long elf_hwcap;
 
 struct sysentvec elf64_freebsd_sysvec = {
@@ -94,8 +96,19 @@ struct sysentvec elf64_freebsd_sysvec = {
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
 	.sv_hwcap	= &elf_hwcap,
+	.sv_machine_arch = riscv_machine_arch,
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
+
+static const char *
+riscv_machine_arch(struct proc *p)
+{
+
+	if ((p->p_elf_flags & EF_RISCV_FLOAT_ABI_MASK) ==
+	    EF_RISCV_FLOAT_ABI_SOFT)
+		return (MACHINE_ARCH "sf");
+	return (MACHINE_ARCH);
+}
 
 static Elf64_Brandinfo freebsd_brand_info = {
 	.brand		= ELFOSABI_FREEBSD,
@@ -506,7 +519,7 @@ elf_cpu_unload_file(linker_file_t lf __unused)
 }
 
 int
-elf_cpu_parse_dynamic(linker_file_t lf __unused, Elf_Dyn *dynamic __unused)
+elf_cpu_parse_dynamic(caddr_t loadbase __unused, Elf_Dyn *dynamic __unused)
 {
 
 	return (0);

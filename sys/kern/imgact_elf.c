@@ -50,7 +50,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
-#include <sys/pioctl.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
 #include <sys/ptrace.h>
@@ -102,7 +101,8 @@ static boolean_t __elfN(check_note)(struct image_params *imgp,
 static vm_prot_t __elfN(trans_prot)(Elf_Word);
 static Elf_Word __elfN(untrans_prot)(vm_prot_t);
 
-SYSCTL_NODE(_kern, OID_AUTO, __CONCAT(elf, __ELF_WORD_SIZE), CTLFLAG_RW, 0,
+SYSCTL_NODE(_kern, OID_AUTO, __CONCAT(elf, __ELF_WORD_SIZE),
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "");
 
 #define	CORE_BUF_SIZE	(16 * 1024)
@@ -156,7 +156,8 @@ SYSCTL_PROC(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO, pie_base,
     sysctl_pie_base, "LU",
     "PIE load base without randomization");
 
-SYSCTL_NODE(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO, aslr, CTLFLAG_RW, 0,
+SYSCTL_NODE(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO, aslr,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "");
 #define	ASLR_NODE_OID	__CONCAT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), _aslr)
 
@@ -182,6 +183,11 @@ SYSCTL_INT(ASLR_NODE_OID, OID_AUTO, stack_gap, CTLFLAG_RW,
     &__elfN(aslr_stack_gap), 0,
     __XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE))
     ": maximum percentage of main stack to waste on a random gap");
+
+static int __elfN(sigfastblock) = 1;
+SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO, sigfastblock,
+    CTLFLAG_RWTUN, &__elfN(sigfastblock), 0,
+    "enable sigfastblock for new processes");
 
 static Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
 
@@ -629,7 +635,6 @@ __elfN(load_section)(struct image_params *imgp, vm_ooffset_t offset,
 		if (memsz == filsz)
 			return (0);
 	}
-
 
 	/*
 	 * We have to get the remaining bit of the file into the first part
@@ -1344,16 +1349,16 @@ __elfN(freebsd_copyout_auxargs)(struct image_params *imgp, uintptr_t base)
 	AUXARGS_ENTRY(pos, AT_BASE, args->base);
 	AUXARGS_ENTRY(pos, AT_EHDRFLAGS, args->hdr_eflags);
 	if (imgp->execpathp != 0)
-		AUXARGS_ENTRY(pos, AT_EXECPATH, imgp->execpathp);
+		AUXARGS_ENTRY_PTR(pos, AT_EXECPATH, imgp->execpathp);
 	AUXARGS_ENTRY(pos, AT_OSRELDATE,
 	    imgp->proc->p_ucred->cr_prison->pr_osreldate);
 	if (imgp->canary != 0) {
-		AUXARGS_ENTRY(pos, AT_CANARY, imgp->canary);
+		AUXARGS_ENTRY_PTR(pos, AT_CANARY, imgp->canary);
 		AUXARGS_ENTRY(pos, AT_CANARYLEN, imgp->canarylen);
 	}
 	AUXARGS_ENTRY(pos, AT_NCPUS, mp_ncpus);
 	if (imgp->pagesizes != 0) {
-		AUXARGS_ENTRY(pos, AT_PAGESIZES, imgp->pagesizes);
+		AUXARGS_ENTRY_PTR(pos, AT_PAGESIZES, imgp->pagesizes);
 		AUXARGS_ENTRY(pos, AT_PAGESIZESLEN, imgp->pagesizeslen);
 	}
 	if (imgp->sysent->sv_timekeep_base != 0) {
@@ -1367,6 +1372,13 @@ __elfN(freebsd_copyout_auxargs)(struct image_params *imgp, uintptr_t base)
 		AUXARGS_ENTRY(pos, AT_HWCAP, *imgp->sysent->sv_hwcap);
 	if (imgp->sysent->sv_hwcap2 != NULL)
 		AUXARGS_ENTRY(pos, AT_HWCAP2, *imgp->sysent->sv_hwcap2);
+	AUXARGS_ENTRY(pos, AT_BSDFLAGS, __elfN(sigfastblock) ?
+	    ELF_BSDF_SIGFASTBLK : 0);
+	AUXARGS_ENTRY(pos, AT_ARGC, imgp->args->argc);
+	AUXARGS_ENTRY_PTR(pos, AT_ARGV, imgp->argv);
+	AUXARGS_ENTRY(pos, AT_ENVC, imgp->args->envc);
+	AUXARGS_ENTRY_PTR(pos, AT_ENVV, imgp->envv);
+	AUXARGS_ENTRY_PTR(pos, AT_PS_STRINGS, imgp->ps_strings);
 	AUXARGS_ENTRY(pos, AT_NULL, 0);
 
 	free(imgp->auxargs, M_TEMP);

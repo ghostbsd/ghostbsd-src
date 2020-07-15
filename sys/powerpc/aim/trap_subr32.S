@@ -348,7 +348,7 @@ CNAME(trapcode):
 	mtsprg1	%r1			/* save SP */
 	mflr	%r1			/* Save the old LR in r1 */
 	mtsprg2 %r1			/* And then in SPRG2 */
-	lwz	%r1, TRAP_GENTRAP(0)	/* Get branch address */
+	lwz	%r1, TRAP_ENTRY(0)	/* Get branch address */
 	mtlr	%r1
 	li	%r1, 0xe0		/* How to get the vector from LR */
 	blrl				/* LR & (0xff00 | r1) is exception # */
@@ -426,7 +426,7 @@ instr_sec_hash:
 	bne do_isi			/* if so, go to ISI interrupt */
 	mfspr %r2, SPR_HASH2		/* get the second pointer */
 	ori %r3, %r3, 0x0040		/* change the compare value */
-	addi %r1, %r0, 8		/* load 8 for counter */
+	addi %r1, 0, 8			/* load 8 for counter */
 	addi %r2, %r2, -8		/* pre dec for update on load */
 	b im0				/* try second hash */
 
@@ -908,7 +908,7 @@ CNAME(dblow):
         mflr	%r1			/* save LR */
 	mtsprg2 %r1			/* And then in SPRG2 */
 
-	lwz	%r1, TRAP_GENTRAP(0)	/* Get branch address */
+	lwz	%r1, TRAP_ENTRY(0)	/* Get branch address */
 	mtlr	%r1
 	li	%r1, 0			/* How to get the vector from LR */
 	blrl				/* LR & (0xff00 | r1) is exception # */

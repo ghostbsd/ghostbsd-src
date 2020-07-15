@@ -51,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/errno.h>
-#include <sys/uio.h>
 #include <sys/random.h>
 #include <sys/conf.h>
 #include <sys/kernel.h>
@@ -116,28 +115,6 @@ struct crypt_kop32 {
 	u_short		crk_oparams;
 	u_int		crk_crid;
 	struct crparam32	crk_param[CRK_MAXPARAM];
-};
-
-struct cryptotstat32 {
-	struct timespec32	acc;
-	struct timespec32	min;
-	struct timespec32	max;
-	u_int32_t	count;
-};
-
-struct cryptostats32 {
-	u_int32_t	cs_ops;
-	u_int32_t	cs_errs;
-	u_int32_t	cs_kops;
-	u_int32_t	cs_kerrs;
-	u_int32_t	cs_intrs;
-	u_int32_t	cs_rets;
-	u_int32_t	cs_blocks;
-	u_int32_t	cs_kblocks;
-	struct cryptotstat32 cs_invoke;
-	struct cryptotstat32 cs_done;
-	struct cryptotstat32 cs_cb;
-	struct cryptotstat32 cs_finis;
 };
 
 #define	CIOCGSESSION32	_IOWR('c', 101, struct session_op32)
@@ -266,38 +243,43 @@ crypt_kop_to_32(const struct crypt_kop *from, struct crypt_kop32 *to)
 struct csession {
 	TAILQ_ENTRY(csession) next;
 	crypto_session_t cses;
+	volatile u_int	refs;
 	u_int32_t	ses;
 	struct mtx	lock;		/* for op submission */
 
-	u_int32_t	cipher;
 	struct enc_xform *txform;
-	u_int32_t	mac;
-	struct auth_hash *thash;
+	int		hashsize;
+	int		ivsize;
+	int		mode;
 
-	caddr_t		key;
-	int		keylen;
-
-	caddr_t		mackey;
-	int		mackeylen;
+	void		*key;
+	void		*mackey;
 };
 
 struct cryptop_data {
 	struct csession *cse;
 
-	struct iovec	iovec[1];
-	struct uio	uio;
+	char		*buf;
+	char		*obuf;
+	char		*aad;
 	bool		done;
 };
 
 struct fcrypt {
 	TAILQ_HEAD(csessionlist, csession) csessions;
 	int		sesn;
+	struct mtx	lock;
 };
 
-static struct timeval warninterval = { .tv_sec = 60, .tv_usec = 0 };
-SYSCTL_TIMEVAL_SEC(_kern, OID_AUTO, cryptodev_warn_interval, CTLFLAG_RW,
-    &warninterval,
-    "Delay in seconds between warnings of deprecated /dev/crypto algorithms");
+static bool use_outputbuffers;
+SYSCTL_BOOL(_kern_crypto, OID_AUTO, cryptodev_use_output, CTLFLAG_RW,
+    &use_outputbuffers, 0,
+    "Use separate output buffers for /dev/crypto requests.");
+
+static bool use_separate_aad;
+SYSCTL_BOOL(_kern_crypto, OID_AUTO, cryptodev_separate_aad, CTLFLAG_RW,
+    &use_separate_aad, 0,
+    "Use separate AAD buffer for /dev/crypto requests.");
 
 static	int cryptof_ioctl(struct file *, u_long, void *,
 		    struct ucred *, struct thread *);
@@ -323,11 +305,10 @@ static struct fileops cryptofops = {
 };
 
 static struct csession *csefind(struct fcrypt *, u_int);
-static int csedelete(struct fcrypt *, struct csession *);
-static struct csession *cseadd(struct fcrypt *, struct csession *);
-static struct csession *csecreate(struct fcrypt *, crypto_session_t, caddr_t,
-    u_int64_t, caddr_t, u_int64_t, u_int32_t, u_int32_t, struct enc_xform *,
-    struct auth_hash *);
+static bool csedelete(struct fcrypt *, u_int);
+static struct csession *csecreate(struct fcrypt *, crypto_session_t,
+    struct crypto_session_params *, struct enc_xform *, void *,
+    struct auth_hash *, void *);
 static void csefree(struct csession *);
 
 static	int cryptodev_op(struct csession *, struct crypt_op *,
@@ -374,7 +355,7 @@ cryptof_ioctl(
 	struct thread *td)
 {
 #define	SES2(p)	((struct session2_op *)p)
-	struct cryptoini cria, crie;
+	struct crypto_session_params csp;
 	struct fcrypt *fcr = fp->f_data;
 	struct csession *cse;
 	struct session_op *sop;
@@ -382,6 +363,8 @@ cryptof_ioctl(
 	struct crypt_aead *caead;
 	struct enc_xform *txform = NULL;
 	struct auth_hash *thash = NULL;
+	void *key = NULL;
+	void *mackey = NULL;
 	struct crypt_kop *kop;
 	crypto_session_t cses;
 	u_int32_t ses;
@@ -410,21 +393,6 @@ cryptof_ioctl(
 		switch (sop->cipher) {
 		case 0:
 			break;
-		case CRYPTO_DES_CBC:
-			txform = &enc_xform_des;
-			break;
-		case CRYPTO_3DES_CBC:
-			txform = &enc_xform_3des;
-			break;
-		case CRYPTO_BLF_CBC:
-			txform = &enc_xform_blf;
-			break;
-		case CRYPTO_CAST_CBC:
-			txform = &enc_xform_cast5;
-			break;
-		case CRYPTO_SKIPJACK_CBC:
-			txform = &enc_xform_skipjack;
-			break;
 		case CRYPTO_AES_CBC:
 			txform = &enc_xform_rijndael128;
 			break;
@@ -433,9 +401,6 @@ cryptof_ioctl(
 			break;
 		case CRYPTO_NULL_CBC:
 			txform = &enc_xform_null;
-			break;
-		case CRYPTO_ARC4:
-			txform = &enc_xform_arc4;
 			break;
  		case CRYPTO_CAMELLIA_CBC:
  			txform = &enc_xform_camellia;
@@ -462,9 +427,6 @@ cryptof_ioctl(
 		switch (sop->mac) {
 		case 0:
 			break;
-		case CRYPTO_MD5_HMAC:
-			thash = &auth_hash_hmac_md5;
-			break;
 		case CRYPTO_POLY1305:
 			thash = &auth_hash_poly1305;
 			break;
@@ -486,18 +448,39 @@ cryptof_ioctl(
 		case CRYPTO_RIPEMD160_HMAC:
 			thash = &auth_hash_hmac_ripemd_160;
 			break;
+#ifdef COMPAT_FREEBSD12
 		case CRYPTO_AES_128_NIST_GMAC:
-			thash = &auth_hash_nist_gmac_aes_128;
-			break;
 		case CRYPTO_AES_192_NIST_GMAC:
-			thash = &auth_hash_nist_gmac_aes_192;
-			break;
 		case CRYPTO_AES_256_NIST_GMAC:
-			thash = &auth_hash_nist_gmac_aes_256;
+			/* Should always be paired with GCM. */
+			if (sop->cipher != CRYPTO_AES_NIST_GCM_16) {
+				CRYPTDEB("GMAC without GCM");
+				SDT_PROBE1(opencrypto, dev, ioctl, error,
+				    __LINE__);
+				return (EINVAL);
+			}
 			break;
-
+#endif
+		case CRYPTO_AES_NIST_GMAC:
+			switch (sop->mackeylen * 8) {
+			case 128:
+				thash = &auth_hash_nist_gmac_aes_128;
+				break;
+			case 192:
+				thash = &auth_hash_nist_gmac_aes_192;
+				break;
+			case 256:
+				thash = &auth_hash_nist_gmac_aes_256;
+				break;
+			default:
+				CRYPTDEB("invalid GMAC key length");
+				SDT_PROBE1(opencrypto, dev, ioctl, error,
+				    __LINE__);
+				return (EINVAL);
+			}
+			break;
 		case CRYPTO_AES_CCM_CBC_MAC:
-			switch (sop->keylen) {
+			switch (sop->mackeylen) {
 			case 16:
 				thash = &auth_hash_ccm_cbc_mac_128;
 				break;
@@ -515,11 +498,6 @@ cryptof_ioctl(
 				return (EINVAL);
 			}
 			break;
-#ifdef notdef
-		case CRYPTO_MD5:
-			thash = &auth_hash_md5;
-			break;
-#endif
 		case CRYPTO_SHA1:
 			thash = &auth_hash_sha1;
 			break;
@@ -553,12 +531,74 @@ cryptof_ioctl(
 			return (EINVAL);
 		}
 
-		bzero(&crie, sizeof(crie));
-		bzero(&cria, sizeof(cria));
+		if (txform == NULL && thash == NULL) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			return (EINVAL);
+		}
+
+		memset(&csp, 0, sizeof(csp));
+		if (use_outputbuffers)
+			csp.csp_flags |= CSP_F_SEPARATE_OUTPUT;
+
+		if (sop->cipher == CRYPTO_AES_NIST_GCM_16) {
+			switch (sop->mac) {
+#ifdef COMPAT_FREEBSD12
+			case CRYPTO_AES_128_NIST_GMAC:
+			case CRYPTO_AES_192_NIST_GMAC:
+			case CRYPTO_AES_256_NIST_GMAC:
+				if (sop->keylen != sop->mackeylen) {
+					SDT_PROBE1(opencrypto, dev, ioctl,
+					    error, __LINE__);
+					return (EINVAL);
+				}
+				break;
+#endif
+			case 0:
+				break;
+			default:
+				SDT_PROBE1(opencrypto, dev, ioctl, error,
+				    __LINE__);
+				return (EINVAL);
+			}
+			csp.csp_mode = CSP_MODE_AEAD;
+		} else if (sop->cipher == CRYPTO_AES_CCM_16) {
+			switch (sop->mac) {
+#ifdef COMPAT_FREEBSD12
+			case CRYPTO_AES_CCM_CBC_MAC:
+				if (sop->keylen != sop->mackeylen) {
+					SDT_PROBE1(opencrypto, dev, ioctl,
+					    error, __LINE__);
+					return (EINVAL);
+				}
+				thash = NULL;
+				break;
+#endif
+			case 0:
+				break;
+			default:
+				SDT_PROBE1(opencrypto, dev, ioctl, error,
+				    __LINE__);
+				return (EINVAL);
+			}
+			csp.csp_mode = CSP_MODE_AEAD;
+		} else if (txform && thash)
+			csp.csp_mode = CSP_MODE_ETA;
+		else if (txform)
+			csp.csp_mode = CSP_MODE_CIPHER;
+		else
+			csp.csp_mode = CSP_MODE_DIGEST;
+
+		switch (csp.csp_mode) {
+		case CSP_MODE_AEAD:
+		case CSP_MODE_ETA:
+			if (use_separate_aad)
+				csp.csp_flags |= CSP_F_SEPARATE_AAD;
+			break;
+		}
 
 		if (txform) {
-			crie.cri_alg = txform->type;
-			crie.cri_klen = sop->keylen * 8;
+			csp.csp_cipher_alg = txform->type;
+			csp.csp_cipher_klen = sop->keylen;
 			if (sop->keylen > txform->maxkey ||
 			    sop->keylen < txform->minkey) {
 				CRYPTDEB("invalid cipher parameters");
@@ -568,24 +608,23 @@ cryptof_ioctl(
 				goto bail;
 			}
 
-			crie.cri_key = malloc(crie.cri_klen / 8,
-			    M_XDATA, M_WAITOK);
-			if ((error = copyin(sop->key, crie.cri_key,
-			    crie.cri_klen / 8))) {
+			key = malloc(csp.csp_cipher_klen, M_XDATA, M_WAITOK);
+			error = copyin(sop->key, key, csp.csp_cipher_klen);
+			if (error) {
 				CRYPTDEB("invalid key");
 				SDT_PROBE1(opencrypto, dev, ioctl, error,
 				    __LINE__);
 				goto bail;
 			}
-			if (thash)
-				crie.cri_next = &cria;
+			csp.csp_cipher_key = key;
+			csp.csp_ivlen = txform->ivsize;
 		}
 
 		if (thash) {
-			cria.cri_alg = thash->type;
-			cria.cri_klen = sop->mackeylen * 8;
-			if (thash->keysize != 0 &&
-			    sop->mackeylen > thash->keysize) {
+			csp.csp_auth_alg = thash->type;
+			csp.csp_auth_klen = sop->mackeylen;
+			if (sop->mackeylen > thash->keysize ||
+			    sop->mackeylen < 0) {
 				CRYPTDEB("invalid mac key length");
 				error = EINVAL;
 				SDT_PROBE1(opencrypto, dev, ioctl, error,
@@ -593,17 +632,24 @@ cryptof_ioctl(
 				goto bail;
 			}
 
-			if (cria.cri_klen) {
-				cria.cri_key = malloc(cria.cri_klen / 8,
-				    M_XDATA, M_WAITOK);
-				if ((error = copyin(sop->mackey, cria.cri_key,
-				    cria.cri_klen / 8))) {
+			if (csp.csp_auth_klen) {
+				mackey = malloc(csp.csp_auth_klen, M_XDATA,
+				    M_WAITOK);
+				error = copyin(sop->mackey, mackey,
+				    csp.csp_auth_klen);
+				if (error) {
 					CRYPTDEB("invalid mac key");
 					SDT_PROBE1(opencrypto, dev, ioctl,
 					    error, __LINE__);
 					goto bail;
 				}
+				csp.csp_auth_key = mackey;
 			}
+
+			if (csp.csp_auth_alg == CRYPTO_AES_NIST_GMAC)
+				csp.csp_ivlen = AES_GCM_IV_LEN;
+			if (csp.csp_auth_alg == CRYPTO_AES_CCM_CBC_MAC)
+				csp.csp_ivlen = AES_CCM_IV_LEN;
 		}
 
 		/* NB: CIOCGSESSION2 has the crid */
@@ -622,16 +668,14 @@ cryptof_ioctl(
 			}
 		} else
 			crid = CRYPTOCAP_F_HARDWARE;
-		error = crypto_newsession(&cses, (txform ? &crie : &cria), crid);
+		error = crypto_newsession(&cses, &csp, crid);
 		if (error) {
 			CRYPTDEB("crypto_newsession");
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
 		}
 
-		cse = csecreate(fcr, cses, crie.cri_key, crie.cri_klen,
-		    cria.cri_key, cria.cri_klen, sop->cipher, sop->mac, txform,
-		    thash);
+		cse = csecreate(fcr, cses, &csp, txform, key, thash, mackey);
 
 		if (cse == NULL) {
 			crypto_freesession(cses);
@@ -651,10 +695,8 @@ cryptof_ioctl(
 		}
 bail:
 		if (error) {
-			if (crie.cri_key)
-				free(crie.cri_key, M_XDATA);
-			if (cria.cri_key)
-				free(cria.cri_key, M_XDATA);
+			free(key, M_XDATA);
+			free(mackey, M_XDATA);
 		}
 #ifdef COMPAT_FREEBSD32
 		else {
@@ -668,13 +710,10 @@ bail:
 		break;
 	case CIOCFSESSION:
 		ses = *(u_int32_t *)data;
-		cse = csefind(fcr, ses);
-		if (cse == NULL) {
+		if (!csedelete(fcr, ses)) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			return (EINVAL);
 		}
-		csedelete(fcr, cse);
-		csefree(cse);
 		break;
 	case CIOCCRYPT:
 #ifdef COMPAT_FREEBSD32
@@ -691,6 +730,7 @@ bail:
 			return (EINVAL);
 		}
 		error = cryptodev_op(cse, cop, active_cred, td);
+		csefree(cse);
 #ifdef COMPAT_FREEBSD32
 		if (error == 0 && cmd == CIOCCRYPT32)
 			crypt_op_to_32(cop, data);
@@ -757,6 +797,7 @@ bail:
 			return (EINVAL);
 		}
 		error = cryptodev_aead(cse, caead, active_cred, td);
+		csefree(cse);
 		break;
 	default:
 		error = EINVAL;
@@ -770,23 +811,21 @@ bail:
 static int cryptodev_cb(struct cryptop *);
 
 static struct cryptop_data *
-cod_alloc(struct csession *cse, size_t len, struct thread *td)
+cod_alloc(struct csession *cse, size_t aad_len, size_t len, struct thread *td)
 {
 	struct cryptop_data *cod;
-	struct uio *uio;
 
 	cod = malloc(sizeof(struct cryptop_data), M_XDATA, M_WAITOK | M_ZERO);
 
 	cod->cse = cse;
-	uio = &cod->uio;
-	uio->uio_iov = cod->iovec;
-	uio->uio_iovcnt = 1;
-	uio->uio_resid = len;
-	uio->uio_segflg = UIO_SYSSPACE;
-	uio->uio_rw = UIO_WRITE;
-	uio->uio_td = td;
-	uio->uio_iov[0].iov_len = len;
-	uio->uio_iov[0].iov_base = malloc(len, M_XDATA, M_WAITOK);
+	if (crypto_get_params(cse->cses)->csp_flags & CSP_F_SEPARATE_AAD) {
+		if (aad_len != 0)
+			cod->aad = malloc(aad_len, M_XDATA, M_WAITOK);
+		cod->buf = malloc(len, M_XDATA, M_WAITOK);
+	} else
+		cod->buf = malloc(aad_len + len, M_XDATA, M_WAITOK);
+	if (crypto_get_params(cse->cses)->csp_flags & CSP_F_SEPARATE_OUTPUT)
+		cod->obuf = malloc(len, M_XDATA, M_WAITOK);
 	return (cod);
 }
 
@@ -794,49 +833,10 @@ static void
 cod_free(struct cryptop_data *cod)
 {
 
-	free(cod->uio.uio_iov[0].iov_base, M_XDATA);
+	free(cod->aad, M_XDATA);
+	free(cod->obuf, M_XDATA);
+	free(cod->buf, M_XDATA);
 	free(cod, M_XDATA);
-}
-
-static void
-cryptodev_warn(struct csession *cse)
-{
-	static struct timeval arc4warn, blfwarn, castwarn, deswarn, md5warn;
-	static struct timeval skipwarn, tdeswarn;
-
-	switch (cse->cipher) {
-	case CRYPTO_DES_CBC:
-		if (ratecheck(&deswarn, &warninterval))
-			gone_in(13, "DES cipher via /dev/crypto");
-		break;
-	case CRYPTO_3DES_CBC:
-		if (ratecheck(&tdeswarn, &warninterval))
-			gone_in(13, "3DES cipher via /dev/crypto");
-		break;
-	case CRYPTO_BLF_CBC:
-		if (ratecheck(&blfwarn, &warninterval))
-			gone_in(13, "Blowfish cipher via /dev/crypto");
-		break;
-	case CRYPTO_CAST_CBC:
-		if (ratecheck(&castwarn, &warninterval))
-			gone_in(13, "CAST128 cipher via /dev/crypto");
-		break;
-	case CRYPTO_SKIPJACK_CBC:
-		if (ratecheck(&skipwarn, &warninterval))
-			gone_in(13, "Skipjack cipher via /dev/crypto");
-		break;
-	case CRYPTO_ARC4:
-		if (ratecheck(&arc4warn, &warninterval))
-			gone_in(13, "ARC4 cipher via /dev/crypto");
-		break;
-	}
-
-	switch (cse->mac) {
-	case CRYPTO_MD5_HMAC:
-		if (ratecheck(&md5warn, &warninterval))
-			gone_in(13, "MD5-HMAC authenticator via /dev/crypto");
-		break;
-	}
 }
 
 static int
@@ -848,7 +848,6 @@ cryptodev_op(
 {
 	struct cryptop_data *cod = NULL;
 	struct cryptop *crp = NULL;
-	struct cryptodesc *crde = NULL, *crda = NULL;
 	int error;
 
 	if (cop->len > 256*1024-4) {
@@ -863,106 +862,137 @@ cryptodev_op(
 		}
 	}
 
-	if (cse->thash)
-		cod = cod_alloc(cse, cop->len + cse->thash->hashsize, td);
-	else
-		cod = cod_alloc(cse, cop->len, td);
-
-	crp = crypto_getreq((cse->txform != NULL) + (cse->thash != NULL));
-	if (crp == NULL) {
+	if (cop->mac && cse->hashsize == 0) {
 		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		error = ENOMEM;
-		goto bail;
+		return (EINVAL);
 	}
 
-	if (cse->thash && cse->txform) {
-		if (cop->flags & COP_F_CIPHER_FIRST) {
-			crde = crp->crp_desc;
-			crda = crde->crd_next;
-		} else {
-			crda = crp->crp_desc;
-			crde = crda->crd_next;
+	/*
+	 * The COP_F_CIPHER_FIRST flag predates explicit session
+	 * modes, but the only way it was used was for EtA so allow it
+	 * as long as it is consistent with EtA.
+	 */
+	if (cop->flags & COP_F_CIPHER_FIRST) {
+		if (cop->op != COP_ENCRYPT) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error,  __LINE__);
+			return (EINVAL);
 		}
-	} else if (cse->thash) {
-		crda = crp->crp_desc;
-	} else if (cse->txform) {
-		crde = crp->crp_desc;
-	} else {
+	}
+
+	cod = cod_alloc(cse, 0, cop->len + cse->hashsize, td);
+
+	crp = crypto_getreq(cse->cses, M_WAITOK);
+
+	error = copyin(cop->src, cod->buf, cop->len);
+	if (error) {
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		goto bail;
+	}
+	crp->crp_payload_start = 0;
+	crp->crp_payload_length = cop->len;
+	if (cse->hashsize)
+		crp->crp_digest_start = cop->len;
+
+	switch (cse->mode) {
+	case CSP_MODE_COMPRESS:
+		switch (cop->op) {
+		case COP_ENCRYPT:
+			crp->crp_op = CRYPTO_OP_COMPRESS;
+			break;
+		case COP_DECRYPT:
+			crp->crp_op = CRYPTO_OP_DECOMPRESS;
+			break;
+		default:
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			error = EINVAL;
+			goto bail;
+		}
+		break;
+	case CSP_MODE_CIPHER:
+		switch (cop->op) {
+		case COP_ENCRYPT:
+			crp->crp_op = CRYPTO_OP_ENCRYPT;
+			break;
+		case COP_DECRYPT:
+			crp->crp_op = CRYPTO_OP_DECRYPT;
+			break;
+		default:
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			error = EINVAL;
+			goto bail;
+		}
+		break;
+	case CSP_MODE_DIGEST:
+		switch (cop->op) {
+		case 0:
+		case COP_ENCRYPT:
+		case COP_DECRYPT:
+			crp->crp_op = CRYPTO_OP_COMPUTE_DIGEST;
+			if (cod->obuf != NULL)
+				crp->crp_digest_start = 0;
+			break;
+		default:
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			error = EINVAL;
+			goto bail;
+		}
+		break;
+	case CSP_MODE_ETA:
+		switch (cop->op) {
+		case COP_ENCRYPT:
+			crp->crp_op = CRYPTO_OP_ENCRYPT |
+			    CRYPTO_OP_COMPUTE_DIGEST;
+			break;
+		case COP_DECRYPT:
+			crp->crp_op = CRYPTO_OP_DECRYPT |
+			    CRYPTO_OP_VERIFY_DIGEST;
+			break;
+		default:
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			error = EINVAL;
+			goto bail;
+		}
+		break;
+	default:
 		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 		error = EINVAL;
 		goto bail;
 	}
 
-	if ((error = copyin(cop->src, cod->uio.uio_iov[0].iov_base,
-	    cop->len))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
-	}
-
-	if (crda) {
-		crda->crd_skip = 0;
-		crda->crd_len = cop->len;
-		crda->crd_inject = cop->len;
-
-		crda->crd_alg = cse->mac;
-		crda->crd_key = cse->mackey;
-		crda->crd_klen = cse->mackeylen * 8;
-	}
-
-	if (crde) {
-		if (cop->op == COP_ENCRYPT)
-			crde->crd_flags |= CRD_F_ENCRYPT;
-		else
-			crde->crd_flags &= ~CRD_F_ENCRYPT;
-		crde->crd_len = cop->len;
-		crde->crd_inject = 0;
-
-		crde->crd_alg = cse->cipher;
-		crde->crd_key = cse->key;
-		crde->crd_klen = cse->keylen * 8;
-	}
-
-	crp->crp_ilen = cop->len;
-	crp->crp_flags = CRYPTO_F_IOV | CRYPTO_F_CBIMM
-		       | (cop->flags & COP_F_BATCH);
-	crp->crp_uio = &cod->uio;
+	crp->crp_flags = CRYPTO_F_CBIMM | (cop->flags & COP_F_BATCH);
+	crypto_use_buf(crp, cod->buf, cop->len + cse->hashsize);
+	if (cod->obuf)
+		crypto_use_output_buf(crp, cod->obuf, cop->len + cse->hashsize);
 	crp->crp_callback = cryptodev_cb;
-	crp->crp_session = cse->cses;
 	crp->crp_opaque = cod;
 
 	if (cop->iv) {
-		if (crde == NULL) {
+		if (cse->ivsize == 0) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			error = EINVAL;
 			goto bail;
 		}
-		if (cse->cipher == CRYPTO_ARC4) { /* XXX use flag? */
-			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			error = EINVAL;
-			goto bail;
-		}
-		if ((error = copyin(cop->iv, crde->crd_iv,
-		    cse->txform->ivsize))) {
+		error = copyin(cop->iv, crp->crp_iv, cse->ivsize);
+		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
 		}
-		crde->crd_flags |= CRD_F_IV_EXPLICIT | CRD_F_IV_PRESENT;
-		crde->crd_skip = 0;
-	} else if (cse->cipher == CRYPTO_ARC4) { /* XXX use flag? */
-		crde->crd_skip = 0;
-	} else if (crde) {
-		crde->crd_flags |= CRD_F_IV_PRESENT;
-		crde->crd_skip = cse->txform->ivsize;
-		crde->crd_len -= cse->txform->ivsize;
+		crp->crp_flags |= CRYPTO_F_IV_SEPARATE;
+	} else if (cse->ivsize != 0) {
+		crp->crp_iv_start = 0;
+		crp->crp_payload_start += cse->ivsize;
+		crp->crp_payload_length -= cse->ivsize;
+		cop->dst += cse->ivsize;
 	}
 
-	if (cop->mac && crda == NULL) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		error = EINVAL;
-		goto bail;
+	if (cop->mac != NULL && crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) {
+		error = copyin(cop->mac, cod->buf + crp->crp_digest_start,
+		    cse->hashsize);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
-	cryptodev_warn(cse);
-
 again:
 	/*
 	 * Let the dispatch run unlocked, then, interlock against the
@@ -995,25 +1025,28 @@ again:
 		goto bail;
 	}
 
-	if (cop->dst &&
-	    (error = copyout(cod->uio.uio_iov[0].iov_base, cop->dst,
-	    cop->len))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
+	if (cop->dst != NULL) {
+		error = copyout(cod->obuf != NULL ? cod->obuf :
+		    cod->buf + crp->crp_payload_start, cop->dst,
+		    crp->crp_payload_length);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
 
-	if (cop->mac &&
-	    (error = copyout((caddr_t)cod->uio.uio_iov[0].iov_base + cop->len,
-	    cop->mac, cse->thash->hashsize))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
+	if (cop->mac != NULL && (crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) == 0) {
+		error = copyout((cod->obuf != NULL ? cod->obuf : cod->buf) +
+		    crp->crp_digest_start, cop->mac, cse->hashsize);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
 
 bail:
-	if (crp)
-		crypto_freereq(crp);
-	if (cod)
-		cod_free(cod);
+	crypto_freereq(crp);
+	cod_free(cod);
 
 	return (error);
 }
@@ -1027,7 +1060,6 @@ cryptodev_aead(
 {
 	struct cryptop_data *cod = NULL;
 	struct cryptop *crp = NULL;
-	struct cryptodesc *crde = NULL, *crda = NULL;
 	int error;
 
 	if (caead->len > 256*1024-4 || caead->aadlen > 256*1024-4) {
@@ -1035,103 +1067,127 @@ cryptodev_aead(
 		return (E2BIG);
 	}
 
-	if (cse->txform == NULL || cse->thash == NULL || caead->tag == NULL ||
+	if (cse->txform == NULL || cse->hashsize == 0 || caead->tag == NULL ||
 	    (caead->len % cse->txform->blocksize) != 0) {
 		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 		return (EINVAL);
 	}
 
-	cod = cod_alloc(cse, caead->aadlen + caead->len + cse->thash->hashsize,
-	    td);
-
-	crp = crypto_getreq(2);
-	if (crp == NULL) {
-		error = ENOMEM;
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
-	}
-
-	if (caead->flags & COP_F_CIPHER_FIRST) {
-		crde = crp->crp_desc;
-		crda = crde->crd_next;
-	} else {
-		crda = crp->crp_desc;
-		crde = crda->crd_next;
-	}
-
-	if ((error = copyin(caead->aad, cod->uio.uio_iov[0].iov_base,
-	    caead->aadlen))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
-	}
-
-	if ((error = copyin(caead->src, (char *)cod->uio.uio_iov[0].iov_base +
-	    caead->aadlen, caead->len))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
-	}
-
 	/*
-	 * For GCM/CCM, crd_len covers only the AAD.  For other ciphers
-	 * chained with an HMAC, crd_len covers both the AAD and the
-	 * cipher text.
+	 * The COP_F_CIPHER_FIRST flag predates explicit session
+	 * modes, but the only way it was used was for EtA so allow it
+	 * as long as it is consistent with EtA.
 	 */
-	crda->crd_skip = 0;
-	if (cse->cipher == CRYPTO_AES_NIST_GCM_16 ||
-	    cse->cipher == CRYPTO_AES_CCM_16)
-		crda->crd_len = caead->aadlen;
+	if (caead->flags & COP_F_CIPHER_FIRST) {
+		if (caead->op != COP_ENCRYPT) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error,  __LINE__);
+			return (EINVAL);
+		}
+	}
+
+	cod = cod_alloc(cse, caead->aadlen, caead->len + cse->hashsize, td);
+
+	crp = crypto_getreq(cse->cses, M_WAITOK);
+
+	if (cod->aad != NULL)
+		error = copyin(caead->aad, cod->aad, caead->aadlen);
 	else
-		crda->crd_len = caead->aadlen + caead->len;
-	crda->crd_inject = caead->aadlen + caead->len;
+		error = copyin(caead->aad, cod->buf, caead->aadlen);
+	if (error) {
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		goto bail;
+	}
+	crp->crp_aad = cod->aad;
+	crp->crp_aad_start = 0;
+	crp->crp_aad_length = caead->aadlen;
 
-	crda->crd_alg = cse->mac;
-	crda->crd_key = cse->mackey;
-	crda->crd_klen = cse->mackeylen * 8;
-
-	if (caead->op == COP_ENCRYPT)
-		crde->crd_flags |= CRD_F_ENCRYPT;
+	if (cod->aad != NULL)
+		crp->crp_payload_start = 0;
 	else
-		crde->crd_flags &= ~CRD_F_ENCRYPT;
-	crde->crd_skip = caead->aadlen;
-	crde->crd_len = caead->len;
-	crde->crd_inject = caead->aadlen;
+		crp->crp_payload_start = caead->aadlen;
+	error = copyin(caead->src, cod->buf + crp->crp_payload_start,
+	    caead->len);
+	if (error) {
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		goto bail;
+	}
+	crp->crp_payload_length = caead->len;
+	if (caead->op == COP_ENCRYPT && cod->obuf != NULL)
+		crp->crp_digest_start = crp->crp_payload_output_start +
+		    caead->len;
+	else
+		crp->crp_digest_start = crp->crp_payload_start + caead->len;
 
-	crde->crd_alg = cse->cipher;
-	crde->crd_key = cse->key;
-	crde->crd_klen = cse->keylen * 8;
+	switch (cse->mode) {
+	case CSP_MODE_AEAD:
+	case CSP_MODE_ETA:
+		switch (caead->op) {
+		case COP_ENCRYPT:
+			crp->crp_op = CRYPTO_OP_ENCRYPT |
+			    CRYPTO_OP_COMPUTE_DIGEST;
+			break;
+		case COP_DECRYPT:
+			crp->crp_op = CRYPTO_OP_DECRYPT |
+			    CRYPTO_OP_VERIFY_DIGEST;
+			break;
+		default:
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			error = EINVAL;
+			goto bail;
+		}
+		break;
+	default:
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		error = EINVAL;
+		goto bail;
+	}
 
-	crp->crp_ilen = caead->aadlen + caead->len;
-	crp->crp_flags = CRYPTO_F_IOV | CRYPTO_F_CBIMM
-		       | (caead->flags & COP_F_BATCH);
-	crp->crp_uio = &cod->uio;
+	crp->crp_flags = CRYPTO_F_CBIMM | (caead->flags & COP_F_BATCH);
+	crypto_use_buf(crp, cod->buf, crp->crp_payload_start + caead->len +
+	    cse->hashsize);
+	if (cod->obuf != NULL)
+		crypto_use_output_buf(crp, cod->obuf, caead->len +
+		    cse->hashsize);
 	crp->crp_callback = cryptodev_cb;
-	crp->crp_session = cse->cses;
 	crp->crp_opaque = cod;
 
 	if (caead->iv) {
-		if (caead->ivlen > sizeof(crde->crd_iv)) {
+		/*
+		 * Permit a 16-byte IV for AES-XTS, but only use the
+		 * first 8 bytes as a block number.
+		 */
+		if (cse->mode == CSP_MODE_ETA &&
+		    caead->ivlen == AES_BLOCK_LEN &&
+		    cse->ivsize == AES_XTS_IV_LEN)
+			caead->ivlen = AES_XTS_IV_LEN;
+
+		if (caead->ivlen != cse->ivsize) {
 			error = EINVAL;
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
 		}
 
-		if ((error = copyin(caead->iv, crde->crd_iv, caead->ivlen))) {
+		error = copyin(caead->iv, crp->crp_iv, cse->ivsize);
+		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			goto bail;
 		}
-		crde->crd_flags |= CRD_F_IV_EXPLICIT | CRD_F_IV_PRESENT;
+		crp->crp_flags |= CRYPTO_F_IV_SEPARATE;
 	} else {
-		crde->crd_flags |= CRD_F_IV_PRESENT;
-		crde->crd_skip += cse->txform->ivsize;
-		crde->crd_len -= cse->txform->ivsize;
+		crp->crp_iv_start = crp->crp_payload_start;
+		crp->crp_payload_start += cse->ivsize;
+		crp->crp_payload_length -= cse->ivsize;
+		caead->dst += cse->ivsize;
 	}
 
-	if ((error = copyin(caead->tag, (caddr_t)cod->uio.uio_iov[0].iov_base +
-	    caead->len + caead->aadlen, cse->thash->hashsize))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
+	if (crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) {
+		error = copyin(caead->tag, cod->buf + crp->crp_digest_start,
+		    cse->hashsize);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
-	cryptodev_warn(cse);
 again:
 	/*
 	 * Let the dispatch run unlocked, then, interlock against the
@@ -1164,23 +1220,28 @@ again:
 		goto bail;
 	}
 
-	if (caead->dst && (error = copyout(
-	    (caddr_t)cod->uio.uio_iov[0].iov_base + caead->aadlen, caead->dst,
-	    caead->len))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
+	if (caead->dst != NULL) {
+		error = copyout(cod->obuf != NULL ? cod->obuf :
+		    cod->buf + crp->crp_payload_start, caead->dst,
+		    crp->crp_payload_length);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
 
-	if ((error = copyout((caddr_t)cod->uio.uio_iov[0].iov_base +
-	    caead->aadlen + caead->len, caead->tag, cse->thash->hashsize))) {
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		goto bail;
+	if ((crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) == 0) {
+		error = copyout((cod->obuf != NULL ? cod->obuf : cod->buf) +
+		    crp->crp_digest_start, caead->tag, cse->hashsize);
+		if (error) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
 	}
 
 bail:
 	crypto_freereq(crp);
-	if (cod)
-		cod_free(cod);
+	cod_free(cod);
 
 	return (error);
 }
@@ -1202,13 +1263,11 @@ cryptodev_cb(struct cryptop *crp)
 	return (0);
 }
 
-static int
-cryptodevkey_cb(void *op)
+static void
+cryptodevkey_cb(struct cryptkop *krp)
 {
-	struct cryptkop *krp = (struct cryptkop *) op;
 
 	wakeup_one(krp);
-	return (0);
 }
 
 static int
@@ -1267,7 +1326,7 @@ cryptodev_key(struct crypt_kop *kop)
 	krp->krp_oparams = kop->crk_oparams;
 	krp->krp_crid = kop->crk_crid;
 	krp->krp_status = 0;
-	krp->krp_callback = (int (*) (struct cryptkop *)) cryptodevkey_cb;
+	krp->krp_callback = cryptodevkey_cb;
 
 	for (i = 0; i < CRK_MAXPARAM; i++) {
 		if (kop->crk_param[i].crp_nbits > 65536) {
@@ -1303,7 +1362,7 @@ cryptodev_key(struct crypt_kop *kop)
 		goto fail;
 	}
 	
-	kop->crk_crid = krp->krp_crid;		/* device that did the work */
+	kop->crk_crid = krp->krp_hid;		/* device that did the work */
 	if (krp->krp_status != 0) {
 		error = krp->krp_status;
 		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
@@ -1375,6 +1434,9 @@ cryptof_close(struct file *fp, struct thread *td)
 
 	while ((cse = TAILQ_FIRST(&fcr->csessions))) {
 		TAILQ_REMOVE(&fcr->csessions, cse, next);
+		KASSERT(cse->refs == 1,
+		    ("%s: crypto session %p with %d refs", __func__, cse,
+		    cse->refs));
 		csefree(cse);
 	}
 	free(fcr, M_XDATA);
@@ -1395,38 +1457,40 @@ csefind(struct fcrypt *fcr, u_int ses)
 {
 	struct csession *cse;
 
-	TAILQ_FOREACH(cse, &fcr->csessions, next)
-		if (cse->ses == ses)
+	mtx_lock(&fcr->lock);
+	TAILQ_FOREACH(cse, &fcr->csessions, next) {
+		if (cse->ses == ses) {
+			refcount_acquire(&cse->refs);
+			mtx_unlock(&fcr->lock);
 			return (cse);
+		}
+	}
+	mtx_unlock(&fcr->lock);
 	return (NULL);
 }
 
-static int
-csedelete(struct fcrypt *fcr, struct csession *cse_del)
+static bool
+csedelete(struct fcrypt *fcr, u_int ses)
 {
 	struct csession *cse;
 
+	mtx_lock(&fcr->lock);
 	TAILQ_FOREACH(cse, &fcr->csessions, next) {
-		if (cse == cse_del) {
+		if (cse->ses == ses) {
 			TAILQ_REMOVE(&fcr->csessions, cse, next);
-			return (1);
+			mtx_unlock(&fcr->lock);
+			csefree(cse);
+			return (true);
 		}
 	}
-	return (0);
+	mtx_unlock(&fcr->lock);
+	return (false);
 }
 	
-static struct csession *
-cseadd(struct fcrypt *fcr, struct csession *cse)
-{
-	TAILQ_INSERT_TAIL(&fcr->csessions, cse, next);
-	cse->ses = fcr->sesn++;
-	return (cse);
-}
-
 struct csession *
-csecreate(struct fcrypt *fcr, crypto_session_t cses, caddr_t key, u_int64_t keylen,
-    caddr_t mackey, u_int64_t mackeylen, u_int32_t cipher, u_int32_t mac,
-    struct enc_xform *txform, struct auth_hash *thash)
+csecreate(struct fcrypt *fcr, crypto_session_t cses,
+    struct crypto_session_params *csp, struct enc_xform *txform,
+    void *key, struct auth_hash *thash, void *mackey)
 {
 	struct csession *cse;
 
@@ -1434,16 +1498,23 @@ csecreate(struct fcrypt *fcr, crypto_session_t cses, caddr_t key, u_int64_t keyl
 	if (cse == NULL)
 		return NULL;
 	mtx_init(&cse->lock, "cryptodev", "crypto session lock", MTX_DEF);
+	refcount_init(&cse->refs, 1);
 	cse->key = key;
-	cse->keylen = keylen/8;
 	cse->mackey = mackey;
-	cse->mackeylen = mackeylen/8;
+	cse->mode = csp->csp_mode;
 	cse->cses = cses;
-	cse->cipher = cipher;
-	cse->mac = mac;
 	cse->txform = txform;
-	cse->thash = thash;
-	cseadd(fcr, cse);
+	if (thash != NULL)
+		cse->hashsize = thash->hashsize;
+	else if (csp->csp_cipher_alg == CRYPTO_AES_NIST_GCM_16)
+		cse->hashsize = AES_GMAC_HASH_LEN;
+	else if (csp->csp_cipher_alg == CRYPTO_AES_CCM_16)
+		cse->hashsize = AES_CBC_MAC_HASH_LEN;
+	cse->ivsize = csp->csp_ivlen;
+	mtx_lock(&fcr->lock);
+	TAILQ_INSERT_TAIL(&fcr->csessions, cse, next);
+	cse->ses = fcr->sesn++;
+	mtx_unlock(&fcr->lock);
 	return (cse);
 }
 
@@ -1451,6 +1522,8 @@ static void
 csefree(struct csession *cse)
 {
 
+	if (!refcount_release(&cse->refs))
+		return;
 	crypto_freesession(cse->cses);
 	mtx_destroy(&cse->lock);
 	if (cse->key)
@@ -1458,24 +1531,6 @@ csefree(struct csession *cse)
 	if (cse->mackey)
 		free(cse->mackey, M_XDATA);
 	free(cse, M_XDATA);
-}
-
-static int
-cryptoopen(struct cdev *dev, int oflags, int devtype, struct thread *td)
-{
-	return (0);
-}
-
-static int
-cryptoread(struct cdev *dev, struct uio *uio, int ioflag)
-{
-	return (EIO);
-}
-
-static int
-cryptowrite(struct cdev *dev, struct uio *uio, int ioflag)
-{
-	return (EIO);
 }
 
 static int
@@ -1487,19 +1542,21 @@ cryptoioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag, struct thread 
 
 	switch (cmd) {
 	case CRIOGET:
-		fcr = malloc(sizeof(struct fcrypt), M_XDATA, M_WAITOK);
+		error = falloc_noinstall(td, &f);
+		if (error)
+			break;
+
+		fcr = malloc(sizeof(struct fcrypt), M_XDATA, M_WAITOK | M_ZERO);
 		TAILQ_INIT(&fcr->csessions);
-		fcr->sesn = 0;
+		mtx_init(&fcr->lock, "fcrypt", NULL, MTX_DEF);
 
-		error = falloc(td, &f, &fd, 0);
-
-		if (error) {
-			free(fcr, M_XDATA);
-			return (error);
-		}
-		/* falloc automatically provides an extra reference to 'f'. */
 		finit(f, FREAD | FWRITE, DTYPE_CRYPTO, fcr, &cryptofops);
-		*(u_int32_t *)data = fd;
+		error = finstall(td, f, &fd, 0, NULL);
+		if (error) {
+			mtx_destroy(&fcr->lock);
+			free(fcr, M_XDATA);
+		} else
+			*(uint32_t *)data = fd;
 		fdrop(f, td);
 		break;
 	case CRIOFINDDEV:
@@ -1517,10 +1574,6 @@ cryptoioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag, struct thread 
 
 static struct cdevsw crypto_cdevsw = {
 	.d_version =	D_VERSION,
-	.d_flags =	D_NEEDGIANT,
-	.d_open =	cryptoopen,
-	.d_read =	cryptoread,
-	.d_write =	cryptowrite,
 	.d_ioctl =	cryptoioctl,
 	.d_name =	"crypto",
 };

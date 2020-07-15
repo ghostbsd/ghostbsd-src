@@ -75,14 +75,13 @@ extern u_long *ipi_rendezvous_counts[MAXCPU];
 
 /* IPI handlers */
 inthand_t
-	IDTVEC(invltlb),	/* TLB shootdowns - global */
-	IDTVEC(invlpg),		/* TLB shootdowns - 1 page */
-	IDTVEC(invlrng),	/* TLB shootdowns - page range */
-	IDTVEC(invlcache),	/* Write back and invalidate cache */
 	IDTVEC(ipi_intr_bitmap_handler), /* Bitmap based IPIs */ 
 	IDTVEC(cpustop),	/* CPU stops & waits to be restarted */
 	IDTVEC(cpususpend),	/* CPU suspends & waits to be resumed */
 	IDTVEC(rendezvous);	/* handle CPU rendezvous */
+
+typedef void (*smp_invl_cb_t)(struct pmap *, vm_offset_t addr1,
+    vm_offset_t addr2);
 
 /* functions in x86_mp.c */
 void	assign_cpu_ids(void);
@@ -91,10 +90,6 @@ void	cpustop_handler(void);
 void	cpususpend_handler(void);
 void	alloc_ap_trampoline(vm_paddr_t *physmap, unsigned int *physmap_idx);
 void	init_secondary_tail(void);
-void	invltlb_handler(void);
-void	invlpg_handler(void);
-void	invlrng_handler(void);
-void	invlcache_handler(void);
 void	init_secondary(void);
 void	ipi_startup(int apic_id, int vector);
 void	ipi_all_but_self(u_int ipi);
@@ -103,11 +98,13 @@ void	ipi_cpu(int cpu, u_int ipi);
 int	ipi_nmi_handler(void);
 void	ipi_selected(cpuset_t cpus, u_int ipi);
 void	set_interrupt_apic_ids(void);
-void	smp_cache_flush(void);
-void	smp_masked_invlpg(cpuset_t mask, vm_offset_t addr, struct pmap *pmap);
+void	smp_cache_flush(smp_invl_cb_t curcpu_cb);
+void	smp_masked_invlpg(cpuset_t mask, vm_offset_t addr, struct pmap *pmap,
+	    smp_invl_cb_t curcpu_cb);
 void	smp_masked_invlpg_range(cpuset_t mask, vm_offset_t startva,
-	    vm_offset_t endva, struct pmap *pmap);
-void	smp_masked_invltlb(cpuset_t mask, struct pmap *pmap);
+	    vm_offset_t endva, struct pmap *pmap, smp_invl_cb_t curcpu_cb);
+void	smp_masked_invltlb(cpuset_t mask, struct pmap *pmap,
+	    smp_invl_cb_t curcpu_cb);
 void	mem_range_AP_init(void);
 void	topo_probe(void);
 void	ipi_send_cpu(int cpu, u_int ipi);

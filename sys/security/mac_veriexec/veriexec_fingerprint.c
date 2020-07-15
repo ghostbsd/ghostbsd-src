@@ -64,7 +64,8 @@ static int mac_veriexec_late;
 static int sysctl_mac_veriexec_algorithms(SYSCTL_HANDLER_ARGS);
 
 SYSCTL_PROC(_security_mac_veriexec, OID_AUTO, algorithms,
-    CTLTYPE_STRING | CTLFLAG_RD, 0, 0, sysctl_mac_veriexec_algorithms, "A",
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+    0, 0, sysctl_mac_veriexec_algorithms, "A",
     "Verified execution supported hashing algorithms");
 
 static int
@@ -214,7 +215,7 @@ mac_veriexec_fingerprint_check_vnode(struct vnode *vp,
 	int error;
 
 	/* reject fingerprint if writers are active */
-	if (vp->v_writecount)
+	if (vp->v_writecount > 0)
 		return (ETXTBSY);
 
 	if ((vp->v_mount->mnt_flag & MNT_VERIFIED) != 0) {

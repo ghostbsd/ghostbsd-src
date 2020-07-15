@@ -127,16 +127,52 @@ struct inode {
 #define	IN_LAZYMOD	0x0020		/* Modified, but don't write yet. */
 #define	IN_LAZYACCESS	0x0040		/* Process IN_ACCESS after the
 					   suspension finished */
-#define	IN_EA_LOCKED	0x0080
-#define	IN_EA_LOCKWAIT	0x0100
-
+#define	IN_EA_LOCKED	0x0080		/* Extended attributes locked */
+#define	IN_EA_LOCKWAIT	0x0100		/* Want extended attributes lock */
 #define	IN_TRUNCATED	0x0200		/* Journaled truncation pending. */
-
 #define	IN_UFS2		0x0400		/* UFS2 vs UFS1 */
+#define	IN_IBLKDATA	0x0800		/* datasync requires inode block
+					   update */
+#define	IN_SIZEMOD	0x1000		/* Inode size has been modified */
 
-#define PRINT_INODE_FLAGS "\20\20b16\17b15\16b14\15b13" \
-	"\14b12\13is_ufs2\12truncated\11ea_lockwait\10ea_locked" \
+#define PRINT_INODE_FLAGS "\20\20b16\17b15\16b14\15sizemod" \
+	"\14iblkdata\13is_ufs2\12truncated\11ea_lockwait\10ea_locked" \
 	"\7lazyaccess\6lazymod\5needsync\4modified\3update\2change\1access"
+
+#define UFS_INODE_FLAG_LAZY_MASK	\
+	(IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE | IN_LAZYMOD | \
+	 IN_LAZYACCESS)
+/*
+ * Some flags can persist a vnode transitioning to 0 hold count and being tkaen
+ * off the list.
+ */
+#define UFS_INODE_FLAG_LAZY_MASK_ASSERTABLE \
+	(UFS_INODE_FLAG_LAZY_MASK & ~(IN_LAZYMOD | IN_LAZYACCESS))
+
+#define UFS_INODE_SET_FLAG(ip, flags) do {			\
+	struct inode *_ip = (ip);				\
+	struct vnode *_vp = ITOV(_ip);				\
+	int _flags = (flags);					\
+								\
+	_ip->i_flag |= _flags;					\
+	if (_flags & UFS_INODE_FLAG_LAZY_MASK)			\
+		vlazy(_vp);					\
+} while (0)
+
+#define UFS_INODE_SET_FLAG_SHARED(ip, flags) do {		\
+	struct inode *_ip = (ip);				\
+	struct vnode *_vp = ITOV(_ip);				\
+	int _flags = (flags);					\
+								\
+	ASSERT_VI_UNLOCKED(_vp, __func__);			\
+	if ((_ip->i_flag & (_flags)) != _flags) {		\
+		VI_LOCK(_vp);					\
+		_ip->i_flag |= _flags;				\
+		if (_flags & UFS_INODE_FLAG_LAZY_MASK)		\
+			vlazy(_vp);				\
+		VI_UNLOCK(_vp);					\
+	}							\
+} while (0)
 
 #define	i_dirhash i_un.dirhash
 #define	i_snapblklist i_un.snapblklist
@@ -196,10 +232,11 @@ struct indir {
 #define	ITOV(ip)	((ip)->i_vnode)
 
 /* Determine if soft dependencies are being done */
-#define	DOINGSOFTDEP(vp)   ((vp)->v_mount->mnt_flag & (MNT_SOFTDEP | MNT_SUJ))
-#define	MOUNTEDSOFTDEP(mp) ((mp)->mnt_flag & (MNT_SOFTDEP | MNT_SUJ))
-#define	DOINGSUJ(vp)	   ((vp)->v_mount->mnt_flag & MNT_SUJ)
-#define	MOUNTEDSUJ(mp)	   ((mp)->mnt_flag & MNT_SUJ)
+#define	DOINGSOFTDEP(vp)   \
+	(((vp)->v_mount->mnt_flag & (MNT_SOFTDEP | MNT_SUJ)) != 0)
+#define	MOUNTEDSOFTDEP(mp) (((mp)->mnt_flag & (MNT_SOFTDEP | MNT_SUJ)) != 0)
+#define	DOINGSUJ(vp)	   (((vp)->v_mount->mnt_flag & MNT_SUJ) != 0)
+#define	MOUNTEDSUJ(mp)	   (((mp)->mnt_flag & MNT_SUJ) != 0)
 
 /* This overlays the fid structure (see mount.h). */
 struct ufid {

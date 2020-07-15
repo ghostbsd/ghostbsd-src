@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 Pawel Jakub Dawidek. All rights reserved.
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2020 by Delphix. All rights reserved.
  * Copyright 2019 Joyent, Inc.
  * Copyright (c) 2012 Martin Matuska <mm@FreeBSD.org>. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
@@ -141,6 +141,8 @@ typedef enum zfs_error {
 	EZFS_TOOMANY,		/* argument list too long */
 	EZFS_INITIALIZING,	/* currently initializing */
 	EZFS_NO_INITIALIZE,	/* no active initialize */
+	EZFS_WRONG_PARENT,	/* invalid parent dataset (e.g ZVOL) */
+	EZFS_IOC_NOTSUPPORTED,	/* operation not supported by zfs module */
 	EZFS_UNKNOWN
 } zfs_error_t;
 
@@ -736,6 +738,9 @@ typedef struct recvflags {
 
 	/* do not mount file systems as they are extracted (private) */
 	boolean_t nomount;
+
+	/* force unmount while recv snapshot (private) */
+	boolean_t forceunmount;
 } recvflags_t;
 
 extern int zfs_receive(libzfs_handle_t *, const char *, nvlist_t *,
@@ -769,6 +774,7 @@ extern ulong_t get_system_hostid(void);
 extern boolean_t is_mounted(libzfs_handle_t *, const char *special, char **);
 extern boolean_t zfs_is_mounted(zfs_handle_t *, char **);
 extern int zfs_mount(zfs_handle_t *, const char *, int);
+extern int zfs_mount_at(zfs_handle_t *, const char *, int, const char *);
 extern int zfs_unmount(zfs_handle_t *, const char *, int);
 extern int zfs_unmountall(zfs_handle_t *, int);
 

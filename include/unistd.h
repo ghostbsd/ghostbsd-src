@@ -494,6 +494,7 @@ struct crypt_data {
 int	 acct(const char *);
 int	 async_daemon(void);
 int	 check_utility_compat(const char *);
+int	 close_range(unsigned int, unsigned int, int);
 ssize_t	 copy_file_range(int, off_t *, int, off_t *, size_t, unsigned int);
 const char *
 	 crypt_get_format(void);
@@ -552,7 +553,7 @@ char	*re_comp(const char *);
 int	 re_exec(const char *);
 int	 reboot(int);
 int	 revoke(const char *);
-pid_t	 rfork(int);
+pid_t	 rfork(int) __returns_twice;
 pid_t	 rfork_thread(int, void *, int (*)(void *), void *);
 int	 rresvport(int *);
 int	 rresvport_af(int *, int);

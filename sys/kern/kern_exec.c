@@ -51,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
-#include <sys/pioctl.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
@@ -123,18 +122,22 @@ static int do_execve(struct thread *td, struct image_args *args,
 
 /* XXX This should be vm_size_t. */
 SYSCTL_PROC(_kern, KERN_PS_STRINGS, ps_strings, CTLTYPE_ULONG|CTLFLAG_RD|
-    CTLFLAG_CAPRD|CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_ps_strings, "LU", "");
+    CTLFLAG_CAPRD|CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_ps_strings, "LU",
+    "Location of process' ps_strings structure");
 
 /* XXX This should be vm_size_t. */
 SYSCTL_PROC(_kern, KERN_USRSTACK, usrstack, CTLTYPE_ULONG|CTLFLAG_RD|
-    CTLFLAG_CAPRD|CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_usrstack, "LU", "");
+    CTLFLAG_CAPRD|CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_usrstack, "LU",
+    "Top of process stack");
 
 SYSCTL_PROC(_kern, OID_AUTO, stackprot, CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_MPSAFE,
-    NULL, 0, sysctl_kern_stackprot, "I", "");
+    NULL, 0, sysctl_kern_stackprot, "I",
+    "Stack memory permissions");
 
 u_long ps_arg_cache_limit = PAGE_SIZE / 16;
 SYSCTL_ULONG(_kern, OID_AUTO, ps_arg_cache_limit, CTLFLAG_RW, 
-    &ps_arg_cache_limit, 0, "");
+    &ps_arg_cache_limit, 0,
+    "Process' command line characters cache limit");
 
 static int disallow_high_osrel;
 SYSCTL_INT(_kern, OID_AUTO, disallow_high_osrel, CTLFLAG_RW,
@@ -230,7 +233,7 @@ struct fexecve_args {
 	int	fd;
 	char	**argv;
 	char	**envv;
-}
+};
 #endif
 int
 sys_fexecve(struct thread *td, struct fexecve_args *uap)
@@ -644,8 +647,8 @@ interpret:
 		free(imgp->freepath, M_TEMP);
 		imgp->freepath = NULL;
 		/* set new name to that of the interpreter */
-		NDINIT(&nd, LOOKUP, ISOPEN | LOCKLEAF | FOLLOW | SAVENAME,
-		    UIO_SYSSPACE, imgp->interpreter_name, td);
+		NDINIT(&nd, LOOKUP, ISOPEN | LOCKLEAF | LOCKSHARED | FOLLOW |
+		    SAVENAME, UIO_SYSSPACE, imgp->interpreter_name, td);
 		args->fname = imgp->interpreter_name;
 		goto interpret;
 	}
@@ -870,7 +873,7 @@ interpret:
 	/* Set values passed into the program in registers. */
 	(*p->p_sysent->sv_setregs)(td, imgp, stack_base);
 
-	vfs_mark_atime(imgp->vp, td->td_ucred);
+	VOP_MMAPPED(imgp->vp);
 
 	SDT_PROBE1(proc, , , exec__success, args->fname);
 
@@ -908,12 +911,6 @@ exec_fail_dealloc:
 				td->td_dbgflags |= TDB_EXEC;
 			PROC_UNLOCK(p);
 		}
-
-		/*
-		 * Stop the process here if its stop event mask has
-		 * the S_EXEC bit set.
-		 */
-		STOPEVENT(p, S_EXEC, 0);
 	} else {
 exec_fail:
 		/* we're done here, clear P_INEXEC */
@@ -984,14 +981,16 @@ exec_map_first_page(struct image_params *imgp)
 	object = imgp->vp->v_object;
 	if (object == NULL)
 		return (EACCES);
-	VM_OBJECT_WLOCK(object);
 #if VM_NRESERVLEVEL > 0
-	vm_object_color(object, 0);
+	if ((object->flags & OBJ_COLORED) == 0) {
+		VM_OBJECT_WLOCK(object);
+		vm_object_color(object, 0);
+		VM_OBJECT_WUNLOCK(object);
+	}
 #endif
-	error = vm_page_grab_valid(&m, object, 0,
+	error = vm_page_grab_valid_unlocked(&m, object, 0,
 	    VM_ALLOC_COUNT(VM_INITIAL_PAGEIN) |
             VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY | VM_ALLOC_WIRED);
-	VM_OBJECT_WUNLOCK(object);
 
 	if (error != VM_PAGER_OK)
 		return (EIO);
@@ -1025,6 +1024,7 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	int error;
 	struct proc *p = imgp->proc;
 	struct vmspace *vmspace = p->p_vmspace;
+	struct thread *td = curthread;
 	vm_object_t obj;
 	struct rlimit rlim_stack;
 	vm_offset_t sv_minuser, stack_addr;
@@ -1033,6 +1033,8 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 
 	imgp->vmspace_destroyed = 1;
 	imgp->sysent = sv;
+
+	sigfastblock_clear(td);
 
 	/* May be called with Giant held */
 	EVENTHANDLER_DIRECT_INVOKE(process_exec, p, imgp);
@@ -1544,6 +1546,7 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	p = imgp->proc;
 	szsigcode = 0;
 	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
+	imgp->ps_strings = arginfo;
 	if (p->p_sysent->sv_sigcode_base == 0) {
 		if (p->p_sysent->sv_szsigcode != NULL)
 			szsigcode = *(p->p_sysent->sv_szsigcode);
@@ -1568,8 +1571,8 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	if (execpath_len != 0) {
 		destp -= execpath_len;
 		destp = rounddown2(destp, sizeof(void *));
-		imgp->execpathp = destp;
-		error = copyout(imgp->execpath, (void *)destp, execpath_len);
+		imgp->execpathp = (void *)destp;
+		error = copyout(imgp->execpath, imgp->execpathp, execpath_len);
 		if (error != 0)
 			return (error);
 	}
@@ -1579,8 +1582,8 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	 */
 	arc4rand(canary, sizeof(canary), 0);
 	destp -= sizeof(canary);
-	imgp->canary = destp;
-	error = copyout(canary, (void *)destp, sizeof(canary));
+	imgp->canary = (void *)destp;
+	error = copyout(canary, imgp->canary, sizeof(canary));
 	if (error != 0)
 		return (error);
 	imgp->canarylen = sizeof(canary);
@@ -1590,8 +1593,8 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	 */
 	destp -= szps;
 	destp = rounddown2(destp, sizeof(void *));
-	imgp->pagesizes = destp;
-	error = copyout(pagesizes, (void *)destp, szps);
+	imgp->pagesizes = (void *)destp;
+	error = copyout(pagesizes, imgp->pagesizes, szps);
 	if (error != 0)
 		return (error);
 	imgp->pagesizeslen = szps;
@@ -1643,6 +1646,7 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	/*
 	 * Fill in "ps_strings" struct for ps, w, etc.
 	 */
+	imgp->argv = vectp;
 	if (suword(&arginfo->ps_argvstr, (long)(intptr_t)vectp) != 0 ||
 	    suword32(&arginfo->ps_nargvstr, argc) != 0)
 		return (EFAULT);
@@ -1662,6 +1666,7 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	if (suword(vectp++, 0) != 0)
 		return (EFAULT);
 
+	imgp->envv = vectp;
 	if (suword(&arginfo->ps_envstr, (long)(intptr_t)vectp) != 0 ||
 	    suword32(&arginfo->ps_nenvstr, envc) != 0)
 		return (EFAULT);

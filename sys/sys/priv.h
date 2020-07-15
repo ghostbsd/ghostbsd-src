@@ -283,6 +283,7 @@
 #define	PRIV_VFS_SYSFLAGS	342	/* Can modify system flags. */
 #define	PRIV_VFS_UNMOUNT	343	/* Can unmount(). */
 #define	PRIV_VFS_STAT		344	/* Override vnode MAC stat perm. */
+#define	PRIV_VFS_READ_DIR	345	/* Can read(2) a dirfd, needs sysctl. */
 
 /*
  * Virtual memory privileges.
@@ -533,6 +534,7 @@ struct thread;
 struct ucred;
 int	priv_check(struct thread *td, int priv);
 int	priv_check_cred(struct ucred *cred, int priv);
+int	priv_check_cred_vfs_generation(struct ucred *cred);
 #endif
 
 #endif /* !_SYS_PRIV_H_ */

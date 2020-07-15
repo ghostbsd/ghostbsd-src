@@ -354,6 +354,13 @@ linux_mprotect(struct thread *td, struct linux_mprotect_args *uap)
 }
 
 int
+linux_madvise(struct thread *td, struct linux_madvise_args *uap)
+{
+
+	return (linux_madvise_common(td, PTROUT(uap->addr), uap->len, uap->behav));
+}
+
+int
 linux_ioperm(struct thread *td, struct linux_ioperm_args *args)
 {
 	int error;
@@ -550,13 +557,6 @@ linux_sigaltstack(struct thread *td, struct linux_sigaltstack_args *uap)
 	}
 
 	return (error);
-}
-
-int
-linux_ftruncate64(struct thread *td, struct linux_ftruncate64_args *args)
-{
-
-	return (kern_ftruncate(td, args->fd, args->length));
 }
 
 int

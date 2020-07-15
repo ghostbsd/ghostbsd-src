@@ -268,8 +268,8 @@ vfs_fhtovp_sigdefer(struct mount *mp, struct fid *fidp, int flags,
 }
 
 static int
-vfs_checkexp_sigdefer(struct mount *mp, struct sockaddr *nam, int *exflg,
-    struct ucred **credp, int *numsecflavors, int **secflavors)
+vfs_checkexp_sigdefer(struct mount *mp, struct sockaddr *nam, uint64_t *exflg,
+    struct ucred **credp, int *numsecflavors, int *secflavors)
 {
 	int prev_stops, rc;
 
@@ -385,7 +385,7 @@ vfs_register(struct vfsconf *vfc)
 		vattr_null(&va_null);
 		once = 1;
 	}
-	
+
 	if (vfc->vfc_version != VFS_VERSION) {
 		printf("ERROR: filesystem %s, unsupported ABI version %x\n",
 		    vfc->vfc_name, vfc->vfc_version);
@@ -522,7 +522,6 @@ vfs_register(struct vfsconf *vfc)
 
 	return (0);
 }
-
 
 /* Remove registration of a filesystem type */
 static int

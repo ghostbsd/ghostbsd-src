@@ -493,14 +493,17 @@ PTHREAD_MLINKS+=pthread_rwlock_rdlock.3 pthread_rwlock_tryrdlock.3
 PTHREAD_MLINKS+=pthread_rwlock_wrlock.3 pthread_rwlock_trywrlock.3
 PTHREAD_MLINKS+=pthread_schedparam.3 pthread_getschedparam.3 \
 		pthread_schedparam.3 pthread_setschedparam.3
-PTHREAD_MLINKS+=pthread_set_name_np.3 pthread_get_name_np.3
+PTHREAD_MLINKS+=pthread_set_name_np.3 pthread_get_name_np.3 \
+		pthread_set_name_np.3 pthread_getname_np.3 \
+		pthread_set_name_np.3 pthread_setname_np.3
 PTHREAD_MLINKS+=pthread_spin_init.3 pthread_spin_destroy.3 \
 		pthread_spin_lock.3 pthread_spin_trylock.3 \
 		pthread_spin_lock.3 pthread_spin_unlock.3
 PTHREAD_MLINKS+=pthread_switch_add_np.3 pthread_switch_delete_np.3
 PTHREAD_MLINKS+=pthread_testcancel.3 pthread_setcancelstate.3 \
 		pthread_testcancel.3 pthread_setcanceltype.3
-PTHREAD_MLINKS+=pthread_join.3 pthread_timedjoin_np.3
+PTHREAD_MLINKS+=pthread_join.3 pthread_peekjoin_np.3 \
+		pthread_join.3 pthread_timedjoin_np.3
 .endif
 
 .include <bsd.prog.mk>

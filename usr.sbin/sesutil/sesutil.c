@@ -570,17 +570,17 @@ fetch_device_details(char *devnames, char **model, char **serial, off_t *size)
 {
 	char ident[DISK_IDENT_SIZE];
 	struct diocgattr_arg arg;
-	char *device, *tmp;
+	char *tmp;
 	off_t mediasize;
+	int comma;
 	int fd;
 
-	tmp = strdup(devnames);
+	comma = (int)strcspn(devnames, ",");
+	asprintf(&tmp, "/dev/%.*s", comma, devnames);
 	if (tmp == NULL)
-		err(1, "strdup");
-
-	device = strsep(&tmp, ",");
-	asprintf(&tmp, "/dev/%s", device);
+		err(1, "asprintf");
 	fd = open(tmp, O_RDONLY);
+	free(tmp);
 	if (fd < 0) {
 		/*
 		 * This can happen with a disk so broken it cannot
@@ -589,6 +589,7 @@ fetch_device_details(char *devnames, char **model, char **serial, off_t *size)
 		*model = strdup("?");
 		*serial = strdup("?");
 		*size = -1;
+		close(fd);
 		return;
 	}
 
@@ -608,6 +609,7 @@ fetch_device_details(char *devnames, char **model, char **serial, off_t *size)
 		*size = mediasize;
 	else
 		*size = -1;
+	close(fd);
 }
 
 static void
@@ -829,7 +831,7 @@ show(int argc, char **argv __unused)
 				break;
 			case ELMTYP_THERM:
 				if (e_ptr[j].elm_type != prev_type)
-					xo_emit("\nVoltages: ");
+					xo_emit("\nTemperatures: ");
 				else
 					xo_emit(", ");
 				prev_type = e_ptr[j].elm_type;
@@ -837,7 +839,7 @@ show(int argc, char **argv __unused)
 				break;
 			case ELMTYP_VOM:
 				if (e_ptr[j].elm_type != prev_type)
-					xo_emit("\nTemperatures: ");
+					xo_emit("\nVoltages: ");
 				else
 					xo_emit(", ");
 				prev_type = e_ptr[j].elm_type;

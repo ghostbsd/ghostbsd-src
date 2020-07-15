@@ -671,9 +671,12 @@ nvme_qpair_construct(struct nvme_qpair *qpair,
 
 		qpair->res = bus_alloc_resource_any(ctrlr->dev, SYS_RES_IRQ,
 		    &qpair->rid, RF_ACTIVE);
-		bus_setup_intr(ctrlr->dev, qpair->res,
+		if (bus_setup_intr(ctrlr->dev, qpair->res,
 		    INTR_TYPE_MISC | INTR_MPSAFE, NULL,
-		    nvme_qpair_msix_handler, qpair, &qpair->tag);
+		    nvme_qpair_msix_handler, qpair, &qpair->tag) != 0) {
+			nvme_printf(ctrlr, "unable to setup intx handler\n");
+			goto out;
+		}
 		if (qpair->id == 0) {
 			bus_describe_intr(ctrlr->dev, qpair->res, qpair->tag,
 			    "admin");
@@ -704,7 +707,7 @@ nvme_qpair_construct(struct nvme_qpair *qpair,
 	cmdsz = roundup2(cmdsz, PAGE_SIZE);
 	cplsz = qpair->num_entries * sizeof(struct nvme_completion);
 	cplsz = roundup2(cplsz, PAGE_SIZE);
-	prpsz = sizeof(uint64_t) * NVME_MAX_PRP_LIST_ENTRIES;;
+	prpsz = sizeof(uint64_t) * NVME_MAX_PRP_LIST_ENTRIES;
 	prpmemsz = qpair->num_trackers * prpsz;
 	allocsz = cmdsz + cplsz + prpmemsz;
 
@@ -726,6 +729,8 @@ nvme_qpair_construct(struct nvme_qpair *qpair,
 	if (bus_dmamap_load(qpair->dma_tag, qpair->queuemem_map,
 	    queuemem, allocsz, nvme_single_map, &queuemem_phys, 0) != 0) {
 		nvme_printf(ctrlr, "failed to load qpair memory\n");
+		bus_dmamem_free(qpair->dma_tag, qpair->cmd,
+		    qpair->queuemem_map);
 		goto out;
 	}
 
@@ -808,24 +813,15 @@ nvme_qpair_destroy(struct nvme_qpair *qpair)
 {
 	struct nvme_tracker	*tr;
 
-	if (qpair->tag)
+	if (qpair->tag) {
 		bus_teardown_intr(qpair->ctrlr->dev, qpair->res, qpair->tag);
-
-	if (mtx_initialized(&qpair->lock))
-		mtx_destroy(&qpair->lock);
-
-	if (qpair->res)
-		bus_release_resource(qpair->ctrlr->dev, SYS_RES_IRQ,
-		    rman_get_rid(qpair->res), qpair->res);
-
-	if (qpair->cmd != NULL) {
-		bus_dmamap_unload(qpair->dma_tag, qpair->queuemem_map);
-		bus_dmamem_free(qpair->dma_tag, qpair->cmd,
-		    qpair->queuemem_map);
+		qpair->tag = NULL;
 	}
 
-	if (qpair->act_tr)
+	if (qpair->act_tr) {
 		free_domain(qpair->act_tr, M_NVME);
+		qpair->act_tr = NULL;
+	}
 
 	while (!TAILQ_EMPTY(&qpair->free_tr)) {
 		tr = TAILQ_FIRST(&qpair->free_tr);
@@ -835,11 +831,31 @@ nvme_qpair_destroy(struct nvme_qpair *qpair)
 		free_domain(tr, M_NVME);
 	}
 
-	if (qpair->dma_tag)
-		bus_dma_tag_destroy(qpair->dma_tag);
+	if (qpair->cmd != NULL) {
+		bus_dmamap_unload(qpair->dma_tag, qpair->queuemem_map);
+		bus_dmamem_free(qpair->dma_tag, qpair->cmd,
+		    qpair->queuemem_map);
+		qpair->cmd = NULL;
+	}
 
-	if (qpair->dma_tag_payload)
+	if (qpair->dma_tag) {
+		bus_dma_tag_destroy(qpair->dma_tag);
+		qpair->dma_tag = NULL;
+	}
+
+	if (qpair->dma_tag_payload) {
 		bus_dma_tag_destroy(qpair->dma_tag_payload);
+		qpair->dma_tag_payload = NULL;
+	}
+
+	if (mtx_initialized(&qpair->lock))
+		mtx_destroy(&qpair->lock);
+
+	if (qpair->res) {
+		bus_release_resource(qpair->ctrlr->dev, SYS_RES_IRQ,
+		    rman_get_rid(qpair->res), qpair->res);
+		qpair->res = NULL;
+	}
 }
 
 static void
@@ -940,6 +956,7 @@ nvme_qpair_submit_tracker(struct nvme_qpair *qpair, struct nvme_tracker *tr)
 {
 	struct nvme_request	*req;
 	struct nvme_controller	*ctrlr;
+	int timeout;
 
 	mtx_assert(&qpair->lock, MA_OWNED);
 
@@ -948,9 +965,14 @@ nvme_qpair_submit_tracker(struct nvme_qpair *qpair, struct nvme_tracker *tr)
 	qpair->act_tr[tr->cid] = tr;
 	ctrlr = qpair->ctrlr;
 
-	if (req->timeout)
-		callout_reset_on(&tr->timer, ctrlr->timeout_period * hz,
-		    nvme_timeout, tr, qpair->cpu);
+	if (req->timeout) {
+		if (req->cb_fn == nvme_completion_poll_cb)
+			timeout = hz;
+		else
+			timeout = ctrlr->timeout_period * hz;
+		callout_reset_on(&tr->timer, timeout, nvme_timeout, tr,
+		    qpair->cpu);
+	}
 
 	/* Copy the command from the tracker to the submission queue. */
 	memcpy(&qpair->cmd[qpair->sq_tail], &req->cmd, sizeof(req->cmd));

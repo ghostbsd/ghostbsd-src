@@ -57,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcib_private.h>
 #include <dev/pci/pci_host_generic.h>
+#include <dev/pci/pci_host_generic_acpi.h>
 
 #include <machine/cpu.h>
 #include <machine/bus.h>
@@ -87,11 +88,6 @@ __FBSDID("$FreeBSD$");
 #define	SPACE_CODE_IO_SPACE	0x1
 #define	PROPS_CELL_SIZE		1
 #define	PCI_ADDR_CELL_SIZE	2
-
-struct generic_pcie_acpi_softc {
-	struct generic_pcie_core_softc base;
-	ACPI_BUFFER		ap_prt;		/* interrupt routing table */
-};
 
 /* Forward prototypes */
 
@@ -163,9 +159,9 @@ pci_host_generic_acpi_parse_resource(ACPI_RESOURCE *res, void *arg)
 		sc->base.ranges[r].phys_base = min + off;
 		sc->base.ranges[r].size = max - min + 1;
 		if (res->Data.Address.ResourceType == ACPI_MEMORY_RANGE)
-			sc->base.ranges[r].flags |= FLAG_MEM;
+			sc->base.ranges[r].flags |= FLAG_TYPE_MEM;
 		else if (res->Data.Address.ResourceType == ACPI_IO_RANGE)
-			sc->base.ranges[r].flags |= FLAG_IO;
+			sc->base.ranges[r].flags |= FLAG_TYPE_IO;
 		sc->base.nranges++;
 	} else if (res->Data.Address.ResourceType == ACPI_BUS_NUMBER_RANGE) {
 		sc->base.bus_start = min;
@@ -233,17 +229,13 @@ pci_host_acpi_get_ecam_resource(device_t dev)
 	return (0);
 }
 
-static int
-pci_host_generic_acpi_attach(device_t dev)
+int
+pci_host_generic_acpi_init(device_t dev)
 {
 	struct generic_pcie_acpi_softc *sc;
 	ACPI_HANDLE handle;
-	uint64_t phys_base;
-	uint64_t pci_base;
-	uint64_t size;
 	ACPI_STATUS status;
 	int error;
-	int tuple;
 
 	sc = device_get_softc(dev);
 	handle = acpi_get_handle(dev);
@@ -283,28 +275,17 @@ pci_host_generic_acpi_attach(device_t dev)
 	if (error != 0)
 		return (error);
 
-	for (tuple = 0; tuple < MAX_RANGES_TUPLES; tuple++) {
-		phys_base = sc->base.ranges[tuple].phys_base;
-		pci_base = sc->base.ranges[tuple].pci_base;
-		size = sc->base.ranges[tuple].size;
-		if (phys_base == 0 || size == 0)
-			continue; /* empty range element */
-		if (sc->base.ranges[tuple].flags & FLAG_MEM) {
-			error = rman_manage_region(&sc->base.mem_rman,
-			   pci_base, pci_base + size - 1);
-		} else if (sc->base.ranges[tuple].flags & FLAG_IO) {
-			error = rman_manage_region(&sc->base.io_rman,
-			   pci_base + PCI_IO_WINDOW_OFFSET,
-			   pci_base + PCI_IO_WINDOW_OFFSET + size - 1);
-		} else
-			continue;
-		if (error) {
-			device_printf(dev, "rman_manage_region() failed."
-						"error = %d\n", error);
-			rman_fini(&sc->base.mem_rman);
-			return (error);
-		}
-	}
+	return (0);
+}
+
+static int
+pci_host_generic_acpi_attach(device_t dev)
+{
+	int error;
+
+	error = pci_host_generic_acpi_init(dev);
+	if (error != 0)
+		return (error);
 
 	device_add_child(dev, "pci", -1);
 	return (bus_generic_attach(dev));

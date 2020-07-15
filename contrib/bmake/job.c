@@ -1,4 +1,4 @@
-/*	$NetBSD: job.c,v 1.195 2018/05/13 22:13:28 sjg Exp $	*/
+/*	$NetBSD: job.c,v 1.201 2020/07/03 08:13:23 rillig Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990 The Regents of the University of California.
@@ -70,14 +70,14 @@
  */
 
 #ifndef MAKE_NATIVE
-static char rcsid[] = "$NetBSD: job.c,v 1.195 2018/05/13 22:13:28 sjg Exp $";
+static char rcsid[] = "$NetBSD: job.c,v 1.201 2020/07/03 08:13:23 rillig Exp $";
 #else
 #include <sys/cdefs.h>
 #ifndef lint
 #if 0
 static char sccsid[] = "@(#)job.c	8.2 (Berkeley) 3/19/94";
 #else
-__RCSID("$NetBSD: job.c,v 1.195 2018/05/13 22:13:28 sjg Exp $");
+__RCSID("$NetBSD: job.c,v 1.201 2020/07/03 08:13:23 rillig Exp $");
 #endif
 #endif /* not lint */
 #endif
@@ -290,7 +290,7 @@ static Shell    shells[] = {
     "",
 },
     /*
-     * KSH description. 
+     * KSH description.
      */
 {
     "ksh",
@@ -358,6 +358,8 @@ static Job childExitJob;	/* child exit pseudo-job */
 #define	CHILD_EXIT	"."
 #define	DO_JOB_RESUME	"R"
 
+static const int npseudojobs = 2; /* number of pseudo-jobs */
+
 #define TARG_FMT  "%s %s ---\n" /* Default format */
 #define MESSAGE(fp, gn) \
 	if (maxJobs != 1 && targPrefix && *targPrefix) \
@@ -388,6 +390,16 @@ static void JobSigReset(void);
 # define MALLOC_OPTIONS "A"
 #endif
 const char *malloc_options= MALLOC_OPTIONS;
+
+static unsigned
+nfds_per_job(void)
+{
+#if defined(USE_FILEMON) && !defined(USE_FILEMON_DEV)
+    if (useMeta)
+	return 2;
+#endif
+    return 1;
+}
 
 static void
 job_table_dump(const char *where)
@@ -451,7 +463,7 @@ JobCreatePipe(Job *job, int minfd)
 	   job->jobPipe[i] = fd;
        }
     }
-    
+
     /* Set close-on-exec flag for both */
     if (fcntl(job->jobPipe[0], F_SETFD, FD_CLOEXEC) == -1)
 	Punt("Cannot set close-on-exec: %s", strerror(errno));
@@ -461,7 +473,7 @@ JobCreatePipe(Job *job, int minfd)
     /*
      * We mark the input side of the pipe non-blocking; we poll(2) the
      * pipe when we're waiting for a job token, but we might lose the
-     * race for the token when a new one becomes available, so the read 
+     * race for the token when a new one becomes available, so the read
      * from the pipe should not block.
      */
     flags = fcntl(job->jobPipe[0], F_GETFL, 0);
@@ -784,7 +796,7 @@ JobPrintCommand(void *cmdp, void *jobp)
 
     /*
      * If the shell doesn't have error control the alternate echo'ing will
-     * be done (to avoid showing additional error checking code) 
+     * be done (to avoid showing additional error checking code)
      * and this will need the characters '$ ` \ "' escaped
      */
 
@@ -792,10 +804,10 @@ JobPrintCommand(void *cmdp, void *jobp)
 	/* Worst that could happen is every char needs escaping. */
 	escCmd = bmake_malloc((strlen(cmd) * 2) + 1);
 	for (i = 0, j= 0; cmd[i] != '\0'; i++, j++) {
-		if (cmd[i] == '$' || cmd[i] == '`' || cmd[i] == '\\' || 
+		if (cmd[i] == '$' || cmd[i] == '`' || cmd[i] == '\\' ||
 			cmd[i] == '"')
 			escCmd[j++] = '\\';
-		escCmd[j] = cmd[i];	
+		escCmd[j] = cmd[i];
 	}
 	escCmd[j] = 0;
     }
@@ -868,13 +880,13 @@ JobPrintCommand(void *cmdp, void *jobp)
 	}
     } else {
 
-	/* 
+	/*
 	 * If errors are being checked and the shell doesn't have error control
 	 * but does supply an errOut template, then setup commands to run
 	 * through it.
 	 */
 
-	if (!commandShell->hasErrCtl && commandShell->errOut && 
+	if (!commandShell->hasErrCtl && commandShell->errOut &&
 	    (*commandShell->errOut != '\0')) {
 		if (!(job->flags & JOB_SILENT) && !shutUp) {
 			if (commandShell->hasEchoCtl) {
@@ -898,7 +910,7 @@ JobPrintCommand(void *cmdp, void *jobp)
 	    DBPRINTF("set -%s\n", "x");
 	    job->flags |= JOB_TRACED;
     }
-    
+
     DBPRINTF(cmdTemplate, cmd);
     free(cmdStart);
     free(escCmd);
@@ -939,7 +951,7 @@ JobSaveCommand(void *cmd, void *gn)
 {
     cmd = Var_Subst(NULL, (char *)cmd, (GNode *)gn, VARF_WANTRES);
     (void)Lst_AtEnd(postCommands->commands, cmd);
-    return(0);
+    return 0;
 }
 
 
@@ -1062,10 +1074,11 @@ JobFinish (Job *job, WAIT_T status)
 		    meta_job_error(job, job->node, job->flags, WEXITSTATUS(status));
 		}
 #endif
-		(void)printf("*** [%s] Error code %d%s\n",
-				job->node->name,
-			       WEXITSTATUS(status),
-			       (job->flags & JOB_IGNERR) ? " (ignored)" : "");
+		if (!dieQuietly(job->node, -1))
+		    (void)printf("*** [%s] Error code %d%s\n",
+				 job->node->name,
+				 WEXITSTATUS(status),
+				 (job->flags & JOB_IGNERR) ? " (ignored)" : "");
 		if (job->flags & JOB_IGNERR) {
 		    WAIT_STATUS(status) = 0;
 		} else {
@@ -1105,7 +1118,7 @@ JobFinish (Job *job, WAIT_T status)
 	}
     }
 #endif
-    
+
     return_job_token = FALSE;
 
     Trace_Log(JOBEND, job);
@@ -1277,7 +1290,7 @@ Job_CheckCommands(GNode *gn, void (*abortProc)(const char *, ...))
 	     * .DEFAULT itself.
 	     */
 	    Make_HandleUse(DEFAULT, gn);
-	    Var_Set(IMPSRC, Var_Value(TARGET, gn, &p1), gn, 0);
+	    Var_Set(IMPSRC, Var_Value(TARGET, gn, &p1), gn);
 	    free(p1);
 	} else if (Dir_MTime(gn, 0) == 0 && (gn->type & OP_SPECIAL) == 0) {
 	    /*
@@ -1423,7 +1436,7 @@ JobExec(Job *job, char **argv)
 		    _exit(1);
 		}
 	}
-	
+
 	/*
 	 * Set up the child's output to be routed through the pipe
 	 * we've created for it.
@@ -1474,6 +1487,12 @@ JobExec(Job *job, char **argv)
     job->pid = cpid;
 
     Trace_Log(JOBSTART, job);
+
+#ifdef USE_META
+    if (useMeta) {
+	meta_job_parent(job, cpid);
+    }
+#endif
 
     /*
      * Set the current position in the buffer to the beginning
@@ -1766,7 +1785,7 @@ JobStart(GNode *gn, int flags)
     JobCreatePipe(job, 3);
 
     JobExec(job, argv);
-    return(JOB_RUNNING);
+    return JOB_RUNNING;
 }
 
 static char *
@@ -2157,12 +2176,24 @@ Job_CatchOutput(void)
     if (nready == 0)
 	    return;
 
-    for (i = 2; i < nfds; i++) {
+    for (i = npseudojobs*nfds_per_job(); i < nfds; i++) {
 	if (!fds[i].revents)
 	    continue;
 	job = jobfds[i];
 	if (job->job_state == JOB_ST_RUNNING)
 	    JobDoOutput(job, FALSE);
+#if defined(USE_FILEMON) && !defined(USE_FILEMON_DEV)
+	/*
+	 * With meta mode, we may have activity on the job's filemon
+	 * descriptor too, which at the moment is any pollfd other than
+	 * job->inPollfd.
+	 */
+	if (useMeta && job->inPollfd != &fds[i]) {
+	    if (meta_job_event(job) <= 0) {
+		fds[i].events = 0; /* never mind */
+	    }
+	}
+#endif
 	if (--nready == 0)
 		return;
     }
@@ -2246,11 +2277,11 @@ Shell_GetNewline(void)
 void
 Job_SetPrefix(void)
 {
-    
+
     if (targPrefix) {
 	free(targPrefix);
     } else if (!Var_Exists(MAKE_JOB_PREFIX, VAR_GLOBAL)) {
-	Var_Set(MAKE_JOB_PREFIX, "---", VAR_GLOBAL, 0);
+	Var_Set(MAKE_JOB_PREFIX, "---", VAR_GLOBAL);
     }
 
     targPrefix = Var_Subst(NULL, "${" MAKE_JOB_PREFIX "}",
@@ -2313,9 +2344,11 @@ Job_Init(void)
 
     JobCreatePipe(&childExitJob, 3);
 
-    /* We can only need to wait for tokens, children and output from each job */
-    fds = bmake_malloc(sizeof (*fds) * (2 + maxJobs));
-    jobfds = bmake_malloc(sizeof (*jobfds) * (2 + maxJobs));
+    /* Preallocate enough for the maximum number of jobs.  */
+    fds = bmake_malloc(sizeof(*fds) *
+	(npseudojobs + maxJobs) * nfds_per_job());
+    jobfds = bmake_malloc(sizeof(*jobfds) *
+	(npseudojobs + maxJobs) * nfds_per_job());
 
     /* These are permanent entries and take slots 0 and 1 */
     watchfd(&tokenWaitJob);
@@ -2400,7 +2433,7 @@ JobMatchShell(const char *name)
 
     for (sh = shells; sh->name != NULL; sh++) {
 	if (strcmp(name, sh->name) == 0)
-		return (sh);
+		return sh;
     }
     return NULL;
 }
@@ -2516,7 +2549,7 @@ Job_ParseShell(char *line)
 		    Parse_Error(PARSE_FATAL, "Unknown keyword \"%s\"",
 				*argv);
 		    free(words);
-		    return(FAILURE);
+		    return FAILURE;
 		}
 		fullSpec = TRUE;
 	    }
@@ -2532,13 +2565,13 @@ Job_ParseShell(char *line)
 	if (newShell.name == NULL) {
 	    Parse_Error(PARSE_FATAL, "Neither path nor name specified");
 	    free(words);
-	    return(FAILURE);
+	    return FAILURE;
 	} else {
 	    if ((sh = JobMatchShell(newShell.name)) == NULL) {
 		    Parse_Error(PARSE_WARNING, "%s: No matching shell",
 				newShell.name);
 		    free(words);
-		    return(FAILURE);
+		    return FAILURE;
 	    }
 	    commandShell = sh;
 	    shellName = newShell.name;
@@ -2574,7 +2607,7 @@ Job_ParseShell(char *line)
 		    Parse_Error(PARSE_WARNING, "%s: No matching shell",
 				shellName);
 		    free(words);
-		    return(FAILURE);
+		    return FAILURE;
 	    }
 	    commandShell = sh;
 	} else {
@@ -2691,7 +2724,7 @@ Job_Finish(void)
 	    JobRun(postCommands);
 	}
     }
-    return(errors);
+    return errors;
 }
 
 /*-
@@ -2834,6 +2867,14 @@ watchfd(Job *job)
     jobfds[nfds] = job;
     job->inPollfd = &fds[nfds];
     nfds++;
+#if defined(USE_FILEMON) && !defined(USE_FILEMON_DEV)
+    if (useMeta) {
+	fds[nfds].fd = meta_job_fd(job);
+	fds[nfds].events = fds[nfds].fd == -1 ? 0 : POLLIN;
+	jobfds[nfds] = job;
+	nfds++;
+    }
+#endif
 }
 
 static void
@@ -2844,6 +2885,18 @@ clearfd(Job *job)
 	Punt("Unwatching unwatched job");
     i = job->inPollfd - fds;
     nfds--;
+#if defined(USE_FILEMON) && !defined(USE_FILEMON_DEV)
+    if (useMeta) {
+	/*
+	 * Sanity check: there should be two fds per job, so the job's
+	 * pollfd number should be even.
+	 */
+	assert(nfds_per_job() == 2);
+	if (i % 2)
+	    Punt("odd-numbered fd with meta");
+	nfds--;
+    }
+#endif
     /*
      * Move last job in table into hole made by dead job.
      */
@@ -2851,6 +2904,12 @@ clearfd(Job *job)
 	fds[i] = fds[nfds];
 	jobfds[i] = jobfds[nfds];
 	jobfds[i]->inPollfd = &fds[i];
+#if defined(USE_FILEMON) && !defined(USE_FILEMON_DEV)
+	if (useMeta) {
+	    fds[i + 1] = fds[nfds + 1];
+	    jobfds[i + 1] = jobfds[nfds + 1];
+	}
+#endif
     }
     job->inPollfd = NULL;
 }
@@ -2910,7 +2969,7 @@ Job_ServerStart(int max_tokens, int jp_0, int jp_1)
 {
     int i;
     char jobarg[64];
-    
+
     if (jp_0 >= 0 && jp_1 >= 0) {
 	/* Pipe passed in from parent */
 	tokenWaitJob.inPipe = jp_0;
@@ -2926,12 +2985,12 @@ Job_ServerStart(int max_tokens, int jp_0, int jp_1)
 	    tokenWaitJob.inPipe, tokenWaitJob.outPipe);
 
     Var_Append(MAKEFLAGS, "-J", VAR_GLOBAL);
-    Var_Append(MAKEFLAGS, jobarg, VAR_GLOBAL);			
+    Var_Append(MAKEFLAGS, jobarg, VAR_GLOBAL);
 
     /*
      * Preload the job pipe with one token per job, save the one
      * "extra" token for the primary job.
-     * 
+     *
      * XXX should clip maxJobs against PIPE_BUF -- if max_tokens is
      * larger than the write buffer size of the pipe, we will
      * deadlock here.
@@ -3010,6 +3069,8 @@ Job_TokenWithdraw(void)
 	/* And put the stopper back */
 	while (write(tokenWaitJob.outPipe, &tok, 1) == -1 && errno == EAGAIN)
 	    continue;
+	if (dieQuietly(NULL, 1))
+	    exit(2);
 	Fatal("A failure has been detected in another branch of the parallel make");
     }
 
@@ -3046,7 +3107,7 @@ Job_RunTarget(const char *target, const char *fname) {
 	return FALSE;
 
     if (fname)
-	Var_Set(ALLSRC, fname, gn, 0);
+	Var_Set(ALLSRC, fname, gn);
 
     JobRun(gn);
     if (gn->made == ERROR) {
@@ -3081,9 +3142,9 @@ emul_poll(struct pollfd *fd, int nfd, int timeout)
 	if (fd[i].fd > maxfd)
 	    maxfd = fd[i].fd;
     }
-    
+
     if (maxfd >= FD_SETSIZE) {
-	Punt("Ran out of fd_set slots; " 
+	Punt("Ran out of fd_set slots; "
 	     "recompile with a larger FD_SETSIZE.");
     }
 

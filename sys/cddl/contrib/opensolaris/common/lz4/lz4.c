@@ -246,16 +246,6 @@ lz4_decompress(void *s_start, void *d_start, size_t s_len, size_t d_len,
 #endif
 
 /*
- * FreeBSD: can't use GCC's __builtin_ctz when using sparc64 because
- * gcc currently rely on libcompiler_rt.
- *
- * TODO: revisit this when situation changes.
- */
-#if defined(__sparc64__)
-#define	LZ4_FORCE_SW_BITCOUNT
-#endif
-
-/*
  * Compiler Options
  */
 #if __STDC_VERSION__ >= 199901L	/* C99 */
@@ -860,7 +850,7 @@ real_LZ4_compress(const char *source, char *dest, int isize, int osize)
 #if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	void *ctx = kmem_cache_alloc(lz4_ctx_cache, KM_NOSLEEP);
 #else
-	void *ctx = malloc(sizeof(struct refTables));
+	void *ctx = calloc(1, sizeof(struct refTables));
 #endif
 	int result;
 

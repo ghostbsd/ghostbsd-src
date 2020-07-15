@@ -19,18 +19,19 @@ SRCS+=	load_elf32.c reloc_elf32.c
 SRCS+=	load_elf32.c reloc_elf32.c
 SRCS+=	load_elf64.c reloc_elf64.c
 SRCS+=	metadata.c
-.elif ${MACHINE_CPUARCH} == "sparc64"
-SRCS+=	load_elf64.c reloc_elf64.c
-SRCS+=	metadata.c
 .elif ${MACHINE_ARCH:Mmips64*} != ""
 SRCS+= load_elf64.c reloc_elf64.c
 SRCS+=	metadata.c
 .elif ${MACHINE} == "mips"
 SRCS+=	load_elf32.c reloc_elf32.c
 SRCS+=	metadata.c
+.elif ${MACHINE_CPUARCH} == "riscv"
+SRCS+=	load_elf64.c reloc_elf64.c
+SRCS+=	metadata.c
 .endif
 
 .if ${LOADER_DISK_SUPPORT:Uyes} == "yes"
+CFLAGS.part.c+= -DHAVE_MEMCPY -I${SRCTOP}/sys/contrib/zlib
 SRCS+=	disk.c part.c vdisk.c
 .endif
 
@@ -76,6 +77,9 @@ SRCS+=	interp_simple.c
 
 .if ${MK_LOADER_VERIEXEC} != "no"
 CFLAGS+= -DLOADER_VERIEXEC -I${SRCTOP}/lib/libsecureboot/h
+.if ${MK_LOADER_VERIEXEC_VECTX} != "no"
+CFLAGS+= -DLOADER_VERIEXEC_VECTX
+.endif
 .endif
 
 .if ${MK_LOADER_VERIEXEC_PASS_MANIFEST} != "no"
@@ -135,6 +139,7 @@ CFLAGS+= -DLOADER_MBR_SUPPORT
 CFLAGS+=	-DLOADER_ZFS_SUPPORT
 CFLAGS+=	-I${ZFSSRC}
 CFLAGS+=	-I${SYSDIR}/cddl/boot/zfs
+CFLAGS+=	-I${SYSDIR}/cddl/contrib/opensolaris/uts/common
 SRCS+=		zfs_cmd.c
 .endif
 

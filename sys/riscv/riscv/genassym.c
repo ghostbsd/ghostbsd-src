@@ -56,10 +56,12 @@ __FBSDID("$FreeBSD$");
 #include <machine/pte.h>
 #include <machine/intr.h>
 #include <machine/machdep.h>
+#include <machine/vmparam.h>
 
 ASSYM(KERNBASE, KERNBASE);
 ASSYM(VM_MAXUSER_ADDRESS, VM_MAXUSER_ADDRESS);
 ASSYM(VM_MAX_KERNEL_ADDRESS, VM_MAX_KERNEL_ADDRESS);
+ASSYM(VM_EARLY_DTB_ADDRESS, VM_EARLY_DTB_ADDRESS);
 ASSYM(TDF_ASTPENDING, TDF_ASTPENDING);
 ASSYM(TDF_NEEDRESCHED, TDF_NEEDRESCHED);
 
@@ -69,9 +71,7 @@ ASSYM(PCB_RA, offsetof(struct pcb, pcb_ra));
 ASSYM(PCB_SP, offsetof(struct pcb, pcb_sp));
 ASSYM(PCB_GP, offsetof(struct pcb, pcb_gp));
 ASSYM(PCB_TP, offsetof(struct pcb, pcb_tp));
-ASSYM(PCB_T, offsetof(struct pcb, pcb_t));
 ASSYM(PCB_S, offsetof(struct pcb, pcb_s));
-ASSYM(PCB_A, offsetof(struct pcb, pcb_a));
 ASSYM(PCB_X, offsetof(struct pcb, pcb_x));
 ASSYM(PCB_FCSR, offsetof(struct pcb, pcb_fcsr));
 
@@ -107,3 +107,4 @@ ASSYM(RISCV_BOOTPARAMS_KERN_STACK, offsetof(struct riscv_bootparams,
     kern_stack));
 ASSYM(RISCV_BOOTPARAMS_DTBP_VIRT, offsetof(struct riscv_bootparams, dtbp_virt));
 ASSYM(RISCV_BOOTPARAMS_DTBP_PHYS, offsetof(struct riscv_bootparams, dtbp_phys));
+ASSYM(RISCV_BOOTPARAMS_MODULEP, offsetof(struct riscv_bootparams, modulep));

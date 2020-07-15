@@ -46,16 +46,25 @@
 #define	MACHINE		"riscv"
 #endif
 #ifndef MACHINE_ARCH
+
+/* Always use the hard-float arch for the kernel. */
+#if !defined(_KERNEL) && defined(__riscv_float_abi_soft)
+#define	MACHINE_ARCH	"riscv64sf"
+#else
 #define	MACHINE_ARCH	"riscv64"
 #endif
+#endif
+#ifdef _KERNEL
+#define	MACHINE_ARCHES	"riscv64 riscv64sf"
+#endif
 
-#if defined(SMP) || defined(KLD_MODULE)
+#ifdef SMP
 #ifndef MAXCPU
 #define	MAXCPU		16
 #endif
 #else
 #define	MAXCPU		1
-#endif /* SMP || KLD_MODULE */
+#endif
 
 #ifndef MAXMEMDOM
 #define	MAXMEMDOM	1

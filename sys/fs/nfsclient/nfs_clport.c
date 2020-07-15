@@ -53,6 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/if_ether.h>
 #include <netinet6/ip6_var.h>
 #include <net/if_types.h>
+#include <net/route/nhop.h>
 
 #include <fs/nfsclient/nfs_kdtrace.h>
 
@@ -597,7 +598,8 @@ ncl_pager_setsize(struct vnode *vp, u_quad_t *nsizep)
 	setnsize = false;
 
 	if (object != NULL && nsize != object->un_pager.vnp.vnp_size) {
-		if (VOP_ISLOCKED(vp) == LK_EXCLUSIVE)
+		if (VOP_ISLOCKED(vp) == LK_EXCLUSIVE &&
+		    (curthread->td_pflags2 & TDP2_SBPAGES) == 0)
 			setnsize = true;
 		else
 			np->n_flag |= NVNSETSZSKIP;
@@ -969,30 +971,35 @@ u_int8_t *
 nfscl_getmyip(struct nfsmount *nmp, struct in6_addr *paddr, int *isinet6p)
 {
 #if defined(INET6) || defined(INET)
-	int error, fibnum;
+	int fibnum;
 
 	fibnum = curthread->td_proc->p_fibnum;
 #endif
 #ifdef INET
 	if (nmp->nm_nam->sa_family == AF_INET) {
+		struct epoch_tracker et;
+		struct nhop_object *nh;
 		struct sockaddr_in *sin;
-		struct nhop4_extended nh_ext;
+		struct in_addr addr = {};
 
 		sin = (struct sockaddr_in *)nmp->nm_nam;
+		NET_EPOCH_ENTER(et);
 		CURVNET_SET(CRED_TO_VNET(nmp->nm_sockreq.nr_cred));
-		error = fib4_lookup_nh_ext(fibnum, sin->sin_addr, 0, 0,
-		    &nh_ext);
+		nh = fib4_lookup(fibnum, sin->sin_addr, 0, NHR_NONE, 0);
 		CURVNET_RESTORE();
-		if (error != 0)
+		if (nh != NULL)
+			addr = IA_SIN(ifatoia(nh->nh_ifa))->sin_addr;
+		NET_EPOCH_EXIT(et);
+		if (nh == NULL)
 			return (NULL);
 
-		if (IN_LOOPBACK(ntohl(nh_ext.nh_src.s_addr))) {
+		if (IN_LOOPBACK(ntohl(addr.s_addr))) {
 			/* Ignore loopback addresses */
 			return (NULL);
 		}
 
 		*isinet6p = 0;
-		*((struct in_addr *)paddr) = nh_ext.nh_src;
+		*((struct in_addr *)paddr) = addr;
 
 		return (u_int8_t *)paddr;
 	}
@@ -1000,6 +1007,7 @@ nfscl_getmyip(struct nfsmount *nmp, struct in6_addr *paddr, int *isinet6p)
 #ifdef INET6
 	if (nmp->nm_nam->sa_family == AF_INET6) {
 		struct sockaddr_in6 *sin6;
+		int error;
 
 		sin6 = (struct sockaddr_in6 *)nmp->nm_nam;
 
@@ -1107,7 +1115,7 @@ nfscl_checksattr(struct vattr *vap, struct nfsvattr *nvap)
  * error should only be returned for the Open, Create and Setattr Ops.
  * As such, most calls can just pass in 0 for those arguments.
  */
-APPLESTATIC int
+int
 nfscl_maperr(struct thread *td, int error, uid_t uid, gid_t gid)
 {
 	struct proc *p;
@@ -1411,5 +1419,4 @@ MODULE_VERSION(nfscl, 1);
 MODULE_DEPEND(nfscl, nfscommon, 1, 1, 1);
 MODULE_DEPEND(nfscl, krpc, 1, 1, 1);
 MODULE_DEPEND(nfscl, nfssvc, 1, 1, 1);
-MODULE_DEPEND(nfscl, nfslock, 1, 1, 1);
 

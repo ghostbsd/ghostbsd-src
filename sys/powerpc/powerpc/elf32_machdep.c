@@ -68,7 +68,8 @@
 extern const char *freebsd32_syscallnames[];
 static void ppc32_fixlimit(struct rlimit *rl, int which);
 
-static SYSCTL_NODE(_compat, OID_AUTO, ppc32, CTLFLAG_RW, 0, "32-bit mode");
+static SYSCTL_NODE(_compat, OID_AUTO, ppc32, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "32-bit mode");
 
 #define PPC32_MAXDSIZ (1024*1024*1024)
 static u_long ppc32_maxdsiz = PPC32_MAXDSIZ;
@@ -220,10 +221,10 @@ elf32_dump_thread(struct thread *td, void *dst, size_t *off)
 
 #ifndef __powerpc64__
 bool
-elf_is_ifunc_reloc(Elf_Size r_info __unused)
+elf_is_ifunc_reloc(Elf_Size r_info)
 {
 
-	return (false);
+	return (ELF_R_TYPE(r_info) == R_PPC_IRELATIVE);
 }
 
 /* Process one elf relocation with addend. */
@@ -234,7 +235,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 	Elf_Addr *where;
 	Elf_Half *hwhere;
 	Elf_Addr addr;
-	Elf_Addr addend;
+	Elf_Addr addend, val;
 	Elf_Word rtype, symidx;
 	const Elf_Rela *rela;
 	int error;
@@ -314,6 +315,13 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		if (error != 0)
 			return -1;
 		*where = elf_relocaddr(lf, addr + addend);
+		break;
+
+	case R_PPC_IRELATIVE:
+		addr = relocbase + addend;
+		val = ((Elf32_Addr (*)(void))addr)();
+		if (*where != val)
+			*where = val;
 		break;
 
 	default:
@@ -402,7 +410,7 @@ ppc32_runtime_resolve()
 }
 
 int
-elf_cpu_parse_dynamic(linker_file_t lf, Elf_Dyn *dynamic)
+elf_cpu_parse_dynamic(caddr_t loadbase, Elf_Dyn *dynamic)
 {
 	Elf_Dyn *dp;
 	bool has_plt = false;
@@ -413,7 +421,7 @@ elf_cpu_parse_dynamic(linker_file_t lf, Elf_Dyn *dynamic)
 		switch (dp->d_tag) {
 		case DT_PPC_GOT:
 			secure_plt = true;
-			got = (Elf_Addr *)(lf->address + dp->d_un.d_ptr);
+			got = (Elf_Addr *)(loadbase + dp->d_un.d_ptr);
 			/* Install runtime resolver canary. */
 			got[1] = (Elf_Addr)ppc32_runtime_resolve;
 			got[2] = (Elf_Addr)0;

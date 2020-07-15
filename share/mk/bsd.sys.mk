@@ -6,8 +6,7 @@
 # Enable various levels of compiler warning checks.  These may be
 # overridden (e.g. if using a non-gcc compiler) by defining MK_WARNS=no.
 
-# for 4.2.1 GCC:   http://gcc.gnu.org/onlinedocs/gcc-4.2.1/gcc/Warning-Options.html
-# for current GCC: https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html
+# for GCC:   https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html
 # for clang: https://clang.llvm.org/docs/DiagnosticsReference.html
 
 .include <bsd.compiler.mk>
@@ -27,15 +26,6 @@ CFLAGS+=	-std=${CSTD}
 
 .if !empty(CXXSTD)
 CXXFLAGS+=	-std=${CXXSTD}
-.endif
-
-#
-# Turn off -Werror for gcc 4.2.1. The compiler is on the glide path out of the
-# system, and any warnings specific to it are no longer relevant as there are
-# too many false positives.
-#
-.if ${COMPILER_VERSION} <  50000
-NO_WERROR.gcc=	yes
 .endif
 
 # -pedantic is problematic because it also imposes namespace restrictions
@@ -81,19 +71,13 @@ CWARNFLAGS+=	-Wno-pointer-sign
 # is set to low values, these have to be disabled explicitly.
 .if ${WARNS} <= 6
 CWARNFLAGS.clang+=	-Wno-empty-body -Wno-string-plus-int
-.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 30400
 CWARNFLAGS.clang+=	-Wno-unused-const-variable
-.endif
 .endif # WARNS <= 6
 .if ${WARNS} <= 3
 CWARNFLAGS.clang+=	-Wno-tautological-compare -Wno-unused-value\
 		-Wno-parentheses-equality -Wno-unused-function -Wno-enum-conversion
-.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 30600
 CWARNFLAGS.clang+=	-Wno-unused-local-typedef
-.endif
-.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 40000
 CWARNFLAGS.clang+=	-Wno-address-of-packed-member
-.endif
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 90100
 CWARNFLAGS.gcc+=	-Wno-address-of-packed-member
 .endif
@@ -111,6 +95,11 @@ CWARNFLAGS.clang+=	-Wno-parentheses
 .if defined(NO_WARRAY_BOUNDS)
 CWARNFLAGS.clang+=	-Wno-array-bounds
 .endif # NO_WARRAY_BOUNDS
+.if defined(NO_WMISLEADING_INDENTATION) && \
+    ((${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 100000) || \
+      ${COMPILER_TYPE} == "gcc")
+CWARNFLAGS+=		-Wno-misleading-indentation
+.endif # NO_WMISLEADING_INDENTATION
 .endif # WARNS
 
 .if defined(FORMAT_AUDIT)
@@ -132,8 +121,15 @@ CWARNFLAGS+=	-Werror
 CWARNFLAGS+=	-Wno-format
 .endif # NO_WFORMAT || NO_WFORMAT.${COMPILER_TYPE}
 
+# GCC
+# We should clean up warnings produced with these flags.
+# They were originally added as a quick hack to enable gcc5/6.
+# The base system requires at least GCC 6.4, but some ports
+# use this file with older compilers.  Request an exprun
+# before changing these.
+.if ${COMPILER_TYPE} == "gcc"
 # GCC 5.2.0
-.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 50200
+.if ${COMPILER_VERSION} >= 50200
 CWARNFLAGS+=	-Wno-error=address			\
 		-Wno-error=array-bounds			\
 		-Wno-error=attributes			\
@@ -153,16 +149,15 @@ CWARNFLAGS+=	-Wno-error=address			\
 .endif
 
 # GCC 6.1.0
-.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 60100
-CWARNFLAGS+=	-Wno-error=misleading-indentation	\
-		-Wno-error=nonnull-compare		\
+.if ${COMPILER_VERSION} >= 60100
+CWARNFLAGS+=	-Wno-error=nonnull-compare		\
 		-Wno-error=shift-negative-value		\
 		-Wno-error=tautological-compare		\
 		-Wno-error=unused-const-variable
 .endif
 
 # GCC 7.1.0
-.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 70100
+.if ${COMPILER_VERSION} >= 70100
 CWARNFLAGS+=	-Wno-error=bool-operation		\
 		-Wno-error=deprecated			\
 		-Wno-error=expansion-to-defined		\
@@ -178,7 +173,7 @@ CWARNFLAGS+=	-Wno-error=bool-operation		\
 .endif
 
 # GCC 8.1.0
-.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 80100
+.if ${COMPILER_VERSION} >= 80100
 CWARNFLAGS+=	-Wno-error=aggressive-loop-optimizations	\
 		-Wno-error=cast-function-type			\
 		-Wno-error=catch-value				\
@@ -187,9 +182,10 @@ CWARNFLAGS+=	-Wno-error=aggressive-loop-optimizations	\
 		-Wno-error=sizeof-pointer-memaccess		\
 		-Wno-error=stringop-truncation
 .endif
+.endif	# gcc
 
 # How to handle FreeBSD custom printf format specifiers.
-.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 30600
+.if ${COMPILER_TYPE} == "clang"
 FORMAT_EXTENSIONS=	-D__printf__=__freebsd_kprintf__
 .else
 FORMAT_EXTENSIONS=	-fformat-extensions
@@ -202,18 +198,25 @@ CWARNFLAGS+=	-Wno-unknown-pragmas
 # This warning is utter nonsense
 CFLAGS+=	-Wno-format-zero-length
 
+.if ${COMPILER_TYPE} == "clang"
+# The headers provided by clang are incompatible with the FreeBSD headers.
+# If the version of clang is not one that has been patched to omit the
+# incompatible headers, we need to compile with -nobuiltininc and add the
+# resource dir to the end of the search paths. This ensures that headers such as
+# immintrin.h are still found but stddef.h, etc. are picked up from FreeBSD.
+#
+# XXX: This is a hack to support complete external installs of clang while
+# we work to synchronize our decleration guards with those in the clang tree.
+.if ${MK_CLANG_BOOTSTRAP:Uno} == "no" && \
+    ${COMPILER_RESOURCE_DIR} != "unknown" && !defined(BOOTSTRAPPING)
+CFLAGS+=-nobuiltininc -idirafter ${COMPILER_RESOURCE_DIR}/include
+.endif
+.endif
+
 CLANG_OPT_SMALL= -mstack-alignment=8 -mllvm -inline-threshold=3\
 		 -mllvm -simplifycfg-dup-ret
-.if ${COMPILER_VERSION} >= 30500 && ${COMPILER_VERSION} < 30700
-CLANG_OPT_SMALL+= -mllvm -enable-gvn=false
-.else
 CLANG_OPT_SMALL+= -mllvm -enable-load-pre=false
-.endif
 CFLAGS.clang+=	 -Qunused-arguments
-.if ${MACHINE_CPUARCH} == "sparc64"
-# Don't emit .cfi directives, since we must use GNU as on sparc64, for now.
-CFLAGS.clang+=	 -fno-dwarf2-cfi-asm
-.endif # SPARC64
 # The libc++ headers use c++11 extensions.  These are normally silenced because
 # they are treated as system headers, but we explicitly disable that warning
 # suppression when building the base system to catch bugs in our headers.
@@ -223,14 +226,8 @@ CXXFLAGS.clang+=	 -Wno-c++11-extensions
 
 .if ${MK_SSP} != "no" && \
     ${MACHINE_CPUARCH} != "arm" && ${MACHINE_CPUARCH} != "mips"
-.if (${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 30500) || \
-    (${COMPILER_TYPE} == "gcc" && \
-     (${COMPILER_VERSION} == 40201 || ${COMPILER_VERSION} >= 40900))
 # Don't use -Wstack-protector as it breaks world with -Werror.
 SSP_CFLAGS?=	-fstack-protector-strong
-.else
-SSP_CFLAGS?=	-fstack-protector
-.endif
 CFLAGS+=	${SSP_CFLAGS}
 .endif # SSP && !ARM && !MIPS
 

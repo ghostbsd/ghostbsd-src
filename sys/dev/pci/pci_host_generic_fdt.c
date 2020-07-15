@@ -65,8 +65,6 @@ __FBSDID("$FreeBSD$");
 
 #include "pcib_if.h"
 
-#define	PCI_IO_WINDOW_OFFSET	0x1000
-
 #define	SPACE_CODE_SHIFT	24
 #define	SPACE_CODE_MASK		0x3
 #define	SPACE_CODE_IO_SPACE	0x1
@@ -122,15 +120,11 @@ generic_pcie_fdt_probe(device_t dev)
 }
 
 int
-pci_host_generic_attach(device_t dev)
+pci_host_generic_setup_fdt(device_t dev)
 {
 	struct generic_pcie_fdt_softc *sc;
-	uint64_t phys_base;
-	uint64_t pci_base;
-	uint64_t size;
 	phandle_t node;
 	int error;
-	int tuple;
 
 	sc = device_get_softc(dev);
 
@@ -155,34 +149,27 @@ pci_host_generic_attach(device_t dev)
 	/* TODO parse FDT bus ranges */
 	sc->base.bus_start = 0;
 	sc->base.bus_end = 0xFF;
+
 	error = pci_host_generic_core_attach(dev);
 	if (error != 0)
 		return (error);
 
-	for (tuple = 0; tuple < MAX_RANGES_TUPLES; tuple++) {
-		phys_base = sc->base.ranges[tuple].phys_base;
-		pci_base = sc->base.ranges[tuple].pci_base;
-		size = sc->base.ranges[tuple].size;
-		if (phys_base == 0 || size == 0)
-			continue; /* empty range element */
-		if (sc->base.ranges[tuple].flags & FLAG_MEM) {
-			error = rman_manage_region(&sc->base.mem_rman,
-			    pci_base, pci_base + size - 1);
-		} else if (sc->base.ranges[tuple].flags & FLAG_IO) {
-			error = rman_manage_region(&sc->base.io_rman,
-			    pci_base + PCI_IO_WINDOW_OFFSET,
-			    pci_base + PCI_IO_WINDOW_OFFSET + size - 1);
-		} else
-			continue;
-		if (error) {
-			device_printf(dev, "rman_manage_region() failed."
-						"error = %d\n", error);
-			rman_fini(&sc->base.mem_rman);
-			return (error);
-		}
-	}
-
 	ofw_bus_setup_iinfo(node, &sc->pci_iinfo, sizeof(cell_t));
+
+	return (0);
+}
+
+int
+pci_host_generic_attach(device_t dev)
+{
+	struct generic_pcie_fdt_softc *sc;
+	int error;
+
+	sc = device_get_softc(dev);
+
+	error = pci_host_generic_setup_fdt(dev);
+	if (error != 0)
+		return (error);
 
 	device_add_child(dev, "pci", -1);
 	return (bus_generic_attach(dev));
@@ -224,9 +211,9 @@ parse_pci_mem_ranges(device_t dev, struct generic_pcie_core_softc *sc)
 		attributes = (base_ranges[j++] >> SPACE_CODE_SHIFT) & \
 							SPACE_CODE_MASK;
 		if (attributes == SPACE_CODE_IO_SPACE) {
-			sc->ranges[i].flags |= FLAG_IO;
+			sc->ranges[i].flags |= FLAG_TYPE_IO;
 		} else {
-			sc->ranges[i].flags |= FLAG_MEM;
+			sc->ranges[i].flags |= FLAG_TYPE_MEM;
 		}
 
 		sc->ranges[i].pci_base = 0;

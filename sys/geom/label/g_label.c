@@ -52,7 +52,8 @@ __FBSDID("$FreeBSD$");
 FEATURE(geom_label, "GEOM labeling support");
 
 SYSCTL_DECL(_kern_geom);
-SYSCTL_NODE(_kern_geom, OID_AUTO, label, CTLFLAG_RW, 0, "GEOM_LABEL stuff");
+SYSCTL_NODE(_kern_geom, OID_AUTO, label, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "GEOM_LABEL stuff");
 u_int g_label_debug = 0;
 SYSCTL_UINT(_kern_geom_label, OID_AUTO, debug, CTLFLAG_RWTUN, &g_label_debug, 0,
     "Debug level");
@@ -179,9 +180,25 @@ g_label_mangle_name(char *label, size_t size)
 {
 	struct sbuf *sb;
 	const u_char *c;
+	size_t len, i;
+
+	/* Trim trailing whitespace. */
+	len = strlen(label);
+	for (i = len; i > 0; i--) {
+		if (isspace(label[i - 1]))
+			label[i - 1] = '\0';
+		else
+			break;
+	}
+	if (*label == '\0')
+		return;
+
 
 	sb = sbuf_new(NULL, NULL, size, SBUF_FIXEDLEN);
 	for (c = label; *c != '\0'; c++) {
+		/* Trim leading whitespace. */
+		if (isspace(*c) && sbuf_len(sb) == 0)
+			continue;
 		if (!isprint(*c) || isspace(*c) || *c =='"' || *c == '%')
 			sbuf_printf(sb, "%%%02X", *c);
 		else
@@ -425,8 +442,8 @@ g_label_ctl_create(struct gctl_req *req, struct g_class *mp)
 		gctl_error(req, "No 'arg%d' argument", 1);
 		return;
 	}
-	if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-		name += strlen("/dev/");
+	if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+		name += strlen(_PATH_DEV);
 	pp = g_provider_by_name(name);
 	if (pp == NULL) {
 		G_LABEL_DEBUG(1, "Provider %s is invalid.", name);
@@ -450,8 +467,8 @@ g_label_skip_dir(const char *name)
 	char path[64];
 	u_int i;
 
-	if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-		name += strlen("/dev/");
+	if (strncmp(name, _PATH_DEV, strlen(_PATH_DEV)) == 0)
+		name += strlen(_PATH_DEV);
 	if (strncmp(name, G_LABEL_DIR "/", strlen(G_LABEL_DIR "/")) == 0)
 		name += strlen(G_LABEL_DIR "/");
 	for (i = 0; g_labels[i] != NULL; i++) {

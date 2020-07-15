@@ -233,47 +233,6 @@ ENTRY(memcpy)
 	ret
 END(memcpy)
 
-/*
- * copystr(from, to, maxlen, int *lencopied) - MP SAFE
- */
-ENTRY(copystr)
-	pushl	%esi
-	pushl	%edi
-
-	movl	12(%esp),%esi			/* %esi = from */
-	movl	16(%esp),%edi			/* %edi = to */
-	movl	20(%esp),%edx			/* %edx = maxlen */
-	incl	%edx
-1:
-	decl	%edx
-	jz	4f
-	lodsb
-	stosb
-	orb	%al,%al
-	jnz	1b
-
-	/* Success -- 0 byte reached */
-	decl	%edx
-	xorl	%eax,%eax
-	jmp	6f
-4:
-	/* edx is zero -- return ENAMETOOLONG */
-	movl	$ENAMETOOLONG,%eax
-
-6:
-	/* set *lencopied and return %eax */
-	movl	20(%esp),%ecx
-	subl	%edx,%ecx
-	movl	24(%esp),%edx
-	testl	%edx,%edx
-	jz	7f
-	movl	%ecx,(%edx)
-7:
-	popl	%edi
-	popl	%esi
-	ret
-END(copystr)
-
 ENTRY(bcmp)
 	pushl	%edi
 	pushl	%esi
@@ -445,8 +404,30 @@ msr_onfault:
 	movl	$EFAULT,%eax
 	ret
 
+	.altmacro
+	.macro	rsb_seq_label l
+rsb_seq_\l:
+	.endm
+	.macro	rsb_call_label l
+	call	rsb_seq_\l
+	.endm
+	.macro	rsb_seq count
+	ll=1
+	.rept	\count
+	rsb_call_label	%(ll)
+	nop
+	rsb_seq_label %(ll)
+	addl	$4,%esp
+	ll=ll+1
+	.endr
+	.endm
+
+ENTRY(rsb_flush)
+	rsb_seq	32
+	ret
+
 ENTRY(handle_ibrs_entry)
-	cmpb	$0,hw_ibrs_active
+	cmpb	$0,hw_ibrs_ibpb_active
 	je	1f
 	movl	$MSR_IA32_SPEC_CTRL,%ecx
 	rdmsr
@@ -455,10 +436,9 @@ ENTRY(handle_ibrs_entry)
 	wrmsr
 	movb	$1,PCPU(IBPB_SET)
 	/*
-	 * i386 does not implement SMEP, but the 4/4 split makes this not
-	 * that important.
+	 * i386 does not implement SMEP.
 	 */
-1:	ret
+1:	jmp	rsb_flush
 END(handle_ibrs_entry)
 
 ENTRY(handle_ibrs_exit)

@@ -97,8 +97,8 @@
  * safely only from their associated CPU, while the Zones backed by the same
  * Keg all share a common Keg lock (to coalesce contention on the backing
  * slabs).  The backing Keg typically only serves one Zone but in the case of
- * multiple Zones, one of the Zones is considered the Master Zone and all
- * Zone-related stats from the Keg are done in the Master Zone.  For an
+ * multiple Zones, one of the Zones is considered the Primary Zone and all
+ * Zone-related stats from the Keg are done in the Primary Zone.  For an
  * example of a Multi-Zone setup, refer to the Mbuf allocation code.
  */
 
@@ -139,6 +139,67 @@
 /* Max waste percentage before going to off page slab management */
 #define UMA_MAX_WASTE	10
 
+/* Max size of a CACHESPREAD slab. */
+#define	UMA_CACHESPREAD_MAX_SIZE	(128 * 1024)
+
+/*
+ * These flags must not overlap with the UMA_ZONE flags specified in uma.h.
+ */
+#define	UMA_ZFLAG_OFFPAGE	0x00200000	/*
+						 * Force the slab structure
+						 * allocation off of the real
+						 * memory.
+						 */
+#define	UMA_ZFLAG_HASH		0x00400000	/*
+						 * Use a hash table instead of
+						 * caching information in the
+						 * vm_page.
+						 */
+#define	UMA_ZFLAG_VTOSLAB	0x00800000	/*
+						 * Zone uses vtoslab for
+						 * lookup.
+						 */
+#define	UMA_ZFLAG_CTORDTOR	0x01000000	/* Zone has ctor/dtor set. */
+#define	UMA_ZFLAG_LIMIT		0x02000000	/* Zone has limit set. */
+#define	UMA_ZFLAG_CACHE		0x04000000	/* uma_zcache_create()d it */
+#define	UMA_ZFLAG_RECLAIMING	0x08000000	/* Running zone_reclaim(). */
+#define	UMA_ZFLAG_BUCKET	0x10000000	/* Bucket zone. */
+#define	UMA_ZFLAG_INTERNAL	0x20000000	/* No offpage no PCPU. */
+#define	UMA_ZFLAG_TRASH		0x40000000	/* Add trash ctor/dtor. */
+
+#define	UMA_ZFLAG_INHERIT						\
+    (UMA_ZFLAG_OFFPAGE | UMA_ZFLAG_HASH | UMA_ZFLAG_VTOSLAB |		\
+     UMA_ZFLAG_BUCKET | UMA_ZFLAG_INTERNAL)
+
+#define	PRINT_UMA_ZFLAGS	"\20"	\
+    "\37TRASH"				\
+    "\36INTERNAL"			\
+    "\35BUCKET"				\
+    "\34RECLAIMING"			\
+    "\33CACHE"				\
+    "\32LIMIT"				\
+    "\31CTORDTOR"			\
+    "\30VTOSLAB"			\
+    "\27HASH"				\
+    "\26OFFPAGE"			\
+    "\23SMR"				\
+    "\22ROUNDROBIN"			\
+    "\21FIRSTTOUCH"			\
+    "\20PCPU"				\
+    "\17NODUMP"				\
+    "\16CACHESPREAD"			\
+    "\15MINBUCKET"			\
+    "\14MAXBUCKET"			\
+    "\13NOBUCKET"			\
+    "\12SECONDARY"			\
+    "\11NOTPAGE"			\
+    "\10VM"				\
+    "\7MTXCLASS"			\
+    "\6NOFREE"				\
+    "\5MALLOC"				\
+    "\4NOTOUCH"				\
+    "\3CONTIG"				\
+    "\2ZINIT"
 
 /*
  * Hash table for freed address -> slab translation.
@@ -152,10 +213,10 @@
 
 #define UMA_HASH_INSERT(h, s, mem)					\
 	LIST_INSERT_HEAD(&(h)->uh_slab_hash[UMA_HASH((h),		\
-	    (mem))], (uma_hash_slab_t)(s), uhs_hlink)
+	    (mem))], slab_tohashslab(s), uhs_hlink)
 
 #define UMA_HASH_REMOVE(h, s)						\
-	LIST_REMOVE((uma_hash_slab_t)(s), uhs_hlink)
+	LIST_REMOVE(slab_tohashslab(s), uhs_hlink)
 
 LIST_HEAD(slabhashhead, uma_hash_slab);
 
@@ -183,10 +244,11 @@ struct uma_hash {
  * for use.
  */
 struct uma_bucket {
-	TAILQ_ENTRY(uma_bucket)	ub_link;	/* Link into the zone */
-	int16_t	ub_cnt;				/* Count of items in bucket. */
-	int16_t	ub_entries;			/* Max items. */
-	void	*ub_bucket[];			/* actual allocation storage */
+	STAILQ_ENTRY(uma_bucket)	ub_link; /* Link into the zone */
+	int16_t		ub_cnt;			/* Count of items in bucket. */
+	int16_t		ub_entries;		/* Max items. */
+	smr_seq_t	ub_seq;			/* SMR sequence number. */
+	void		*ub_bucket[];		/* actual allocation storage */
 };
 
 typedef struct uma_bucket * uma_bucket_t;
@@ -262,7 +324,8 @@ struct uma_domain {
 	struct slabhead	ud_free_slab;	/* completely unallocated slabs */
 	struct slabhead ud_full_slab;	/* fully allocated slabs */
 	uint32_t	ud_pages;	/* Total page count */
-	uint32_t	ud_free;	/* Count of items free in slabs */
+	uint32_t	ud_free_items;	/* Count of items free in all slabs */
+	uint32_t	ud_free_slabs;	/* Count of free slabs */
 } __aligned(CACHE_LINE_SIZE);
 
 typedef struct uma_domain * uma_domain_t;
@@ -290,7 +353,6 @@ struct uma_keg {
 
 	u_long		uk_offset;	/* Next free offset from base KVA */
 	vm_offset_t	uk_kva;		/* Zone base KVA */
-	uma_zone_t	uk_slabzone;	/* Slab zone backing us, if OFFPAGE */
 
 	uint32_t	uk_pgoff;	/* Offset to uma_slab struct */
 	uint16_t	uk_ppera;	/* pages per allocation from backend */
@@ -306,17 +368,11 @@ struct uma_keg {
 };
 typedef struct uma_keg	* uma_keg_t;
 
-#ifdef _KERNEL
-#define	KEG_ASSERT_COLD(k)						\
-	KASSERT(uma_keg_get_allocs((k)) == 0,				\
-	    ("keg %s initialization after use.", (k)->uk_name))
-
 /*
  * Free bits per-slab.
  */
 #define	SLAB_MAX_SETSIZE	(PAGE_SIZE / UMA_SMALLEST_UNIT)
 #define	SLAB_MIN_SETSIZE	_BITSET_BITS
-BITSET_DEFINE(slabbits, SLAB_MAX_SETSIZE);
 BITSET_DEFINE(noslabbits, 0);
 
 /*
@@ -330,53 +386,40 @@ struct uma_slab {
 	uint8_t		us_domain;		/* Backing NUMA domain. */
 	struct noslabbits us_free;		/* Free bitmask, flexible. */
 };
-_Static_assert(sizeof(struct uma_slab) == offsetof(struct uma_slab, us_free),
+_Static_assert(sizeof(struct uma_slab) == __offsetof(struct uma_slab, us_free),
     "us_free field must be last");
-#if MAXMEMDOM >= 255
-#error "Slab domain type insufficient"
-#endif
+_Static_assert(MAXMEMDOM < 255,
+    "us_domain field is not wide enough");
 
 typedef struct uma_slab * uma_slab_t;
-
-/*
- * On INVARIANTS builds, the slab contains a second bitset of the same size,
- * "dbg_bits", which is laid out immediately after us_free.
- */
-#ifdef INVARIANTS
-#define	SLAB_BITSETS	2
-#else
-#define	SLAB_BITSETS	1
-#endif
-
-/* These three functions are for embedded (!OFFPAGE) use only. */
-size_t slab_sizeof(int nitems);
-size_t slab_space(int nitems);
-int slab_ipers(size_t size, int align);
 
 /*
  * Slab structure with a full sized bitset and hash link for both
  * HASH and OFFPAGE zones.
  */
 struct uma_hash_slab {
-	struct uma_slab		uhs_slab;	/* Must be first. */
-	struct slabbits		uhs_bits1;	/* Must be second. */
-#ifdef INVARIANTS
-	struct slabbits		uhs_bits2;	/* Must be third. */
-#endif
 	LIST_ENTRY(uma_hash_slab) uhs_hlink;	/* Link for hash table */
 	uint8_t			*uhs_data;	/* First item */
+	struct uma_slab		uhs_slab;	/* Must be last. */
 };
 
 typedef struct uma_hash_slab * uma_hash_slab_t;
+
+static inline uma_hash_slab_t
+slab_tohashslab(uma_slab_t slab)
+{
+
+	return (__containerof(slab, struct uma_hash_slab, uhs_slab));
+}
 
 static inline void *
 slab_data(uma_slab_t slab, uma_keg_t keg)
 {
 
-	if ((keg->uk_flags & UMA_ZONE_OFFPAGE) == 0)
+	if ((keg->uk_flags & UMA_ZFLAG_OFFPAGE) == 0)
 		return ((void *)((uintptr_t)slab - keg->uk_pgoff));
 	else
-		return (((uma_hash_slab_t)slab)->uhs_data);
+		return (slab_tohashslab(slab)->uhs_data);
 }
 
 static inline void *
@@ -396,9 +439,8 @@ slab_item_index(uma_slab_t slab, uma_keg_t keg, void *item)
 	data = (uintptr_t)slab_data(slab, keg);
 	return (((uintptr_t)item - data) / keg->uk_rsize);
 }
-#endif /* _KERNEL */
 
-TAILQ_HEAD(uma_bucketlist, uma_bucket);
+STAILQ_HEAD(uma_bucketlist, uma_bucket);
 
 struct uma_zone_domain {
 	struct uma_bucketlist uzd_buckets; /* full buckets */
@@ -407,6 +449,8 @@ struct uma_zone_domain {
 	long		uzd_imax;	/* maximum item count this period */
 	long		uzd_imin;	/* minimum item count this period */
 	long		uzd_wss;	/* working set size estimate */
+	smr_seq_t	uzd_seq;	/* Lowest queued seq. */
+	struct mtx	uzd_lock;	/* Lock for the domain */
 } __aligned(CACHE_LINE_SIZE);
 
 typedef struct uma_zone_domain * uma_zone_domain_t;
@@ -416,56 +460,47 @@ typedef struct uma_zone_domain * uma_zone_domain_t;
  */
 struct uma_zone {
 	/* Offset 0, used in alloc/free fast/medium fast path and const. */
-	uma_keg_t	uz_keg;		/* This zone's keg if !CACHE */
-	struct uma_zone_domain	*uz_domain;	/* per-domain buckets */
 	uint32_t	uz_flags;	/* Flags inherited from kegs */
 	uint32_t	uz_size;	/* Size inherited from kegs */
 	uma_ctor	uz_ctor;	/* Constructor for each allocation */
 	uma_dtor	uz_dtor;	/* Destructor */
-	uint64_t	uz_spare0;
+	smr_t		uz_smr;		/* Safe memory reclaim context. */
 	uint64_t	uz_max_items;	/* Maximum number of items to alloc */
-	uint32_t	uz_sleepers;	/* Threads sleeping on limit */
+	uint64_t	uz_bucket_max;	/* Maximum bucket cache size */
 	uint16_t	uz_bucket_size;	/* Number of items in full bucket */
 	uint16_t	uz_bucket_size_max; /* Maximum number of bucket items */
+	uint32_t	uz_sleepers;	/* Threads sleeping on limit */
+	counter_u64_t	uz_xdomain;	/* Total number of cross-domain frees */
 
 	/* Offset 64, used in bucket replenish. */
+	uma_keg_t	uz_keg;		/* This zone's keg if !CACHE */
 	uma_import	uz_import;	/* Import new memory to cache. */
 	uma_release	uz_release;	/* Release memory from cache. */
 	void		*uz_arg;	/* Import/release argument. */
 	uma_init	uz_init;	/* Initializer for each item */
 	uma_fini	uz_fini;	/* Finalizer for each item. */
-	void		*uz_spare1;
-	uint64_t	uz_bkt_count;    /* Items in bucket cache */
-	uint64_t	uz_bkt_max;	/* Maximum bucket cache size */
+	volatile uint64_t uz_items;	/* Total items count & sleepers */
+	uint64_t	uz_sleeps;	/* Total number of alloc sleeps */
 
-	/* Offset 128 Rare. */
-	/*
-	 * The lock is placed here to avoid adjacent line prefetcher
-	 * in fast paths and to take up space near infrequently accessed
-	 * members to reduce alignment overhead.
-	 */
-	struct mtx	uz_lock;	/* Lock for the zone */
+	/* Offset 128 Rare stats, misc read-only. */
 	LIST_ENTRY(uma_zone) uz_link;	/* List of all zones in keg */
-	const char	*uz_name;	/* Text name of the zone */
-	/* The next two fields are used to print a rate-limited warnings. */
-	const char	*uz_warning;	/* Warning to print on failure */
-	struct timeval	uz_ratecheck;	/* Warnings rate-limiting */
-	struct task	uz_maxaction;	/* Task to run when at limit */
-	uint16_t	uz_bucket_size_min; /* Min number of items in bucket */
-
-	struct mtx_padalign	uz_cross_lock;	/* Cross domain free lock */
-
-	/* Offset 256+, stats and misc. */
 	counter_u64_t	uz_allocs;	/* Total number of allocations */
 	counter_u64_t	uz_frees;	/* Total number of frees */
 	counter_u64_t	uz_fails;	/* Total number of alloc failures */
-	uint64_t	uz_sleeps;	/* Total number of alloc sleeps */
-	uint64_t	uz_xdomain;	/* Total number of cross-domain frees */
-	volatile uint64_t uz_items;	/* Total items count & sleepers */
-
+	const char	*uz_name;	/* Text name of the zone */
 	char		*uz_ctlname;	/* sysctl safe name string. */
-	struct sysctl_oid *uz_oid;	/* sysctl oid pointer. */
 	int		uz_namecnt;	/* duplicate name count. */
+	uint16_t	uz_bucket_size_min; /* Min number of items in bucket */
+	uint16_t	uz_pad0;
+
+	/* Offset 192, rare read-only. */
+	struct sysctl_oid *uz_oid;	/* sysctl oid pointer. */
+	const char	*uz_warning;	/* Warning to print on failure */
+	struct timeval	uz_ratecheck;	/* Warnings rate-limiting */
+	struct task	uz_maxaction;	/* Task to run when at limit */
+
+	/* Offset 256. */
+	struct mtx	uz_cross_lock;	/* Cross domain free lock */
 
 	/*
 	 * This HAS to be the last item because we adjust the zone size
@@ -473,52 +508,8 @@ struct uma_zone {
 	 */
 	struct uma_cache	uz_cpu[]; /* Per cpu caches */
 
-	/* uz_domain follows here. */
+	/* domains follow here. */
 };
-
-/*
- * These flags must not overlap with the UMA_ZONE flags specified in uma.h.
- */
-#define	UMA_ZFLAG_CTORDTOR	0x01000000	/* Zone has ctor/dtor set. */
-#define	UMA_ZFLAG_LIMIT		0x02000000	/* Zone has limit set. */
-#define	UMA_ZFLAG_CACHE		0x04000000	/* uma_zcache_create()d it */
-#define	UMA_ZFLAG_RECLAIMING	0x08000000	/* Running zone_reclaim(). */
-#define	UMA_ZFLAG_BUCKET	0x10000000	/* Bucket zone. */
-#define UMA_ZFLAG_INTERNAL	0x20000000	/* No offpage no PCPU. */
-#define UMA_ZFLAG_TRASH		0x40000000	/* Add trash ctor/dtor. */
-#define UMA_ZFLAG_CACHEONLY	0x80000000	/* Don't ask VM for buckets. */
-
-#define	UMA_ZFLAG_INHERIT						\
-    (UMA_ZFLAG_INTERNAL | UMA_ZFLAG_CACHEONLY | UMA_ZFLAG_BUCKET)
-
-#define	PRINT_UMA_ZFLAGS	"\20"	\
-    "\40CACHEONLY"			\
-    "\37TRASH"				\
-    "\36INTERNAL"			\
-    "\35BUCKET"				\
-    "\34RECLAIMING"			\
-    "\33CACHE"				\
-    "\32LIMIT"				\
-    "\31CTORDTOR"			\
-    "\23ROUNDROBIN"			\
-    "\22FIRSTTOUCH"			\
-    "\21MINBUCKET"			\
-    "\20PCPU"				\
-    "\17NODUMP"				\
-    "\16VTOSLAB"			\
-    "\15CACHESPREAD"			\
-    "\14MAXBUCKET"			\
-    "\13NOBUCKET"			\
-    "\12SECONDARY"			\
-    "\11HASH"				\
-    "\10VM"				\
-    "\7MTXCLASS"			\
-    "\6NOFREE"				\
-    "\5MALLOC"				\
-    "\4OFFPAGE"				\
-    "\3STATIC"				\
-    "\2ZINIT"				\
-    "\1PAGEABLE"
 
 /*
  * Macros for interpreting the uz_items field.  20 bits of sleeper count
@@ -562,25 +553,36 @@ static __inline uma_slab_t hash_sfind(struct uma_hash *hash, uint8_t *data);
 
 #define	KEG_GET(zone, keg) do {					\
 	(keg) = (zone)->uz_keg;					\
-	KASSERT((void *)(keg) != (void *)&(zone)->uz_lock,	\
+	KASSERT((void *)(keg) != NULL,				\
 	    ("%s: Invalid zone %p type", __func__, (zone)));	\
 	} while (0)
 
-#define	ZONE_LOCK_INIT(z, lc)					\
-	do {							\
-		if ((lc))					\
-			mtx_init(&(z)->uz_lock, (z)->uz_name,	\
-			    (z)->uz_name, MTX_DEF | MTX_DUPOK);	\
-		else						\
-			mtx_init(&(z)->uz_lock, (z)->uz_name,	\
-			    "UMA zone", MTX_DEF | MTX_DUPOK);	\
-	} while (0)
+#define	KEG_ASSERT_COLD(k)						\
+	KASSERT(uma_keg_get_allocs((k)) == 0,				\
+	    ("keg %s initialization after use.", (k)->uk_name))
 
-#define	ZONE_LOCK(z)	mtx_lock(&(z)->uz_lock)
-#define	ZONE_TRYLOCK(z)	mtx_trylock(&(z)->uz_lock)
-#define	ZONE_UNLOCK(z)	mtx_unlock(&(z)->uz_lock)
-#define	ZONE_LOCK_FINI(z)	mtx_destroy(&(z)->uz_lock)
-#define	ZONE_LOCK_ASSERT(z)	mtx_assert(&(z)->uz_lock, MA_OWNED)
+/* Domains are contiguous after the last CPU */
+#define	ZDOM_GET(z, n)							\
+    (&((uma_zone_domain_t)&(z)->uz_cpu[mp_maxid + 1])[n])
+
+#define	ZDOM_LOCK_INIT(z, zdom, lc)					\
+	do {								\
+		if ((lc))						\
+			mtx_init(&(zdom)->uzd_lock, (z)->uz_name,	\
+			    (z)->uz_name, MTX_DEF | MTX_DUPOK);		\
+		else							\
+			mtx_init(&(zdom)->uzd_lock, (z)->uz_name,	\
+			    "UMA zone", MTX_DEF | MTX_DUPOK);		\
+	} while (0)
+#define	ZDOM_LOCK_FINI(z)	mtx_destroy(&(z)->uzd_lock)
+#define	ZDOM_LOCK_ASSERT(z)	mtx_assert(&(z)->uzd_lock, MA_OWNED)
+
+#define	ZDOM_LOCK(z)	mtx_lock(&(z)->uzd_lock)
+#define	ZDOM_OWNED(z)	(mtx_owner(&(z)->uzd_lock) != NULL)
+#define	ZDOM_UNLOCK(z)	mtx_unlock(&(z)->uzd_lock)
+
+#define	ZONE_LOCK(z)	ZDOM_LOCK(ZDOM_GET((z), 0))
+#define	ZONE_UNLOCK(z)	ZDOM_UNLOCK(ZDOM_GET((z), 0))
 
 #define	ZONE_CROSS_LOCK_INIT(z)					\
 	mtx_init(&(z)->uz_cross_lock, "UMA Cross", NULL, MTX_DEF)
@@ -673,6 +675,7 @@ void uma_small_free(void *mem, vm_size_t size, uint8_t flags);
 
 /* Set a global soft limit on UMA managed memory. */
 void uma_set_limit(unsigned long limit);
+
 #endif /* _KERNEL */
 
 #endif /* VM_UMA_INT_H */

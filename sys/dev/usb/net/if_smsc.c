@@ -122,7 +122,8 @@ __FBSDID("$FreeBSD$");
 #ifdef USB_DEBUG
 static int smsc_debug = 0;
 
-SYSCTL_NODE(_hw_usb, OID_AUTO, smsc, CTLFLAG_RW, 0, "USB smsc");
+SYSCTL_NODE(_hw_usb, OID_AUTO, smsc, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB smsc");
 SYSCTL_INT(_hw_usb_smsc, OID_AUTO, debug, CTLFLAG_RWTUN, &smsc_debug, 0,
     "Debug level");
 #endif
@@ -185,9 +186,7 @@ static miibus_readreg_t smsc_miibus_readreg;
 static miibus_writereg_t smsc_miibus_writereg;
 static miibus_statchg_t smsc_miibus_statchg;
 
-#if __FreeBSD_version > 1000000
 static int smsc_attach_post_sub(struct usb_ether *ue);
-#endif
 static uether_fn_t smsc_attach_post;
 static uether_fn_t smsc_init;
 static uether_fn_t smsc_stop;
@@ -232,9 +231,7 @@ static const struct usb_config smsc_config[SMSC_N_TRANSFER] = {
 
 static const struct usb_ether_methods smsc_ue_methods = {
 	.ue_attach_post = smsc_attach_post,
-#if __FreeBSD_version > 1000000
 	.ue_attach_post_sub = smsc_attach_post_sub,
-#endif
 	.ue_start = smsc_start,
 	.ue_ioctl = smsc_ioctl,
 	.ue_init = smsc_init,
@@ -919,24 +916,6 @@ smsc_init(struct usb_ether *ue)
 	/* Cancel pending I/O */
 	smsc_stop(ue);
 
-#if __FreeBSD_version <= 1000000
-	/* On earlier versions this was the first place we could tell the system
-	 * that we supported h/w csuming, however this is only called after the
-	 * the interface has been brought up - not ideal.  
-	 */
-	if (!(ifp->if_capabilities & IFCAP_RXCSUM)) {
-		ifp->if_capabilities |= IFCAP_RXCSUM;
-		ifp->if_capenable |= IFCAP_RXCSUM;
-		ifp->if_hwassist = 0;
-	}
-	
-	/* TX checksuming is disabled for now
-	ifp->if_capabilities |= IFCAP_TXCSUM;
-	ifp->if_capenable |= IFCAP_TXCSUM;
-	ifp->if_hwassist = CSUM_TCP | CSUM_UDP;
-	*/
-#endif
-
 	/* Reset the ethernet interface. */
 	smsc_reset(sc);
 
@@ -976,7 +955,7 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct mbuf *m;
 	struct usb_page_cache *pc;
 	uint32_t rxhdr;
-	uint16_t pktlen;
+	int pktlen;
 	int off;
 	int actlen;
 
@@ -1001,6 +980,9 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 		
 			/* The frame header is always aligned on a 4 byte boundary */
 			off = ((off + 0x3) & ~0x3);
+
+			if ((off + sizeof(rxhdr)) > actlen)
+				goto tr_setup;
 
 			usbd_copy_out(pc, off, &rxhdr, sizeof(rxhdr));
 			off += (sizeof(rxhdr) + ETHER_ALIGN);
@@ -1030,7 +1012,13 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 					if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 					goto tr_setup;
 				}
-				
+				if (pktlen > m->m_len) {
+					smsc_dbg_printf(sc, "buffer too small %d vs %d bytes",
+					    pktlen, m->m_len);
+					if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
+					m_freem(m);
+					goto tr_setup;
+				}
 				usbd_copy_out(pc, off, mtod(m, uint8_t *), pktlen);
 
 				/* Check if RX TCP/UDP checksumming is being offloaded */
@@ -1550,11 +1538,7 @@ smsc_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		
 		SMSC_UNLOCK(sc);
 		if (reinit)
-#if __FreeBSD_version > 1000000
 			uether_init(ue);
-#else
-			ifp->if_init(ue);
-#endif
 
 	} else {
 		rc = uether_ioctl(ifp, cmd, data);
@@ -1636,7 +1620,6 @@ smsc_attach_post(struct usb_ether *ue)
  *	RETURNS:
  *	Returns 0 on success or a negative error code.
  */
-#if __FreeBSD_version > 1000000
 static int
 smsc_attach_post_sub(struct usb_ether *ue)
 {
@@ -1676,7 +1659,6 @@ smsc_attach_post_sub(struct usb_ether *ue)
 
 	return (error);
 }
-#endif /* __FreeBSD_version > 1000000 */
 
 
 /**

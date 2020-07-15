@@ -57,7 +57,6 @@
 #include <sys/mman.h>
 #endif
 #include <assert.h>
-#include <sys/ipc.h>
 
 #include <dt_impl.h>
 #include <dt_provider.h>
@@ -688,6 +687,9 @@ dump_elf64(dtrace_hdl_t *dtp, const dof_hdr_t *dof, int fd)
 #elif defined(__mips__)
 	elf_file.ehdr.e_machine = EM_MIPS;
 #elif defined(__powerpc64__)
+#if defined(_CALL_ELF) && _CALL_ELF == 2
+	elf_file.ehdr.e_flags = 2;
+#endif
 	elf_file.ehdr.e_machine = EM_PPC64;
 #elif defined(__sparc)
 	elf_file.ehdr.e_machine = EM_SPARCV9;
@@ -1249,16 +1251,35 @@ dt_link_error(dtrace_hdl_t *dtp, Elf *elf, int fd, dt_link_pair_t *bufs,
 	return (dt_set_errno(dtp, EDT_COMPILER));
 }
 
+/*
+ * Provide a unique identifier used when adding global symbols to an object.
+ * This is the FNV-1a hash of an absolute path for the file.
+ */
+static unsigned int
+hash_obj(const char *obj, int fd)
+{
+	char path[PATH_MAX];
+	unsigned int h;
+
+	if (realpath(obj, path) == NULL)
+		return (-1);
+
+	for (h = 2166136261u, obj = &path[0]; *obj != '\0'; obj++)
+		h = (h ^ *obj) * 16777619;
+	h &= 0x7fffffff;
+	return (h);
+}
+
 static int
 process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 {
 	static const char dt_prefix[] = "__dtrace";
 	static const char dt_enabled[] = "enabled";
 	static const char dt_symprefix[] = "$dtrace";
-	static const char dt_symfmt[] = "%s%ld.%s";
+	static const char dt_symfmt[] = "%s%u.%s";
 	static const char dt_weaksymfmt[] = "%s.%s";
 	char probename[DTRACE_NAMELEN];
-	int fd, i, ndx, eprobe, mod = 0;
+	int fd, i, ndx, eprobe, uses_funcdesc = 0, mod = 0;
 	Elf *elf = NULL;
 	GElf_Ehdr ehdr;
 	Elf_Scn *scn_rel, *scn_sym, *scn_str, *scn_tgt;
@@ -1272,7 +1293,7 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 	dt_probe_t *prp;
 	uint32_t off, eclass, emachine1, emachine2;
 	size_t symsize, osym, nsym, isym, istr, len;
-	key_t objkey;
+	unsigned int objkey;
 	dt_link_pair_t *pair, *bufs = NULL;
 	dt_strtab_t *strtab;
 	void *tmp;
@@ -1310,6 +1331,9 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 		emachine1 = emachine2 = EM_MIPS;
 #elif defined(__powerpc__)
 		emachine1 = emachine2 = EM_PPC64;
+#if !defined(_CALL_ELF) || _CALL_ELF == 1
+		uses_funcdesc = 1;
+#endif
 #elif defined(__sparc)
 		emachine1 = emachine2 = EM_SPARCV9;
 #elif defined(__i386) || defined(__amd64)
@@ -1350,10 +1374,9 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 	 * system in order to disambiguate potential conflicts between files of
 	 * the same name which contain identially named local symbols.
 	 */
-	if ((objkey = ftok(obj, 0)) == (key_t)-1) {
+	if ((objkey = hash_obj(obj, fd)) == (unsigned int)-1)
 		return (dt_link_error(dtp, elf, fd, bufs,
 		    "failed to generate unique key for object file: %s", obj));
-	}
 
 	scn_rel = NULL;
 	while ((scn_rel = elf_nextscn(elf, scn_rel)) != NULL) {
@@ -1456,7 +1479,7 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 				continue;
 
 			if (dt_symtab_lookup(data_sym, 0, isym, rela.r_offset,
-			    shdr_rel.sh_info, &fsym, (emachine1 == EM_PPC64),
+			    shdr_rel.sh_info, &fsym, uses_funcdesc,
 			    elf) != 0) {
 				dt_strtab_destroy(strtab);
 				goto err;
@@ -1627,7 +1650,7 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 
 			if (dt_symtab_lookup(data_sym, osym, isym,
 			    rela.r_offset, shdr_rel.sh_info, &fsym,
-			    (emachine1 == EM_PPC64), elf) == 0) {
+			    uses_funcdesc, elf) == 0) {
 				if (fsym.st_name > data_str->d_size)
 					goto err;
 
@@ -1636,7 +1659,7 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 				s = strchr(s, '.') + 1;
 			} else if (dt_symtab_lookup(data_sym, 0, osym,
 			    rela.r_offset, shdr_rel.sh_info, &fsym,
-			    (emachine1 == EM_PPC64), elf) == 0) {
+			    uses_funcdesc, elf) == 0) {
 				u_int bind;
 
 				bind = GELF_ST_BIND(fsym.st_info) == STB_WEAK ?

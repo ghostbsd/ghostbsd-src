@@ -502,10 +502,8 @@ vfs_mount_alloc(struct vnode *vp, struct vfsconf *vfsp, const char *fspath,
 	    __rangeof(struct mount, mnt_startzero, mnt_endzero));
 	TAILQ_INIT(&mp->mnt_nvnodelist);
 	mp->mnt_nvnodelistsize = 0;
-	TAILQ_INIT(&mp->mnt_activevnodelist);
-	mp->mnt_activevnodelistsize = 0;
-	TAILQ_INIT(&mp->mnt_tmpfreevnodelist);
-	mp->mnt_tmpfreevnodelistsize = 0;
+	TAILQ_INIT(&mp->mnt_lazyvnodelist);
+	mp->mnt_lazyvnodelistsize = 0;
 	if (mp->mnt_ref != 0 || mp->mnt_lockref != 0 ||
 	    mp->mnt_writeopcount != 0)
 		panic("%s: non-zero counters on new mp %p\n", __func__, mp);
@@ -571,10 +569,8 @@ vfs_mount_destroy(struct mount *mp)
 	KASSERT(TAILQ_EMPTY(&mp->mnt_uppers), ("mnt_uppers"));
 	if (mp->mnt_nvnodelistsize != 0)
 		panic("vfs_mount_destroy: nonzero nvnodelistsize");
-	if (mp->mnt_activevnodelistsize != 0)
-		panic("vfs_mount_destroy: nonzero activevnodelistsize");
-	if (mp->mnt_tmpfreevnodelistsize != 0)
-		panic("vfs_mount_destroy: nonzero tmpfreevnodelistsize");
+	if (mp->mnt_lazyvnodelistsize != 0)
+		panic("vfs_mount_destroy: nonzero lazyvnodelistsize");
 	if (mp->mnt_lockref != 0)
 		panic("vfs_mount_destroy: nonzero lock refcount");
 	MNT_IUNLOCK(mp);
@@ -904,7 +900,7 @@ vfs_domount_first(
 {
 	struct vattr va;
 	struct mount *mp;
-	struct vnode *newdp;
+	struct vnode *newdp, *rootvp;
 	int error, error1;
 
 	ASSERT_VOP_ELOCKED(vp, __func__);
@@ -971,6 +967,9 @@ vfs_domount_first(
 	    (error1 = VFS_ROOT(mp, LK_EXCLUSIVE, &newdp)) != 0) {
 		if (error1 != 0) {
 			error = error1;
+			rootvp = vfs_cache_root_clear(mp);
+			if (rootvp != NULL)
+				vrele(rootvp);
 			if ((error1 = VFS_UNMOUNT(mp, 0)) != 0)
 				printf("VFS_UNMOUNT returned %d\n", error1);
 		}
@@ -1039,11 +1038,13 @@ vfs_domount_update(
 	)
 {
 	struct export_args export;
+	struct o2export_args o2export;
 	struct vnode *rootvp;
 	void *bufp;
 	struct mount *mp;
-	int error, export_error, len;
+	int error, export_error, i, len;
 	uint64_t flag;
+	gid_t *grps;
 
 	ASSERT_VOP_ELOCKED(vp, __func__);
 	KASSERT((fsflags & MNT_UPDATE) != 0, ("MNT_UPDATE should be here"));
@@ -1126,11 +1127,64 @@ vfs_domount_update(
 		/* Assume that there is only 1 ABI for each length. */
 		switch (len) {
 		case (sizeof(struct oexport_args)):
-			bzero(&export, sizeof(export));
+			bzero(&o2export, sizeof(o2export));
 			/* FALLTHROUGH */
+		case (sizeof(o2export)):
+			bcopy(bufp, &o2export, len);
+			export.ex_flags = (uint64_t)o2export.ex_flags;
+			export.ex_root = o2export.ex_root;
+			export.ex_uid = o2export.ex_anon.cr_uid;
+			export.ex_groups = NULL;
+			export.ex_ngroups = o2export.ex_anon.cr_ngroups;
+			if (export.ex_ngroups > 0) {
+				if (export.ex_ngroups <= XU_NGROUPS) {
+					export.ex_groups = malloc(
+					    export.ex_ngroups * sizeof(gid_t),
+					    M_TEMP, M_WAITOK);
+					for (i = 0; i < export.ex_ngroups; i++)
+						export.ex_groups[i] =
+						  o2export.ex_anon.cr_groups[i];
+				} else
+					export_error = EINVAL;
+			} else if (export.ex_ngroups < 0)
+				export_error = EINVAL;
+			export.ex_addr = o2export.ex_addr;
+			export.ex_addrlen = o2export.ex_addrlen;
+			export.ex_mask = o2export.ex_mask;
+			export.ex_masklen = o2export.ex_masklen;
+			export.ex_indexfile = o2export.ex_indexfile;
+			export.ex_numsecflavors = o2export.ex_numsecflavors;
+			if (export.ex_numsecflavors < MAXSECFLAVORS) {
+				for (i = 0; i < export.ex_numsecflavors; i++)
+					export.ex_secflavors[i] =
+					    o2export.ex_secflavors[i];
+			} else
+				export_error = EINVAL;
+			if (export_error == 0)
+				export_error = vfs_export(mp, &export);
+			free(export.ex_groups, M_TEMP);
+			break;
 		case (sizeof(export)):
 			bcopy(bufp, &export, len);
-			export_error = vfs_export(mp, &export);
+			grps = NULL;
+			if (export.ex_ngroups > 0) {
+				if (export.ex_ngroups <= NGROUPS_MAX) {
+					grps = malloc(export.ex_ngroups *
+					    sizeof(gid_t), M_TEMP, M_WAITOK);
+					export_error = copyin(export.ex_groups,
+					    grps, export.ex_ngroups *
+					    sizeof(gid_t));
+					if (export_error == 0)
+						export.ex_groups = grps;
+				} else
+					export_error = EINVAL;
+			} else if (export.ex_ngroups == 0)
+				export.ex_groups = NULL;
+			else
+				export_error = EINVAL;
+			if (export_error == 0)
+				export_error = vfs_export(mp, &export);
+			free(grps, M_TEMP);
 			break;
 		default:
 			export_error = EINVAL;
@@ -1270,8 +1324,7 @@ vfs_domount(
 		pathbuf = malloc(MNAMELEN, M_TEMP, M_WAITOK);
 		strcpy(pathbuf, fspath);
 		error = vn_path_to_global_path(td, vp, pathbuf, MNAMELEN);
-		/* debug.disablefullpath == 1 results in ENODEV */
-		if (error == 0 || error == ENODEV) {
+		if (error == 0) {
 			error = vfs_domount_first(td, vfsp, pathbuf, vp,
 			    fsflags, optlist);
 		}
@@ -1298,12 +1351,19 @@ struct unmount_args {
 int
 sys_unmount(struct thread *td, struct unmount_args *uap)
 {
+
+	return (kern_unmount(td, uap->path, uap->flags));
+}
+
+int
+kern_unmount(struct thread *td, const char *path, int flags)
+{
 	struct nameidata nd;
 	struct mount *mp;
 	char *pathbuf;
 	int error, id0, id1;
 
-	AUDIT_ARG_VALUE(uap->flags);
+	AUDIT_ARG_VALUE(flags);
 	if (jailed(td->td_ucred) || usermount == 0) {
 		error = priv_check(td, PRIV_VFS_UNMOUNT);
 		if (error)
@@ -1311,12 +1371,12 @@ sys_unmount(struct thread *td, struct unmount_args *uap)
 	}
 
 	pathbuf = malloc(MNAMELEN, M_TEMP, M_WAITOK);
-	error = copyinstr(uap->path, pathbuf, MNAMELEN, NULL);
+	error = copyinstr(path, pathbuf, MNAMELEN, NULL);
 	if (error) {
 		free(pathbuf, M_TEMP);
 		return (error);
 	}
-	if (uap->flags & MNT_BYFSID) {
+	if (flags & MNT_BYFSID) {
 		AUDIT_ARG_TEXT(pathbuf);
 		/* Decode the filesystem ID. */
 		if (sscanf(pathbuf, "FSID:%d:%d", &id0, &id1) != 2) {
@@ -1343,7 +1403,7 @@ sys_unmount(struct thread *td, struct unmount_args *uap)
 			NDFREE(&nd, NDF_ONLY_PNBUF);
 			error = vn_path_to_global_path(td, nd.ni_vp, pathbuf,
 			    MNAMELEN);
-			if (error == 0 || error == ENODEV)
+			if (error == 0)
 				vput(nd.ni_vp);
 		}
 		mtx_lock(&mountlist_mtx);
@@ -1363,7 +1423,7 @@ sys_unmount(struct thread *td, struct unmount_args *uap)
 		 * now, so in the !MNT_BYFSID case return the more likely
 		 * EINVAL for compatibility.
 		 */
-		return ((uap->flags & MNT_BYFSID) ? ENOENT : EINVAL);
+		return ((flags & MNT_BYFSID) ? ENOENT : EINVAL);
 	}
 
 	/*
@@ -1373,7 +1433,7 @@ sys_unmount(struct thread *td, struct unmount_args *uap)
 		vfs_rel(mp);
 		return (EINVAL);
 	}
-	error = dounmount(mp, uap->flags, td);
+	error = dounmount(mp, flags, td);
 	return (error);
 }
 
@@ -1439,16 +1499,7 @@ vfs_op_enter(struct mount *mp)
 		MNT_IUNLOCK(mp);
 		return;
 	}
-	/*
-	 * Paired with a fence in vfs_op_thread_enter(). See the comment
-	 * above it for details.
-	 */
-	atomic_thread_fence_seq_cst();
 	vfs_op_barrier_wait(mp);
-	/*
-	 * Paired with a fence in vfs_op_thread_exit().
-	 */
-	atomic_thread_fence_acq();
 	CPU_FOREACH(cpu) {
 		mp->mnt_ref +=
 		    zpcpu_replace_cpu(mp->mnt_ref_pcpu, 0, cpu);
@@ -1482,20 +1533,52 @@ vfs_op_exit(struct mount *mp)
 	MNT_IUNLOCK(mp);
 }
 
-/*
- * It is assumed the caller already posted at least an acquire barrier.
- */
+struct vfs_op_barrier_ipi {
+	struct mount *mp;
+	struct smp_rendezvous_cpus_retry_arg srcra;
+};
+
+static void
+vfs_op_action_func(void *arg)
+{
+	struct vfs_op_barrier_ipi *vfsopipi;
+	struct mount *mp;
+
+	vfsopipi = __containerof(arg, struct vfs_op_barrier_ipi, srcra);
+	mp = vfsopipi->mp;
+
+	if (!vfs_op_thread_entered(mp))
+		smp_rendezvous_cpus_done(arg);
+}
+
+static void
+vfs_op_wait_func(void *arg, int cpu)
+{
+	struct vfs_op_barrier_ipi *vfsopipi;
+	struct mount *mp;
+	int *in_op;
+
+	vfsopipi = __containerof(arg, struct vfs_op_barrier_ipi, srcra);
+	mp = vfsopipi->mp;
+
+	in_op = zpcpu_get_cpu(mp->mnt_thread_in_ops_pcpu, cpu);
+	while (atomic_load_int(in_op))
+		cpu_spinwait();
+}
+
 void
 vfs_op_barrier_wait(struct mount *mp)
 {
-	int *in_op;
-	int cpu;
+	struct vfs_op_barrier_ipi vfsopipi;
 
-	CPU_FOREACH(cpu) {
-		in_op = zpcpu_get_cpu(mp->mnt_thread_in_ops_pcpu, cpu);
-		while (atomic_load_int(in_op))
-			cpu_spinwait();
-	}
+	vfsopipi.mp = mp;
+
+	smp_rendezvous_cpus_retry(all_cpus,
+	    smp_no_rendezvous_barrier,
+	    vfs_op_action_func,
+	    smp_no_rendezvous_barrier,
+	    vfs_op_wait_func,
+	    &vfsopipi.srcra);
 }
 
 #ifdef DIAGNOSTIC
@@ -1508,9 +1591,9 @@ vfs_assert_mount_counters(struct mount *mp)
 		return;
 
 	CPU_FOREACH(cpu) {
-		if (*(int *)zpcpu_get_cpu(mp->mnt_ref_pcpu, cpu) != 0 ||
-		    *(int *)zpcpu_get_cpu(mp->mnt_lockref_pcpu, cpu) != 0 ||
-		    *(int *)zpcpu_get_cpu(mp->mnt_writeopcount_pcpu, cpu) != 0)
+		if (*zpcpu_get_cpu(mp->mnt_ref_pcpu, cpu) != 0 ||
+		    *zpcpu_get_cpu(mp->mnt_lockref_pcpu, cpu) != 0 ||
+		    *zpcpu_get_cpu(mp->mnt_writeopcount_pcpu, cpu) != 0)
 			vfs_dump_mount_counters(mp);
 	}
 }
@@ -1580,7 +1663,7 @@ vfs_mount_fetch_counter(struct mount *mp, enum mount_counter which)
 
 	sum = *base;
 	CPU_FOREACH(cpu) {
-		sum += *(int *)zpcpu_get_cpu(pcpu, cpu);
+		sum += *zpcpu_get_cpu(pcpu, cpu);
 	}
 	return (sum);
 }
@@ -1692,7 +1775,7 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 	if (coveredvp != NULL)
 		vdrop(coveredvp);
 
-	vfs_msync(mp, MNT_WAIT);
+	vfs_periodic(mp, MNT_WAIT);
 	MNT_ILOCK(mp);
 	async_flag = mp->mnt_flag & MNT_ASYNC;
 	mp->mnt_flag &= ~MNT_ASYNC;
@@ -1700,9 +1783,7 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 	MNT_IUNLOCK(mp);
 	cache_purgevfs(mp, false); /* remove cache entries for this file sys */
 	vfs_deallocate_syncvnode(mp);
-	if ((mp->mnt_flag & MNT_RDONLY) != 0 || (flags & MNT_FORCE) != 0 ||
-	    (error = VFS_SYNC(mp, MNT_WAIT)) == 0)
-		error = VFS_UNMOUNT(mp, flags);
+	error = VFS_UNMOUNT(mp, flags);
 	vn_finished_write(mp);
 	/*
 	 * If we failed to flush the dirty blocks for this mount point,
@@ -2092,7 +2173,8 @@ __vfs_statfs(struct mount *mp, struct statfs *sbp)
 	 * Filesystems only fill in part of the structure for updates, we
 	 * have to read the entirety first to get all content.
 	 */
-	memcpy(sbp, &mp->mnt_stat, sizeof(*sbp));
+	if (sbp != &mp->mnt_stat)
+		memcpy(sbp, &mp->mnt_stat, sizeof(*sbp));
 
 	/*
 	 * Set these in case the underlying filesystem fails to do so.
@@ -2315,12 +2397,4 @@ kernel_vmount(int flags, ...)
 
 	error = kernel_mount(ma, flags);
 	return (error);
-}
-
-void
-vfs_oexport_conv(const struct oexport_args *oexp, struct export_args *exp)
-{
-
-	bcopy(oexp, exp, sizeof(*oexp));
-	exp->ex_numsecflavors = 0;
 }

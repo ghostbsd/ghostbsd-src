@@ -72,7 +72,6 @@ DUMMY(delete_module);
 DUMMY(quotactl);
 DUMMY(bdflush);
 DUMMY(sysfs);
-DUMMY(sendfile);
 DUMMY(setfsuid);
 DUMMY(setfsgid);
 DUMMY(pivot_root);
@@ -134,7 +133,6 @@ DUMMY(finit_module);
 DUMMY(sched_setattr);
 DUMMY(sched_getattr);
 /* Linux 3.17: */
-DUMMY(memfd_create);
 DUMMY(seccomp);
 /* Linux 3.18: */
 DUMMY(bpf);

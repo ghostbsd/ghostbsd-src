@@ -66,68 +66,6 @@ __FBSDID("$FreeBSD$");
 #include <cam/ctl/ctl_debug.h>
 #include <cam/ctl/ctl_error.h>
 
-#if (__FreeBSD_version < 1100000)
-struct mbufq {
-	struct mbuf *head;
-	struct mbuf *tail;
-};
-
-static void
-mbufq_init(struct mbufq *q, int limit)
-{
-
-	q->head = q->tail = NULL;
-}
-
-static void
-mbufq_drain(struct mbufq *q)
-{
-	struct mbuf *m;
-
-	while ((m = q->head) != NULL) {
-		q->head = m->m_nextpkt;
-		m_freem(m);
-	}
-	q->tail = NULL;
-}
-
-static struct mbuf *
-mbufq_dequeue(struct mbufq *q)
-{
-	struct mbuf *m;
-
-	m = q->head;
-	if (m) {
-		if (q->tail == m)
-			q->tail = NULL;
-		q->head = m->m_nextpkt;
-		m->m_nextpkt = NULL;
-	}
-	return (m);
-}
-
-static void
-mbufq_enqueue(struct mbufq *q, struct mbuf *m)
-{
-
-	m->m_nextpkt = NULL;
-	if (q->tail)
-		q->tail->m_nextpkt = m;
-	else
-		q->head = m;
-	q->tail = m;
-}
-
-static u_int
-sbavail(struct sockbuf *sb)
-{
-	return (sb->sb_cc);
-}
-
-#if (__FreeBSD_version < 1000000)
-#define	mtodo(m, o)	((void *)(((m)->m_data) + (o)))
-#endif
-#endif
 
 struct ha_msg_wire {
 	uint32_t	 channel;
@@ -258,9 +196,11 @@ ctl_ha_lclose(struct ha_softc *softc)
 {
 
 	if (softc->ha_lso) {
-		SOCKBUF_LOCK(&softc->ha_lso->so_rcv);
-		soupcall_clear(softc->ha_lso, SO_RCV);
-		SOCKBUF_UNLOCK(&softc->ha_lso->so_rcv);
+		if (SOLISTENING(softc->ha_lso)) {
+			SOLISTEN_LOCK(softc->ha_lso);
+			solisten_upcall_set(softc->ha_lso, NULL, NULL);
+			SOLISTEN_UNLOCK(softc->ha_lso);
+		}
 		soclose(softc->ha_lso);
 		softc->ha_lso = NULL;
 	}
@@ -957,7 +897,8 @@ ctl_ha_msg_init(struct ctl_softc *ctl_softc)
 	    ctl_ha_msg_shutdown, ctl_softc, SHUTDOWN_PRI_FIRST);
 	SYSCTL_ADD_PROC(&ctl_softc->sysctl_ctx,
 	    SYSCTL_CHILDREN(ctl_softc->sysctl_tree),
-	    OID_AUTO, "ha_peer", CTLTYPE_STRING | CTLFLAG_RWTUN,
+	    OID_AUTO, "ha_peer",
+	    CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT,
 	    softc, 0, ctl_ha_peer_sysctl, "A", "HA peer connection method");
 
 	if (ctl_ha_msg_register(CTL_HA_CHAN_DATA, ctl_dt_event_handler)

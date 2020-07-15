@@ -71,8 +71,10 @@ static const struct ipspec intparams[] = {
     [IP_EXEC_JAIL_USER] =	{"exec.jail_user",	PF_INTERNAL},
     [IP_EXEC_POSTSTART] =	{"exec.poststart",	PF_INTERNAL},
     [IP_EXEC_POSTSTOP] =	{"exec.poststop",	PF_INTERNAL},
+    [IP_EXEC_PREPARE] =		{"exec.prepare",	PF_INTERNAL},
     [IP_EXEC_PRESTART] =	{"exec.prestart",	PF_INTERNAL},
     [IP_EXEC_PRESTOP] =		{"exec.prestop",	PF_INTERNAL},
+    [IP_EXEC_RELEASE] =		{"exec.release",	PF_INTERNAL},
     [IP_EXEC_CREATED] =		{"exec.created",	PF_INTERNAL},
     [IP_EXEC_START] =		{"exec.start",		PF_INTERNAL},
     [IP_EXEC_STOP] =		{"exec.stop",		PF_INTERNAL},
@@ -596,8 +598,8 @@ check_intparams(struct cfjail *j)
 			if (cs || defif)
 				add_param(j, NULL, IP__IP4_IFADDR, s->s);
 			if (cs) {
-				strcpy(s->s, cs + 1);
 				s->len -= cs + 1 - s->s;
+				memmove(s->s, cs + 1, s->len + 1);
 			}
 			if ((cs = strchr(s->s, '/')) != NULL) {
 				*cs = '\0';
@@ -617,8 +619,8 @@ check_intparams(struct cfjail *j)
 			if (cs || defif)
 				add_param(j, NULL, IP__IP6_IFADDR, s->s);
 			if (cs) {
-				strcpy(s->s, cs + 1);
 				s->len -= cs + 1 - s->s;
+				memmove(s->s, cs + 1, s->len + 1);
 			}
 			if ((cs = strchr(s->s, '/')) != NULL) {
 				*cs = '\0';

@@ -31,6 +31,7 @@
 #include <dev/mlx5/mlx5_ifc.h>
 #include <dev/mlx5/mlx5_fpga/core.h>
 #include "mlx5_core.h"
+#include "eswitch.h"
 
 #include "opt_rss.h"
 
@@ -65,7 +66,8 @@ enum {
 			       (1ull << MLX5_EVENT_TYPE_PORT_CHANGE)	    | \
 			       (1ull << MLX5_EVENT_TYPE_SRQ_CATAS_ERROR)    | \
 			       (1ull << MLX5_EVENT_TYPE_SRQ_LAST_WQE)	    | \
-			       (1ull << MLX5_EVENT_TYPE_SRQ_RQ_LIMIT))
+			       (1ull << MLX5_EVENT_TYPE_SRQ_RQ_LIMIT)	    | \
+			       (1ull << MLX5_EVENT_TYPE_NIC_VPORT_CHANGE))
 
 struct map_eq_in {
 	u64	mask;
@@ -238,7 +240,7 @@ static int mlx5_eq_int(struct mlx5_core_dev *dev, struct mlx5_eq *eq)
 		 * Make sure we read EQ entry contents after we've
 		 * checked the ownership bit.
 		 */
-		rmb();
+		atomic_thread_fence_acq();
 
 		mlx5_core_dbg(eq->dev, "eqn %d, eqe type %s\n",
 			      eq->eqn, eqe_type_str(eqe->type));
@@ -353,6 +355,9 @@ static int mlx5_eq_int(struct mlx5_core_dev *dev, struct mlx5_eq *eq)
 					     MLX5_DEV_EVENT_VPORT_CHANGE,
 					     (unsigned long)vport_num);
 			}
+			if (dev->priv.eswitch != NULL)
+				mlx5_eswitch_vport_event(dev->priv.eswitch,
+				    eqe);
 			break;
 
 		case MLX5_EVENT_TYPE_FPGA_ERROR:
@@ -654,6 +659,20 @@ static const char *mlx5_port_module_event_error_type_to_string(u8 error_type)
 		return "High Temperature";
 	case MLX5_MODULE_EVENT_ERROR_CABLE_IS_SHORTED:
 		return "Bad or shorted cable/module";
+	case MLX5_MODULE_EVENT_ERROR_PMD_TYPE_NOT_ENABLED:
+		return "PMD type is not enabled";
+	case MLX5_MODULE_EVENT_ERROR_LASTER_TEC_FAILURE:
+		return "Laster_TEC_failure";
+	case MLX5_MODULE_EVENT_ERROR_HIGH_CURRENT:
+		return "High_current";
+	case MLX5_MODULE_EVENT_ERROR_HIGH_VOLTAGE:
+		return "High_voltage";
+	case MLX5_MODULE_EVENT_ERROR_PCIE_SYS_POWER_SLOT_EXCEEDED:
+		return "pcie_system_power_slot_Exceeded";
+	case MLX5_MODULE_EVENT_ERROR_HIGH_POWER:
+		return "High_power";
+	case MLX5_MODULE_EVENT_ERROR_MODULE_STATE_MACHINE_FAULT:
+		return "Module_state_machine_fault";
 	default:
 		return "Unknown error type";
 	}
@@ -739,3 +758,28 @@ static void mlx5_port_general_notification_event(struct mlx5_core_dev *dev,
 	}
 }
 
+void
+mlx5_disable_interrupts(struct mlx5_core_dev *dev)
+{
+	int nvec = dev->priv.eq_table.num_comp_vectors + MLX5_EQ_VEC_COMP_BASE;
+	int x;
+
+	for (x = 0; x != nvec; x++)
+		disable_irq(dev->priv.msix_arr[x].vector);
+}
+
+void
+mlx5_poll_interrupts(struct mlx5_core_dev *dev)
+{
+	struct mlx5_eq *eq;
+
+	if (unlikely(dev->priv.disable_irqs != 0))
+		return;
+
+	mlx5_eq_int(dev, &dev->priv.eq_table.cmd_eq);
+	mlx5_eq_int(dev, &dev->priv.eq_table.async_eq);
+	mlx5_eq_int(dev, &dev->priv.eq_table.pages_eq);
+
+	list_for_each_entry(eq, &dev->priv.eq_table.comp_eqs_list, list)
+		mlx5_eq_int(dev, eq);
+}

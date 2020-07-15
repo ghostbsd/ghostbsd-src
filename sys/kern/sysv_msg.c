@@ -99,7 +99,6 @@ static int msg_prison_get(void *, void *);
 static int msg_prison_remove(void *, void *);
 static void msg_prison_cleanup(struct prison *);
 
-
 #ifdef MSG_DEBUG
 #define DPRINTF(a)	printf a
 #else
@@ -351,7 +350,6 @@ msgunload()
 	mtx_destroy(&msq_mtx);
 	return (0);
 }
-
 
 static int
 sysvmsg_modload(struct module *module, int cmd, void *arg)
@@ -615,6 +613,13 @@ kern_msgctl(struct thread *td, int msqid, int cmd, struct msqid_ds *msqbuf)
 		*msqbuf = msqkptr->u;
 		if (td->td_ucred->cr_prison != msqkptr->cred->cr_prison)
 			msqbuf->msg_perm.key = IPC_PRIVATE;
+
+		/*
+		 * Try to hide the fact that the structure layout is shared by
+		 * both the kernel and userland.  These pointers are not useful
+		 * to userspace.
+		 */
+		msqbuf->__msg_first = msqbuf->__msg_last = NULL;
 		break;
 
 	default:

@@ -90,7 +90,8 @@ __FBSDID("$FreeBSD$");
 #define AMR_DEFINE_TABLES
 #include <dev/amr/amr_tables.h>
 
-SYSCTL_NODE(_hw, OID_AUTO, amr, CTLFLAG_RD, 0, "AMR driver parameters");
+SYSCTL_NODE(_hw, OID_AUTO, amr, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "AMR driver parameters");
 
 static d_open_t         amr_open;
 static d_close_t        amr_close;
@@ -1315,6 +1316,10 @@ amr_bio_command(struct amr_softc *sc, struct amr_command **acp)
 	ac->ac_flags |= AMR_CMD_PRIORITY | AMR_CMD_DATAOUT;
 	cmd = AMR_CMD_FLUSH;
 	break;
+    default:
+	biofinish(bio, NULL, EOPNOTSUPP);
+	amr_releasecmd(ac);
+	return (0);
     }
     amrd = (struct amrd_softc *)bio->bio_disk->d_drv1;
     driveno = amrd->amrd_drive - sc->amr_drive;

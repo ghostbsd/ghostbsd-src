@@ -222,10 +222,8 @@ vm_imgact_hold_page(vm_object_t object, vm_ooffset_t offset)
 	vm_pindex_t pindex;
 
 	pindex = OFF_TO_IDX(offset);
-	VM_OBJECT_WLOCK(object);
-	(void)vm_page_grab_valid(&m, object, pindex,
+	(void)vm_page_grab_valid_unlocked(&m, object, pindex,
 	    VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY | VM_ALLOC_WIRED);
-	VM_OBJECT_WUNLOCK(object);
 	return (m);
 }
 
@@ -266,9 +264,9 @@ vm_sync_icache(vm_map_t map, vm_offset_t va, vm_offset_t sz)
 	pmap_sync_icache(map->pmap, va, sz);
 }
 
+vm_object_t kstack_object;
 static uma_zone_t kstack_cache;
 static int kstack_cache_size;
-static int kstack_domain_iter;
 
 static int
 sysctl_kstack_cache_size(SYSCTL_HANDLER_ARGS)
@@ -281,28 +279,20 @@ sysctl_kstack_cache_size(SYSCTL_HANDLER_ARGS)
 		uma_zone_set_maxcache(kstack_cache, kstack_cache_size);
 	return (error);
 }
-SYSCTL_PROC(_vm, OID_AUTO, kstack_cache_size, CTLTYPE_INT|CTLFLAG_RW,
-	&kstack_cache_size, 0, sysctl_kstack_cache_size, "IU",
-	"Maximum number of cached kernel stacks");
+SYSCTL_PROC(_vm, OID_AUTO, kstack_cache_size,
+    CTLTYPE_INT|CTLFLAG_MPSAFE|CTLFLAG_RW, &kstack_cache_size, 0,
+    sysctl_kstack_cache_size, "IU", "Maximum number of cached kernel stacks");
 
 /*
  * Create the kernel stack (including pcb for i386) for a new thread.
- * This routine directly affects the fork perf for a process and
- * create performance for a thread.
  */
 static vm_offset_t
-vm_thread_stack_create(struct domainset *ds, vm_object_t *ksobjp, int pages)
+vm_thread_stack_create(struct domainset *ds, int pages)
 {
 	vm_page_t ma[KSTACK_MAX_PAGES];
-	vm_object_t ksobj;
 	vm_offset_t ks;
 	int i;
 
-	/*
-	 * Allocate an object for the kstack.
-	 */
-	ksobj = vm_object_allocate(OBJT_DEFAULT, pages);
-	
 	/*
 	 * Get a kernel virtual address for this thread's kstack.
 	 */
@@ -321,13 +311,7 @@ vm_thread_stack_create(struct domainset *ds, vm_object_t *ksobjp, int pages)
 #endif
 	if (ks == 0) {
 		printf("%s: kstack allocation failed\n", __func__);
-		vm_object_deallocate(ksobj);
 		return (0);
-	}
-	if (vm_ndomains > 1) {
-		ksobj->domain.dr_policy = ds;
-		ksobj->domain.dr_iter =
-		    atomic_fetchadd_int(&kstack_domain_iter, 1);
 	}
 
 	if (KSTACK_GUARD_PAGES != 0) {
@@ -335,40 +319,37 @@ vm_thread_stack_create(struct domainset *ds, vm_object_t *ksobjp, int pages)
 		ks += KSTACK_GUARD_PAGES * PAGE_SIZE;
 	}
 
-	/* 
-	 * For the length of the stack, link in a real page of ram for each
-	 * page of stack.
+	/*
+	 * Allocate physical pages to back the stack.
 	 */
-	VM_OBJECT_WLOCK(ksobj);
-	(void)vm_page_grab_pages(ksobj, 0, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY |
-	    VM_ALLOC_WIRED, ma, pages);
+	vm_thread_stack_back(ds, ks, ma, pages, VM_ALLOC_NORMAL);
 	for (i = 0; i < pages; i++)
-		ma[i]->valid = VM_PAGE_BITS_ALL;
-	VM_OBJECT_WUNLOCK(ksobj);
+		vm_page_valid(ma[i]);
 	pmap_qenter(ks, ma, pages);
-	*ksobjp = ksobj;
 
 	return (ks);
 }
 
 static void
-vm_thread_stack_dispose(vm_object_t ksobj, vm_offset_t ks, int pages)
+vm_thread_stack_dispose(vm_offset_t ks, int pages)
 {
 	vm_page_t m;
+	vm_pindex_t pindex;
 	int i;
 
+	pindex = atop(ks - VM_MIN_KERNEL_ADDRESS);
+
 	pmap_qremove(ks, pages);
-	VM_OBJECT_WLOCK(ksobj);
+	VM_OBJECT_WLOCK(kstack_object);
 	for (i = 0; i < pages; i++) {
-		m = vm_page_lookup(ksobj, i);
+		m = vm_page_lookup(kstack_object, pindex + i);
 		if (m == NULL)
 			panic("%s: kstack already missing?", __func__);
-		vm_page_busy_acquire(m, 0);
+		vm_page_xbusy_claim(m);
 		vm_page_unwire_noq(m);
 		vm_page_free(m);
 	}
-	VM_OBJECT_WUNLOCK(ksobj);
-	vm_object_deallocate(ksobj);
+	VM_OBJECT_WUNLOCK(kstack_object);
 	kva_free(ks - (KSTACK_GUARD_PAGES * PAGE_SIZE),
 	    (pages + KSTACK_GUARD_PAGES) * PAGE_SIZE);
 }
@@ -379,7 +360,6 @@ vm_thread_stack_dispose(vm_object_t ksobj, vm_offset_t ks, int pages)
 int
 vm_thread_new(struct thread *td, int pages)
 {
-	vm_object_t ksobj;
 	vm_offset_t ks;
 
 	/* Bounds check */
@@ -389,12 +369,8 @@ vm_thread_new(struct thread *td, int pages)
 		pages = KSTACK_MAX_PAGES;
 
 	ks = 0;
-	ksobj = NULL;
-	if (pages == kstack_pages && kstack_cache != NULL) {
+	if (pages == kstack_pages && kstack_cache != NULL)
 		ks = (vm_offset_t)uma_zalloc(kstack_cache, M_NOWAIT);
-		if (ks != 0) 
-			ksobj = PHYS_TO_VM_PAGE(pmap_kextract(ks))->object;
-	}
 
 	/*
 	 * Ensure that kstack objects can draw pages from any memory
@@ -403,10 +379,9 @@ vm_thread_new(struct thread *td, int pages)
 	 */
 	if (ks == 0)
 		ks = vm_thread_stack_create(DOMAINSET_PREF(PCPU_GET(domain)),
-		    &ksobj, pages);
+		    pages);
 	if (ks == 0)
 		return (0);
-	td->td_kstack_obj = ksobj;
 	td->td_kstack = ks;
 	td->td_kstack_pages = pages;
 	return (1);
@@ -418,26 +393,52 @@ vm_thread_new(struct thread *td, int pages)
 void
 vm_thread_dispose(struct thread *td)
 {
-	vm_object_t ksobj;
 	vm_offset_t ks;
 	int pages;
 
 	pages = td->td_kstack_pages;
-	ksobj = td->td_kstack_obj;
 	ks = td->td_kstack;
 	td->td_kstack = 0;
 	td->td_kstack_pages = 0;
 	if (pages == kstack_pages)
 		uma_zfree(kstack_cache, (void *)ks);
 	else
-		vm_thread_stack_dispose(ksobj, ks, pages);
+		vm_thread_stack_dispose(ks, pages);
+}
+
+/*
+ * Allocate physical pages, following the specified NUMA policy, to back a
+ * kernel stack.
+ */
+void
+vm_thread_stack_back(struct domainset *ds, vm_offset_t ks, vm_page_t ma[],
+    int npages, int req_class)
+{
+	vm_pindex_t pindex;
+	int n;
+
+	pindex = atop(ks - VM_MIN_KERNEL_ADDRESS);
+
+	VM_OBJECT_WLOCK(kstack_object);
+	for (n = 0; n < npages;) {
+		if (vm_ndomains > 1)
+			kstack_object->domain.dr_policy = ds;
+
+		/*
+		 * Use WAITFAIL to force a reset of the domain selection policy
+		 * if we had to sleep for pages.
+		 */
+		n += vm_page_grab_pages(kstack_object, pindex + n,
+		    req_class | VM_ALLOC_WIRED | VM_ALLOC_WAITFAIL,
+		    &ma[n], npages - n);
+	}
+	VM_OBJECT_WUNLOCK(kstack_object);
 }
 
 static int
 kstack_import(void *arg, void **store, int cnt, int domain, int flags)
 {
 	struct domainset *ds;
-	vm_object_t ksobj;
 	int i;
 
 	if (domain == UMA_ANYDOMAIN)
@@ -446,8 +447,7 @@ kstack_import(void *arg, void **store, int cnt, int domain, int flags)
 		ds = DOMAINSET_PREF(domain);
 
 	for (i = 0; i < cnt; i++) {
-		store[i] = (void *)vm_thread_stack_create(ds, &ksobj,
-		    kstack_pages);
+		store[i] = (void *)vm_thread_stack_create(ds, kstack_pages);
 		if (store[i] == NULL)
 			break;
 	}
@@ -462,15 +462,15 @@ kstack_release(void *arg, void **store, int cnt)
 
 	for (i = 0; i < cnt; i++) {
 		ks = (vm_offset_t)store[i];
-		vm_thread_stack_dispose(
-		    PHYS_TO_VM_PAGE(pmap_kextract(ks))->object,
-		    ks, kstack_pages);
+		vm_thread_stack_dispose(ks, kstack_pages);
 	}
 }
 
 static void
 kstack_cache_init(void *null)
 {
+	kstack_object = vm_object_allocate(OBJT_SWAP,
+	    atop(VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS));
 	kstack_cache = uma_zcache_create("kstack_cache",
 	    kstack_pages * PAGE_SIZE, NULL, NULL, NULL, NULL,
 	    kstack_import, kstack_release, NULL,
@@ -478,8 +478,7 @@ kstack_cache_init(void *null)
 	kstack_cache_size = imax(128, mp_ncpus * 4);
 	uma_zone_set_maxcache(kstack_cache, kstack_cache_size);
 }
-
-SYSINIT(vm_kstacks, SI_SUB_KTHREAD_INIT, SI_ORDER_ANY, kstack_cache_init, NULL);
+SYSINIT(vm_kstacks, SI_SUB_KMEM, SI_ORDER_ANY, kstack_cache_init, NULL);
 
 #ifdef KSTACK_USAGE_PROF
 /*

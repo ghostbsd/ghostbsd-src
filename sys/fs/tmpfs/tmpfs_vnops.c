@@ -90,7 +90,7 @@ tmpfs_lookup1(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 	*vpp = NULLVP;
 
 	/* Check accessibility of requested node as a first step. */
-	error = VOP_ACCESS(dvp, VEXEC, cnp->cn_cred, cnp->cn_thread);
+	error = vn_dir_check_exec(dvp, cnp);
 	if (error != 0)
 		goto out;
 
@@ -387,7 +387,7 @@ tmpfs_getattr(struct vop_getattr_args *v)
 
 	node = VP_TO_TMPFS_NODE(vp);
 
-	tmpfs_update(vp);
+	tmpfs_update_getattr(vp);
 
 	vap->va_type = vp->v_type;
 	vap->va_mode = node->tn_mode;
@@ -1435,16 +1435,28 @@ tmpfs_pathconf(struct vop_pathconf_args *v)
 
 static int
 tmpfs_vptofh(struct vop_vptofh_args *ap)
+/*
+vop_vptofh {
+	IN struct vnode *a_vp;
+	IN struct fid *a_fhp;
+};
+*/
 {
-	struct tmpfs_fid *tfhp;
+	struct tmpfs_fid_data tfd;
 	struct tmpfs_node *node;
+	struct fid *fhp;
 
-	tfhp = (struct tmpfs_fid *)ap->a_fhp;
 	node = VP_TO_TMPFS_NODE(ap->a_vp);
+	fhp = ap->a_fhp;
+	fhp->fid_len = sizeof(tfd);
 
-	tfhp->tf_len = sizeof(struct tmpfs_fid);
-	tfhp->tf_id = node->tn_id;
-	tfhp->tf_gen = node->tn_gen;
+	/*
+	 * Copy into fid_data from the stack to avoid unaligned pointer use.
+	 * See the comment in sys/mount.h on struct fid for details.
+	 */
+	tfd.tfd_id = node->tn_id;
+	tfd.tfd_gen = node->tn_gen;
+	memcpy(fhp->fid_data, &tfd, fhp->fid_len);
 
 	return (0);
 }
@@ -1491,7 +1503,7 @@ tmpfs_vptocnp_dir(struct tmpfs_node *tn, struct tmpfs_node *tnp,
 
 static int
 tmpfs_vptocnp_fill(struct vnode *vp, struct tmpfs_node *tn,
-    struct tmpfs_node *tnp, char *buf, int *buflen, struct vnode **dvp)
+    struct tmpfs_node *tnp, char *buf, size_t *buflen, struct vnode **dvp)
 {
 	struct tmpfs_dirent *de;
 	int error, i;
@@ -1531,7 +1543,7 @@ tmpfs_vptocnp(struct vop_vptocnp_args *ap)
 	struct tmpfs_dirent *de;
 	struct tmpfs_mount *tm;
 	char *buf;
-	int *buflen;
+	size_t *buflen;
 	int error;
 
 	vp = ap->a_vp;

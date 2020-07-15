@@ -3465,6 +3465,7 @@ static bool
 iwm_rx_mpdu(struct iwm_softc *sc, struct mbuf *m, uint32_t offset,
     bool stolen)
 {
+  	struct epoch_tracker et;
 	struct ieee80211com *ic;
 	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
@@ -3484,6 +3485,8 @@ iwm_rx_mpdu(struct iwm_softc *sc, struct mbuf *m, uint32_t offset,
 	ni = ieee80211_find_rxnode(ic, (struct ieee80211_frame_min *)wh);
 
 	IWM_UNLOCK(sc);
+
+	NET_EPOCH_ENTER(et);
 	if (ni != NULL) {
 		IWM_DPRINTF(sc, IWM_DEBUG_RECV, "input m %p\n", m);
 		ieee80211_input_mimo(ni, m);
@@ -3492,6 +3495,8 @@ iwm_rx_mpdu(struct iwm_softc *sc, struct mbuf *m, uint32_t offset,
 		IWM_DPRINTF(sc, IWM_DEBUG_RECV, "inputall m %p\n", m);
 		ieee80211_input_mimo_all(ic, m);
 	}
+	NET_EPOCH_EXIT(et);
+
 	IWM_LOCK(sc);
 
 	return true;
@@ -5059,18 +5064,46 @@ iwm_parent(struct ieee80211com *ic)
 {
 	struct iwm_softc *sc = ic->ic_softc;
 	int startall = 0;
+	int rfkill = 0;
 
 	IWM_LOCK(sc);
 	if (ic->ic_nrunning > 0) {
 		if (!(sc->sc_flags & IWM_FLAG_HW_INITED)) {
 			iwm_init(sc);
-			startall = 1;
+			rfkill = iwm_check_rfkill(sc);
+			if (!rfkill)
+				startall = 1;
 		}
 	} else if (sc->sc_flags & IWM_FLAG_HW_INITED)
 		iwm_stop(sc);
 	IWM_UNLOCK(sc);
 	if (startall)
 		ieee80211_start_all(ic);
+	else if (rfkill)
+		taskqueue_enqueue(sc->sc_tq, &sc->sc_rftoggle_task);
+}
+
+static void
+iwm_rftoggle_task(void *arg, int npending __unused)
+{
+	struct iwm_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
+	int rfkill;
+
+	IWM_LOCK(sc);
+	rfkill = iwm_check_rfkill(sc);
+	IWM_UNLOCK(sc);
+	if (rfkill) {
+		device_printf(sc->sc_dev,
+		    "%s: rfkill switch, disabling interface\n", __func__);
+		ieee80211_suspend_all(ic);
+		ieee80211_notify_radio(ic, 0);
+	} else {
+		device_printf(sc->sc_dev,
+		    "%s: rfkill cleared, re-enabling interface\n", __func__);
+		ieee80211_resume_all(ic);
+		ieee80211_notify_radio(ic, 1);
+	}
 }
 
 /*
@@ -5618,9 +5651,8 @@ iwm_handle_rxb(struct iwm_softc *sc, struct mbuf *m)
 
 		default:
 			device_printf(sc->sc_dev,
-			    "frame %d/%d %x UNHANDLED (this should "
-			    "not happen)\n", qid & ~0x80, idx,
-			    pkt->len_n_flags);
+			    "code %x, frame %d/%d %x unhandled\n",
+			    code, qid & ~0x80, idx, pkt->len_n_flags);
 			break;
 		}
 
@@ -5810,12 +5842,7 @@ iwm_intr(void *arg)
 
 	if (r1 & IWM_CSR_INT_BIT_RF_KILL) {
 		handled |= IWM_CSR_INT_BIT_RF_KILL;
-		if (iwm_check_rfkill(sc)) {
-			device_printf(sc->sc_dev,
-			    "%s: rfkill switch, disabling interface\n",
-			    __func__);
-			iwm_stop(sc);
-		}
+		taskqueue_enqueue(sc->sc_tq, &sc->sc_rftoggle_task);
 	}
 
 	/*
@@ -6020,6 +6047,16 @@ iwm_attach(device_t dev)
 	callout_init_mtx(&sc->sc_watchdog_to, &sc->sc_mtx, 0);
 	callout_init_mtx(&sc->sc_led_blink_to, &sc->sc_mtx, 0);
 	TASK_INIT(&sc->sc_es_task, 0, iwm_endscan_cb, sc);
+	TASK_INIT(&sc->sc_rftoggle_task, 0, iwm_rftoggle_task, sc);
+
+	sc->sc_tq = taskqueue_create("iwm_taskq", M_WAITOK,
+	    taskqueue_thread_enqueue, &sc->sc_tq);
+	error = taskqueue_start_threads(&sc->sc_tq, 1, 0, "iwm_taskq");
+	if (error != 0) {
+		device_printf(dev, "can't start taskq thread, error %d\n",
+		    error);
+		goto fail;
+	}
 
 	error = iwm_dev_check(dev);
 	if (error != 0)
@@ -6586,6 +6623,8 @@ iwm_detach_local(struct iwm_softc *sc, int do_net80211)
 		ieee80211_draintask(&sc->sc_ic, &sc->sc_es_task);
 	}
 	iwm_stop_device(sc);
+	taskqueue_drain_all(sc->sc_tq);
+	taskqueue_free(sc->sc_tq);
 	if (do_net80211) {
 		IWM_LOCK(sc);
 		iwm_xmit_queue_drain(sc);

@@ -58,6 +58,8 @@ __FBSDID("$FreeBSD$");
 
 #include "fsck.h"
 
+struct inoinfo **inphead, **inpsort;
+
 struct uufsd disk;
 struct bufarea asblk;
 #define altsblock (*asblk.b_un.b_fs)
@@ -214,7 +216,7 @@ setup(char *dev)
 	disk.d_ufs = (sblock.fs_magic == FS_UFS1_MAGIC) ? 1 : 2;
 	disk.d_bsize = sblock.fs_fsize / fsbtodb(&sblock, 1);
 	disk.d_sblock = sblock.fs_sblockloc / disk.d_bsize;
-	disk.d_sbcsum = sblock.fs_csp;
+	disk.d_si = sblock.fs_si;
 
 	if (skipclean && ckclean && sblock.fs_clean) {
 		pwarn("FILE SYSTEM CLEAN; SKIPPING CHECKS\n");

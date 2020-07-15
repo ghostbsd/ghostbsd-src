@@ -113,6 +113,9 @@ static void	me_clone_destroy(struct ifnet *);
 VNET_DEFINE_STATIC(struct if_clone *, me_cloner);
 #define	V_me_cloner	VNET(me_cloner)
 
+#ifdef VIMAGE
+static void	me_reassign(struct ifnet *, struct vnet *, char *);
+#endif
 static void	me_qflush(struct ifnet *);
 static int	me_transmit(struct ifnet *, struct mbuf *);
 static int	me_ioctl(struct ifnet *, u_long, caddr_t);
@@ -124,7 +127,7 @@ static int	me_set_tunnel(struct me_softc *, in_addr_t, in_addr_t);
 static void	me_delete_tunnel(struct me_softc *);
 
 SYSCTL_DECL(_net_link);
-static SYSCTL_NODE(_net_link, IFT_TUNNEL, me, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_net_link, IFT_TUNNEL, me, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Minimal Encapsulation for IP (RFC 2004)");
 #ifndef MAX_ME_NEST
 #define MAX_ME_NEST 1
@@ -194,18 +197,36 @@ me_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	ME2IFP(sc)->if_softc = sc;
 	if_initname(ME2IFP(sc), mename, unit);
 
-	ME2IFP(sc)->if_mtu = MEMTU;;
+	ME2IFP(sc)->if_mtu = MEMTU;
 	ME2IFP(sc)->if_flags = IFF_POINTOPOINT|IFF_MULTICAST;
 	ME2IFP(sc)->if_output = me_output;
 	ME2IFP(sc)->if_ioctl = me_ioctl;
 	ME2IFP(sc)->if_transmit = me_transmit;
 	ME2IFP(sc)->if_qflush = me_qflush;
+#ifdef VIMAGE
+	ME2IFP(sc)->if_reassign = me_reassign;
+#endif
 	ME2IFP(sc)->if_capabilities |= IFCAP_LINKSTATE;
 	ME2IFP(sc)->if_capenable |= IFCAP_LINKSTATE;
 	if_attach(ME2IFP(sc));
 	bpfattach(ME2IFP(sc), DLT_NULL, sizeof(u_int32_t));
 	return (0);
 }
+
+#ifdef VIMAGE
+static void
+me_reassign(struct ifnet *ifp, struct vnet *new_vnet __unused,
+    char *unused __unused)
+{
+	struct me_softc *sc;
+
+	sx_xlock(&me_ioctl_sx);
+	sc = ifp->if_softc;
+	if (sc != NULL)
+		me_delete_tunnel(sc);
+	sx_xunlock(&me_ioctl_sx);
+}
+#endif /* VIMAGE */
 
 static void
 me_clone_destroy(struct ifnet *ifp)
@@ -326,7 +347,7 @@ me_lookup(const struct mbuf *m, int off, int proto, void **arg)
 	if (V_me_hashtbl == NULL)
 		return (0);
 
-	MPASS(in_epoch(net_epoch_preempt));
+	NET_EPOCH_ASSERT();
 	ip = mtod(m, const struct ip *);
 	CK_LIST_FOREACH(sc, &ME_HASH(ip->ip_dst.s_addr,
 	    ip->ip_src.s_addr), chain) {
@@ -370,7 +391,7 @@ me_srcaddr(void *arg __unused, const struct sockaddr *sa,
 	if (V_me_hashtbl == NULL)
 		return;
 
-	MPASS(in_epoch(net_epoch_preempt));
+	NET_EPOCH_ASSERT();
 	sin = (const struct sockaddr_in *)sa;
 	CK_LIST_FOREACH(sc, &ME_SRCHASH(sin->sin_addr.s_addr), srchash) {
 		if (sc->me_src.s_addr != sin->sin_addr.s_addr)

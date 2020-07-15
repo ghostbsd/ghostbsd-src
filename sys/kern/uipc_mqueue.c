@@ -199,7 +199,7 @@ struct mqueue_msg {
 	/* following real data... */
 };
 
-static SYSCTL_NODE(_kern, OID_AUTO, mqueue, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_kern, OID_AUTO, mqueue, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
 	"POSIX real time message queue");
 
 static int	default_maxmsg  = 10;
@@ -2669,6 +2669,7 @@ static struct fileops mqueueops = {
 	.fo_chown		= mqf_chown,
 	.fo_sendfile		= invfo_sendfile,
 	.fo_fill_kinfo		= mqf_fill_kinfo,
+	.fo_flags		= DFLAG_PASSABLE,
 };
 
 static struct vop_vector mqfs_vnodeops = {

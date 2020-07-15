@@ -152,7 +152,7 @@ static int f_timesort;		/* sort by time vice name */
        int f_type;		/* add type character for non-regular files */
 static int f_whiteout;		/* show whiteout entries */
 #ifdef COLORLS
-       int colorflag = COLORFLAG_AUTO;		/* passed in colorflag */
+       int colorflag = COLORFLAG_NEVER;		/* passed in colorflag */
        int f_color;		/* add type in color for non-regular files */
        bool explicitansi;	/* Explicit ANSI sequences, no termcap(5) */
 char *ansi_bgcol;		/* ANSI sequence to set background colour */
@@ -265,6 +265,15 @@ main(int argc, char *argv[])
 	fts_options = FTS_PHYSICAL;
 	if (getenv("LS_SAMESORT"))
 		f_samesort = 1;
+
+	/*
+	 * For historical compatibility, we'll use our autodetection if CLICOLOR
+	 * is set.
+	 */
+#ifdef COLORLS
+	if (getenv("CLICOLOR"))
+		colorflag = COLORFLAG_AUTO;
+#endif
 	while ((ch = getopt_long(argc, argv,
 	    "+1ABCD:FGHILPRSTUWXZabcdfghiklmnopqrstuwxy,", long_opts,
 	    NULL)) != -1) {
@@ -342,7 +351,15 @@ main(int argc, char *argv[])
 			f_slash = 0;
 			break;
 		case 'G':
+			/*
+			 * We both set CLICOLOR here and set colorflag to
+			 * COLORFLAG_AUTO, because -G should not force color if
+			 * stdout isn't a tty.
+			 */
 			setenv("CLICOLOR", "", 1);
+#ifdef COLORLS
+			colorflag = COLORFLAG_AUTO;
+#endif
 			break;
 		case 'H':
 			fts_options |= FTS_COMFOLLOW;
@@ -838,7 +855,21 @@ display(const FTSENT *p, FTSENT *list, int options)
 					group = ngroup;
 				} else {
 					user = user_from_uid(sp->st_uid, 0);
+					/*
+					 * user_from_uid(..., 0) only returns
+					 * NULL in OOM conditions.  We could
+					 * format the uid here, but (1) in
+					 * general ls(1) exits on OOM, and (2)
+					 * there is another allocation/exit
+					 * path directly below, which will
+					 * likely exit anyway.
+					 */
+					if (user == NULL)
+						err(1, "user_from_uid");
 					group = group_from_gid(sp->st_gid, 0);
+					/* Ditto. */
+					if (group == NULL)
+						err(1, "group_from_gid");
 				}
 				if ((ulen = strlen(user)) > maxuser)
 					maxuser = ulen;

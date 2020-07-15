@@ -112,7 +112,8 @@ static struct g_class g_dev_class	= {
  */
 static uint64_t g_dev_del_max_sectors = 262144;
 SYSCTL_DECL(_kern_geom);
-SYSCTL_NODE(_kern_geom, OID_AUTO, dev, CTLFLAG_RW, 0, "GEOM_DEV stuff");
+SYSCTL_NODE(_kern_geom, OID_AUTO, dev, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "GEOM_DEV stuff");
 SYSCTL_QUAD(_kern_geom_dev, OID_AUTO, delete_max_sectors, CTLFLAG_RW,
     &g_dev_del_max_sectors, 0, "Maximum number of sectors in a single "
     "delete request sent to the provider. Larger requests are chunked "
@@ -165,7 +166,7 @@ init_dumpdev(struct cdev *dev)
 {
 	struct diocskerneldump_arg kda;
 	struct g_consumer *cp;
-	const char *devprefix = "/dev/", *devname;
+	const char *devprefix = _PATH_DEV, *devname;
 	int error;
 	size_t len;
 
@@ -382,7 +383,7 @@ g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 	/*
 	 * Now add all the aliases for this drive
 	 */
-	LIST_FOREACH(gap, &pp->geom->aliases, ga_next) {
+	LIST_FOREACH(gap, &pp->aliases, ga_next) {
 		error = make_dev_alias_p(MAKEDEV_CHECKNAME | MAKEDEV_WAITOK, &adev, dev,
 		    "%s", gap->ga_alias);
 		if (error) {
@@ -613,10 +614,7 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 			kda->kda_encryptedkey = encryptedkey;
 			error = g_dev_setdumpdev(dev, kda);
 		}
-		if (encryptedkey != NULL) {
-			explicit_bzero(encryptedkey, kda->kda_encryptedkeysize);
-			free(encryptedkey, M_TEMP);
-		}
+		zfree(encryptedkey, M_TEMP);
 		explicit_bzero(kda, sizeof(*kda));
 		break;
 	    }

@@ -11,7 +11,7 @@
         private
             bsdstat
             ..
-            event
+            event1
             ..
             gmock
                 internal
@@ -37,15 +37,21 @@
         aout
         ..
         clang
-            9.0.1
+            10.0.1
                 include
                     cuda_wrappers
+                    ..
+                    fuzzer
                     ..
                     openmp_wrappers
                     ..
                     ppc_wrappers
                     ..
+                    profile
+                    ..
                     sanitizer
+                    ..
+                    xray
                     ..
                 ..
                 lib
@@ -201,9 +207,9 @@
             ..
         ..
         certs
-            blacklisted
+            blacklisted tags=package=caroot
             ..
-            trusted
+            trusted tags=package=caroot
             ..
         ..
         dict
@@ -212,6 +218,8 @@
             IPv6
             ..
             atf
+            ..
+            kyua
             ..
             legal
             ..
@@ -306,6 +314,8 @@
                     test
                     ..
                 ..
+            ..
+            kyua
             ..
             libusb20
             ..
@@ -442,6 +452,12 @@
                 ..
                 trusted tags=package=runtime
                 ..
+            ..
+        ..
+        kyua
+            misc
+            ..
+            store
             ..
         ..
         locale
@@ -1176,6 +1192,10 @@
                 ..
                 man3
                 ..
+                man5
+                ..
+                man7
+                ..
             ..
         ..
         security
@@ -1233,15 +1253,25 @@
             ..
             Australia
             ..
+            Brazil
+            ..
+            Canada
+            ..
+            Chile
+            ..
             Etc
             ..
             Europe
             ..
             Indian
             ..
+            Mexico
+            ..
             Pacific
             ..
             SystemV
+            ..
+            US
             ..
         ..
     ..

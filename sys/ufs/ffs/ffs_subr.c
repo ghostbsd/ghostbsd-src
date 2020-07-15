@@ -50,7 +50,6 @@ uint32_t ffs_calc_sbhash(struct fs *);
 struct malloc_type;
 #define UFS_MALLOC(size, type, flags) malloc(size)
 #define UFS_FREE(ptr, type) free(ptr)
-#define UFS_TIME time(NULL)
 /*
  * Request standard superblock location in ffs_sbget
  */
@@ -78,130 +77,7 @@ struct malloc_type;
 
 #define UFS_MALLOC(size, type, flags) malloc(size, type, flags)
 #define UFS_FREE(ptr, type) free(ptr, type)
-#define UFS_TIME time_second
 
-/*
- * Return buffer with the contents of block "offset" from the beginning of
- * directory "ip".  If "res" is non-zero, fill it in with a pointer to the
- * remaining space in the directory.
- */
-int
-ffs_blkatoff(struct vnode *vp, off_t offset, char **res, struct buf **bpp)
-{
-	struct inode *ip;
-	struct fs *fs;
-	struct buf *bp;
-	ufs_lbn_t lbn;
-	int bsize, error;
-
-	ip = VTOI(vp);
-	fs = ITOFS(ip);
-	lbn = lblkno(fs, offset);
-	bsize = blksize(fs, ip, lbn);
-
-	*bpp = NULL;
-	error = bread(vp, lbn, bsize, NOCRED, &bp);
-	if (error) {
-		return (error);
-	}
-	if (res)
-		*res = (char *)bp->b_data + blkoff(fs, offset);
-	*bpp = bp;
-	return (0);
-}
-
-/*
- * Load up the contents of an inode and copy the appropriate pieces
- * to the incore copy.
- */
-int
-ffs_load_inode(struct buf *bp, struct inode *ip, struct fs *fs, ino_t ino)
-{
-	struct ufs1_dinode *dip1;
-	struct ufs2_dinode *dip2;
-	int error;
-
-	if (I_IS_UFS1(ip)) {
-		dip1 = ip->i_din1;
-		*dip1 =
-		    *((struct ufs1_dinode *)bp->b_data + ino_to_fsbo(fs, ino));
-		ip->i_mode = dip1->di_mode;
-		ip->i_nlink = dip1->di_nlink;
-		ip->i_effnlink = dip1->di_nlink;
-		ip->i_size = dip1->di_size;
-		ip->i_flags = dip1->di_flags;
-		ip->i_gen = dip1->di_gen;
-		ip->i_uid = dip1->di_uid;
-		ip->i_gid = dip1->di_gid;
-		return (0);
-	}
-	dip2 = ((struct ufs2_dinode *)bp->b_data + ino_to_fsbo(fs, ino));
-	if ((error = ffs_verify_dinode_ckhash(fs, dip2)) != 0) {
-		printf("%s: inode %jd: check-hash failed\n", fs->fs_fsmnt,
-		    (intmax_t)ino);
-		return (error);
-	}
-	*ip->i_din2 = *dip2;
-	dip2 = ip->i_din2;
-	ip->i_mode = dip2->di_mode;
-	ip->i_nlink = dip2->di_nlink;
-	ip->i_effnlink = dip2->di_nlink;
-	ip->i_size = dip2->di_size;
-	ip->i_flags = dip2->di_flags;
-	ip->i_gen = dip2->di_gen;
-	ip->i_uid = dip2->di_uid;
-	ip->i_gid = dip2->di_gid;
-	return (0);
-}
-
-/*
- * Verify that a filesystem block number is a valid data block.
- * This routine is only called on untrusted filesystems.
- */
-int
-ffs_check_blkno(struct mount *mp, ino_t inum, ufs2_daddr_t daddr, int blksize)
-{
-	struct fs *fs;
-	struct ufsmount *ump;
-	ufs2_daddr_t end_daddr;
-	int cg, havemtx;
-
-	KASSERT((mp->mnt_flag & MNT_UNTRUSTED) != 0,
-	    ("ffs_check_blkno called on a trusted file system"));
-	ump = VFSTOUFS(mp);
-	fs = ump->um_fs;
-	cg = dtog(fs, daddr);
-	end_daddr = daddr + numfrags(fs, blksize);
-	/*
-	 * Verify that the block number is a valid data block. Also check
-	 * that it does not point to an inode block or a superblock. Accept
-	 * blocks that are unalloacted (0) or part of snapshot metadata
-	 * (BLK_NOCOPY or BLK_SNAP).
-	 *
-	 * Thus, the block must be in a valid range for the filesystem and
-	 * either in the space before a backup superblock (except the first
-	 * cylinder group where that space is used by the bootstrap code) or
-	 * after the inode blocks and before the end of the cylinder group.
-	 */
-	if ((uint64_t)daddr <= BLK_SNAP ||
-	    ((uint64_t)end_daddr <= fs->fs_size &&
-	    ((cg > 0 && end_daddr <= cgsblock(fs, cg)) ||
-	    (daddr >= cgdmin(fs, cg) &&
-	    end_daddr <= cgbase(fs, cg) + fs->fs_fpg))))
-		return (0);
-	if ((havemtx = mtx_owned(UFS_MTX(ump))) == 0)
-		UFS_LOCK(ump);
-	if (ppsratecheck(&ump->um_last_integritymsg,
-	    &ump->um_secs_integritymsg, 1)) {
-		UFS_UNLOCK(ump);
-		uprintf("\n%s: inode %jd, out-of-range indirect block "
-		    "number %jd\n", mp->mnt_stat.f_mntonname, inum, daddr);
-		if (havemtx)
-			UFS_LOCK(ump);
-	} else if (!havemtx)
-		UFS_UNLOCK(ump);
-	return (EINTEGRITY);
-}
 #endif /* _KERNEL */
 
 /*
@@ -280,6 +156,7 @@ ffs_sbget(void *devfd, struct fs **fsp, off_t altsblock,
     int (*readfunc)(void *devfd, off_t loc, void **bufp, int size))
 {
 	struct fs *fs;
+	struct fs_summary_info *fs_si;
 	int i, error, size, blks;
 	uint8_t *space;
 	int32_t *lp;
@@ -323,7 +200,14 @@ ffs_sbget(void *devfd, struct fs **fsp, off_t altsblock,
 		size += fs->fs_ncg * sizeof(int32_t);
 	size += fs->fs_ncg * sizeof(u_int8_t);
 	/* When running in libufs or libsa, UFS_MALLOC may fail */
+	if ((fs_si = UFS_MALLOC(sizeof(*fs_si), filltype, M_WAITOK)) == NULL) {
+		UFS_FREE(fs, filltype);
+		return (ENOSPC);
+	}
+	bzero(fs_si, sizeof(*fs_si));
+	fs->fs_si = fs_si;
 	if ((space = UFS_MALLOC(size, filltype, M_WAITOK)) == NULL) {
+		UFS_FREE(fs->fs_si, filltype);
 		UFS_FREE(fs, filltype);
 		return (ENOSPC);
 	}
@@ -339,6 +223,7 @@ ffs_sbget(void *devfd, struct fs **fsp, off_t altsblock,
 			if (buf != NULL)
 				UFS_FREE(buf, filltype);
 			UFS_FREE(fs->fs_csp, filltype);
+			UFS_FREE(fs->fs_si, filltype);
 			UFS_FREE(fs, filltype);
 			return (error);
 		}
@@ -416,12 +301,12 @@ readsuper(void *devfd, struct fs **fsp, off_t sblockloc, int isaltsblk,
 				return (0);
 			}
 			fs->fs_fmod = 0;
-			return (EINVAL);
+			return (EINTEGRITY);
 		}
 		/* Have to set for old filesystems that predate this field */
 		fs->fs_sblockactualloc = sblockloc;
 		/* Not yet any summary information */
-		fs->fs_csp = NULL;
+		fs->fs_si = NULL;
 		return (0);
 	}
 	return (ENOENT);
@@ -447,7 +332,7 @@ ffs_sbput(void *devfd, struct fs *fs, off_t loc,
 	 * If there is summary information, write it first, so if there
 	 * is an error, the superblock will not be marked as clean.
 	 */
-	if (fs->fs_csp != NULL) {
+	if (fs->fs_si != NULL && fs->fs_csp != NULL) {
 		blks = howmany(fs->fs_cssize, fs->fs_fsize);
 		space = (uint8_t *)fs->fs_csp;
 		for (i = 0; i < blks; i += fs->fs_frag) {
@@ -462,11 +347,24 @@ ffs_sbput(void *devfd, struct fs *fs, off_t loc,
 		}
 	}
 	fs->fs_fmod = 0;
-	fs->fs_time = UFS_TIME;
+#ifndef _KERNEL
+	{
+		struct fs_summary_info *fs_si;
+
+		fs->fs_time = time(NULL);
+		/* Clear the pointers for the duration of writing. */
+		fs_si = fs->fs_si;
+		fs->fs_si = NULL;
+		fs->fs_ckhash = ffs_calc_sbhash(fs);
+		error = (*writefunc)(devfd, loc, fs, fs->fs_sbsize);
+		fs->fs_si = fs_si;
+	}
+#else /* _KERNEL */
+	fs->fs_time = time_second;
 	fs->fs_ckhash = ffs_calc_sbhash(fs);
-	if ((error = (*writefunc)(devfd, loc, fs, fs->fs_sbsize)) != 0)
-		return (error);
-	return (0);
+	error = (*writefunc)(devfd, loc, fs, fs->fs_sbsize);
+#endif /* _KERNEL */
+	return (error);
 }
 
 /*

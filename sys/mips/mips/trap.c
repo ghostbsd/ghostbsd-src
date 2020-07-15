@@ -66,7 +66,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/user.h>
 #include <sys/buf.h>
 #include <sys/vnode.h>
-#include <sys/pioctl.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/bus.h>
@@ -115,22 +114,22 @@ SYSCTL_INT(_machdep, OID_AUTO, trap_debug, CTLFLAG_RW,
 
 #define	lwl_macro(data, addr)						\
 	__asm __volatile ("lwl %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
+			: "+r" (data)	/* outputs */			\
 			: "r" (addr));	/* inputs */
 
 #define	lwr_macro(data, addr)						\
 	__asm __volatile ("lwr %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
+			: "+r" (data)	/* outputs */			\
 			: "r" (addr));	/* inputs */
 
 #define	ldl_macro(data, addr)						\
 	__asm __volatile ("ldl %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
+			: "+r" (data)	/* outputs */			\
 			: "r" (addr));	/* inputs */
 
 #define	ldr_macro(data, addr)						\
 	__asm __volatile ("ldr %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
+			: "+r" (data)	/* outputs */			\
 			: "r" (addr));	/* inputs */
 
 #define	sb_macro(data, addr)						\
@@ -808,10 +807,9 @@ dofault:
 #if defined(KDTRACE_HOOKS) || defined(DDB)
 	case T_BREAK:
 #ifdef KDTRACE_HOOKS
-		if (!usermode && dtrace_invop_jump_addr != 0) {
-			dtrace_invop_jump_addr(trapframe);
+		if (!usermode && dtrace_invop_jump_addr != NULL &&
+		    dtrace_invop_jump_addr(trapframe) == 0)
 			return (trapframe->pc);
-		}
 #endif
 #ifdef DDB
 		kdb_trap(type, 0, trapframe);
@@ -904,7 +902,7 @@ dofault:
 					if (inst.RType.rd == 29) {
 						frame_regs = &(trapframe->zero);
 						frame_regs[inst.RType.rt] = (register_t)(intptr_t)td->td_md.md_tls;
-						frame_regs[inst.RType.rt] += td->td_md.md_tls_tcb_offset;
+						frame_regs[inst.RType.rt] += td->td_proc->p_md.md_tls_tcb_offset;
 						trapframe->pc += sizeof(int);
 						goto out;
 					}
@@ -1403,7 +1401,7 @@ log_illegal_instruction(const char *msg, struct trapframe *frame)
 {
 	pt_entry_t *ptep;
 	pd_entry_t *pdep;
-	unsigned int *addr;
+	unsigned int *addr, instr[4];
 	struct thread *td;
 	struct proc *p;
 	register_t pc;
@@ -1430,17 +1428,16 @@ log_illegal_instruction(const char *msg, struct trapframe *frame)
 	 * Dump a few words around faulting instruction, if the addres is
 	 * valid.
 	 */
-	if (!(pc & 3) &&
-	    useracc((caddr_t)(intptr_t)pc, sizeof(int) * 4, VM_PROT_READ)) {
+	addr = (unsigned int *)(intptr_t)pc;
+	if ((pc & 3) == 0 && copyin(addr, instr, sizeof(instr)) == 0) {
 		/* dump page table entry for faulting instruction */
 		log(LOG_ERR, "Page table info for pc address %#jx: pde = %p, pte = %#jx\n",
 		    (intmax_t)pc, (void *)(intptr_t)*pdep, (uintmax_t)(ptep ? *ptep : 0));
 
-		addr = (unsigned int *)(intptr_t)pc;
 		log(LOG_ERR, "Dumping 4 words starting at pc address %p: \n",
 		    addr);
 		log(LOG_ERR, "%08x %08x %08x %08x\n",
-		    addr[0], addr[1], addr[2], addr[3]);
+		    instr[0], instr[1], instr[2], instr[3]);
 	} else {
 		log(LOG_ERR, "pc address %#jx is inaccessible, pde = %p, pte = %#jx\n",
 		    (intmax_t)pc, (void *)(intptr_t)*pdep, (uintmax_t)(ptep ? *ptep : 0));
@@ -1452,7 +1449,7 @@ log_bad_page_fault(char *msg, struct trapframe *frame, int trap_type)
 {
 	pt_entry_t *ptep;
 	pd_entry_t *pdep;
-	unsigned int *addr;
+	unsigned int *addr, instr[4];
 	struct thread *td;
 	struct proc *p;
 	char *read_or_write;
@@ -1500,18 +1497,18 @@ log_bad_page_fault(char *msg, struct trapframe *frame, int trap_type)
 	 * Dump a few words around faulting instruction, if the addres is
 	 * valid.
 	 */
-	if (!(pc & 3) && (pc != frame->badvaddr) &&
-	    (trap_type != T_BUS_ERR_IFETCH) &&
-	    useracc((caddr_t)(intptr_t)pc, sizeof(int) * 4, VM_PROT_READ)) {
+	addr = (unsigned int *)(intptr_t)pc;
+	if ((pc & 3) == 0 && pc != frame->badvaddr &&
+	    trap_type != T_BUS_ERR_IFETCH &&
+	    copyin((caddr_t)(intptr_t)pc, instr, sizeof(instr)) == 0) {
 		/* dump page table entry for faulting instruction */
 		log(LOG_ERR, "Page table info for pc address %#jx: pde = %p, pte = %#jx\n",
 		    (intmax_t)pc, (void *)(intptr_t)*pdep, (uintmax_t)(ptep ? *ptep : 0));
 
-		addr = (unsigned int *)(intptr_t)pc;
 		log(LOG_ERR, "Dumping 4 words starting at pc address %p: \n",
 		    addr);
 		log(LOG_ERR, "%08x %08x %08x %08x\n",
-		    addr[0], addr[1], addr[2], addr[3]);
+		    instr[0], instr[1], instr[2], instr[3]);
 	} else {
 		log(LOG_ERR, "pc address %#jx is inaccessible, pde = %p, pte = %#jx\n",
 		    (intmax_t)pc, (void *)(intptr_t)*pdep, (uintmax_t)(ptep ? *ptep : 0));
@@ -1531,7 +1528,7 @@ mips_unaligned_load_store(struct trapframe *frame, int mode, register_t addr, re
 {
 	register_t *reg = (register_t *) frame;
 	u_int32_t inst = *((u_int32_t *)(intptr_t)pc);
-	register_t value_msb, value;
+	register_t value_msb = 0, value = 0;
 	unsigned size;
 
 	/*

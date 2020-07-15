@@ -42,10 +42,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/sx.h>
 #include <sys/proc.h>
+#include <sys/resourcevar.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysent.h>
 
 #include <compat/linux/linux_emul.h>
+#include <compat/linux/linux_mib.h>
 #include <compat/linux/linux_misc.h>
 #include <compat/linux/linux_persona.h>
 #include <compat/linux/linux_util.h>
@@ -87,6 +89,32 @@ pem_find(struct proc *p)
 	return (pem);
 }
 
+/*
+ * Linux apps generally expect the soft open file limit to be set
+ * to 1024, often iterating over all the file descriptors up to that
+ * limit instead of using closefrom(2).  Give them what they want,
+ * unless there already is a resource limit in place.
+ */
+static void
+linux_set_default_openfiles(struct thread *td, struct proc *p)
+{
+	struct rlimit rlim;
+	int error;
+
+	if (linux_default_openfiles < 0)
+		return;
+
+	PROC_LOCK(p);
+	lim_rlimit_proc(p, RLIMIT_NOFILE, &rlim);
+	PROC_UNLOCK(p);
+	if (rlim.rlim_cur != rlim.rlim_max ||
+	    rlim.rlim_cur <= linux_default_openfiles)
+		return;
+	rlim.rlim_cur = linux_default_openfiles;
+	error = kern_proc_setrlimit(td, p, RLIMIT_NOFILE, &rlim);
+	KASSERT(error == 0, ("kern_proc_setrlimit failed"));
+}
+
 void
 linux_proc_init(struct thread *td, struct thread *newtd, int flags)
 {
@@ -115,6 +143,8 @@ linux_proc_init(struct thread *td, struct thread *newtd, int flags)
 			p->p_emuldata = pem;
 		}
 		newtd->td_emuldata = em;
+
+		linux_set_default_openfiles(td, p);
 	} else {
 		p = td->td_proc;
 
@@ -261,22 +291,13 @@ linux_common_execve(struct thread *td, struct image_args *eargs)
 void
 linux_proc_exec(void *arg __unused, struct proc *p, struct image_params *imgp)
 {
-	struct thread *td = curthread;
+	struct thread *td;
 	struct thread *othertd;
 #if defined(__amd64__)
 	struct linux_pemuldata *pem;
 #endif
 
-	/*
-	 * In a case of execing from Linux binary properly detach
-	 * other threads from the user space.
-	 */
-	if (__predict_false(SV_PROC_ABI(p) == SV_ABI_LINUX)) {
-		FOREACH_THREAD_IN_PROC(p, othertd) {
-			if (td != othertd)
-				(p->p_sysent->sv_thread_detach)(othertd);
-		}
-	}
+	td = curthread;
 
 	/*
 	 * In a case of execing to Linux binary we create Linux
@@ -284,11 +305,32 @@ linux_proc_exec(void *arg __unused, struct proc *p, struct image_params *imgp)
 	 */
 	if (__predict_false((imgp->sysent->sv_flags & SV_ABI_MASK) ==
 	    SV_ABI_LINUX)) {
-
-		if (SV_PROC_ABI(p) == SV_ABI_LINUX)
+		if (SV_PROC_ABI(p) == SV_ABI_LINUX) {
+			/*
+			 * Process already was under Linuxolator
+			 * before exec.  Update emuldata to reflect
+			 * single-threaded cleaned state after exec.
+			 */
 			linux_proc_init(td, NULL, 0);
-		else
+		} else {
+			/*
+			 * We are switching the process to Linux emulator.
+			 */
 			linux_proc_init(td, td, 0);
+
+			/*
+			 * Create a transient td_emuldata for all suspended
+			 * threads, so that p->p_sysent->sv_thread_detach() ==
+			 * linux_thread_detach() can find expected but unused
+			 * emuldata.
+			 */
+			FOREACH_THREAD_IN_PROC(td->td_proc, othertd) {
+				if (othertd != td) {
+					linux_proc_init(td, othertd,
+					    LINUX_CLONE_THREAD);
+				}
+			}
+		}
 #if defined(__amd64__)
 		/*
 		 * An IA32 executable which has executable stack will have the

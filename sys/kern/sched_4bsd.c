@@ -209,18 +209,21 @@ sysctl_kern_quantum(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_NODE(_kern, OID_AUTO, sched, CTLFLAG_RD, 0, "Scheduler");
+SYSCTL_NODE(_kern, OID_AUTO, sched, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "Scheduler");
 
 SYSCTL_STRING(_kern_sched, OID_AUTO, name, CTLFLAG_RD, "4BSD", 0,
     "Scheduler name");
-SYSCTL_PROC(_kern_sched, OID_AUTO, quantum, CTLTYPE_INT | CTLFLAG_RW,
-    NULL, 0, sysctl_kern_quantum, "I",
+SYSCTL_PROC(_kern_sched, OID_AUTO, quantum,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_quantum, "I",
     "Quantum for timeshare threads in microseconds");
 SYSCTL_INT(_kern_sched, OID_AUTO, slice, CTLFLAG_RW, &sched_slice, 0,
     "Quantum for timeshare threads in stathz ticks");
 #ifdef SMP
 /* Enable forwarding of wakeups to all other cpus */
-static SYSCTL_NODE(_kern_sched, OID_AUTO, ipiwakeup, CTLFLAG_RD, NULL,
+static SYSCTL_NODE(_kern_sched, OID_AUTO, ipiwakeup,
+    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
     "Kernel SMP");
 
 static int runq_fuzz = 1;
@@ -348,7 +351,7 @@ maybe_preempt(struct thread *td)
 			("maybe_preempt: trying to run inhibited thread"));
 	pri = td->td_priority;
 	cpri = ctd->td_priority;
-	if (panicstr != NULL || pri >= cpri /* || dumping */ ||
+	if (KERNEL_PANICKED() || pri >= cpri /* || dumping */ ||
 	    TD_IS_INHIBITED(ctd))
 		return (0);
 #ifndef FULL_PREEMPTION
@@ -434,7 +437,8 @@ maybe_preempt(struct thread *td)
 
 /* decay 95% of `ts_pctcpu' in 60 seconds; see CCPU_SHIFT before changing */
 static fixpt_t	ccpu = 0.95122942450071400909 * FSCALE;	/* exp(-1/20) */
-SYSCTL_UINT(_kern, OID_AUTO, ccpu, CTLFLAG_RD, &ccpu, 0, "");
+SYSCTL_UINT(_kern, OID_AUTO, ccpu, CTLFLAG_RD, &ccpu, 0,
+    "Decay factor used for updating %CPU");
 
 /*
  * If `ccpu' is not equal to `exp(-1/20)' and you still want to use the
@@ -828,7 +832,6 @@ static void
 sched_priority(struct thread *td, u_char prio)
 {
 
-
 	KTR_POINT3(KTR_SCHED, "thread", sched_tdname(td), "priority change",
 	    "prio:%d", td->td_priority, "new prio:%d", prio, KTR_ATTR_LINKED,
 	    sched_tdname(curthread));
@@ -1138,7 +1141,7 @@ forward_wakeup(int cpunum)
 	if ((!forward_wakeup_enabled) ||
 	     (forward_wakeup_use_mask == 0 && forward_wakeup_use_loop == 0))
 		return (0);
-	if (!smp_started || panicstr)
+	if (!smp_started || KERNEL_PANICKED())
 		return (0);
 
 	forward_wakeups_requested++;
@@ -1297,7 +1300,6 @@ sched_add(struct thread *td, int flags)
 	    KTR_ATTR_LINKED, sched_tdname(td));
 	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL, 
 	    flags & SRQ_PREEMPTED);
-
 
 	/*
 	 * Now that the thread is moving to the run-queue, set the lock

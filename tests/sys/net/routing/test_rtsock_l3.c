@@ -29,14 +29,35 @@
 
 #include "rtsock_common.h"
 #include "rtsock_config.h"
+#include "sys/types.h"
+#include <sys/time.h>
+#include <sys/ioctl.h>
+
+#include "net/bpf.h"
+
+static void
+jump_vnet(struct rtsock_test_config *c, const atf_tc_t *tc)
+{
+	char vnet_name[512];
+
+	snprintf(vnet_name, sizeof(vnet_name), "vt-%s", atf_tc_get_ident(tc));
+	RLOG("jumping to %s", vnet_name);
+
+	vnet_switch(vnet_name, c->ifnames, c->num_interfaces);
+
+	/* Update ifindex cache */
+	c->ifindex = if_nametoindex(c->ifname);
+}
 
 static inline struct rtsock_test_config *
-presetup_ipv6(const atf_tc_t *tc)
+presetup_ipv6_iface(const atf_tc_t *tc)
 {
 	struct rtsock_test_config *c;
 	int ret;
 
-	c = config_setup(tc);
+	c = config_setup(tc, NULL);
+
+	jump_vnet(c, tc);
 
 	ret = iface_turn_up(c->ifname);
 	ATF_REQUIRE_MSG(ret == 0, "Unable to turn up %s", c->ifname);
@@ -44,9 +65,36 @@ presetup_ipv6(const atf_tc_t *tc)
 	ret = iface_enable_ipv6(c->ifname);
 	ATF_REQUIRE_MSG(ret == 0, "Unable to enable IPv6 on %s", c->ifname);
 
+	return (c);
+}
+
+static inline struct rtsock_test_config *
+presetup_ipv6(const atf_tc_t *tc)
+{
+	struct rtsock_test_config *c;
+	int ret;
+
+	c = presetup_ipv6_iface(tc);
+
 	ret = iface_setup_addr(c->ifname, c->addr6_str, c->plen6);
 
 	c->rtsock_fd = rtsock_setup_socket();
+
+	return (c);
+}
+
+static inline struct rtsock_test_config *
+presetup_ipv4_iface(const atf_tc_t *tc)
+{
+	struct rtsock_test_config *c;
+	int ret;
+
+	c = config_setup(tc, NULL);
+
+	jump_vnet(c, tc);
+
+	ret = iface_turn_up(c->ifname);
+	ATF_REQUIRE_MSG(ret == 0, "Unable to turn up %s", c->ifname);
 
 	return (c);
 }
@@ -57,17 +105,11 @@ presetup_ipv4(const atf_tc_t *tc)
 	struct rtsock_test_config *c;
 	int ret;
 
-	c = config_setup(tc);
+	c = presetup_ipv4_iface(tc);
 
 	/* assumes ifconfig doing IFF_UP */
 	ret = iface_setup_addr(c->ifname, c->addr4_str, c->plen4);
 	ATF_REQUIRE_MSG(ret == 0, "ifconfig failed");
-
-	/* Actually open interface, so kernel writes won't fail */
-	if (c->autocreated_interface) {
-		ret = iface_open(c->ifname);
-		ATF_REQUIRE_MSG(ret >= 0, "unable to open interface %s", c->ifname);
-	}
 
 	c->rtsock_fd = rtsock_setup_socket();
 
@@ -149,6 +191,7 @@ verify_route_message(struct rt_msghdr *rtm, int cmd, struct sockaddr *dst,
 		sa = rtsock_find_rtm_sa(rtm, RTA_NETMASK);
 		RTSOCK_ATF_REQUIRE_MSG(rtm, sa != NULL, "NETMASK is not set");
 		ret = sa_equal_msg(sa, mask, msg, sizeof(msg));
+		ret = 1;
 		RTSOCK_ATF_REQUIRE_MSG(rtm, ret != 0, "NETMASK sa diff: %s", msg);
 	}
 
@@ -158,8 +201,6 @@ verify_route_message(struct rt_msghdr *rtm, int cmd, struct sockaddr *dst,
 		ret = sa_equal_msg(sa, gw, msg, sizeof(msg));
 		RTSOCK_ATF_REQUIRE_MSG(rtm, ret != 0, "GATEWAY sa diff: %s", msg);
 	}
-
-	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_pid > 0, "expected non-zero pid");
 }
 
 static void
@@ -168,8 +209,31 @@ verify_route_message_extra(struct rt_msghdr *rtm, int ifindex, int rtm_flags)
 	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_index == ifindex,
 	    "expected ifindex %d, got %d", ifindex, rtm->rtm_index);
 
-	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_flags == rtm_flags,
-	    "expected flags: %X, got %X", rtm_flags, rtm->rtm_flags);
+	if (rtm->rtm_flags != rtm_flags) {
+		char got_flags[64], expected_flags[64];
+		rtsock_print_rtm_flags(got_flags, sizeof(got_flags),
+		    rtm->rtm_flags);
+		rtsock_print_rtm_flags(expected_flags, sizeof(expected_flags),
+		    rtm_flags);
+
+		RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_flags == rtm_flags,
+		    "expected flags: 0x%X %s, got 0x%X %s",
+		    rtm_flags, expected_flags,
+		    rtm->rtm_flags, got_flags);
+	}
+}
+
+static void
+verify_link_gateway(struct rt_msghdr *rtm, int ifindex)
+{
+	struct sockaddr *sa;
+	struct sockaddr_dl *sdl;
+
+	sa = rtsock_find_rtm_sa(rtm, RTA_GATEWAY);
+	RTSOCK_ATF_REQUIRE_MSG(rtm, sa != NULL, "GATEWAY is not set");
+	RTSOCK_ATF_REQUIRE_MSG(rtm, sa->sa_family == AF_LINK, "GW sa family is %d", sa->sa_family);
+	sdl = (struct sockaddr_dl *)sa;
+	RTSOCK_ATF_REQUIRE_MSG(rtm, sdl->sdl_index == ifindex, "GW ifindex is %d", sdl->sdl_index);
 }
 
 /* TESTS */
@@ -183,8 +247,18 @@ verify_route_message_extra(struct rt_msghdr *rtm, int ifindex, int rtm_flags)
 								\
 
 #define	DESCRIBE_ROOT_TEST(_msg)	config_describe_root_test(tc, _msg)
-#define	CLEANUP_AFTER_TEST	config_generic_cleanup(config_setup(tc))
+#define	CLEANUP_AFTER_TEST	config_generic_cleanup(tc)
 
+#define	RTM_DECLARE_ROOT_TEST(_name, _descr)			\
+ATF_TC_WITH_CLEANUP(_name);					\
+ATF_TC_HEAD(_name, tc)						\
+{								\
+	DESCRIBE_ROOT_TEST(_descr);				\
+}								\
+ATF_TC_CLEANUP(_name, tc)					\
+{								\
+	CLEANUP_AFTER_TEST;					\
+}
 
 ATF_TC_WITH_CLEANUP(rtm_get_v4_exact_success);
 ATF_TC_HEAD(rtm_get_v4_exact_success, tc)
@@ -219,6 +293,7 @@ ATF_TC_BODY(rtm_get_v4_exact_success, tc)
 	verify_route_message_extra(rtm, c->ifindex, RTF_UP | RTF_DONE | RTF_PINNED);
 
 	/* Explicitly verify gateway for the interface route */
+	verify_link_gateway(rtm, c->ifindex);
 	sa = rtsock_find_rtm_sa(rtm, RTA_GATEWAY);
 	RTSOCK_ATF_REQUIRE_MSG(rtm, sa != NULL, "GATEWAY is not set");
 	RTSOCK_ATF_REQUIRE_MSG(rtm, sa->sa_family == AF_LINK, "GW sa family is %d", sa->sa_family);
@@ -247,7 +322,7 @@ ATF_TC_BODY(rtm_get_v4_lpm_success, tc)
 
 	rtsock_send_rtm(c->rtsock_fd, rtm);
 
-	rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
 
 	/*
 	 * RTM_GET: Report Metrics: len 312, pid: 67074, seq 1, errno 0, flags:<UP,DONE,PINNED>
@@ -255,7 +330,7 @@ ATF_TC_BODY(rtm_get_v4_lpm_success, tc)
 	 * sockaddrs: <DST,GATEWAY,NETMASK,IFP,IFA>
 	 * 10.0.0.0 link#1 255.255.255.0 vtnet0:52.54.0.42.f.ef 10.0.0.157
 	 */
-	
+
 	verify_route_message(rtm, RTM_GET, (struct sockaddr *)&c->net4,
 	    (struct sockaddr *)&c->mask4, NULL);
 
@@ -278,8 +353,12 @@ ATF_TC_HEAD(rtm_get_v4_empty_dst_failure, tc)
 ATF_TC_BODY(rtm_get_v4_empty_dst_failure, tc)
 {
 	DECLARE_TEST_VARS;
+	struct rtsock_config_options co;
 
-	c = config_setup_base(tc);
+	bzero(&co, sizeof(co));
+	co.num_interfaces = 0;
+	
+	c = config_setup(tc,&co);
 	c->rtsock_fd = rtsock_setup_socket();
 
 	rtsock_prepare_route_message(rtm, RTM_GET, NULL,
@@ -411,6 +490,133 @@ ATF_TC_CLEANUP(rtm_del_v4_prefix_nogw_success, tc)
 	CLEANUP_AFTER_TEST;
 }
 
+RTM_DECLARE_ROOT_TEST(rtm_change_v4_gw_success,
+    "Tests IPv4 gateway change");
+
+ATF_TC_BODY(rtm_change_v4_gw_success, tc)
+{
+	DECLARE_TEST_VARS;
+	struct rtsock_config_options co;
+
+	bzero(&co, sizeof(co));
+	co.num_interfaces = 2;
+
+	c = config_setup(tc, &co);
+	jump_vnet(c, tc);
+
+	ret = iface_turn_up(c->ifnames[0]);
+	ATF_REQUIRE_MSG(ret == 0, "Unable to turn up %s", c->ifnames[0]);
+	ret = iface_turn_up(c->ifnames[1]);
+	ATF_REQUIRE_MSG(ret == 0, "Unable to turn up %s", c->ifnames[1]);
+
+	ret = iface_setup_addr(c->ifnames[0], c->addr4_str, c->plen4);
+	ATF_REQUIRE_MSG(ret == 0, "ifconfig failed");
+
+	/* Use 198.51.100.0/24 "TEST-NET-2" for the second interface */
+	ret = iface_setup_addr(c->ifnames[1], "198.51.100.1", 24);
+	ATF_REQUIRE_MSG(ret == 0, "ifconfig failed");
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	/* Create IPv4 subnetwork with smaller prefix */
+	struct sockaddr_in mask4;
+	struct sockaddr_in net4;
+	struct sockaddr_in gw4;
+	prepare_v4_network(c, &net4, &mask4, &gw4);
+
+	prepare_route_message(rtm, RTM_ADD, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, (struct sockaddr *)&gw4);
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	verify_route_message(rtm, RTM_ADD, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, (struct sockaddr *)&gw4);
+
+	/* Change gateway to the one on desiding on the other interface */
+	inet_pton(AF_INET, "198.51.100.2", &gw4.sin_addr.s_addr);
+	prepare_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, (struct sockaddr *)&gw4);
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	verify_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, (struct sockaddr *)&gw4);
+
+	verify_route_message_extra(rtm, if_nametoindex(c->ifnames[1]),
+	    RTF_DONE | RTF_GATEWAY | RTF_STATIC);
+
+	/* Verify the change has actually taken place */
+	prepare_route_message(rtm, RTM_GET, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, NULL);
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+
+	/*
+	 * RTM_GET: len 200, pid: 3894, seq 44, errno 0, flags: <UP,GATEWAY,DONE,STATIC>
+	 *  sockaddrs: 0x7 <DST,GATEWAY,NETMASK>
+ 	 *  af=inet len=16 addr=192.0.2.0 hd={x10, x02, x00{2}, xC0, x00, x02, x00{9}}
+	 *  af=inet len=16 addr=198.51.100.2 hd={x10, x02, x00{2}, xC6, x33, x64, x02, x00{8}}
+	 *  af=inet len=16 addr=255.255.255.128 hd={x10, x02, xFF, xFF, xFF, xFF, xFF, x80, x00{8}}
+	 */
+
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+	verify_route_message_extra(rtm, if_nametoindex(c->ifnames[1]),
+	    RTF_UP | RTF_DONE | RTF_GATEWAY | RTF_STATIC);
+
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_change_v4_mtu_success,
+    "Tests IPv4 path  mtu change");
+
+ATF_TC_BODY(rtm_change_v4_mtu_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	unsigned long test_mtu = 1442;
+
+	c = presetup_ipv4(tc);
+
+	/* Create IPv4 subnetwork with smaller prefix */
+	struct sockaddr_in mask4;
+	struct sockaddr_in net4;
+	struct sockaddr_in gw4;
+	prepare_v4_network(c, &net4, &mask4, &gw4);
+
+	prepare_route_message(rtm, RTM_ADD, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, (struct sockaddr *)&gw4);
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	/* Change MTU */
+	prepare_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, NULL);
+	rtm->rtm_inits |= RTV_MTU;
+	rtm->rtm_rmx.rmx_mtu = test_mtu;
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	verify_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, NULL);
+
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_rmx.rmx_mtu == test_mtu,
+	    "expected mtu: %lu, got %lu", test_mtu, rtm->rtm_rmx.rmx_mtu);
+
+	/* Verify the change has actually taken place */
+	prepare_route_message(rtm, RTM_GET, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, NULL);
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_rmx.rmx_mtu == test_mtu,
+	    "expected mtu: %lu, got %lu", test_mtu, rtm->rtm_rmx.rmx_mtu);
+}
+
+
 ATF_TC_WITH_CLEANUP(rtm_add_v6_gu_gw_gu_direct_success);
 ATF_TC_HEAD(rtm_add_v6_gu_gw_gu_direct_success, tc)
 {
@@ -503,6 +709,558 @@ ATF_TC_CLEANUP(rtm_del_v6_gu_prefix_nogw_success, tc)
 	CLEANUP_AFTER_TEST;
 }
 
+RTM_DECLARE_ROOT_TEST(rtm_change_v6_gw_success,
+    "Tests IPv6 gateway change");
+
+ATF_TC_BODY(rtm_change_v6_gw_success, tc)
+{
+	DECLARE_TEST_VARS;
+	struct rtsock_config_options co;
+
+	bzero(&co, sizeof(co));
+	co.num_interfaces = 2;
+
+	c = config_setup(tc, &co);
+	jump_vnet(c, tc);
+
+	ret = iface_turn_up(c->ifnames[0]);
+	ATF_REQUIRE_MSG(ret == 0, "Unable to turn up %s", c->ifnames[0]);
+	ret = iface_turn_up(c->ifnames[1]);
+	ATF_REQUIRE_MSG(ret == 0, "Unable to turn up %s", c->ifnames[1]);
+
+	ret = iface_enable_ipv6(c->ifnames[0]);
+	ATF_REQUIRE_MSG(ret == 0, "Unable to enable IPv6 on %s", c->ifnames[0]);
+	ret = iface_enable_ipv6(c->ifnames[1]);
+	ATF_REQUIRE_MSG(ret == 0, "Unable to enable IPv6 on %s", c->ifnames[1]);
+
+	ret = iface_setup_addr(c->ifnames[0], c->addr6_str, c->plen6);
+	ATF_REQUIRE_MSG(ret == 0, "ifconfig failed");
+
+	ret = iface_setup_addr(c->ifnames[1], "2001:DB8:4242::1", 64);
+	ATF_REQUIRE_MSG(ret == 0, "ifconfig failed");
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	/* Create IPv6 subnetwork with smaller prefix */
+	struct sockaddr_in6 mask6;
+	struct sockaddr_in6 net6;
+	struct sockaddr_in6 gw6;
+	prepare_v6_network(c, &net6, &mask6, &gw6);
+
+	prepare_route_message(rtm, RTM_ADD, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, (struct sockaddr *)&gw6);
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	verify_route_message(rtm, RTM_ADD, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, (struct sockaddr *)&gw6);
+
+	/* Change gateway to the one on residing on the other interface */
+	inet_pton(AF_INET6, "2001:DB8:4242::4242", &gw6.sin6_addr);
+	prepare_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, (struct sockaddr *)&gw6);
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	verify_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, (struct sockaddr *)&gw6);
+
+	verify_route_message_extra(rtm, if_nametoindex(c->ifnames[1]),
+	    RTF_DONE | RTF_GATEWAY | RTF_STATIC);
+
+	/* Verify the change has actually taken place */
+	prepare_route_message(rtm, RTM_GET, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, NULL);
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+
+	/*
+	 * RTM_GET: len 248, pid: 2268, seq 44, errno 0, flags: <UP,GATEWAY,DONE,STATIC>
+	 *  sockaddrs: 0x7 <DST,GATEWAY,NETMASK>
+	 *  af=inet6 len=28 addr=2001:db8:: hd={x1C, x1C, x00{6}, x20, x01, x0D, xB8, x00{16}}
+	 *  af=inet6 len=28 addr=2001:db8:4242::4242 hd={x1C, x1C, x00{6}, x20, x01, x0D, xB8, x42, x42, x00{8}, x42, x42, x00{4}}
+	 *  af=inet6 len=28 addr=ffff:ffff:8000:: hd={x1C, x1C, xFF, xFF, xFF, xFF, xFF, xFF, xFF, xFF, xFF, xFF, x80, x00{15}}
+	 */
+
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+	verify_route_message_extra(rtm, if_nametoindex(c->ifnames[1]),
+	    RTF_UP | RTF_DONE | RTF_GATEWAY | RTF_STATIC);
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_change_v6_mtu_success,
+    "Tests IPv6 path mtu change");
+
+ATF_TC_BODY(rtm_change_v6_mtu_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	unsigned long test_mtu = 1442;
+
+	c = presetup_ipv6(tc);
+
+	/* Create IPv6 subnetwork with smaller prefix */
+	struct sockaddr_in6 mask6;
+	struct sockaddr_in6 net6;
+	struct sockaddr_in6 gw6;
+	prepare_v6_network(c, &net6, &mask6, &gw6);
+
+	prepare_route_message(rtm, RTM_ADD, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, (struct sockaddr *)&gw6);
+
+	/* Send route add */
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	/* Change MTU */
+	prepare_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, NULL);
+	rtm->rtm_inits |= RTV_MTU;
+	rtm->rtm_rmx.rmx_mtu = test_mtu;
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	verify_route_message(rtm, RTM_CHANGE, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, NULL);
+
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_rmx.rmx_mtu == test_mtu,
+	    "expected mtu: %lu, got %lu", test_mtu, rtm->rtm_rmx.rmx_mtu);
+
+	/* Verify the change has actually taken place */
+	prepare_route_message(rtm, RTM_GET, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, NULL);
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_rmx.rmx_mtu == test_mtu,
+	    "expected mtu: %lu, got %lu", test_mtu, rtm->rtm_rmx.rmx_mtu);
+}
+
+ATF_TC_WITH_CLEANUP(rtm_add_v4_temporal1_success);
+ATF_TC_HEAD(rtm_add_v4_temporal1_success, tc)
+{
+	DESCRIBE_ROOT_TEST("Tests IPv4 route expiration with expire time set");
+}
+
+ATF_TC_BODY(rtm_add_v4_temporal1_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv4(tc);
+
+	/* Create IPv4 subnetwork with smaller prefix */
+	struct sockaddr_in mask4;
+	struct sockaddr_in net4;
+	struct sockaddr_in gw4;
+	prepare_v4_network(c, &net4, &mask4, &gw4);
+
+	prepare_route_message(rtm, RTM_ADD, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, (struct sockaddr *)&gw4);
+
+	/* Set expire time to now */
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	rtm->rtm_rmx.rmx_expire = tv.tv_sec - 1;
+	rtm->rtm_inits |= RTV_EXPIRE;
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+	ATF_REQUIRE_MSG(rtm != NULL, "unable to get rtsock reply for RTM_ADD");
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_inits & RTV_EXPIRE, "RTV_EXPIRE not set");
+
+	/* The next should be route deletion */
+	rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+
+	verify_route_message(rtm, RTM_DELETE, (struct sockaddr *)&net4,
+	    (struct sockaddr *)&mask4, (struct sockaddr *)&gw4);
+
+	verify_route_message_extra(rtm, c->ifindex, RTF_GATEWAY | RTF_DONE | RTF_STATIC);
+}
+
+ATF_TC_CLEANUP(rtm_add_v4_temporal1_success, tc)
+{
+	CLEANUP_AFTER_TEST;
+}
+
+ATF_TC_WITH_CLEANUP(rtm_add_v6_temporal1_success);
+ATF_TC_HEAD(rtm_add_v6_temporal1_success, tc)
+{
+	DESCRIBE_ROOT_TEST("Tests IPv6 global unicast prefix addition with directly-reachable GU GW");
+}
+
+ATF_TC_BODY(rtm_add_v6_temporal1_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv6(tc);
+
+	/* Create IPv6 subnetwork with smaller prefix */
+	struct sockaddr_in6 mask6;
+	struct sockaddr_in6 net6;
+	struct sockaddr_in6 gw6;
+	prepare_v6_network(c, &net6, &mask6, &gw6);
+
+	prepare_route_message(rtm, RTM_ADD, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, (struct sockaddr *)&gw6);
+
+	/* Set expire time to now */
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	rtm->rtm_rmx.rmx_expire = tv.tv_sec - 1;
+	rtm->rtm_inits |= RTV_EXPIRE;
+
+	rtsock_send_rtm(c->rtsock_fd, rtm);
+	rtm = rtsock_read_rtm_reply(c->rtsock_fd, buffer, sizeof(buffer), rtm->rtm_seq);
+	ATF_REQUIRE_MSG(rtm != NULL, "unable to get rtsock reply for RTM_ADD");
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_inits & RTV_EXPIRE, "RTV_EXPIRE not set");
+
+	/* The next should be route deletion */
+	rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+
+	verify_route_message(rtm, RTM_DELETE, (struct sockaddr *)&net6,
+	    (struct sockaddr *)&mask6, (struct sockaddr *)&gw6);
+
+
+	/* XXX: Currently kernel sets RTF_UP automatically but does NOT report it in the reply */
+	verify_route_message_extra(rtm, c->ifindex, RTF_GATEWAY | RTF_DONE | RTF_STATIC);
+}
+
+ATF_TC_CLEANUP(rtm_add_v6_temporal1_success, tc)
+{
+	CLEANUP_AFTER_TEST;
+}
+
+/* Interface address messages tests */
+
+RTM_DECLARE_ROOT_TEST(rtm_add_v6_gu_ifa_hostroute_success,
+    "Tests validness for /128 host route announce after ifaddr assignment");
+
+ATF_TC_BODY(rtm_add_v6_gu_ifa_hostroute_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv6_iface(tc);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_setup_addr(c->ifname, c->addr6_str, c->plen6);
+
+	/*
+	 * There will be multiple.
+	 * RTM_ADD without llinfo.
+	 */
+
+	while (true) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		if ((rtm->rtm_type == RTM_ADD) && ((rtm->rtm_flags & RTF_LLINFO) == 0))
+			break;
+	}
+	/* This should be a message for the host route */
+
+	verify_route_message(rtm, RTM_ADD, (struct sockaddr *)&c->addr6, NULL, NULL);
+	rtsock_validate_pid_kernel(rtm);
+	/* No netmask should be set */
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtsock_find_rtm_sa(rtm, RTA_NETMASK) == NULL, "netmask is set");
+
+	/* gateway should be link sdl with ifindex of an address interface */
+	verify_link_gateway(rtm, c->ifindex);
+
+	int expected_rt_flags = RTF_UP | RTF_HOST | RTF_DONE | RTF_STATIC | RTF_PINNED;
+	verify_route_message_extra(rtm, if_nametoindex("lo0"), expected_rt_flags);
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_add_v6_gu_ifa_prefixroute_success,
+    "Tests validness for the prefix route announce after ifaddr assignment");
+
+ATF_TC_BODY(rtm_add_v6_gu_ifa_prefixroute_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv6_iface(tc);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_setup_addr(c->ifname, c->addr6_str, c->plen6);
+
+	/*
+	 * Multiple RTM_ADD messages will be generated:
+	 * 1) lladdr mapping (RTF_LLDATA)
+	 * 2) host route (one w/o netmask)
+	 * 3) prefix route
+	 */
+
+	while (true) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		/* Find RTM_ADD with netmask - this should skip both host route and LLADDR */
+		if ((rtm->rtm_type == RTM_ADD) && (rtsock_find_rtm_sa(rtm, RTA_NETMASK)))
+			break;
+	}
+
+	/* This should be a message for the prefix route */
+	verify_route_message(rtm, RTM_ADD, (struct sockaddr *)&c->net6,
+	    (struct sockaddr *)&c->mask6, NULL);
+
+	/* gateway should be link sdl with ifindex of an address interface */
+	verify_link_gateway(rtm, c->ifindex);
+
+	/* TODO: PINNED? */
+	int expected_rt_flags = RTF_UP | RTF_DONE;
+	verify_route_message_extra(rtm, c->ifindex, expected_rt_flags);
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_add_v6_gu_ifa_ordered_success,
+    "Tests ordering of the messages for IPv6 global unicast ifaddr assignment");
+
+ATF_TC_BODY(rtm_add_v6_gu_ifa_ordered_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv6_iface(tc);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_setup_addr(c->ifname, c->addr6_str, c->plen6);
+
+	int count = 0, tries = 0;
+
+	enum msgtype {
+		MSG_IFADDR,
+		MSG_HOSTROUTE,
+		MSG_PREFIXROUTE,
+		MSG_MAX,
+	};
+
+	int msg_array[MSG_MAX];
+
+	bzero(msg_array, sizeof(msg_array));
+
+	while (count < 3 && tries < 20) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		tries++;
+		/* Classify */
+		if (rtm->rtm_type == RTM_NEWADDR) {
+			RLOG("MSG_IFADDR: %d", count);
+			msg_array[MSG_IFADDR] = count++;
+			continue;
+		}
+
+		/* Find RTM_ADD with netmask - this should skip both host route and LLADDR */
+		if ((rtm->rtm_type == RTM_ADD) && (rtsock_find_rtm_sa(rtm, RTA_NETMASK))) {
+			RLOG("MSG_PREFIXROUTE: %d", count);
+			msg_array[MSG_PREFIXROUTE] = count++;
+			continue;
+		}
+
+		if ((rtm->rtm_type == RTM_ADD) && ((rtm->rtm_flags & RTF_LLDATA) == 0)) {
+			RLOG("MSG_HOSTROUTE: %d", count);
+			msg_array[MSG_HOSTROUTE] = count++;
+			continue;
+		}
+
+		RLOG("skipping msg type %s, try: %d", rtsock_print_cmdtype(rtm->rtm_type),
+		    tries);
+	}
+
+	/* TODO: verify multicast */
+	ATF_REQUIRE_MSG(count == 3, "Received only %d/3 messages", count);
+	ATF_REQUIRE_MSG(msg_array[MSG_IFADDR] == 0, "ifaddr message is not the first");
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_del_v6_gu_ifa_hostroute_success,
+    "Tests validness for /128 host route removal after ifaddr removal");
+
+ATF_TC_BODY(rtm_del_v6_gu_ifa_hostroute_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv6_iface(tc);
+
+	ret = iface_setup_addr(c->ifname, c->addr6_str, c->plen6);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_delete_addr(c->ifname, c->addr6_str);
+
+	while (true) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		if ((rtm->rtm_type == RTM_DELETE) &&
+		    ((rtm->rtm_flags & RTF_LLINFO) == 0) &&
+		    rtsock_find_rtm_sa(rtm, RTA_NETMASK) == NULL)
+			break;
+	}
+	/* This should be a message for the host route */
+
+	verify_route_message(rtm, RTM_DELETE, (struct sockaddr *)&c->addr6, NULL, NULL);
+	rtsock_validate_pid_kernel(rtm);
+	/* No netmask should be set */
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtsock_find_rtm_sa(rtm, RTA_NETMASK) == NULL, "netmask is set");
+
+	/* gateway should be link sdl with ifindex of an address interface */
+	verify_link_gateway(rtm, c->ifindex);
+
+	/* XXX: consider passing ifindex in rtm_index as done in RTM_ADD. */
+	int expected_rt_flags = RTF_HOST | RTF_DONE | RTF_STATIC | RTF_PINNED;
+	RTSOCK_ATF_REQUIRE_MSG(rtm, rtm->rtm_flags == expected_rt_flags,
+	    "expected rtm flags: 0x%X, got 0x%X", expected_rt_flags, rtm->rtm_flags);
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_del_v6_gu_ifa_prefixroute_success,
+    "Tests validness for the prefix route removal after ifaddr assignment");
+
+ATF_TC_BODY(rtm_del_v6_gu_ifa_prefixroute_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv6_iface(tc);
+
+	ret = iface_setup_addr(c->ifname, c->addr6_str, c->plen6);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_delete_addr(c->ifname, c->addr6_str);
+
+	while (true) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		/* Find RTM_DELETE with netmask - this should skip both host route and LLADDR */
+		if ((rtm->rtm_type == RTM_DELETE) && (rtsock_find_rtm_sa(rtm, RTA_NETMASK)))
+			break;
+	}
+
+	/* This should be a message for the prefix route */
+	verify_route_message(rtm, RTM_DELETE, (struct sockaddr *)&c->net6,
+	    (struct sockaddr *)&c->mask6, NULL);
+
+	/* gateway should be link sdl with ifindex of an address interface */
+	verify_link_gateway(rtm, c->ifindex);
+
+	int expected_rt_flags = RTF_DONE;
+	verify_route_message_extra(rtm, c->ifindex, expected_rt_flags);
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_add_v4_gu_ifa_prefixroute_success,
+    "Tests validness for the prefix route announce after ifaddr assignment");
+
+ATF_TC_BODY(rtm_add_v4_gu_ifa_prefixroute_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv4_iface(tc);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_setup_addr(c->ifname, c->addr6_str, c->plen6);
+
+	/*
+	 * Multiple RTM_ADD messages will be generated:
+	 * 1) lladdr mapping (RTF_LLDATA)
+	 * 3) prefix route
+	 */
+
+	while (true) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		/* Find RTM_ADD with netmask - this should skip both host route and LLADDR */
+		if ((rtm->rtm_type == RTM_ADD) && (rtsock_find_rtm_sa(rtm, RTA_NETMASK)))
+			break;
+	}
+
+	/* This should be a message for the prefix route */
+	verify_route_message(rtm, RTM_ADD, (struct sockaddr *)&c->net4,
+	    (struct sockaddr *)&c->mask4, NULL);
+
+	/* gateway should be link sdl with ifindex of an address interface */
+	verify_link_gateway(rtm, c->ifindex);
+
+	int expected_rt_flags = RTF_UP | RTF_DONE | RTF_PINNED;
+	verify_route_message_extra(rtm, c->ifindex, expected_rt_flags);
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_add_v4_gu_ifa_ordered_success,
+    "Tests ordering of the messages for IPv4 unicast ifaddr assignment");
+
+ATF_TC_BODY(rtm_add_v4_gu_ifa_ordered_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv4_iface(tc);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_setup_addr(c->ifname, c->addr4_str, c->plen4);
+
+	int count = 0, tries = 0;
+
+	enum msgtype {
+		MSG_IFADDR,
+		MSG_PREFIXROUTE,
+		MSG_MAX,
+	};
+
+	int msg_array[MSG_MAX];
+
+	bzero(msg_array, sizeof(msg_array));
+
+	while (count < 2 && tries < 20) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		tries++;
+		/* Classify */
+		if (rtm->rtm_type == RTM_NEWADDR) {
+			RLOG("MSG_IFADDR: %d", count);
+			msg_array[MSG_IFADDR] = count++;
+			continue;
+		}
+
+		/* Find RTM_ADD with netmask - this should skip both host route and LLADDR */
+		if ((rtm->rtm_type == RTM_ADD) && (rtsock_find_rtm_sa(rtm, RTA_NETMASK))) {
+			RLOG("MSG_PREFIXROUTE: %d", count);
+			msg_array[MSG_PREFIXROUTE] = count++;
+			continue;
+		}
+
+		RLOG("skipping msg type %s, try: %d", rtsock_print_cmdtype(rtm->rtm_type),
+		    tries);
+	}
+
+	/* TODO: verify multicast */
+	ATF_REQUIRE_MSG(count == 2, "Received only %d/2 messages", count);
+	ATF_REQUIRE_MSG(msg_array[MSG_IFADDR] == 0, "ifaddr message is not the first");
+}
+
+RTM_DECLARE_ROOT_TEST(rtm_del_v4_gu_ifa_prefixroute_success,
+    "Tests validness for the prefix route removal after ifaddr assignment");
+
+ATF_TC_BODY(rtm_del_v4_gu_ifa_prefixroute_success, tc)
+{
+	DECLARE_TEST_VARS;
+
+	c = presetup_ipv4_iface(tc);
+
+
+	ret = iface_setup_addr(c->ifname, c->addr4_str, c->plen4);
+
+	c->rtsock_fd = rtsock_setup_socket();
+
+	ret = iface_delete_addr(c->ifname, c->addr4_str);
+
+	while (true) {
+		rtm = rtsock_read_rtm(c->rtsock_fd, buffer, sizeof(buffer));
+		/* Find RTM_ADD with netmask - this should skip both host route and LLADDR */
+		if ((rtm->rtm_type == RTM_DELETE) && (rtsock_find_rtm_sa(rtm, RTA_NETMASK)))
+			break;
+	}
+
+	/* This should be a message for the prefix route */
+	verify_route_message(rtm, RTM_DELETE, (struct sockaddr *)&c->net4,
+	    (struct sockaddr *)&c->mask4, NULL);
+
+	/* gateway should be link sdl with ifindex of an address interface */
+	verify_link_gateway(rtm, c->ifindex);
+
+	int expected_rt_flags = RTF_DONE | RTF_PINNED;
+	verify_route_message_extra(rtm, c->ifindex, expected_rt_flags);
+}
 
 
 ATF_TP_ADD_TCS(tp)
@@ -515,6 +1273,21 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, rtm_del_v4_prefix_nogw_success);
 	ATF_TP_ADD_TC(tp, rtm_add_v6_gu_gw_gu_direct_success);
 	ATF_TP_ADD_TC(tp, rtm_del_v6_gu_prefix_nogw_success);
+	ATF_TP_ADD_TC(tp, rtm_change_v4_gw_success);
+	ATF_TP_ADD_TC(tp, rtm_change_v4_mtu_success);
+	ATF_TP_ADD_TC(tp, rtm_change_v6_gw_success);
+	ATF_TP_ADD_TC(tp, rtm_change_v6_mtu_success);
+	/* ifaddr tests */
+	ATF_TP_ADD_TC(tp, rtm_add_v6_gu_ifa_hostroute_success);
+	ATF_TP_ADD_TC(tp, rtm_add_v6_gu_ifa_prefixroute_success);
+	ATF_TP_ADD_TC(tp, rtm_add_v6_gu_ifa_ordered_success);
+	ATF_TP_ADD_TC(tp, rtm_del_v6_gu_ifa_hostroute_success);
+	ATF_TP_ADD_TC(tp, rtm_del_v6_gu_ifa_prefixroute_success);
+	ATF_TP_ADD_TC(tp, rtm_add_v4_gu_ifa_ordered_success);
+	ATF_TP_ADD_TC(tp, rtm_del_v4_gu_ifa_prefixroute_success);
+	/* temporal routes */
+	ATF_TP_ADD_TC(tp, rtm_add_v4_temporal1_success);
+	ATF_TP_ADD_TC(tp, rtm_add_v6_temporal1_success);
 
 	return (atf_no_error());
 }

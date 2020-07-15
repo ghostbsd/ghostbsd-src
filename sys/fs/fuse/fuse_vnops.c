@@ -235,6 +235,7 @@ fuse_extattr_check_cred(struct vnode *vp, int ns, struct ucred *cred,
 {
 	struct mount *mp = vnode_mount(vp);
 	struct fuse_data *data = fuse_get_mpdata(mp);
+	int default_permissions = data->dataflags & FSESS_DEFAULT_PERMISSIONS;
 
 	/*
 	 * Kernel-invoked always succeeds.
@@ -248,12 +249,15 @@ fuse_extattr_check_cred(struct vnode *vp, int ns, struct ucred *cred,
 	 */
 	switch (ns) {
 	case EXTATTR_NAMESPACE_SYSTEM:
-		if (data->dataflags & FSESS_DEFAULT_PERMISSIONS) {
+		if (default_permissions) {
 			return (priv_check_cred(cred, PRIV_VFS_EXTATTR_SYSTEM));
 		}
-		/* FALLTHROUGH */
+		return (0);
 	case EXTATTR_NAMESPACE_USER:
-		return (fuse_internal_access(vp, accmode, td, cred));
+		if (default_permissions) {
+			return (fuse_internal_access(vp, accmode, td, cred));
+		}
+		return (0);
 	default:
 		return (EPERM);
 	}
@@ -961,6 +965,8 @@ fuse_lookup_alloc(struct mount *mp, void *arg, int lkflags, struct vnode **vpp)
 
 SDT_PROBE_DEFINE3(fusefs, , vnops, cache_lookup,
 	"int", "struct timespec*", "struct timespec*");
+SDT_PROBE_DEFINE2(fusefs, , vnops, lookup_cache_incoherent,
+	"struct vnode*", "struct fuse_entry_out*");
 /*
     struct vnop_lookup_args {
 	struct vnodeop_desc *a_desc;
@@ -983,6 +989,8 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 	int wantparent = flags & (LOCKPARENT | WANTPARENT);
 	int islastcn = flags & ISLASTCN;
 	struct mount *mp = vnode_mount(dvp);
+	struct fuse_data *data = fuse_get_mpdata(mp);
+	int default_permissions = data->dataflags & FSESS_DEFAULT_PERMISSIONS;
 
 	int err = 0;
 	int lookup_err = 0;
@@ -1006,7 +1014,9 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 	if (islastcn && vfs_isrdonly(mp) && (nameiop != LOOKUP))
 		return EROFS;
 
-	if ((err = fuse_internal_access(dvp, VEXEC, td, cred)))
+	if ((cnp->cn_flags & NOEXECCHECK) != 0)
+		cnp->cn_flags &= ~NOEXECCHECK;
+	else if ((err = fuse_internal_access(dvp, VEXEC, td, cred)))
 		return err;
 
 	if (flags & ISDOTDOT) {
@@ -1104,7 +1114,11 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 	if (lookup_err) {
 		/* Entry not found */
 		if ((nameiop == CREATE || nameiop == RENAME) && islastcn) {
-			err = fuse_internal_access(dvp, VWRITE, td, cred);
+			if (default_permissions)
+				err = fuse_internal_access(dvp, VWRITE, td,
+				    cred);
+			else
+				err = 0;
 			if (!err) {
 				/*
 				 * Set the SAVENAME flag to hold onto the
@@ -1135,6 +1149,7 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 			*vpp = dvp;
 		} else {
 			struct fuse_vnode_data *fvdat;
+			struct vattr *vap;
 
 			err = fuse_vnode_get(vnode_mount(dvp), feo, nid, dvp,
 			    &vp, cnp, vtyp);
@@ -1155,22 +1170,27 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 			 */
 			fvdat = VTOFUD(vp);
 			if (vnode_isreg(vp) &&
-			    filesize != fvdat->cached_attrs.va_size &&
-			    fvdat->flag & FN_SIZECHANGE) {
-				/*
-				 * The FN_SIZECHANGE flag reflects a dirty
-				 * append.  If userspace lets us know our cache
-				 * is invalid, that write was lost.  (Dirty
-				 * writes that do not cause append are also
-				 * lost, but we don't detect them here.)
-				 *
-				 * XXX: Maybe disable WB caching on this mount.
-				 */
-				printf("%s: WB cache incoherent on %s!\n",
-				    __func__,
-				    vnode_mount(vp)->mnt_stat.f_mntonname);
-
+			    ((filesize != fvdat->cached_attrs.va_size &&
+			      fvdat->flag & FN_SIZECHANGE) ||
+			     ((vap = VTOVA(vp)) &&
+			      filesize != vap->va_size)))
+			{
+				SDT_PROBE2(fusefs, , vnops, lookup_cache_incoherent, vp, feo);
 				fvdat->flag &= ~FN_SIZECHANGE;
+				/*
+				 * The server changed the file's size even
+				 * though we had it cached, or had dirty writes
+				 * in the WB cache!
+				 */
+				printf("%s: cache incoherent on %s!  "
+		    		    "Buggy FUSE server detected.  To prevent "
+				    "data corruption, disable the data cache "
+				    "by mounting with -o direct_io, or as "
+				    "directed otherwise by your FUSE server's "
+		    		    "documentation\n", __func__,
+				    vnode_mount(vp)->mnt_stat.f_mntonname);
+				int iosize = fuse_iosize(vp);
+				v_inval_buf_range(vp, 0, INT64_MAX, iosize);
 			}
 
 			MPASS(feo != NULL);
@@ -1181,7 +1201,7 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 				&fvdat->entry_cache_timeout);
 
 			if ((nameiop == DELETE || nameiop == RENAME) &&
-				islastcn)
+				islastcn && default_permissions)
 			{
 				struct vattr dvattr;
 
@@ -1818,7 +1838,11 @@ fuse_vnop_setattr(struct vop_setattr_args *ap)
 	if (vfs_isrdonly(mp))
 		return EROFS;
 
-	err = fuse_internal_access(vp, accmode, td, cred);
+	if (checkperm) {
+		err = fuse_internal_access(vp, accmode, td, cred);
+	} else {
+		err = 0;
+	}
 	if (err)
 		return err;
 	else

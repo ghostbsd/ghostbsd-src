@@ -17,6 +17,8 @@ ${PACKAGE}FILES+=		bg7.0
 ${PACKAGE}FILES+=		bg8.0
 ${PACKAGE}FILES+=		bg9.0
 ${PACKAGE}FILES+=		bg10.0 bg10.0.stdout
+${PACKAGE}FILES+=		bg11.0
+${PACKAGE}FILES+=		bg12.0
 ${PACKAGE}FILES+=		env1.0
 ${PACKAGE}FILES+=		fork1.0
 ${PACKAGE}FILES+=		fork2.0
@@ -59,11 +61,13 @@ ${PACKAGE}FILES+=		shellproc2.0
 ${PACKAGE}FILES+=		shellproc3.0
 ${PACKAGE}FILES+=		shellproc4.0
 ${PACKAGE}FILES+=		shellproc5.0
+${PACKAGE}FILES+=		shellproc6.0
 ${PACKAGE}FILES+=		subshell1.0 subshell1.0.stdout
 ${PACKAGE}FILES+=		subshell2.0
 ${PACKAGE}FILES+=		subshell3.0
 ${PACKAGE}FILES+=		subshell4.0
 ${PACKAGE}FILES+=		unknown1.0
+${PACKAGE}FILES+=		unknown2.0
 ${PACKAGE}FILES+=		var-assign1.0
 
 .include <bsd.test.mk>

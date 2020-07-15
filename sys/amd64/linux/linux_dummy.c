@@ -53,25 +53,33 @@ UNIMPLEMENTED(getpmsg);
 UNIMPLEMENTED(nfsservctl);	/* Added in Linux 2.2 removed in 3.1. */
 UNIMPLEMENTED(putpmsg);
 UNIMPLEMENTED(query_module);	/* Added in Linux 2.2 removed in 2.6. */
+UNIMPLEMENTED(tuxcall);
 UNIMPLEMENTED(security);
 UNIMPLEMENTED(set_thread_area);
-UNIMPLEMENTED(tuxcall);
 UNIMPLEMENTED(uselib);
 UNIMPLEMENTED(vserver);
 
-DUMMY(sendfile);
 DUMMY(setfsuid);
 DUMMY(setfsgid);
 DUMMY(sysfs);
 DUMMY(vhangup);
+DUMMY(modify_ldt);
 DUMMY(pivot_root);
 DUMMY(adjtimex);
 DUMMY(swapoff);
 DUMMY(init_module);
+DUMMY(ioperm);
 DUMMY(delete_module);
 DUMMY(quotactl);
+DUMMY(readahead);
+DUMMY(io_setup);
+DUMMY(io_destroy);
+DUMMY(io_getevents);
+DUMMY(io_submit);
+DUMMY(io_cancel);
 DUMMY(lookup_dcookie);
 DUMMY(remap_file_pages);
+DUMMY(restart_syscall);
 DUMMY(semtimedop);
 DUMMY(mbind);
 DUMMY(get_mempolicy);
@@ -130,7 +138,6 @@ DUMMY(sched_getattr);
 /* Linux 3.15: */
 DUMMY(kexec_file_load);
 /* Linux 3.17: */
-DUMMY(memfd_create);
 DUMMY(seccomp);
 /* Linux 3.18: */
 DUMMY(bpf);

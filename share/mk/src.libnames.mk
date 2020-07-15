@@ -15,9 +15,10 @@ __<src.libnames.mk>__:
 _PRIVATELIBS=	\
 		atf_c \
 		atf_cxx \
+		auditd \
 		bsdstat \
 		devdctl \
-		event \
+		event1 \
 		gmock \
 		gtest \
 		gmock_main \
@@ -40,7 +41,15 @@ _INTERNALLIBS=	\
 		fifolog \
 		ifconfig \
 		ipf \
+		kyua_cli \
+		kyua_drivers \
+		kyua_engine \
+		kyua_model \
+		kyua_store \
+		kyua_utils \
 		lpr \
+		lua \
+		lutok \
 		netbsd \
 		ntp \
 		ntpevent \
@@ -64,7 +73,6 @@ _LIBRARIES=	\
 		alias \
 		archive \
 		asn1 \
-		auditd \
 		avl \
 		be \
 		begemot \
@@ -216,18 +224,18 @@ _LIBRARIES+= \
 .endif
 
 .if ${MK_BEARSSL} == "yes"
-_INTERNALLIBS+= \
+_LIBRARIES+= \
 		bearssl \
 		secureboot \
 
-LIBBEARSSL?=	${LIBBEARSSLDIR}/libbearssl${PIE_SUFFIX}.a
-LIBSECUREBOOT?=	${LIBSECUREBOOTDIR}/libsecureboot${PIE_SUFFIX}.a
+LIBBEARSSL?=	${LIBBEARSSLDIR}/libbearssl.a
+LIBSECUREBOOT?=	${LIBSECUREBOOTDIR}/libsecureboot.a
 .endif
 
 .if ${MK_VERIEXEC} == "yes"
-_INTERNALLIBS+= veriexec
+_LIBRARIES+= veriexec
 
-LIBVERIEXEC?=	${LIBVERIEXECDIR}/libveriexec${PIE_SUFFIX}.a
+LIBVERIEXEC?=	${LIBVERIEXECDIR}/libveriexec.a
 .endif
 
 # Each library's LIBADD needs to be duplicated here for static linkage of
@@ -258,6 +266,12 @@ _DP_einfo=	kvm
 _DP_geom=	bsdxml sbuf
 _DP_cam=	sbuf
 _DP_kvm=	elf
+_DP_kyua_cli=		kyua_drivers kyua_engine kyua_model kyua_store kyua_utils
+_DP_kyua_drivers=	kyua_model kyua_engine kyua_store
+_DP_kyua_engine=	lutok kyua_utils
+_DP_kyua_model=		lutok
+_DP_kyua_utils=		lutok
+_DP_kyua_store=		kyua_model kyua_utils sqlite3
 _DP_casper=	nv
 _DP_cap_dns=	nv
 _DP_cap_fileargs=	nv
@@ -297,6 +311,8 @@ _DP_memstat=	kvm
 _DP_magic=	z
 _DP_mt=		sbuf bsdxml
 _DP_ldns=	ssl crypto
+_DP_lua=	m
+_DP_lutok=	lua
 .if ${MK_OPENSSL} != "no"
 _DP_fetch=	ssl crypto
 .else
@@ -338,7 +354,7 @@ _DP_heimipcs=	heimbase roken pthread
 _DP_kafs5=	asn1 krb5 roken
 _DP_krb5+=	asn1 com_err crypt crypto hx509 roken wind heimbase heimipcc
 _DP_gssapi_krb5+=	gssapi krb5 crypto roken asn1 com_err
-_DP_lzma=	pthread
+_DP_lzma=	md pthread
 _DP_ucl=	m
 _DP_vmmapi=	util
 _DP_opencsd=	cxxrt
@@ -348,7 +364,8 @@ _DP_xo=		util
 # The libc dependencies are not strictly needed but are defined to make the
 # assert happy.
 _DP_c=		compiler_rt
-.if ${MK_SSP} != "no"
+.if ${MK_SSP} != "no" && \
+    (${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH:Mpower*} != "")
 _DP_c+=		ssp_nonshared
 .endif
 _DP_stats=	sbuf pthread
@@ -471,6 +488,30 @@ _LIB_OBJTOP?=	${OBJTOP}
 LIBELFTCDIR=	${_LIB_OBJTOP}/lib/libelftc
 LIBELFTC?=	${LIBELFTCDIR}/libelftc${PIE_SUFFIX}.a
 
+LIBKYUA_CLIDIR=	${_LIB_OBJTOP}/lib/kyua/cli
+LIBKYUA_CLI?=	${LIBKYUA_CLIDIR}/libkyua_cli${PIE_SUFFIX}.a
+
+LIBKYUA_DRIVERSDIR=	${_LIB_OBJTOP}/lib/kyua/drivers
+LIBKYUA_DRIVERS?=	${LIBKYUA_DRIVERSDIR}/libkyua_drivers${PIE_SUFFIX}.a
+
+LIBKYUA_ENGINEDIR=	${_LIB_OBJTOP}/lib/kyua/engine
+LIBKYUA_ENGINE?=	${LIBKYUA_ENGINEDIR}/libkyua_engine${PIE_SUFFIX}.a
+
+LIBKYUA_MODELDIR=	${_LIB_OBJTOP}/lib/kyua/model
+LIBKYUA_MODEL?=		${LIBKYUA_MODELDIR}/libkyua_model${PIE_SUFFIX}.a
+
+LIBKYUA_STOREDIR=	${_LIB_OBJTOP}/lib/kyua/store
+LIBKYUA_STORE?=		${LIBKYUA_STOREDIR}/libkyua_store${PIE_SUFFIX}.a
+
+LIBKYUA_UTILSDIR=	${_LIB_OBJTOP}/lib/kyua/utils
+LIBKYUA_UTILS?=		${LIBKYUA_UTILSDIR}/libkyua_utils${PIE_SUFFIX}.a
+
+LIBLUADIR=	${_LIB_OBJTOP}/lib/liblua
+LIBLUA?=	${LIBLUADIR}/liblua${PIE_SUFFIX}.a
+
+LIBLUTOKDIR=	${_LIB_OBJTOP}/lib/liblutok
+LIBLUTOK?=	${LIBLUTOKDIR}/liblutok${PIE_SUFFIX}.a
+
 LIBPEDIR=	${_LIB_OBJTOP}/lib/libpe
 LIBPE?=		${LIBPEDIR}/libpe${PIE_SUFFIX}.a
 
@@ -567,12 +608,9 @@ LIBOPENSMDIR=	${OBJTOP}/lib/ofed/libopensm
 LIBOSMVENDORDIR=${OBJTOP}/lib/ofed/libvendor
 
 LIBDIALOGDIR=	${OBJTOP}/gnu/lib/libdialog
-LIBGCOVDIR=	${OBJTOP}/gnu/lib/libgcov
-LIBGOMPDIR=	${OBJTOP}/gnu/lib/libgomp
 LIBGNUREGEXDIR=	${OBJTOP}/gnu/lib/libregex
 LIBSSPDIR=	${OBJTOP}/lib/libssp
 LIBSSP_NONSHAREDDIR=	${OBJTOP}/lib/libssp_nonshared
-LIBSUPCPLUSPLUSDIR=	${OBJTOP}/gnu/lib/libsupc++
 LIBASN1DIR=	${OBJTOP}/kerberos5/lib/libasn1
 LIBGSSAPI_KRB5DIR=	${OBJTOP}/kerberos5/lib/libgssapi_krb5
 LIBGSSAPI_NTLMDIR=	${OBJTOP}/kerberos5/lib/libgssapi_ntlm

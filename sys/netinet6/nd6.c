@@ -62,6 +62,8 @@ __FBSDID("$FreeBSD$");
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/route/route_ctl.h>
+#include <net/route/nhop.h>
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -136,7 +138,6 @@ static void nd6_free_redirect(const struct llentry *);
 static void nd6_llinfo_timer(void *);
 static void nd6_llinfo_settimer_locked(struct llentry *, long);
 static void clear_llinfo_pqueue(struct llentry *);
-static void nd6_rtrequest(int, struct rtentry *, struct rt_addrinfo *);
 static int nd6_resolve_slow(struct ifnet *, int, struct mbuf *,
     const struct sockaddr_in6 *, u_char *, uint32_t *, struct llentry **);
 static int nd6_need_cache(struct ifnet *);
@@ -818,9 +819,27 @@ nd6_llinfo_timer(void *arg)
 				clear_llinfo_pqueue(ln);
 			}
 			nd6_free(&ln, 0);
-			if (m != NULL)
-				icmp6_error2(m, ICMP6_DST_UNREACH,
-				    ICMP6_DST_UNREACH_ADDR, 0, ifp);
+			if (m != NULL) {
+				struct mbuf *n = m;
+
+				/*
+				 * if there are any ummapped mbufs, we
+				 * must free them, rather than using
+				 * them for an ICMP, as they cannot be
+				 * checksummed.
+				 */
+				while ((n = n->m_next) != NULL) {
+					if (n->m_flags & M_EXTPG)
+						break;
+				}
+				if (n != NULL) {
+					m_freem(m);
+					m = NULL;
+				} else {
+					icmp6_error2(m, ICMP6_DST_UNREACH,
+					    ICMP6_DST_UNREACH_ADDR, 0, ifp);
+				}
+			}
 		}
 		break;
 	case ND6_LLINFO_REACHABLE:
@@ -1526,14 +1545,15 @@ nd6_free(struct llentry **lnp, int gc)
 }
 
 static int
-nd6_isdynrte(const struct rtentry *rt, void *xap)
+nd6_isdynrte(const struct rtentry *rt, const struct nhop_object *nh, void *xap)
 {
 
-	if (rt->rt_flags == (RTF_UP | RTF_HOST | RTF_DYNAMIC))
+	if (nh->nh_flags & NHF_REDIRECT)
 		return (1);
 
 	return (0);
 }
+
 /*
  * Remove the rtentry for the given llentry,
  * both of which were installed by a redirect.
@@ -1544,54 +1564,38 @@ nd6_free_redirect(const struct llentry *ln)
 	int fibnum;
 	struct sockaddr_in6 sin6;
 	struct rt_addrinfo info;
+	struct epoch_tracker et;
 
 	lltable_fill_sa_entry(ln, (struct sockaddr *)&sin6);
 	memset(&info, 0, sizeof(info));
 	info.rti_info[RTAX_DST] = (struct sockaddr *)&sin6;
 	info.rti_filter = nd6_isdynrte;
 
+	NET_EPOCH_ENTER(et);
 	for (fibnum = 0; fibnum < rt_numfibs; fibnum++)
 		rtrequest1_fib(RTM_DELETE, &info, NULL, fibnum);
+	NET_EPOCH_EXIT(et);
 }
 
 /*
- * Rejuvenate this function for routing operations related
- * processing.
+ * Updates status of the default router route.
  */
 void
-nd6_rtrequest(int req, struct rtentry *rt, struct rt_addrinfo *info)
+nd6_subscription_cb(struct rib_head *rnh, struct rib_cmd_info *rc, void *arg)
 {
-	struct sockaddr_in6 *gateway;
 	struct nd_defrouter *dr;
-	struct ifnet *ifp;
+	struct nhop_object *nh;
 
-	gateway = (struct sockaddr_in6 *)rt->rt_gateway;
-	ifp = rt->rt_ifp;
+	if (rc->rc_cmd == RTM_DELETE) {
+		nh = rc->rc_nh_old;
 
-	switch (req) {
-	case RTM_ADD:
-		break;
-
-	case RTM_DELETE:
-		if (!ifp)
-			return;
-		/*
-		 * Only indirect routes are interesting.
-		 */
-		if ((rt->rt_flags & RTF_GATEWAY) == 0)
-			return;
-		/*
-		 * check for default route
-		 */
-		if (IN6_ARE_ADDR_EQUAL(&in6addr_any,
-		    &SIN6(rt_key(rt))->sin6_addr)) {
-			dr = defrouter_lookup(&gateway->sin6_addr, ifp);
+		if (nh->nh_flags & NHF_DEFAULT) {
+			dr = defrouter_lookup(&nh->gw6_sa.sin6_addr, nh->nh_ifp);
 			if (dr != NULL) {
 				dr->installed = 0;
 				defrouter_rele(dr);
 			}
 		}
-		break;
 	}
 }
 
@@ -2511,7 +2515,6 @@ nd6_add_ifa_lle(struct in6_ifaddr *ia)
 	if (nd6_need_cache(ifp) == 0)
 		return (0);
 
-	ia->ia_ifa.ifa_rtrequest = nd6_rtrequest;
 	dst = (struct sockaddr *)&ia->ia_addr;
 	ln = lltable_alloc_entry(LLTABLE6(ifp), LLE_IFADDR, dst);
 	if (ln == NULL)

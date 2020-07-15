@@ -41,8 +41,8 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/gtaskqueue.h>
 #include <sys/kernel.h>
+#include <sys/ktr.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/protosw.h>
@@ -50,15 +50,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
 #include <sys/priv.h>
-#include <sys/ktr.h>
+#include <sys/taskqueue.h>
 #include <sys/tree.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/route.h>
+#include <net/route/nhop.h>
 #include <net/vnet.h>
-
 
 #include <netinet/in.h>
 #include <netinet/udp.h>
@@ -121,8 +121,6 @@ MTX_SYSINIT(in6_multi_free_mtx, &in6_multi_free_mtx, "in6_multi_free_mtx", MTX_D
 struct sx in6_multi_sx;
 SX_SYSINIT(in6_multi_sx, &in6_multi_sx, "in6_multi_sx");
 
-
-
 static void	im6f_commit(struct in6_mfilter *);
 static int	im6f_get_source(struct in6_mfilter *imf,
 		    const struct sockaddr_in6 *psin,
@@ -144,6 +142,8 @@ static void	im6s_merge(struct ip6_msource *ims,
 		    const struct in6_msource *lims, const int rollback);
 static int	in6_getmulti(struct ifnet *, const struct in6_addr *,
 		    struct in6_multi **);
+static int	in6_joingroup_locked(struct ifnet *, const struct in6_addr *,
+		    struct in6_mfilter *, struct in6_multi **, int);
 static int	in6m_get_source(struct in6_multi *inm,
 		    const struct in6_addr *addr, const int noalloc,
 		    struct ip6_msource **pims);
@@ -168,7 +168,8 @@ static int	sysctl_ip6_mcast_filters(SYSCTL_HANDLER_ARGS);
 
 SYSCTL_DECL(_net_inet6_ip6);	/* XXX Not in any common header. */
 
-static SYSCTL_NODE(_net_inet6_ip6, OID_AUTO, mcast, CTLFLAG_RW, 0,
+static SYSCTL_NODE(_net_inet6_ip6, OID_AUTO, mcast,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "IPv6 multicast");
 
 static u_long in6_mcast_maxgrpsrc = IPV6_MAX_GROUP_SRC_FILTER;
@@ -510,23 +511,21 @@ in6m_release(struct in6_multi *inm)
 	}
 }
 
-static struct grouptask free_gtask;
-static struct in6_multi_head in6m_free_list;
-static void in6m_release_task(void *arg __unused);
-static void in6m_init(void)
+/*
+ * Interface detach can happen in a taskqueue thread context, so we must use a
+ * dedicated thread to avoid deadlocks when draining in6m_release tasks.
+ */
+TASKQUEUE_DEFINE_THREAD(in6m_free);
+static struct task in6m_free_task;
+static struct in6_multi_head in6m_free_list = SLIST_HEAD_INITIALIZER();
+static void in6m_release_task(void *arg __unused, int pending __unused);
+
+static void
+in6m_init(void)
 {
-	SLIST_INIT(&in6m_free_list);
-	taskqgroup_config_gtask_init(NULL, &free_gtask, in6m_release_task, "in6m release task");
+	TASK_INIT(&in6m_free_task, 0, in6m_release_task, NULL);
 }
-
-#ifdef EARLY_AP_STARTUP
-SYSINIT(in6m_init, SI_SUB_SMP + 1, SI_ORDER_FIRST,
-	in6m_init, NULL);
-#else
-SYSINIT(in6m_init, SI_SUB_ROOT_CONF - 1, SI_ORDER_SECOND,
-	in6m_init, NULL);
-#endif
-
+SYSINIT(in6m_init, SI_SUB_TASKQ, SI_ORDER_ANY, in6m_init, NULL);
 
 void
 in6m_release_list_deferred(struct in6_multi_head *inmh)
@@ -536,15 +535,13 @@ in6m_release_list_deferred(struct in6_multi_head *inmh)
 	mtx_lock(&in6_multi_free_mtx);
 	SLIST_CONCAT(&in6m_free_list, inmh, in6_multi, in6m_nrele);
 	mtx_unlock(&in6_multi_free_mtx);
-	GROUPTASK_ENQUEUE(&free_gtask);
+	taskqueue_enqueue(taskqueue_in6m_free, &in6m_free_task);
 }
 
 void
 in6m_release_wait(void)
 {
-
-	/* Wait for all jobs to complete. */
-	gtaskqueue_drain_all(free_gtask.gt_taskqueue);
+	taskqueue_drain_all(taskqueue_in6m_free);
 }
 
 void
@@ -604,7 +601,7 @@ in6m_disconnect_locked(struct in6_multi_head *inmh, struct in6_multi *inm)
 }
 
 static void
-in6m_release_task(void *arg __unused)
+in6m_release_task(void *arg __unused, int pending __unused)
 {
 	struct in6_multi_head in6m_free_tmp;
 	struct in6_multi *inm, *tinm;
@@ -1197,7 +1194,7 @@ in6_joingroup(struct ifnet *ifp, const struct in6_addr *mcaddr,
  * If the MLD downcall fails, the group is not joined, and an error
  * code is returned.
  */
-int
+static int
 in6_joingroup_locked(struct ifnet *ifp, const struct in6_addr *mcaddr,
     /*const*/ struct in6_mfilter *imf, struct in6_multi **pinm,
     const int delay)
@@ -1833,7 +1830,7 @@ static struct ifnet *
 in6p_lookup_mcast_ifp(const struct inpcb *inp,
     const struct sockaddr_in6 *gsin6)
 {
-	struct nhop6_basic	nh6;
+	struct nhop_object	*nh;
 	struct in6_addr		dst;
 	uint32_t		scopeid;
 	uint32_t		fibnum;
@@ -1845,10 +1842,9 @@ in6p_lookup_mcast_ifp(const struct inpcb *inp,
 
 	in6_splitscope(&gsin6->sin6_addr, &dst, &scopeid);
 	fibnum = inp ? inp->inp_inc.inc_fibnum : RT_DEFAULT_FIB;
-	if (fib6_lookup_nh_basic(fibnum, &dst, scopeid, 0, 0, &nh6) != 0)
-		return (NULL);
+	nh = fib6_lookup(fibnum, &dst, scopeid, 0, 0);
 
-	return (nh6.nh_ifp);
+	return (nh ? nh->nh_ifp : NULL);
 }
 
 /*

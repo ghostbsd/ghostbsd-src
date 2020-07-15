@@ -1057,11 +1057,10 @@ mdstart_swap(struct md_s *sc, struct bio *bp)
 	lastend = (bp->bio_offset + bp->bio_length - 1) % PAGE_SIZE + 1;
 
 	rv = VM_PAGER_OK;
-	VM_OBJECT_WLOCK(sc->object);
 	vm_object_pip_add(sc->object, 1);
 	for (i = bp->bio_offset / PAGE_SIZE; i <= lastp; i++) {
 		len = ((i == lastp) ? lastend : PAGE_SIZE) - offs;
-		m = vm_page_grab(sc->object, i, VM_ALLOC_SYSTEM);
+		m = vm_page_grab_unlocked(sc->object, i, VM_ALLOC_SYSTEM);
 		if (bp->bio_cmd == BIO_READ) {
 			if (vm_page_all_valid(m))
 				rv = VM_PAGER_OK;
@@ -1069,7 +1068,9 @@ mdstart_swap(struct md_s *sc, struct bio *bp)
 				rv = vm_pager_get_pages(sc->object, &m, 1,
 				    NULL, NULL);
 			if (rv == VM_PAGER_ERROR) {
+				VM_OBJECT_WLOCK(sc->object);
 				vm_page_free(m);
+				VM_OBJECT_WUNLOCK(sc->object);
 				break;
 			} else if (rv == VM_PAGER_FAIL) {
 				/*
@@ -1099,7 +1100,9 @@ mdstart_swap(struct md_s *sc, struct bio *bp)
 				rv = vm_pager_get_pages(sc->object, &m, 1,
 				    NULL, NULL);
 			if (rv == VM_PAGER_ERROR) {
+				VM_OBJECT_WLOCK(sc->object);
 				vm_page_free(m);
+				VM_OBJECT_WUNLOCK(sc->object);
 				break;
 			} else if (rv == VM_PAGER_FAIL)
 				pmap_zero_page(m);
@@ -1122,8 +1125,10 @@ mdstart_swap(struct md_s *sc, struct bio *bp)
 			else
 				rv = vm_pager_get_pages(sc->object, &m, 1,
 				    NULL, NULL);
+			VM_OBJECT_WLOCK(sc->object);
 			if (rv == VM_PAGER_ERROR) {
 				vm_page_free(m);
+				VM_OBJECT_WUNLOCK(sc->object);
 				break;
 			} else if (rv == VM_PAGER_FAIL) {
 				vm_page_free(m);
@@ -1139,6 +1144,7 @@ mdstart_swap(struct md_s *sc, struct bio *bp)
 					m = NULL;
 				}
 			}
+			VM_OBJECT_WUNLOCK(sc->object);
 		}
 		if (m != NULL) {
 			vm_page_xunbusy(m);
@@ -1160,7 +1166,6 @@ mdstart_swap(struct md_s *sc, struct bio *bp)
 		ma_offs += len;
 	}
 	vm_object_pip_wakeup(sc->object);
-	VM_OBJECT_WUNLOCK(sc->object);
 	return (rv != VM_PAGER_ERROR ? 0 : ENOSPC);
 }
 
@@ -1556,13 +1561,11 @@ mdresize(struct md_s *sc, struct md_req *mdr)
 		if (mdr->md_mediasize <= 0 ||
 		    (mdr->md_mediasize % PAGE_SIZE) != 0)
 			return (EDOM);
-		oldpages = OFF_TO_IDX(round_page(sc->mediasize));
-		newpages = OFF_TO_IDX(round_page(mdr->md_mediasize));
+		oldpages = OFF_TO_IDX(sc->mediasize);
+		newpages = OFF_TO_IDX(mdr->md_mediasize);
 		if (newpages < oldpages) {
 			VM_OBJECT_WLOCK(sc->object);
 			vm_object_page_remove(sc->object, newpages, 0, 0);
-			swap_pager_freespace(sc->object, newpages,
-			    oldpages - newpages);
 			swap_release_by_cred(IDX_TO_OFF(oldpages -
 			    newpages), sc->cred);
 			sc->object->charge = IDX_TO_OFF(newpages);

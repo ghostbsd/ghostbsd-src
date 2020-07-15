@@ -274,7 +274,7 @@ devfs_vptocnp(struct vop_vptocnp_args *ap)
 	struct vnode **dvp = ap->a_vpp;
 	struct devfs_mount *dmp;
 	char *buf = ap->a_buf;
-	int *buflen = ap->a_buflen;
+	size_t *buflen = ap->a_buflen;
 	struct devfs_dirent *dd, *de;
 	int i, error;
 
@@ -479,8 +479,7 @@ loop:
 		dev_refl(dev);
 		/* XXX: v_rdev should be protect by vnode lock */
 		vp->v_rdev = dev;
-		KASSERT(vp->v_usecount == 1,
-		    ("%s %d (%d)\n", __func__, __LINE__, vp->v_usecount));
+		VNPASS(vp->v_usecount == 1, vp);
 		dev->si_usecount++;
 		/* Special casing of ttys for deadfs.  Probably redundant. */
 		dsw = dev->si_devsw;
@@ -788,6 +787,7 @@ devfs_ioctl(struct vop_ioctl_args *ap)
 	struct vnode *vpold, *vp;
 	struct cdevsw *dsw;
 	struct thread *td;
+	struct session *sess;
 	struct cdev *dev;
 	int error, ref, i;
 	const char *p;
@@ -837,18 +837,18 @@ devfs_ioctl(struct vop_ioctl_args *ap)
 		 * nothing left to do.
 		 */
 		sx_slock(&proctree_lock);
-		if (td->td_proc->p_session->s_ttyvp == vp ||
-		    td->td_proc->p_session->s_ttyp == NULL) {
+		sess = td->td_proc->p_session;
+		if (sess->s_ttyvp == vp || sess->s_ttyp == NULL) {
 			sx_sunlock(&proctree_lock);
 			return (0);
 		}
 
-		vpold = td->td_proc->p_session->s_ttyvp;
-		VREF(vp);
-		SESS_LOCK(td->td_proc->p_session);
-		td->td_proc->p_session->s_ttyvp = vp;
-		td->td_proc->p_session->s_ttydp = cdev2priv(dev);
-		SESS_UNLOCK(td->td_proc->p_session);
+		vrefact(vp);
+		SESS_LOCK(sess);
+		vpold = sess->s_ttyvp;
+		sess->s_ttyvp = vp;
+		sess->s_ttydp = cdev2priv(dev);
+		SESS_UNLOCK(sess);
 
 		sx_sunlock(&proctree_lock);
 
@@ -946,8 +946,8 @@ devfs_lookupx(struct vop_lookup_args *ap, int *dm_unlock)
 	if ((flags & ISDOTDOT) && (dvp->v_vflag & VV_ROOT))
 		return (EIO);
 
-	error = VOP_ACCESS(dvp, VEXEC, cnp->cn_cred, td);
-	if (error)
+	error = vn_dir_check_exec(dvp, cnp);
+	if (error != 0)
 		return (error);
 
 	if (cnp->cn_namelen == 1 && *pname == '.') {
@@ -1306,7 +1306,7 @@ devfs_read_f(struct file *fp, struct uio *uio, struct ucred *cred,
 	td->td_fpop = fpop;
 	dev_relthread(dev, ref);
 
-	foffset_unlock_uio(fp, uio, flags | FOF_NOLOCK | FOF_NEXTOFF);
+	foffset_unlock_uio(fp, uio, flags | FOF_NOLOCK | FOF_NEXTOFF_R);
 	return (error);
 }
 
@@ -1803,7 +1803,7 @@ devfs_write_f(struct file *fp, struct uio *uio, struct ucred *cred,
 	td->td_fpop = fpop;
 	dev_relthread(dev, ref);
 
-	foffset_unlock_uio(fp, uio, flags | FOF_NOLOCK | FOF_NEXTOFF);
+	foffset_unlock_uio(fp, uio, flags | FOF_NOLOCK | FOF_NEXTOFF_W);
 	return (error);
 }
 

@@ -40,15 +40,16 @@ CFLAGS.errlst.c+=-I${LIBC_SRCTOP}/include
 
 # Use the string and memory .o files from libc instead of rebuilding them (they
 # might be using optimized assembly and duplicating that logic here is awkward).
-_libc_string_objects=	bcmp bcopy memchr memcmp memcpy memmove stpncpy strcat \
-    strchr strcmp stpcpy strcpy strcspn strdup strlcat strlcpy strlen strncmp \
-    strncpy strrchr strsep strspn strstr strtok
+_libc_string_objects=	bcmp bcopy bzero memset memchr memcmp memcpy memmove \
+    stpncpy strcat strchr strcmp stpcpy strcpy strcspn strdup strlcat strlcpy \
+    strlen strncmp strncpy strrchr strsep strspn strstr strtok
 # Also use all the syscall .o files from libc_nossp_pic:
 _libc_other_objects= sigsetjmp lstat stat fstat fstatat fstatfs syscall \
-    cerror geteuid getegid munmap mprotect sysarch __sysctl issetugid __getcwd \
-    utrace thr_self thr_kill pread mmap lseek _exit _fstat _fstatat _fstatfs \
+    cerror geteuid getegid sigfastblock munmap mprotect \
+    sysarch __sysctl issetugid __getcwd utrace getpid \
+    thr_self thr_kill pread mmap lseek _exit _fstat _fstatat _fstatfs \
     getdirentries _getdirentries _close _fcntl _open _openat _read \
-    _sigprocmask _write readlink _setjmp setjmp setjmperr
+    _sigprocmask _write readlink __realpathat _setjmp setjmp setjmperr
 
 
 # Finally add additional architecture-dependent libc dependencies
@@ -72,12 +73,6 @@ _libc_other_objects+=syncicache
 .if ${MACHINE_ARCH:Mmipsn32*} == "" && ${MACHINE_ARCH:Mmips64*} == ""
 _libc_other_objects+=umoddi3 udivdi3 qdivrem
 .endif
-.elif ${LIBC_ARCH} == "sparc64"
-# reloc.c uses __sparc_utrap which needs a lot of other object files
-_libc_other_objects+=__sparc_utrap __sparc_utrap_fp_disabled __sparc_utrap_gen \
-    __sparc_utrap_setup __sparc_utrap_align __sparc_utrap_emul kill getpid \
-    fpu fpu_explode fpu_div fpu_reg fpu_sqrt fpu_implode fpu_subr fpu_add \
-    fpu_compare fpu_mul
 .endif
 
 # Extract all the .o files from libc_nossp_pic.a. This ensures that

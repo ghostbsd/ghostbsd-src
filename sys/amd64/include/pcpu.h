@@ -85,7 +85,7 @@ _Static_assert(sizeof(struct monitorbuf) == 128, "2x cache line");
 	u_int	pc_vcpu_id;		/* Xen vCPU ID */		\
 	uint32_t pc_pcid_next;						\
 	uint32_t pc_pcid_gen;						\
-	uint32_t pc_smp_tlb_done;	/* TLB op acknowledgement */	\
+	uint32_t pc_unused;						\
 	uint32_t pc_ibpb_set;						\
 	void	*pc_mds_buf;						\
 	void	*pc_mds_buf64;						\
@@ -94,7 +94,12 @@ _Static_assert(sizeof(struct monitorbuf) == 128, "2x cache line");
 	u_int 	pc_ipi_bitmap;						\
 	struct amd64tss pc_common_tss;					\
 	struct user_segment_descriptor pc_gdt[NGDT];			\
-	char	__pad[2956]		/* pad to UMA_PCPU_ALLOC_SIZE */
+	void	*pc_smp_tlb_pmap;					\
+	uint64_t pc_smp_tlb_addr1;					\
+	uint64_t pc_smp_tlb_addr2;					\
+	uint32_t pc_smp_tlb_gen;					\
+	u_int	pc_smp_tlb_op;						\
+	char	__pad[2924]		/* pad to UMA_PCPU_ALLOC_SIZE */
 
 #define	PC_DBREG_CMD_NONE	0
 #define	PC_DBREG_CMD_LOAD	1
@@ -239,6 +244,67 @@ _Static_assert(sizeof(struct monitorbuf) == 128, "2x cache line");
 #define	PCPU_SET(member, val)	__PCPU_SET(pc_ ## member, val)
 
 #define	IS_BSP()	(PCPU_GET(cpuid) == 0)
+
+#define zpcpu_offset_cpu(cpu)	((uintptr_t)&__pcpu[0] + UMA_PCPU_ALLOC_SIZE * cpu)
+#define zpcpu_base_to_offset(base) (void *)((uintptr_t)(base) - (uintptr_t)&__pcpu[0])
+#define zpcpu_offset_to_base(base) (void *)((uintptr_t)(base) + (uintptr_t)&__pcpu[0])
+
+#define zpcpu_sub_protected(base, n) do {				\
+	ZPCPU_ASSERT_PROTECTED();					\
+	zpcpu_sub(base, n);						\
+} while (0)
+
+#define zpcpu_set_protected(base, n) do {				\
+	__typeof(*base) __n = (n);					\
+	ZPCPU_ASSERT_PROTECTED();					\
+	switch (sizeof(*base)) {					\
+	case 4:								\
+		__asm __volatile("movl\t%1,%%gs:(%0)"			\
+		    : : "r" (base), "ri" (__n) : "memory", "cc");	\
+		break;							\
+	case 8:								\
+		__asm __volatile("movq\t%1,%%gs:(%0)"			\
+		    : : "r" (base), "ri" (__n) : "memory", "cc");	\
+		break;							\
+	default:							\
+		*zpcpu_get(base) = __n;					\
+	}								\
+} while (0);
+
+#define zpcpu_add(base, n) do {						\
+	__typeof(*base) __n = (n);					\
+	CTASSERT(sizeof(*base) == 4 || sizeof(*base) == 8);		\
+	switch (sizeof(*base)) {					\
+	case 4:								\
+		__asm __volatile("addl\t%1,%%gs:(%0)"			\
+		    : : "r" (base), "ri" (__n) : "memory", "cc");	\
+		break;							\
+	case 8:								\
+		__asm __volatile("addq\t%1,%%gs:(%0)"			\
+		    : : "r" (base), "ri" (__n) : "memory", "cc");	\
+		break;							\
+	}								\
+} while (0)
+
+#define zpcpu_add_protected(base, n) do {				\
+	ZPCPU_ASSERT_PROTECTED();					\
+	zpcpu_add(base, n);						\
+} while (0)
+
+#define zpcpu_sub(base, n) do {						\
+	__typeof(*base) __n = (n);					\
+	CTASSERT(sizeof(*base) == 4 || sizeof(*base) == 8);		\
+	switch (sizeof(*base)) {					\
+	case 4:								\
+		__asm __volatile("subl\t%1,%%gs:(%0)"			\
+		    : : "r" (base), "ri" (__n) : "memory", "cc");	\
+		break;							\
+	case 8:								\
+		__asm __volatile("subq\t%1,%%gs:(%0)"			\
+		    : : "r" (base), "ri" (__n) : "memory", "cc");	\
+		break;							\
+	}								\
+} while (0);
 
 #else /* !__GNUCLIKE_ASM || !__GNUCLIKE___TYPEOF */
 

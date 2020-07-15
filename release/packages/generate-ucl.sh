@@ -34,6 +34,13 @@ main() {
 	outname="$(echo ${outname} | tr '-' '_')"
 
 	case "${outname}" in
+		clibs)
+			# clibs should not have any dependencies or anything
+			# else imposed on it.
+			;;
+		caroot)
+			pkgdeps="utilities"
+			;;
 		runtime)
 			outname="runtime"
 			uclfile="${uclfile}"
@@ -54,19 +61,14 @@ main() {
 			pkgdeps="runtime"
 			_descr="$(make -C ${srctree}/release/packages -f Makefile.package -V ${outname}_DESCR)"
 			;;
-		*_lib32_development)
-			outname="${outname%%_lib32_development}"
+		*_lib32_dev)
+			outname="${outname%%_lib32_dev}"
 			_descr="32-bit Libraries, Development Files"
 			pkgdeps="${outname}"
 			;;
-		*_lib32_debug)
-			outname="${outname%%_lib32_debug}"
+		*_lib32_dbg)
+			outname="${outname%%_lib32_dbg}"
 			_descr="32-bit Libraries, Debugging Symbols"
-			pkgdeps="${outname}"
-			;;
-		*_lib32_profile)
-			outname="${outname%%_lib32_profile}"
-			_descr="32-bit Libraries, Profiling"
 			pkgdeps="${outname}"
 			;;
 		*_lib32)
@@ -74,18 +76,13 @@ main() {
 			_descr="32-bit Libraries"
 			pkgdeps="${outname}"
 			;;
-		*_development)
-			outname="${outname%%_development}"
+		*_dev)
+			outname="${outname%%_dev}"
 			_descr="Development Files"
 			pkgdeps="${outname}"
 			;;
-		*_profile)
-			outname="${outname%%_profile}"
-			_descr="Profiling Libraries"
-			pkgdeps="${outname}"
-			;;
-		*_debug)
-			outname="${outname%%_debug}"
+		*_dbg)
+			outname="${outname%%_dbg}"
 			_descr="Debugging Symbols"
 			pkgdeps="${outname}"
 			;;
@@ -131,13 +128,22 @@ main() {
 	[ -z "${desc}" ] && desc="${outname} package"
 
 	cp "${uclsource}" "${uclfile}"
+	if [ ! -z "${pkgdeps}" ]; then
+		cat <<EOF >> ${uclfile}
+deps: {
+	FreeBSD-${pkgdeps}: {
+		origin: "base",
+		version: "${PKG_VERSION}"
+	}
+}
+EOF
+	fi
 	cap_arg="$( make -f ${srctree}/share/mk/bsd.endian.mk -VCAP_MKDB_ENDIAN )"
 	sed -i '' -e "s/%VERSION%/${PKG_VERSION}/" \
 		-e "s/%PKGNAME%/${origname}/" \
 		-e "s/%COMMENT%/${comment}/" \
 		-e "s/%DESC%/${desc}/" \
 		-e "s/%CAP_MKDB_ENDIAN%/${cap_arg}/g" \
-		-e "s/%PKGDEPS%/${pkgdeps}/" \
 		${uclfile}
 	return 0
 }
