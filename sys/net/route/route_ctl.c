@@ -76,10 +76,84 @@ struct rib_subscription {
 	struct epoch_context			epoch_ctx;
 };
 
+static int add_route(struct rib_head *rnh, struct rt_addrinfo *info,
+    struct rib_cmd_info *rc);
+static int del_route(struct rib_head *rnh, struct rt_addrinfo *info,
+    struct rib_cmd_info *rc);
+static int change_route(struct rib_head *, struct rt_addrinfo *,
+    struct rib_cmd_info *rc);
 static void rib_notify(struct rib_head *rnh, enum rib_subscription_type type,
     struct rib_cmd_info *rc);
 
 static void destroy_subscription_epoch(epoch_context_t ctx);
+
+/* Routing table UMA zone */
+VNET_DEFINE_STATIC(uma_zone_t, rtzone);
+#define	V_rtzone	VNET(rtzone)
+
+void
+vnet_rtzone_init()
+{
+	
+	V_rtzone = uma_zcreate("rtentry", sizeof(struct rtentry),
+		NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
+}
+
+#ifdef VIMAGE
+void
+vnet_rtzone_destroy()
+{
+
+	uma_zdestroy(V_rtzone);
+}
+#endif
+
+static void
+destroy_rtentry(struct rtentry *rt)
+{
+
+	/*
+	 * At this moment rnh, nh_control may be already freed.
+	 * nhop interface may have been migrated to a different vnet.
+	 * Use vnet stored in the nexthop to delete the entry.
+	 */
+	CURVNET_SET(nhop_get_vnet(rt->rt_nhop));
+
+	/* Unreference nexthop */
+	nhop_free(rt->rt_nhop);
+
+	uma_zfree(V_rtzone, rt);
+
+	CURVNET_RESTORE();
+}
+
+/*
+ * Epoch callback indicating rtentry is safe to destroy
+ */
+static void
+destroy_rtentry_epoch(epoch_context_t ctx)
+{
+	struct rtentry *rt;
+
+	rt = __containerof(ctx, struct rtentry, rt_epoch_ctx);
+
+	destroy_rtentry(rt);
+}
+
+/*
+ * Schedule rtentry deletion
+ */
+static void
+rtfree(struct rtentry *rt)
+{
+
+	KASSERT(rt != NULL, ("%s: NULL rt", __func__));
+
+	epoch_call(net_epoch_preempt, destroy_rtentry_epoch,
+	    &rt->rt_epoch_ctx);
+}
+
+
 
 static struct rib_head *
 get_rnh(uint32_t fibnum, const struct rt_addrinfo *info)
@@ -128,7 +202,7 @@ rib_add_route(uint32_t fibnum, struct rt_addrinfo *info,
 	return (add_route(rnh, info, rc));
 }
 
-int
+static int
 add_route(struct rib_head *rnh, struct rt_addrinfo *info,
     struct rib_cmd_info *rc)
 {
@@ -138,7 +212,6 @@ add_route(struct rib_head *rnh, struct rt_addrinfo *info,
 	struct radix_node *rn;
 	struct ifaddr *ifa;
 	int error, flags;
-	struct epoch_tracker et;
 
 	dst = info->rti_info[RTAX_DST];
 	gateway = info->rti_info[RTAX_GATEWAY];
@@ -162,21 +235,19 @@ add_route(struct rib_head *rnh, struct rt_addrinfo *info,
 		ifa_ref(info->rti_ifa);
 	}
 
-	NET_EPOCH_ENTER(et);
 	error = nhop_create_from_info(rnh, info, &nh);
-	NET_EPOCH_EXIT(et);
 	if (error != 0) {
 		ifa_free(info->rti_ifa);
 		return (error);
 	}
 
-	rt = uma_zalloc(V_rtzone, M_NOWAIT);
+	rt = uma_zalloc(V_rtzone, M_NOWAIT | M_ZERO);
 	if (rt == NULL) {
 		ifa_free(info->rti_ifa);
 		nhop_free(nh);
 		return (ENOBUFS);
 	}
-	rt->rt_flags = RTF_UP | flags;
+	rt->rte_flags = RTF_UP | flags;
 	rt->rt_nhop = nh;
 
 	/* Fill in dst */
@@ -208,7 +279,6 @@ add_route(struct rib_head *rnh, struct rt_addrinfo *info,
 	rt_old = NULL;
 
 	RIB_WLOCK(rnh);
-	RT_LOCK(rt);
 #ifdef RADIX_MPATH
 	/* do not permit exactly the same dst/mask/gw pair */
 	if (rt_mpath_capable(rnh) &&
@@ -231,8 +301,9 @@ add_route(struct rib_head *rnh, struct rt_addrinfo *info,
 		/* Finalize notification */
 		rnh->rnh_gen++;
 
-		rc->rc_rt = RNTORT(rn);
+		rc->rc_rt = rt;
 		rc->rc_nh_new = nh;
+		rc->rc_nh_weight = rt->rt_weight;
 
 		rib_notify(rnh, RIB_NOTIFY_IMMEDIATE, rc);
 	} else if ((info->rti_flags & RTF_PINNED) != 0) {
@@ -257,14 +328,15 @@ add_route(struct rib_head *rnh, struct rt_addrinfo *info,
 
 			if (rn != NULL) {
 				rc->rc_cmd = RTM_CHANGE;
-				rc->rc_rt = RNTORT(rn);
+				rc->rc_rt = rt;
 				rc->rc_nh_old = rt_old->rt_nhop;
 				rc->rc_nh_new = nh;
+				rc->rc_nh_weight = rt->rt_weight;
 			} else {
 				rc->rc_cmd = RTM_DELETE;
-				rc->rc_rt = RNTORT(rn);
+				rc->rc_rt = rt_old;
 				rc->rc_nh_old = rt_old->rt_nhop;
-				rc->rc_nh_new = nh;
+				rc->rc_nh_weight = rt_old->rt_weight;
 			}
 			rib_notify(rnh, RIB_NOTIFY_IMMEDIATE, rc);
 		}
@@ -286,8 +358,6 @@ add_route(struct rib_head *rnh, struct rt_addrinfo *info,
 		uma_zfree(V_rtzone, rt);
 		return (EEXIST);
 	}
-
-	RT_UNLOCK(rt);
 
 	return (0);
 }
@@ -329,6 +399,7 @@ rt_unlinkrte(struct rib_head *rnh, struct rt_addrinfo *info, int *perror)
 {
 	struct sockaddr *dst, *netmask;
 	struct rtentry *rt;
+	struct nhop_object *nh;
 	struct radix_node *rn;
 
 	dst = info->rti_info[RTAX_DST];
@@ -340,16 +411,18 @@ rt_unlinkrte(struct rib_head *rnh, struct rt_addrinfo *info, int *perror)
 		return (NULL);
 	}
 
+	nh = rt->rt_nhop;
+
 	if ((info->rti_flags & RTF_PINNED) == 0) {
 		/* Check if target route can be deleted */
-		if (rt->rt_flags & RTF_PINNED) {
+		if (NH_IS_PINNED(nh)) {
 			*perror = EADDRINUSE;
 			return (NULL);
 		}
 	}
 
 	if (info->rti_filter != NULL) {
-		if (info->rti_filter(rt, rt->rt_nhop, info->rti_filterdata)==0){
+		if (info->rti_filter(rt, nh, info->rti_filterdata)==0){
 			/* Not matched */
 			*perror = ENOENT;
 			return (NULL);
@@ -360,7 +433,7 @@ rt_unlinkrte(struct rib_head *rnh, struct rt_addrinfo *info, int *perror)
 		 * Ease the caller work by filling in remaining info
 		 * from that particular entry.
 		 */
-		info->rti_info[RTAX_GATEWAY] = &rt->rt_nhop->gw_sa;
+		info->rti_info[RTAX_GATEWAY] = &nh->gw_sa;
 	}
 
 	/*
@@ -381,15 +454,14 @@ rt_unlinkrte(struct rib_head *rnh, struct rt_addrinfo *info, int *perror)
 		panic ("rtrequest delete");
 
 	rt = RNTORT(rn);
-	RT_LOCK(rt);
-	rt->rt_flags &= ~RTF_UP;
+	rt->rte_flags &= ~RTF_UP;
 
 	*perror = 0;
 
 	return (rt);
 }
 
-int
+static int
 del_route(struct rib_head *rnh, struct rt_addrinfo *info,
     struct rib_cmd_info *rc)
 {
@@ -540,21 +612,19 @@ change_route_one(struct rib_head *rnh, struct rt_addrinfo *info,
 	}
 
 	/* Proceed with the update */
-	RT_LOCK(rt);
 
 	/* Provide notification to the protocols.*/
 	rt->rt_nhop = nh;
 	rt_setmetrics(info, rt);
 
 	/* Finalize notification */
+	rnh->rnh_gen++;
+
 	rc->rc_rt = rt;
 	rc->rc_nh_old = nh_orig;
 	rc->rc_nh_new = rt->rt_nhop;
+	rc->rc_nh_weight = rt->rt_weight;
 
-	RT_UNLOCK(rt);
-
-	/* Update generation id to reflect rtable change */
-	rnh->rnh_gen++;
 	rib_notify(rnh, RIB_NOTIFY_IMMEDIATE, rc);
 
 	RIB_WUNLOCK(rnh);
@@ -566,7 +636,7 @@ change_route_one(struct rib_head *rnh, struct rt_addrinfo *info,
 	return (0);
 }
 
-int
+static int
 change_route(struct rib_head *rnh, struct rt_addrinfo *info,
     struct rib_cmd_info *rc)
 {
@@ -740,24 +810,12 @@ rib_notify(struct rib_head *rnh, enum rib_subscription_type type,
 	}
 }
 
-/*
- * Subscribe for the changes in the routing table specified by @fibnum and
- *  @family.
- * Needs to be run in network epoch.
- *
- * Returns pointer to the subscription structure on success.
- */
-struct rib_subscription *
-rib_subscribe(uint32_t fibnum, int family, rib_subscription_cb_t *f, void *arg,
-    enum rib_subscription_type type, int waitok)
+static struct rib_subscription *
+allocate_subscription(rib_subscription_cb_t *f, void *arg,
+    enum rib_subscription_type type, bool waitok)
 {
-	struct rib_head *rnh;
 	struct rib_subscription *rs;
 	int flags = M_ZERO | (waitok ? M_WAITOK : 0);
-
-	NET_EPOCH_ASSERT();
-	KASSERT((fibnum < rt_numfibs), ("%s: bad fibnum", __func__));
-	rnh = rt_tables_get_rnh(fibnum, family);
 
 	rs = malloc(sizeof(struct rib_subscription), M_RTABLE, flags);
 	if (rs == NULL)
@@ -767,9 +825,54 @@ rib_subscribe(uint32_t fibnum, int family, rib_subscription_cb_t *f, void *arg,
 	rs->arg = arg;
 	rs->type = type;
 
+	return (rs);
+}
+
+
+/*
+ * Subscribe for the changes in the routing table specified by @fibnum and
+ *  @family.
+ *
+ * Returns pointer to the subscription structure on success.
+ */
+struct rib_subscription *
+rib_subscribe(uint32_t fibnum, int family, rib_subscription_cb_t *f, void *arg,
+    enum rib_subscription_type type, bool waitok)
+{
+	struct rib_head *rnh;
+	struct rib_subscription *rs;
+	struct epoch_tracker et;
+
+	if ((rs = allocate_subscription(f, arg, type, waitok)) == NULL)
+		return (NULL);
+
+	NET_EPOCH_ENTER(et);
+	KASSERT((fibnum < rt_numfibs), ("%s: bad fibnum", __func__));
+	rnh = rt_tables_get_rnh(fibnum, family);
+
 	RIB_WLOCK(rnh);
 	CK_STAILQ_INSERT_TAIL(&rnh->rnh_subscribers, rs, next);
 	RIB_WUNLOCK(rnh);
+	NET_EPOCH_EXIT(et);
+
+	return (rs);
+}
+
+struct rib_subscription *
+rib_subscribe_internal(struct rib_head *rnh, rib_subscription_cb_t *f, void *arg,
+    enum rib_subscription_type type, bool waitok)
+{
+	struct rib_subscription *rs;
+	struct epoch_tracker et;
+
+	if ((rs = allocate_subscription(f, arg, type, waitok)) == NULL)
+		return (NULL);
+
+	NET_EPOCH_ENTER(et);
+	RIB_WLOCK(rnh);
+	CK_STAILQ_INSERT_TAIL(&rnh->rnh_subscribers, rs, next);
+	RIB_WUNLOCK(rnh);
+	NET_EPOCH_EXIT(et);
 
 	return (rs);
 }

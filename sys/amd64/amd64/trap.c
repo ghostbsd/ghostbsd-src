@@ -350,11 +350,9 @@ trap(struct trapframe *frame)
 			signo = SIGFPE;
 			break;
 
-#ifdef DEV_ISA
 		case T_NMI:
 			nmi_handle_intr(type, frame);
 			return;
-#endif
 
 		case T_OFLOW:		/* integer overflow fault */
 			ucode = FPE_INTOVF;
@@ -580,11 +578,9 @@ trap(struct trapframe *frame)
 #endif
 			break;
 
-#ifdef DEV_ISA
 		case T_NMI:
 			nmi_handle_intr(type, frame);
 			return;
-#endif
 		}
 
 		trap_fatal(frame, 0);
@@ -1193,7 +1189,8 @@ amd64_syscall(struct thread *td, int traced)
 	 * not be safe.  Instead, use the full return path which
 	 * catches the problem safely.
 	 */
-	if (__predict_false(td->td_frame->tf_rip >= VM_MAXUSER_ADDRESS))
+	if (__predict_false(td->td_frame->tf_rip >= (la57 ?
+	    VM_MAXUSER_ADDRESS_LA57 : VM_MAXUSER_ADDRESS_LA48)))
 		set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
 
 	amd64_syscall_ret_flush_l1d_check_inline(td->td_errno);

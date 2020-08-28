@@ -66,6 +66,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/resource.h>
 #include <sys/sbuf.h>
 #include <sys/sem.h>
+#include <sys/shm.h>
 #include <sys/smp.h>
 #include <sys/socket.h>
 #include <sys/syscallsubr.h>
@@ -144,41 +145,35 @@ static int
 linprocfs_domeminfo(PFS_FILL_ARGS)
 {
 	unsigned long memtotal;		/* total memory in bytes */
-	unsigned long memused;		/* used memory in bytes */
 	unsigned long memfree;		/* free memory in bytes */
-	unsigned long buffers, cached;	/* buffer / cache memory ??? */
+	unsigned long cached;		/* page cache */
+	unsigned long buffers;		/* buffer cache */
 	unsigned long long swaptotal;	/* total swap space in bytes */
 	unsigned long long swapused;	/* used swap space in bytes */
 	unsigned long long swapfree;	/* free swap space in bytes */
-	int i, j;
+	size_t sz;
+	int error, i, j;
 
 	memtotal = physmem * PAGE_SIZE;
-	/*
-	 * The correct thing here would be:
-	 *
-	memfree = vm_free_count() * PAGE_SIZE;
-	memused = memtotal - memfree;
-	 *
-	 * but it might mislead linux binaries into thinking there
-	 * is very little memory left, so we cheat and tell them that
-	 * all memory that isn't wired down is free.
-	 */
-	memused = vm_wire_count() * PAGE_SIZE;
-	memfree = memtotal - memused;
+	memfree = (unsigned long)vm_free_count() * PAGE_SIZE;
 	swap_pager_status(&i, &j);
 	swaptotal = (unsigned long long)i * PAGE_SIZE;
 	swapused = (unsigned long long)j * PAGE_SIZE;
 	swapfree = swaptotal - swapused;
+
 	/*
-	 * We'd love to be able to write:
-	 *
-	buffers = bufspace;
-	 *
-	 * but bufspace is internal to vfs_bio.c and we don't feel
-	 * like unstaticizing it just for linprocfs's sake.
+	 * This value may exclude wired pages, but we have no good way of
+	 * accounting for that.
 	 */
-	buffers = 0;
-	cached = vm_inactive_count() * PAGE_SIZE;
+	cached =
+	    (vm_active_count() + vm_inactive_count() + vm_laundry_count()) *
+	    PAGE_SIZE;
+
+	sz = sizeof(buffers);
+	error = kernel_sysctlbyname(curthread, "vfs.bufspace", &buffers, &sz,
+	    NULL, 0, 0, 0);
+	if (error != 0)
+		buffers = 0;
 
 	sbuf_printf(sb,
 	    "MemTotal: %9lu kB\n"
@@ -235,10 +230,10 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 	};
 
 	static char *cpu_feature2_names[] = {
-		/*  0 */ "pni", "pclmulqdq", "dtes3", "monitor",
+		/*  0 */ "pni", "pclmulqdq", "dtes64", "monitor",
 		/*  4 */ "ds_cpl", "vmx", "smx", "est",
 		/*  8 */ "tm2", "ssse3", "cid", "sdbg",
-		/* 12 */ "fma", "cx16", "xptr", "pdcm",
+		/* 12 */ "fma", "cx16", "xtpr", "pdcm",
 		/* 16 */ "", "pcid", "dca", "sse4_1",
 		/* 20 */ "sse4_2", "x2apic", "movbe", "popcnt",
 		/* 24 */ "tsc_deadline_timer", "aes", "xsave", "",
@@ -364,7 +359,7 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 #else
 		    "",
 #endif
-		    fqmhz, fqkhz,
+		    fqmhz * 2, fqkhz,
 		    cpu_clflush_line_size, cpu_clflush_line_size,
 		    cpu_maxphyaddr,
 		    (cpu_maxphyaddr > 32) ? 48 : 0);
@@ -431,7 +426,7 @@ linprocfs_domtab(PFS_FILL_ARGS)
 	error = namei(&nd);
 	lep = linux_emul_path;
 	if (error == 0) {
-		if (vn_fullpath(td, nd.ni_vp, &dlep, &flep) == 0)
+		if (vn_fullpath(nd.ni_vp, &dlep, &flep) == 0)
 			lep = dlep;
 		vrele(nd.ni_vp);
 	}
@@ -1058,7 +1053,7 @@ linprocfs_doproccwd(PFS_FILL_ARGS)
 	char *freepath = NULL;
 
 	pwd = pwd_hold(td);
-	vn_fullpath(td, pwd->pwd_cdir, &fullpath, &freepath);
+	vn_fullpath(pwd->pwd_cdir, &fullpath, &freepath);
 	sbuf_printf(sb, "%s", fullpath);
 	if (freepath)
 		free(freepath, M_TEMP);
@@ -1079,7 +1074,7 @@ linprocfs_doprocroot(PFS_FILL_ARGS)
 
 	pwd = pwd_hold(td);
 	vp = jailed(p->p_ucred) ? pwd->pwd_jdir : pwd->pwd_rdir;
-	vn_fullpath(td, vp, &fullpath, &freepath);
+	vn_fullpath(vp, &fullpath, &freepath);
 	sbuf_printf(sb, "%s", fullpath);
 	if (freepath)
 		free(freepath, M_TEMP);
@@ -1224,7 +1219,7 @@ linprocfs_doprocmaps(PFS_FILL_ARGS)
 			shadow_count = obj->shadow_count;
 			VM_OBJECT_RUNLOCK(obj);
 			if (vp != NULL) {
-				vn_fullpath(td, vp, &name, &freename);
+				vn_fullpath(vp, &name, &freename);
 				vn_lock(vp, LK_SHARED | LK_RETRY);
 				VOP_GETATTR(vp, &vat, td->td_ucred);
 				ino = vat.va_fileid;
@@ -1405,6 +1400,17 @@ linprocfs_doosbuild(PFS_FILL_ARGS)
 }
 
 /*
+ * Filler function for proc/sys/kernel/msgmax
+ */
+static int
+linprocfs_domsgmax(PFS_FILL_ARGS)
+{
+
+	sbuf_printf(sb, "%d\n", msginfo.msgmax);
+	return (0);
+}
+
+/*
  * Filler function for proc/sys/kernel/msgmni
  */
 static int
@@ -1412,6 +1418,17 @@ linprocfs_domsgmni(PFS_FILL_ARGS)
 {
 
 	sbuf_printf(sb, "%d\n", msginfo.msgmni);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/kernel/msgmnb
+ */
+static int
+linprocfs_domsgmnb(PFS_FILL_ARGS)
+{
+
+	sbuf_printf(sb, "%d\n", msginfo.msgmnb);
 	return (0);
 }
 
@@ -1435,6 +1452,39 @@ linprocfs_dosem(PFS_FILL_ARGS)
 
 	sbuf_printf(sb, "%d %d %d %d\n", seminfo.semmsl, seminfo.semmns,
 	    seminfo.semopm, seminfo.semmni);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/kernel/shmall
+ */
+static int
+linprocfs_doshmall(PFS_FILL_ARGS)
+{
+
+	sbuf_printf(sb, "%lu\n", shminfo.shmall);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/kernel/shmmax
+ */
+static int
+linprocfs_doshmmax(PFS_FILL_ARGS)
+{
+
+	sbuf_printf(sb, "%lu\n", shminfo.shmmax);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/kernel/shmmni
+ */
+static int
+linprocfs_doshmmni(PFS_FILL_ARGS)
+{
+
+	sbuf_printf(sb, "%lu\n", shminfo.shmmni);
 	return (0);
 }
 
@@ -1837,6 +1887,7 @@ linprocfs_init(PFS_INIT_ARGS)
 
 	/* /proc/sys/... */
 	sys = pfs_create_dir(root, "sys", NULL, NULL, NULL, 0);
+
 	/* /proc/sys/kernel/... */
 	dir = pfs_create_dir(sys, "kernel", NULL, NULL, NULL, 0);
 	pfs_create_file(dir, "osrelease", &linprocfs_doosrelease,
@@ -1845,11 +1896,21 @@ linprocfs_init(PFS_INIT_ARGS)
 	    NULL, NULL, NULL, PFS_RD);
 	pfs_create_file(dir, "version", &linprocfs_doosbuild,
 	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, "msgmax", &linprocfs_domsgmax,
+	    NULL, NULL, NULL, PFS_RD);
 	pfs_create_file(dir, "msgmni", &linprocfs_domsgmni,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, "msgmnb", &linprocfs_domsgmnb,
 	    NULL, NULL, NULL, PFS_RD);
 	pfs_create_file(dir, "pid_max", &linprocfs_dopid_max,
 	    NULL, NULL, NULL, PFS_RD);
 	pfs_create_file(dir, "sem", &linprocfs_dosem,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, "shmall", &linprocfs_doshmall,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, "shmmax", &linprocfs_doshmmax,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, "shmmni", &linprocfs_doshmmni,
 	    NULL, NULL, NULL, PFS_RD);
 	pfs_create_file(dir, "tainted", &linprocfs_dotainted,
 	    NULL, NULL, NULL, PFS_RD);
@@ -1887,3 +1948,4 @@ MODULE_DEPEND(linprocfs, linux, 1, 1, 1);
 MODULE_DEPEND(linprocfs, procfs, 1, 1, 1);
 MODULE_DEPEND(linprocfs, sysvmsg, 1, 1, 1);
 MODULE_DEPEND(linprocfs, sysvsem, 1, 1, 1);
+MODULE_DEPEND(linprocfs, sysvshm, 1, 1, 1);

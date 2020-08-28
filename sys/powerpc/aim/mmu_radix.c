@@ -183,7 +183,7 @@ ttusync(void)
 						 * Invalidate a range of translations
 						 */
 
-static __inline void
+static __always_inline void
 radix_tlbie(uint8_t ric, uint8_t prs, uint16_t is, uint32_t pid, uint32_t lpid,
 			vm_offset_t va, uint16_t ap)
 {
@@ -715,7 +715,7 @@ static struct md_page pv_dummy;
 
 static int powernv_enabled = 1;
 
-static inline void
+static __always_inline void
 tlbiel_radix_set_isa300(uint32_t set, uint32_t is,
 	uint32_t pid, uint32_t ric, uint32_t prs)
 {
@@ -5846,8 +5846,10 @@ mmu_radix_unmapdev(vm_offset_t va, vm_size_t size)
 	size = round_page(offset + size);
 	va = trunc_page(va);
 
-	if (pmap_initialized)
+	if (pmap_initialized) {
+		mmu_radix_qremove(va, atop(size));
 		kva_free(va, size);
+	}
 }
 
 static __inline void

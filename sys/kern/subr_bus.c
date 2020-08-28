@@ -234,7 +234,6 @@ devclass_sysctl_handler(SYSCTL_HANDLER_ARGS)
 static void
 devclass_sysctl_init(devclass_t dc)
 {
-
 	if (dc->sysctl_tree != NULL)
 		return;
 	sysctl_ctx_init(&dc->sysctl_ctx);
@@ -366,21 +365,8 @@ device_sysctl_fini(device_t dev)
  *
  * Also note: we specifically do not attach a device to the device_t tree
  * to avoid potential chicken and egg problems.  One could argue that all
- * of this belongs to the root node.  One could also further argue that the
- * sysctl interface that we have not might more properly be an ioctl
- * interface, but at this stage of the game, I'm not inclined to rock that
- * boat.
- *
- * I'm also not sure that the SIGIO support is done correctly or not, as
- * I copied it from a driver that had SIGIO support that likely hasn't been
- * tested since 3.4 or 2.2.8!
+ * of this belongs to the root node.
  */
-
-/* Deprecated way to adjust queue length */
-static int sysctl_devctl_disable(SYSCTL_HANDLER_ARGS);
-SYSCTL_PROC(_hw_bus, OID_AUTO, devctl_disable, CTLTYPE_INT | CTLFLAG_RWTUN |
-    CTLFLAG_MPSAFE, NULL, 0, sysctl_devctl_disable, "I",
-    "devctl disable -- deprecated");
 
 #define DEVCTL_DEFAULT_QUEUE_LEN 1000
 static int sysctl_devctl_queue(SYSCTL_HANDLER_ARGS);
@@ -406,25 +392,23 @@ static struct cdevsw dev_cdevsw = {
 	.d_name =	"devctl",
 };
 
-struct dev_event_info
-{
+struct dev_event_info {
 	char *dei_data;
-	TAILQ_ENTRY(dev_event_info) dei_link;
+	STAILQ_ENTRY(dev_event_info) dei_link;
 };
 
-TAILQ_HEAD(devq, dev_event_info);
+STAILQ_HEAD(devq, dev_event_info);
 
-static struct dev_softc
-{
-	int	inuse;
-	int	nonblock;
-	int	queued;
-	int	async;
-	struct mtx mtx;
-	struct cv cv;
-	struct selinfo sel;
-	struct devq devq;
-	struct sigio *sigio;
+static struct dev_softc {
+	int		inuse;
+	int		nonblock;
+	int		queued;
+	int		async;
+	struct mtx	mtx;
+	struct cv	cv;
+	struct selinfo	sel;
+	struct devq	devq;
+	struct sigio	*sigio;
 } devsoftc;
 
 static void	filt_devctl_detach(struct knote *kn);
@@ -445,7 +429,7 @@ devinit(void)
 	    UID_ROOT, GID_WHEEL, 0600, "devctl");
 	mtx_init(&devsoftc.mtx, "dev mtx", "devd", MTX_DEF);
 	cv_init(&devsoftc.cv, "dev cv");
-	TAILQ_INIT(&devsoftc.devq);
+	STAILQ_INIT(&devsoftc.devq);
 	knlist_init_mtx(&devsoftc.sel.si_note, &devsoftc.mtx);
 	devctl2_init();
 }
@@ -453,7 +437,6 @@ devinit(void)
 static int
 devopen(struct cdev *dev, int oflags, int devtype, struct thread *td)
 {
-
 	mtx_lock(&devsoftc.mtx);
 	if (devsoftc.inuse) {
 		mtx_unlock(&devsoftc.mtx);
@@ -468,7 +451,6 @@ devopen(struct cdev *dev, int oflags, int devtype, struct thread *td)
 static int
 devclose(struct cdev *dev, int fflag, int devtype, struct thread *td)
 {
-
 	mtx_lock(&devsoftc.mtx);
 	devsoftc.inuse = 0;
 	devsoftc.nonblock = 0;
@@ -494,7 +476,7 @@ devread(struct cdev *dev, struct uio *uio, int ioflag)
 	int rv;
 
 	mtx_lock(&devsoftc.mtx);
-	while (TAILQ_EMPTY(&devsoftc.devq)) {
+	while (STAILQ_EMPTY(&devsoftc.devq)) {
 		if (devsoftc.nonblock) {
 			mtx_unlock(&devsoftc.mtx);
 			return (EAGAIN);
@@ -508,8 +490,8 @@ devread(struct cdev *dev, struct uio *uio, int ioflag)
 			return (rv);
 		}
 	}
-	n1 = TAILQ_FIRST(&devsoftc.devq);
-	TAILQ_REMOVE(&devsoftc.devq, n1, dei_link);
+	n1 = STAILQ_FIRST(&devsoftc.devq);
+	STAILQ_REMOVE_HEAD(&devsoftc.devq, dei_link);
 	devsoftc.queued--;
 	mtx_unlock(&devsoftc.mtx);
 	rv = uiomove(n1->dei_data, strlen(n1->dei_data), uio);
@@ -522,7 +504,6 @@ static	int
 devioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td)
 {
 	switch (cmd) {
-
 	case FIONBIO:
 		if (*(int*)data)
 			devsoftc.nonblock = 1;
@@ -558,7 +539,7 @@ devpoll(struct cdev *dev, int events, struct thread *td)
 
 	mtx_lock(&devsoftc.mtx);
 	if (events & (POLLIN | POLLRDNORM)) {
-		if (!TAILQ_EMPTY(&devsoftc.devq))
+		if (!STAILQ_EMPTY(&devsoftc.devq))
 			revents = events & (POLLIN | POLLRDNORM);
 		else
 			selrecord(td, &devsoftc.sel);
@@ -585,7 +566,6 @@ devkqfilter(struct cdev *dev, struct knote *kn)
 static void
 filt_devctl_detach(struct knote *kn)
 {
-
 	knlist_remove(&devsoftc.sel.si_note, kn, 0);
 }
 
@@ -612,7 +592,7 @@ devctl_process_running(void)
  * assumed that @p data is properly formatted.  It is further assumed
  * that @p data is allocated using the M_BUS malloc type.
  */
-void
+static void
 devctl_queue_data_f(char *data, int flags)
 {
 	struct dev_event_info *n1 = NULL, *n2 = NULL;
@@ -634,13 +614,13 @@ devctl_queue_data_f(char *data, int flags)
 	}
 	/* Leave at least one spot in the queue... */
 	while (devsoftc.queued > devctl_queue_length - 1) {
-		n2 = TAILQ_FIRST(&devsoftc.devq);
-		TAILQ_REMOVE(&devsoftc.devq, n2, dei_link);
+		n2 = STAILQ_FIRST(&devsoftc.devq);
+		STAILQ_REMOVE_HEAD(&devsoftc.devq, dei_link);
 		free(n2->dei_data, M_BUS);
 		free(n2, M_BUS);
 		devsoftc.queued--;
 	}
-	TAILQ_INSERT_TAIL(&devsoftc.devq, n1, dei_link);
+	STAILQ_INSERT_TAIL(&devsoftc.devq, n1, dei_link);
 	devsoftc.queued++;
 	cv_broadcast(&devsoftc.cv);
 	KNOTE_LOCKED(&devsoftc.sel.si_note, 0);
@@ -658,10 +638,9 @@ out:
 	return;
 }
 
-void
+static void
 devctl_queue_data(char *data)
 {
-
 	devctl_queue_data_f(data, M_NOWAIT);
 }
 
@@ -704,7 +683,6 @@ void
 devctl_notify(const char *system, const char *subsystem, const char *type,
     const char *data)
 {
-
 	devctl_notify_f(system, subsystem, type, data, M_NOWAIT);
 }
 
@@ -806,35 +784,6 @@ devnomatch(device_t dev)
 }
 
 static int
-sysctl_devctl_disable(SYSCTL_HANDLER_ARGS)
-{
-	struct dev_event_info *n1;
-	int dis, error;
-
-	dis = (devctl_queue_length == 0);
-	error = sysctl_handle_int(oidp, &dis, 0, req);
-	if (error || !req->newptr)
-		return (error);
-	if (mtx_initialized(&devsoftc.mtx))
-		mtx_lock(&devsoftc.mtx);
-	if (dis) {
-		while (!TAILQ_EMPTY(&devsoftc.devq)) {
-			n1 = TAILQ_FIRST(&devsoftc.devq);
-			TAILQ_REMOVE(&devsoftc.devq, n1, dei_link);
-			free(n1->dei_data, M_BUS);
-			free(n1, M_BUS);
-		}
-		devsoftc.queued = 0;
-		devctl_queue_length = 0;
-	} else {
-		devctl_queue_length = DEVCTL_DEFAULT_QUEUE_LEN;
-	}
-	if (mtx_initialized(&devsoftc.mtx))
-		mtx_unlock(&devsoftc.mtx);
-	return (0);
-}
-
-static int
 sysctl_devctl_queue(SYSCTL_HANDLER_ARGS)
 {
 	struct dev_event_info *n1;
@@ -850,8 +799,8 @@ sysctl_devctl_queue(SYSCTL_HANDLER_ARGS)
 		mtx_lock(&devsoftc.mtx);
 	devctl_queue_length = q;
 	while (devsoftc.queued > devctl_queue_length) {
-		n1 = TAILQ_FIRST(&devsoftc.devq);
-		TAILQ_REMOVE(&devsoftc.devq, n1, dei_link);
+		n1 = STAILQ_FIRST(&devsoftc.devq);
+		STAILQ_REMOVE_HEAD(&devsoftc.devq, dei_link);
 		free(n1->dei_data, M_BUS);
 		free(n1, M_BUS);
 		devsoftc.queued--;
@@ -867,8 +816,6 @@ sysctl_devctl_queue(SYSCTL_HANDLER_ARGS)
  * The devctl protocol relies on quoted strings having matching quotes.
  * This routine quotes any internal quotes so the resulting string
  * is safe to pass to snprintf to construct, for example pnp info strings.
- * Strings are always terminated with a NUL, but may be truncated if longer
- * than @p len bytes after quotes.
  *
  * @param sb	sbuf to place the characters into
  * @param src	Original buffer.
@@ -876,7 +823,6 @@ sysctl_devctl_queue(SYSCTL_HANDLER_ARGS)
 void
 devctl_safe_quote_sb(struct sbuf *sb, const char *src)
 {
-
 	while (*src != '\0') {
 		if (*src == '"' || *src == '\\')
 			sbuf_putc(sb, '\\');
@@ -2550,7 +2496,7 @@ void
 device_set_softc(device_t dev, void *softc)
 {
 	if (dev->softc && !(dev->flags & DF_EXTERNALSOFTC))
-		free_domain(dev->softc, M_BUS_SC);
+		free(dev->softc, M_BUS_SC);
 	dev->softc = softc;
 	if (dev->softc)
 		dev->flags |= DF_EXTERNALSOFTC;
@@ -2567,7 +2513,7 @@ device_set_softc(device_t dev, void *softc)
 void
 device_free_softc(void *softc)
 {
-	free_domain(softc, M_BUS_SC);
+	free(softc, M_BUS_SC);
 }
 
 /**
@@ -2597,7 +2543,6 @@ device_claim_softc(device_t dev)
 void *
 device_get_ivars(device_t dev)
 {
-
 	KASSERT(dev != NULL, ("device_get_ivars(NULL, ...)"));
 	return (dev->ivars);
 }
@@ -2608,7 +2553,6 @@ device_get_ivars(device_t dev)
 void
 device_set_ivars(device_t dev, void * ivars)
 {
-
 	KASSERT(dev != NULL, ("device_set_ivars(NULL, ...)"));
 	dev->ivars = ivars;
 }
@@ -2836,7 +2780,7 @@ device_set_driver(device_t dev, driver_t *driver)
 		return (0);
 
 	if (dev->softc && !(dev->flags & DF_EXTERNALSOFTC)) {
-		free_domain(dev->softc, M_BUS_SC);
+		free(dev->softc, M_BUS_SC);
 		dev->softc = NULL;
 	}
 	device_set_desc(dev, NULL);
@@ -3087,7 +3031,6 @@ device_detach(device_t dev)
 int
 device_quiesce(device_t dev)
 {
-
 	PDEBUG(("%s", DEVICENAME(dev)));
 	if (dev->state == DS_BUSY)
 		return (EBUSY);
@@ -3148,7 +3091,6 @@ device_set_unit(device_t dev, int unit)
 void
 resource_init_map_request_impl(struct resource_map_request *args, size_t sz)
 {
-
 	bzero(args, sz);
 	args->size = sz;
 	args->memattr = VM_MEMATTR_UNCACHEABLE;
@@ -3704,7 +3646,6 @@ resource_list_purge(struct resource_list *rl)
 device_t
 bus_generic_add_child(device_t dev, u_int order, const char *name, int unit)
 {
-
 	return (device_add_child_ordered(dev, order, name, unit));
 }
 
@@ -3852,7 +3793,6 @@ bus_generic_suspend_child(device_t dev, device_t child)
 int
 bus_generic_resume_child(device_t dev, device_t child)
 {
-
 	DEVICE_RESUME(child);
 	child->flags &= ~DF_SUSPENDED;
 
@@ -3944,7 +3884,6 @@ bus_helper_reset_post(device_t dev, int flags)
 static void
 bus_helper_reset_prepare_rollback(device_t dev, device_t child, int flags)
 {
-
 	child = TAILQ_NEXT(child, link);
 	if (child == NULL)
 		return;
@@ -4356,7 +4295,6 @@ int
 bus_generic_bind_intr(device_t dev, device_t child, struct resource *irq,
     int cpu)
 {
-
 	/* Propagate up the bus hierarchy until someone handles it. */
 	if (dev->parent)
 		return (BUS_BIND_INTR(dev->parent, child, irq, cpu));
@@ -4373,7 +4311,6 @@ int
 bus_generic_config_intr(device_t dev, int irq, enum intr_trigger trig,
     enum intr_polarity pol)
 {
-
 	/* Propagate up the bus hierarchy until someone handles it. */
 	if (dev->parent)
 		return (BUS_CONFIG_INTR(dev->parent, irq, trig, pol));
@@ -4390,7 +4327,6 @@ int
 bus_generic_describe_intr(device_t dev, device_t child, struct resource *irq,
     void *cookie, const char *descr)
 {
-
 	/* Propagate up the bus hierarchy until someone handles it. */
 	if (dev->parent)
 		return (BUS_DESCRIBE_INTR(dev->parent, child, irq, cookie,
@@ -4408,7 +4344,6 @@ int
 bus_generic_get_cpus(device_t dev, device_t child, enum cpu_sets op,
     size_t setsize, cpuset_t *cpuset)
 {
-
 	/* Propagate up the bus hierarchy until someone handles it. */
 	if (dev->parent != NULL)
 		return (BUS_GET_CPUS(dev->parent, child, op, setsize, cpuset));
@@ -4424,7 +4359,6 @@ bus_generic_get_cpus(device_t dev, device_t child, enum cpu_sets op,
 bus_dma_tag_t
 bus_generic_get_dma_tag(device_t dev, device_t child)
 {
-
 	/* Propagate up the bus hierarchy until someone handles it. */
 	if (dev->parent != NULL)
 		return (BUS_GET_DMA_TAG(dev->parent, child));
@@ -4440,7 +4374,6 @@ bus_generic_get_dma_tag(device_t dev, device_t child)
 bus_space_tag_t
 bus_generic_get_bus_tag(device_t dev, device_t child)
 {
-
 	/* Propagate up the bus hierarchy until someone handles it. */
 	if (dev->parent != NULL)
 		return (BUS_GET_BUS_TAG(dev->parent, child));
@@ -4587,7 +4520,6 @@ bus_generic_child_present(device_t dev, device_t child)
 int
 bus_generic_get_domain(device_t dev, device_t child, int *domain)
 {
-
 	if (dev->parent)
 		return (BUS_GET_DOMAIN(dev->parent, dev, domain));
 
@@ -4603,7 +4535,6 @@ bus_generic_get_domain(device_t dev, device_t child, int *domain)
 int
 bus_null_rescan(device_t dev)
 {
-
 	return (ENXIO);
 }
 
@@ -5058,8 +4989,10 @@ root_resume(device_t dev)
 	int error;
 
 	error = bus_generic_resume(dev);
-	if (error == 0)
-		devctl_notify("kern", "power", "resume", NULL);
+	if (error == 0) {
+		devctl_notify("kern", "power", "resume", NULL); /* Deprecated gone in 14 */
+		devctl_notify("kernel", "power", "resume", NULL);
+	}
 	return (error);
 }
 
@@ -5101,7 +5034,6 @@ static int
 root_get_cpus(device_t dev, device_t child, enum cpu_sets op, size_t setsize,
     cpuset_t *cpuset)
 {
-
 	switch (op) {
 	case INTR_CPUS:
 		/* Default to returning the set of all CPUs. */
@@ -5182,7 +5114,6 @@ DECLARE_MODULE(rootbus, root_bus_mod, SI_SUB_DRIVERS, SI_ORDER_FIRST);
 void
 root_bus_configure(void)
 {
-
 	PDEBUG(("."));
 
 	/* Eventually this will be split up, but this is sufficient for now. */
@@ -5556,7 +5487,6 @@ bus_data_generation_check(int generation)
 void
 bus_data_generation_update(void)
 {
-
 	atomic_add_int(&bus_data_generation, 1);
 }
 
@@ -5944,7 +5874,6 @@ static struct cdevsw devctl2_cdevsw = {
 static void
 devctl2_init(void)
 {
-
 	make_dev_credf(MAKEDEV_ETERNAL, &devctl2_cdevsw, 0, NULL,
 	    UID_ROOT, GID_WHEEL, 0600, "devctl2");
 }
@@ -5960,7 +5889,6 @@ SYSCTL_INT(_debug, OID_AUTO, obsolete_panic, CTLFLAG_RWTUN, &obsolete_panic, 0,
 static void
 gone_panic(int major, int running, const char *msg)
 {
-
 	switch (obsolete_panic)
 	{
 	case 0:
@@ -5977,7 +5905,6 @@ gone_panic(int major, int running, const char *msg)
 void
 _gone_in(int major, const char *msg)
 {
-
 	gone_panic(major, P_OSREL_MAJOR(__FreeBSD_version), msg);
 	if (P_OSREL_MAJOR(__FreeBSD_version) >= major)
 		printf("Obsolete code will be removed soon: %s\n", msg);
@@ -5989,7 +5916,6 @@ _gone_in(int major, const char *msg)
 void
 _gone_in_dev(device_t dev, int major, const char *msg)
 {
-
 	gone_panic(major, P_OSREL_MAJOR(__FreeBSD_version), msg);
 	if (P_OSREL_MAJOR(__FreeBSD_version) >= major)
 		device_printf(dev,

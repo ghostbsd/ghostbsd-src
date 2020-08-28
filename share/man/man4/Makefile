@@ -113,6 +113,7 @@ MAN=	aac.4 \
 	cloudabi.4 \
 	cmx.4 \
 	${_coretemp.4} \
+	cp2112.4 \
 	${_cpuctl.4} \
 	cpufreq.4 \
 	crypto.4 \
@@ -121,7 +122,6 @@ MAN=	aac.4 \
 	cxgb.4 \
 	cxgbe.4 \
 	cxgbev.4 \
-	cy.4 \
 	cyapa.4 \
 	da.4 \
 	dc.4 \
@@ -172,6 +172,7 @@ MAN=	aac.4 \
 	gif.4 \
 	gpio.4 \
 	gpioiic.4 \
+	gpiokeys.4 \
 	gpioled.4 \
 	gpioths.4 \
 	gre.4 \
@@ -243,6 +244,7 @@ MAN=	aac.4 \
 	jedec_dimm.4 \
 	jme.4 \
 	kbdmux.4 \
+	kcov.4 \
 	keyboard.4 \
 	kld.4 \
 	ksyms.4 \
@@ -434,7 +436,6 @@ MAN=	aac.4 \
 	${_qlnxe.4} \
 	ral.4 \
 	random.4 \
-	rc.4 \
 	rctl.4 \
 	re.4 \
 	rgephy.4 \
@@ -442,7 +443,6 @@ MAN=	aac.4 \
 	rl.4 \
 	rndtest.4 \
 	route.4 \
-	rp.4 \
 	rtwn.4 \
 	rtwnfw.4 \
 	rtwn_pci.4 \
@@ -976,7 +976,6 @@ MAN+=	\
 	udbp.4 \
 	udl.4 \
 	uep.4 \
-	ufm.4 \
 	ufoma.4 \
 	uftdi.4 \
 	ugen.4 \

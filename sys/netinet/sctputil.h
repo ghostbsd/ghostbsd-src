@@ -90,6 +90,14 @@ sctp_notify_stream_reset_add(struct sctp_tcb *stcb, uint16_t numberin,
 void
      sctp_notify_stream_reset_tsn(struct sctp_tcb *stcb, uint32_t sending_tsn, uint32_t recv_tsn, int flag);
 
+/*
+ * NOTE: sctp_timer_start() will increment the reference count of any relevant
+ * structure the timer is referencing, in order to prevent a race condition
+ * between the timer executing and the structure being freed.
+ *
+ * When the timer fires or sctp_timer_stop() is called, these references are
+ * removed.
+ */
 void
 sctp_timer_start(int, struct sctp_inpcb *, struct sctp_tcb *,
     struct sctp_nets *);
@@ -156,7 +164,7 @@ void sctp_stop_timers_for_shutdown(struct sctp_tcb *);
 /* Stop all timers for association and remote addresses. */
 void sctp_stop_association_timers(struct sctp_tcb *, bool);
 
-void sctp_report_all_outbound(struct sctp_tcb *, uint16_t, int, int);
+void sctp_report_all_outbound(struct sctp_tcb *, uint16_t, int);
 
 int sctp_expand_mapping_array(struct sctp_association *, uint32_t);
 

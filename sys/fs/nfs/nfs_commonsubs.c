@@ -319,7 +319,7 @@ static int nfs_bigrequest[NFSV42_NPROCS] = {
 void
 nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
     u_int8_t *nfhp, int fhlen, u_int32_t **opcntpp, struct nfsclsession *sep,
-    int vers, int minorvers, bool use_ext)
+    int vers, int minorvers)
 {
 	struct mbuf *mb;
 	u_int32_t *tl;
@@ -352,26 +352,18 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 	}
 	nd->nd_procnum = procnum;
 	nd->nd_repstat = 0;
-	nd->nd_maxextsiz = 16384;
-	if (use_ext && mb_use_ext_pgs && PMAP_HAS_DMAP != 0)
-		nd->nd_flag |= ND_EXTPG;
+	nd->nd_maxextsiz = 0;
 
 	/*
 	 * Get the first mbuf for the request.
 	 */
-	if ((nd->nd_flag & ND_EXTPG) != 0) {
-		mb = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
-		nd->nd_mreq = nd->nd_mb = mb;
-		nfsm_set(nd, 0);
-	} else {
-		if (nfs_bigrequest[procnum])
-			NFSMCLGET(mb, M_WAITOK);
-		else
-			NFSMGET(mb);
-		mb->m_len = 0;
-		nd->nd_mreq = nd->nd_mb = mb;
-		nd->nd_bpos = mtod(mb, char *);
-	}
+	if (nfs_bigrequest[procnum])
+		NFSMCLGET(mb, M_WAITOK);
+	else
+		NFSMGET(mb);
+	mb->m_len = 0;
+	nd->nd_mreq = nd->nd_mb = mb;
+	nd->nd_bpos = mtod(mb, char *);
 	
 	/*
 	 * And fill the first file handle into the request.
@@ -504,6 +496,7 @@ nfscl_fillsattr(struct nfsrv_descript *nd, struct vattr *vap,
 	u_int32_t *tl;
 	struct nfsv2_sattr *sp;
 	nfsattrbit_t attrbits;
+	struct nfsnode *np;
 
 	switch (nd->nd_flag & (ND_NFSV2 | ND_NFSV3 | ND_NFSV4)) {
 	case ND_NFSV2:
@@ -605,8 +598,18 @@ nfscl_fillsattr(struct nfsrv_descript *nd, struct vattr *vap,
 			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMEACCESSSET);
 		if (vap->va_mtime.tv_sec != VNOVAL)
 			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMEMODIFYSET);
-		if (vap->va_birthtime.tv_sec != VNOVAL)
-			NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_TIMECREATE);
+		if (vap->va_birthtime.tv_sec != VNOVAL &&
+		    strcmp(vp->v_mount->mnt_vfc->vfc_name, "nfs") == 0) {
+			/*
+			 * We can only test for support of TimeCreate if
+			 * the "vp" argument is for an NFS vnode.
+			 */
+			np = VTONFS(vp);
+			if (NFSISSET_ATTRBIT(&np->n_vattr.na_suppattr,
+			    NFSATTRBIT_TIMECREATE))
+				NFSSETBIT_ATTRBIT(&attrbits,
+				    NFSATTRBIT_TIMECREATE);
+		}
 		(void) nfsv4_fillattr(nd, vp->v_mount, vp, NULL, vap, NULL, 0,
 		    &attrbits, NULL, NULL, 0, 0, 0, 0, (uint64_t)0, NULL);
 		break;
@@ -1044,25 +1047,6 @@ nfsaddr2_match(NFSSOCKADDR_T nam1, NFSSOCKADDR_T nam2)
 #endif
 	}
 	return (0);
-}
-
-/*
- * Trim trailing data off the mbuf list being built.
- */
-void
-newnfs_trimtrailing(nd, mb, bpos)
-	struct nfsrv_descript *nd;
-	struct mbuf *mb;
-	caddr_t bpos;
-{
-
-	if (mb->m_next) {
-		m_freem(mb->m_next);
-		mb->m_next = NULL;
-	}
-	mb->m_len = bpos - mtod(mb, caddr_t);
-	nd->nd_mb = mb;
-	nd->nd_bpos = bpos;
 }
 
 /*
@@ -3639,7 +3623,7 @@ nfsrv_nfsuserdport(struct nfsuserd_args *nargs, NFSPROC_T *p)
  	}
 	rp->nr_vers = RPCNFSUSERD_VERS;
 	if (error == 0)
-		error = newnfs_connect(NULL, rp, NFSPROCCRED(p), p, 0);
+		error = newnfs_connect(NULL, rp, NFSPROCCRED(p), p, 0, false);
 	if (error == 0) {
 		NFSLOCKNAMEID();
 		nfsrv_nfsuserd = RUNNING;

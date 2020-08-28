@@ -58,23 +58,22 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_map.h>
+#include <contrib/dev/acpica/include/acpi.h>
+#include <contrib/dev/acpica/include/accommon.h>
+#include <dev/pci/pcireg.h>
+#include <dev/pci/pcivar.h>
 #include <machine/atomic.h>
 #include <machine/bus.h>
 #include <machine/md_var.h>
 #include <machine/specialreg.h>
-#include <contrib/dev/acpica/include/acpi.h>
-#include <contrib/dev/acpica/include/accommon.h>
 #include <x86/include/busdma_impl.h>
+#include <dev/iommu/busdma_iommu.h>
 #include <x86/iommu/intel_reg.h>
-#include <x86/iommu/busdma_dmar.h>
-#include <dev/pci/pcireg.h>
 #include <x86/iommu/intel_dmar.h>
-#include <dev/pci/pcivar.h>
 
 static MALLOC_DEFINE(M_DMAR_CTX, "dmar_ctx", "Intel DMAR Context");
 static MALLOC_DEFINE(M_DMAR_DOMAIN, "dmar_dom", "Intel DMAR Domain");
 
-static void dmar_domain_unload_task(void *arg, int pending);
 static void dmar_unref_domain_locked(struct dmar_unit *dmar,
     struct dmar_domain *domain);
 static void dmar_domain_destroy(struct dmar_domain *domain);
@@ -89,7 +88,7 @@ dmar_ensure_ctx_page(struct dmar_unit *dmar, int bus)
 	/*
 	 * Allocated context page must be linked.
 	 */
-	ctxm = dmar_pgalloc(dmar->ctx_obj, 1 + bus, DMAR_PGF_NOALLOC);
+	ctxm = dmar_pgalloc(dmar->ctx_obj, 1 + bus, IOMMU_PGF_NOALLOC);
 	if (ctxm != NULL)
 		return;
 
@@ -100,9 +99,9 @@ dmar_ensure_ctx_page(struct dmar_unit *dmar, int bus)
 	 * threads are equal.
 	 */
 	TD_PREP_PINNED_ASSERT;
-	ctxm = dmar_pgalloc(dmar->ctx_obj, 1 + bus, DMAR_PGF_ZERO |
-	    DMAR_PGF_WAITOK);
-	re = dmar_map_pgtbl(dmar->ctx_obj, 0, DMAR_PGF_NOALLOC, &sf);
+	ctxm = dmar_pgalloc(dmar->ctx_obj, 1 + bus, IOMMU_PGF_ZERO |
+	    IOMMU_PGF_WAITOK);
+	re = dmar_map_pgtbl(dmar->ctx_obj, 0, IOMMU_PGF_NOALLOC, &sf);
 	re += bus;
 	dmar_pte_store(&re->r1, DMAR_ROOT_R1_P | (DMAR_ROOT_R1_CTP_MASK &
 	    VM_PAGE_TO_PHYS(ctxm)));
@@ -117,10 +116,10 @@ dmar_map_ctx_entry(struct dmar_ctx *ctx, struct sf_buf **sfp)
 	struct dmar_unit *dmar;
 	dmar_ctx_entry_t *ctxp;
 
-	dmar = (struct dmar_unit *)ctx->context.domain->iommu;
+	dmar = CTX2DMAR(ctx);
 
 	ctxp = dmar_map_pgtbl(dmar->ctx_obj, 1 +
-	    PCI_RID2BUS(ctx->rid), DMAR_PGF_NOALLOC | DMAR_PGF_WAITOK, sfp);
+	    PCI_RID2BUS(ctx->rid), IOMMU_PGF_NOALLOC | IOMMU_PGF_WAITOK, sfp);
 	ctxp += ctx->rid & 0xff;
 	return (ctxp);
 }
@@ -131,8 +130,8 @@ device_tag_init(struct dmar_ctx *ctx, device_t dev)
 	struct dmar_domain *domain;
 	bus_addr_t maxaddr;
 
-	domain = (struct dmar_domain *)ctx->context.domain;
-	maxaddr = MIN(domain->end, BUS_SPACE_MAXADDR);
+	domain = CTX2DOM(ctx);
+	maxaddr = MIN(domain->iodom.end, BUS_SPACE_MAXADDR);
 	ctx->context.tag->common.ref_count = 1; /* Prevent free */
 	ctx->context.tag->common.impl = &bus_dma_iommu_impl;
 	ctx->context.tag->common.boundary = 0;
@@ -141,7 +140,7 @@ device_tag_init(struct dmar_ctx *ctx, device_t dev)
 	ctx->context.tag->common.maxsize = maxaddr;
 	ctx->context.tag->common.nsegments = BUS_SPACE_UNRESTRICTED;
 	ctx->context.tag->common.maxsegsz = maxaddr;
-	ctx->context.tag->ctx = (struct iommu_ctx *)ctx;
+	ctx->context.tag->ctx = CTX2IOCTX(ctx);
 	ctx->context.tag->owner = dev;
 }
 
@@ -178,24 +177,25 @@ ctx_id_entry_init(struct dmar_ctx *ctx, dmar_ctx_entry_t *ctxp, bool move,
 	vm_page_t ctx_root;
 	int i;
 
-	domain = (struct dmar_domain *)ctx->context.domain;
-	unit = (struct dmar_unit *)domain->iodom.iommu;
+	domain = CTX2DOM(ctx);
+	unit = DOM2DMAR(domain);
 	KASSERT(move || (ctxp->ctx1 == 0 && ctxp->ctx2 == 0),
 	    ("dmar%d: initialized ctx entry %d:%d:%d 0x%jx 0x%jx",
 	    unit->iommu.unit, busno, pci_get_slot(ctx->context.tag->owner),
 	    pci_get_function(ctx->context.tag->owner),
 	    ctxp->ctx1, ctxp->ctx2));
 
-	if ((domain->flags & DMAR_DOMAIN_IDMAP) != 0 &&
+	if ((domain->iodom.flags & IOMMU_DOMAIN_IDMAP) != 0 &&
 	    (unit->hw_ecap & DMAR_ECAP_PT) != 0) {
 		KASSERT(domain->pgtbl_obj == NULL,
 		    ("ctx %p non-null pgtbl_obj", ctx));
 		ctx_root = NULL;
 	} else {
-		ctx_root = dmar_pgalloc(domain->pgtbl_obj, 0, DMAR_PGF_NOALLOC);
+		ctx_root = dmar_pgalloc(domain->pgtbl_obj, 0,
+		    IOMMU_PGF_NOALLOC);
 	}
 
-	if (dmar_is_buswide_ctx(unit, busno)) {
+	if (iommu_is_buswide_ctx(DMAR2IOMMU(unit), busno)) {
 		MPASS(!move);
 		for (i = 0; i <= PCI_BUSMAX; i++) {
 			ctx_id_entry_init_one(&ctxp[i], domain, ctx_root);
@@ -254,7 +254,7 @@ domain_init_rmrr(struct dmar_domain *domain, device_t dev, int bus,
 		 * and round as neccesary.
 		 *
 		 * We also allow the overlapping RMRR entries, see
-		 * dmar_gas_alloc_region().
+		 * iommu_gas_alloc_region().
 		 */
 		start = entry->start;
 		end = entry->end;
@@ -282,7 +282,7 @@ domain_init_rmrr(struct dmar_domain *domain, device_t dev, int bus,
 			ma[i] = vm_page_getfake(entry->start + PAGE_SIZE * i,
 			    VM_MEMATTR_DEFAULT);
 		}
-		error1 = dmar_gas_map_region(domain, entry,
+		error1 = iommu_gas_map_region(DOM2IODOM(domain), entry,
 		    IOMMU_MAP_ENTRY_READ | IOMMU_MAP_ENTRY_WRITE,
 		    IOMMU_MF_CANWAIT | IOMMU_MF_RMRR, ma);
 		/*
@@ -294,7 +294,7 @@ domain_init_rmrr(struct dmar_domain *domain, device_t dev, int bus,
 		if (error1 == 0 && entry->end != entry->start) {
 			IOMMU_LOCK(domain->iodom.iommu);
 			domain->refs++; /* XXXKIB prevent free */
-			domain->flags |= DMAR_DOMAIN_RMRR;
+			domain->iodom.flags |= IOMMU_DOMAIN_RMRR;
 			IOMMU_UNLOCK(domain->iodom.iommu);
 		} else {
 			if (error1 != 0) {
@@ -308,7 +308,7 @@ domain_init_rmrr(struct dmar_domain *domain, device_t dev, int bus,
 				error = error1;
 			}
 			TAILQ_REMOVE(&rmrr_entries, entry, unroll_link);
-			dmar_gas_free_entry(domain, entry);
+			iommu_gas_free_entry(DOM2IODOM(domain), entry);
 		}
 		for (i = 0; i < size; i++)
 			vm_page_putfake(ma[i]);
@@ -320,6 +320,8 @@ domain_init_rmrr(struct dmar_domain *domain, device_t dev, int bus,
 static struct dmar_domain *
 dmar_domain_alloc(struct dmar_unit *dmar, bool id_mapped)
 {
+	struct iommu_domain *iodom;
+	struct iommu_unit *unit;
 	struct dmar_domain *domain;
 	int error, id, mgaw;
 
@@ -327,15 +329,13 @@ dmar_domain_alloc(struct dmar_unit *dmar, bool id_mapped)
 	if (id == -1)
 		return (NULL);
 	domain = malloc(sizeof(*domain), M_DMAR_DOMAIN, M_WAITOK | M_ZERO);
+	iodom = DOM2IODOM(domain);
+	unit = DMAR2IOMMU(dmar);
 	domain->domain = id;
 	LIST_INIT(&domain->contexts);
-	RB_INIT(&domain->rb_root);
-	TAILQ_INIT(&domain->iodom.unload_entries);
-	TASK_INIT(&domain->iodom.unload_task, 0, dmar_domain_unload_task,
-	    domain);
-	mtx_init(&domain->iodom.lock, "dmardom", NULL, MTX_DEF);
+	iommu_domain_init(unit, iodom, &dmar_domain_map_ops);
+
 	domain->dmar = dmar;
-	domain->iodom.iommu = &dmar->iommu;
 
 	/*
 	 * For now, use the maximal usable physical address of the
@@ -343,29 +343,29 @@ dmar_domain_alloc(struct dmar_unit *dmar, bool id_mapped)
 	 * It is useful for the identity mapping, and less so for the
 	 * virtualized bus address space.
 	 */
-	domain->end = id_mapped ? ptoa(Maxmem) : BUS_SPACE_MAXADDR;
-	mgaw = dmar_maxaddr2mgaw(dmar, domain->end, !id_mapped);
+	domain->iodom.end = id_mapped ? ptoa(Maxmem) : BUS_SPACE_MAXADDR;
+	mgaw = dmar_maxaddr2mgaw(dmar, domain->iodom.end, !id_mapped);
 	error = domain_set_agaw(domain, mgaw);
 	if (error != 0)
 		goto fail;
 	if (!id_mapped)
 		/* Use all supported address space for remapping. */
-		domain->end = 1ULL << (domain->agaw - 1);
+		domain->iodom.end = 1ULL << (domain->agaw - 1);
 
-	dmar_gas_init_domain(domain);
+	iommu_gas_init_domain(DOM2IODOM(domain));
 
 	if (id_mapped) {
 		if ((dmar->hw_ecap & DMAR_ECAP_PT) == 0) {
 			domain->pgtbl_obj = domain_get_idmap_pgtbl(domain,
-			    domain->end);
+			    domain->iodom.end);
 		}
-		domain->flags |= DMAR_DOMAIN_IDMAP;
+		domain->iodom.flags |= IOMMU_DOMAIN_IDMAP;
 	} else {
 		error = domain_alloc_pgtbl(domain);
 		if (error != 0)
 			goto fail;
 		/* Disable local apic region access */
-		error = dmar_gas_reserve_region(domain, 0xfee00000,
+		error = iommu_gas_reserve_region(iodom, 0xfee00000,
 		    0xfeefffff + 1);
 		if (error != 0)
 			goto fail;
@@ -383,7 +383,7 @@ dmar_ctx_alloc(struct dmar_domain *domain, uint16_t rid)
 	struct dmar_ctx *ctx;
 
 	ctx = malloc(sizeof(*ctx), M_DMAR_CTX, M_WAITOK | M_ZERO);
-	ctx->context.domain = (struct iommu_domain *)domain;
+	ctx->context.domain = DOM2IODOM(domain);
 	ctx->context.tag = malloc(sizeof(struct bus_dma_tag_iommu),
 	    M_DMAR_CTX, M_WAITOK | M_ZERO);
 	ctx->rid = rid;
@@ -396,7 +396,7 @@ dmar_ctx_link(struct dmar_ctx *ctx)
 {
 	struct dmar_domain *domain;
 
-	domain = (struct dmar_domain *)ctx->context.domain;
+	domain = CTX2DOM(ctx);
 	IOMMU_ASSERT_LOCKED(domain->iodom.iommu);
 	KASSERT(domain->refs >= domain->ctx_cnt,
 	    ("dom %p ref underflow %d %d", domain, domain->refs,
@@ -411,7 +411,7 @@ dmar_ctx_unlink(struct dmar_ctx *ctx)
 {
 	struct dmar_domain *domain;
 
-	domain = (struct dmar_domain *)ctx->context.domain;
+	domain = CTX2DOM(ctx);
 	IOMMU_ASSERT_LOCKED(domain->iodom.iommu);
 	KASSERT(domain->refs > 0,
 	    ("domain %p ctx dtr refs %d", domain, domain->refs));
@@ -426,7 +426,10 @@ dmar_ctx_unlink(struct dmar_ctx *ctx)
 static void
 dmar_domain_destroy(struct dmar_domain *domain)
 {
+	struct iommu_domain *iodom;
 	struct dmar_unit *dmar;
+
+	iodom = DOM2IODOM(domain);
 
 	KASSERT(TAILQ_EMPTY(&domain->iodom.unload_entries),
 	    ("unfinished unloads %p", domain));
@@ -436,18 +439,18 @@ dmar_domain_destroy(struct dmar_domain *domain)
 	    ("destroying dom %p with ctx_cnt %d", domain, domain->ctx_cnt));
 	KASSERT(domain->refs == 0,
 	    ("destroying dom %p with refs %d", domain, domain->refs));
-	if ((domain->flags & DMAR_DOMAIN_GAS_INITED) != 0) {
+	if ((domain->iodom.flags & IOMMU_DOMAIN_GAS_INITED) != 0) {
 		DMAR_DOMAIN_LOCK(domain);
-		dmar_gas_fini_domain(domain);
+		iommu_gas_fini_domain(iodom);
 		DMAR_DOMAIN_UNLOCK(domain);
 	}
-	if ((domain->flags & DMAR_DOMAIN_PGTBL_INITED) != 0) {
+	if ((domain->iodom.flags & IOMMU_DOMAIN_PGTBL_INITED) != 0) {
 		if (domain->pgtbl_obj != NULL)
 			DMAR_DOMAIN_PGLOCK(domain);
 		domain_free_pgtbl(domain);
 	}
-	mtx_destroy(&domain->iodom.lock);
-	dmar = (struct dmar_unit *)domain->iodom.iommu;
+	iommu_domain_fini(iodom);
+	dmar = DOM2DMAR(domain);
 	free_unr(dmar->domids, domain->domain);
 	free(domain, M_DMAR_DOMAIN);
 }
@@ -459,6 +462,7 @@ dmar_get_ctx_for_dev1(struct dmar_unit *dmar, device_t dev, uint16_t rid,
 {
 	struct dmar_domain *domain, *domain1;
 	struct dmar_ctx *ctx, *ctx1;
+	struct iommu_unit *unit;
 	dmar_ctx_entry_t *ctxp;
 	struct sf_buf *sf;
 	int bus, slot, func, error;
@@ -475,9 +479,10 @@ dmar_get_ctx_for_dev1(struct dmar_unit *dmar, device_t dev, uint16_t rid,
 	}
 	enable = false;
 	TD_PREP_PINNED_ASSERT;
+	unit = DMAR2IOMMU(dmar);
 	DMAR_LOCK(dmar);
-	KASSERT(!dmar_is_buswide_ctx(dmar, bus) || (slot == 0 && func == 0),
-	    ("dmar%d pci%d:%d:%d get_ctx for buswide", dmar->iommu.unit, bus,
+	KASSERT(!iommu_is_buswide_ctx(unit, bus) || (slot == 0 && func == 0),
+	    ("iommu%d pci%d:%d:%d get_ctx for buswide", dmar->iommu.unit, bus,
 	    slot, func));
 	ctx = dmar_find_ctx_locked(dmar, rid);
 	error = 0;
@@ -542,11 +547,11 @@ dmar_get_ctx_for_dev1(struct dmar_unit *dmar, device_t dev, uint16_t rid,
 			dmar_domain_destroy(domain1);
 			/* Nothing needs to be done to destroy ctx1. */
 			free(ctx1, M_DMAR_CTX);
-			domain = (struct dmar_domain *)ctx->context.domain;
+			domain = CTX2DOM(ctx);
 			ctx->refs++; /* tag referenced us */
 		}
 	} else {
-		domain = (struct dmar_domain *)ctx->context.domain;
+		domain = CTX2DOM(ctx);
 		if (ctx->context.tag->owner == NULL)
 			ctx->context.tag->owner = dev;
 		ctx->refs++; /* tag referenced us */
@@ -619,7 +624,7 @@ dmar_move_ctx_to_domain(struct dmar_domain *domain, struct dmar_ctx *ctx)
 	int error;
 
 	dmar = domain->dmar;
-	old_domain = (struct dmar_domain *)ctx->context.domain;
+	old_domain = CTX2DOM(ctx);
 	if (domain == old_domain)
 		return (0);
 	KASSERT(old_domain->iodom.iommu == domain->iodom.iommu,
@@ -639,7 +644,7 @@ dmar_move_ctx_to_domain(struct dmar_domain *domain, struct dmar_ctx *ctx)
 	/* If flush failed, rolling back would not work as well. */
 	printf("dmar%d rid %x domain %d->%d %s-mapped\n",
 	    dmar->iommu.unit, ctx->rid, old_domain->domain, domain->domain,
-	    (domain->flags & DMAR_DOMAIN_IDMAP) != 0 ? "id" : "re");
+	    (domain->iodom.flags & IOMMU_DOMAIN_IDMAP) != 0 ? "id" : "re");
 	dmar_unref_domain_locked(dmar, old_domain);
 	TD_PINNED_ASSERT;
 	return (error);
@@ -663,7 +668,7 @@ dmar_unref_domain_locked(struct dmar_unit *dmar, struct dmar_domain *domain)
 		return;
 	}
 
-	KASSERT((domain->flags & DMAR_DOMAIN_RMRR) == 0,
+	KASSERT((domain->iodom.flags & IOMMU_DOMAIN_RMRR) == 0,
 	    ("lost ref on RMRR domain %p", domain));
 
 	LIST_REMOVE(domain, link);
@@ -740,7 +745,7 @@ dmar_free_ctx_locked(struct dmar_unit *dmar, struct dmar_ctx *ctx)
 			dmar_inv_iotlb_glob(dmar);
 	}
 	dmar_unmap_pgtbl(sf);
-	domain = (struct dmar_domain *)ctx->context.domain;
+	domain = CTX2DOM(ctx);
 	dmar_ctx_unlink(ctx);
 	free(ctx->context.tag, M_DMAR_CTX);
 	free(ctx, M_DMAR_CTX);
@@ -753,7 +758,7 @@ dmar_free_ctx(struct dmar_ctx *ctx)
 {
 	struct dmar_unit *dmar;
 
-	dmar = (struct dmar_unit *)ctx->context.domain->iommu;
+	dmar = CTX2DMAR(ctx);
 	DMAR_LOCK(dmar);
 	dmar_free_ctx_locked(dmar, ctx);
 }
@@ -781,17 +786,17 @@ dmar_find_ctx_locked(struct dmar_unit *dmar, uint16_t rid)
 void
 dmar_domain_free_entry(struct iommu_map_entry *entry, bool free)
 {
-	struct dmar_domain *domain;
+	struct iommu_domain *domain;
 
-	domain = (struct dmar_domain *)entry->domain;
-	DMAR_DOMAIN_LOCK(domain);
+	domain = entry->domain;
+	IOMMU_DOMAIN_LOCK(domain);
 	if ((entry->flags & IOMMU_MAP_ENTRY_RMRR) != 0)
-		dmar_gas_free_region(domain, entry);
+		iommu_gas_free_region(domain, entry);
 	else
-		dmar_gas_free_space(domain, entry);
-	DMAR_DOMAIN_UNLOCK(domain);
+		iommu_gas_free_space(domain, entry);
+	IOMMU_DOMAIN_UNLOCK(domain);
 	if (free)
-		dmar_gas_free_entry(domain, entry);
+		iommu_gas_free_entry(domain, entry);
 	else
 		entry->flags = 0;
 }
@@ -802,11 +807,11 @@ dmar_domain_unload_entry(struct iommu_map_entry *entry, bool free)
 	struct dmar_domain *domain;
 	struct dmar_unit *unit;
 
-	domain = (struct dmar_domain *)entry->domain;
-	unit = (struct dmar_unit *)domain->iodom.iommu;
+	domain = IODOM2DOM(entry->domain);
+	unit = DOM2DMAR(domain);
 	if (unit->qi_enabled) {
 		DMAR_LOCK(unit);
-		dmar_qi_invalidate_locked((struct dmar_domain *)entry->domain,
+		dmar_qi_invalidate_locked(IODOM2DOM(entry->domain),
 		    entry->start, entry->end - entry->start, &entry->gseq,
 		    true);
 		if (!free)
@@ -814,7 +819,7 @@ dmar_domain_unload_entry(struct iommu_map_entry *entry, bool free)
 		TAILQ_INSERT_TAIL(&unit->tlb_flush_entries, entry, dmamap_link);
 		DMAR_UNLOCK(unit);
 	} else {
-		domain_flush_iotlb_sync((struct dmar_domain *)entry->domain,
+		domain_flush_iotlb_sync(IODOM2DOM(entry->domain),
 		    entry->start, entry->end - entry->start);
 		dmar_domain_free_entry(entry, free);
 	}
@@ -835,16 +840,18 @@ dmar_domain_unload(struct dmar_domain *domain,
     struct iommu_map_entries_tailq *entries, bool cansleep)
 {
 	struct dmar_unit *unit;
+	struct iommu_domain *iodom;
 	struct iommu_map_entry *entry, *entry1;
 	int error;
 
-	unit = (struct dmar_unit *)domain->iodom.iommu;
+	iodom = DOM2IODOM(domain);
+	unit = DOM2DMAR(domain);
 
 	TAILQ_FOREACH_SAFE(entry, entries, dmamap_link, entry1) {
 		KASSERT((entry->flags & IOMMU_MAP_ENTRY_MAP) != 0,
 		    ("not mapped entry %p %p", domain, entry));
-		error = domain_unmap_buf(domain, entry->start, entry->end -
-		    entry->start, cansleep ? DMAR_PGF_WAITOK : 0);
+		error = iodom->ops->unmap(iodom, entry->start, entry->end -
+		    entry->start, cansleep ? IOMMU_PGF_WAITOK : 0);
 		KASSERT(error == 0, ("unmap %p error %d", domain, error));
 		if (!unit->qi_enabled) {
 			domain_flush_iotlb_sync(domain, entry->start,
@@ -865,26 +872,6 @@ dmar_domain_unload(struct dmar_domain *domain,
 	}
 	TAILQ_CONCAT(&unit->tlb_flush_entries, entries, dmamap_link);
 	DMAR_UNLOCK(unit);
-}	
-
-static void
-dmar_domain_unload_task(void *arg, int pending)
-{
-	struct dmar_domain *domain;
-	struct iommu_map_entries_tailq entries;
-
-	domain = arg;
-	TAILQ_INIT(&entries);
-
-	for (;;) {
-		DMAR_DOMAIN_LOCK(domain);
-		TAILQ_SWAP(&domain->iodom.unload_entries, &entries,
-		    iommu_map_entry, dmamap_link);
-		DMAR_DOMAIN_UNLOCK(domain);
-		if (TAILQ_EMPTY(&entries))
-			break;
-		dmar_domain_unload(domain, &entries, true);
-	}
 }
 
 struct iommu_ctx *
@@ -894,11 +881,11 @@ iommu_get_ctx(struct iommu_unit *iommu, device_t dev, uint16_t rid,
 	struct dmar_unit *dmar;
 	struct dmar_ctx *ret;
 
-	dmar = (struct dmar_unit *)iommu;
+	dmar = IOMMU2DMAR(iommu);
 
 	ret = dmar_get_ctx_for_dev(dmar, dev, rid, id_mapped, rmrr_init);
 
-	return ((struct iommu_ctx *)ret);
+	return (CTX2IOCTX(ret));
 }
 
 void
@@ -907,8 +894,8 @@ iommu_free_ctx_locked(struct iommu_unit *iommu, struct iommu_ctx *context)
 	struct dmar_unit *dmar;
 	struct dmar_ctx *ctx;
 
-	dmar = (struct dmar_unit *)iommu;
-	ctx = (struct dmar_ctx *)context;
+	dmar = IOMMU2DMAR(iommu);
+	ctx = IOCTX2CTX(context);
 
 	dmar_free_ctx_locked(dmar, ctx);
 }
@@ -916,11 +903,9 @@ iommu_free_ctx_locked(struct iommu_unit *iommu, struct iommu_ctx *context)
 void
 iommu_free_ctx(struct iommu_ctx *context)
 {
-	struct dmar_unit *dmar;
 	struct dmar_ctx *ctx;
 
-	ctx = (struct dmar_ctx *)context;
-	dmar = (struct dmar_unit *)ctx->context.domain->iommu;
+	ctx = IOCTX2CTX(context);
 
 	dmar_free_ctx(ctx);
 }
@@ -938,7 +923,7 @@ iommu_domain_unload(struct iommu_domain *iodom,
 {
 	struct dmar_domain *domain;
 
-	domain = (struct dmar_domain *)iodom;
+	domain = IODOM2DOM(iodom);
 
 	dmar_domain_unload(domain, entries, cansleep);
 }

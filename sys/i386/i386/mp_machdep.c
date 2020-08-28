@@ -188,6 +188,10 @@ cpu_mp_start(void)
 	setidt(IPI_SUSPEND, IDTVEC(cpususpend),
 	       SDT_SYS386IGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
 
+	/* Install an IPI for calling delayed SWI */
+	setidt(IPI_SWI, IDTVEC(ipi_swi),
+	       SDT_SYS386IGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+
 	/* Set boot_cpu_id if needed. */
 	if (boot_cpu_id == -1) {
 		boot_cpu_id = PCPU_GET(apic_id);
@@ -481,9 +485,10 @@ volatile uint32_t smp_tlb_generation;
 /*
  * Used by pmap to request cache or TLB invalidation on local and
  * remote processors.  Mask provides the set of remote CPUs which are
- * to be signalled with the invalidation IPI, specified by vector.  As
- * an optimization, the curcpu_cb callback is invoked on the calling
- * CPU while waiting for remote CPUs to complete the operation.
+ * to be signalled with the invalidation IPI.  Vector specifies which
+ * invalidation IPI is used.  As an optimization, the curcpu_cb
+ * callback is invoked on the calling CPU while waiting for remote
+ * CPUs to complete the operation.
  *
  * The callback function is called unconditionally on the caller's
  * underlying processor, even when this processor is not set in the
@@ -535,13 +540,7 @@ smp_targeted_tlb_shootdown(cpuset_t mask, u_int vector, pmap_t pmap,
 		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
 	} else {
 		other_cpus = mask;
-		while ((cpu = CPU_FFS(&mask)) != 0) {
-			cpu--;
-			CPU_CLR(cpu, &mask);
-			CTR3(KTR_SMP, "%s: cpu: %d ipi: %x", __func__,
-			    cpu, vector);
-			ipi_send_cpu(cpu, vector);
-		}
+		ipi_selected(mask, vector);
 	}
 	curcpu_cb(pmap, addr1, addr2);
 	while ((cpu = CPU_FFS(&other_cpus)) != 0) {

@@ -96,13 +96,15 @@ __FBSDID("$FreeBSD$");
 
 #define GiB(v)			(v ## ULL << 30)
 
-#define	AP_BOOTPT_SZ		(PAGE_SIZE * 3)
+#define	AP_BOOTPT_SZ		(PAGE_SIZE * 4)
 
 /* Temporary variables for init_secondary()  */
 char *doublefault_stack;
 char *mce_stack;
 char *nmi_stack;
 char *dbg_stack;
+
+extern u_int mptramp_la57;
 
 /*
  * Local data and functions.
@@ -203,7 +205,7 @@ cpu_mp_start(void)
 		cpu_apic_ids[i] = -1;
 	}
 
-	/* Install an inter-CPU IPI for for cache and TLB invalidations. */
+	/* Install an inter-CPU IPI for cache and TLB invalidations. */
 	setidt(IPI_INVLOP, pti ? IDTVEC(invlop_pti) : IDTVEC(invlop),
 	    SDT_SYSIGT, SEL_KPL, 0);
 
@@ -223,6 +225,10 @@ cpu_mp_start(void)
 	setidt(IPI_SUSPEND, pti ? IDTVEC(cpususpend_pti) : IDTVEC(cpususpend),
 	    SDT_SYSIGT, SEL_KPL, 0);
 
+	/* Install an IPI for calling delayed SWI */
+	setidt(IPI_SWI, pti ? IDTVEC(ipi_swi_pti) : IDTVEC(ipi_swi),
+	    SDT_SYSIGT, SEL_KPL, 0);
+
 	/* Set boot_cpu_id if needed. */
 	if (boot_cpu_id == -1) {
 		boot_cpu_id = PCPU_GET(apic_id);
@@ -235,6 +241,8 @@ cpu_mp_start(void)
 	topo_probe();
 
 	assign_cpu_ids();
+
+	mptramp_la57 = la57;
 
 	/* Start each Application Processor */
 	init_ops.start_all_aps();
@@ -283,6 +291,7 @@ init_secondary(void)
 	pc->pc_fs32p = &gdt[GUFS32_SEL];
 	pc->pc_gs32p = &gdt[GUGS32_SEL];
 	pc->pc_ldt = (struct system_segment_descriptor *)&gdt[GUSERLDT_SEL];
+	pc->pc_ucr3_load_mask = PMAP_UCR3_NOMASK;
 	/* See comment in pmap_bootstrap(). */
 	pc->pc_pcid_next = PMAP_PCID_KERN + 2;
 	pc->pc_pcid_gen = 1;
@@ -390,9 +399,9 @@ mp_realloc_pcpu(int cpuid, int domain)
 int
 native_start_all_aps(void)
 {
-	u_int64_t *pt4, *pt3, *pt2;
+	u_int64_t *pt5, *pt4, *pt3, *pt2;
 	u_int32_t mpbioswarmvec;
-	int apic_id, cpu, domain, i;
+	int apic_id, cpu, domain, i, xo;
 	u_char mpbiosreason;
 
 	mtx_init(&ap_boot_mtx, "ap boot", NULL, MTX_SPIN);
@@ -401,18 +410,38 @@ native_start_all_aps(void)
 	bcopy(mptramp_start, (void *)PHYS_TO_DMAP(boot_address), bootMP_size);
 
 	/* Locate the page tables, they'll be below the trampoline */
-	pt4 = (uint64_t *)PHYS_TO_DMAP(mptramp_pagetables);
+	if (la57) {
+		pt5 = (uint64_t *)PHYS_TO_DMAP(mptramp_pagetables);
+		xo = 1;
+	} else {
+		xo = 0;
+	}
+	pt4 = (uint64_t *)PHYS_TO_DMAP(mptramp_pagetables + xo * PAGE_SIZE);
 	pt3 = pt4 + (PAGE_SIZE) / sizeof(u_int64_t);
 	pt2 = pt3 + (PAGE_SIZE) / sizeof(u_int64_t);
 
 	/* Create the initial 1GB replicated page tables */
 	for (i = 0; i < 512; i++) {
-		/* Each slot of the level 4 pages points to the same level 3 page */
-		pt4[i] = (u_int64_t)(uintptr_t)(mptramp_pagetables + PAGE_SIZE);
+		if (la57) {
+			pt5[i] = (u_int64_t)(uintptr_t)(mptramp_pagetables +
+			    PAGE_SIZE);
+			pt5[i] |= PG_V | PG_RW | PG_U;
+		}
+
+		/*
+		 * Each slot of the level 4 pages points to the same
+		 * level 3 page.
+		 */
+		pt4[i] = (u_int64_t)(uintptr_t)(mptramp_pagetables +
+		    (xo + 1) * PAGE_SIZE);
 		pt4[i] |= PG_V | PG_RW | PG_U;
 
-		/* Each slot of the level 3 pages points to the same level 2 page */
-		pt3[i] = (u_int64_t)(uintptr_t)(mptramp_pagetables + (2 * PAGE_SIZE));
+		/*
+		 * Each slot of the level 3 pages points to the same
+		 * level 2 page.
+		 */
+		pt3[i] = (u_int64_t)(uintptr_t)(mptramp_pagetables +
+		    ((xo + 2) * PAGE_SIZE));
 		pt3[i] |= PG_V | PG_RW | PG_U;
 
 		/* The level 2 page slots are mapped with 2MB pages for 1GB. */
@@ -557,7 +586,7 @@ static enum invl_op_codes invl_op_pg;
  * at location (cpu, my_cpuid) for each target cpu.  After that IPI is
  * sent to all targets which scan for zeroed scoreboard generation
  * words.  Upon finding such word the shootdown data is read from
- * corresponding cpu' pcpu, and generation is set.  Meantime initiator
+ * corresponding cpu's pcpu, and generation is set.  Meantime initiator
  * loops waiting for all zeroed generations in scoreboard to update.
  */
 static uint32_t *invl_scoreboard;
@@ -654,8 +683,8 @@ smp_targeted_tlb_shootdown(cpuset_t mask, pmap_t pmap, vm_offset_t addr1,
 
 	/*
 	 * Initiator must have interrupts enabled, which prevents
-	 * non-invalidation IPIs, that takes smp_ipi_mtx spinlock,
-	 * from deadlocking with as.  On the other hand, preemption
+	 * non-invalidation IPIs that take smp_ipi_mtx spinlock,
+	 * from deadlocking with us.  On the other hand, preemption
 	 * must be disabled to pin initiator to the instance of the
 	 * pcpu pc_smp_tlb data and scoreboard line.
 	 */
@@ -687,7 +716,7 @@ smp_targeted_tlb_shootdown(cpuset_t mask, pmap_t pmap, vm_offset_t addr1,
 	/*
 	 * IPI acts as a fence between writing to the scoreboard above
 	 * (zeroing slot) and reading from it below (wait for
-	 * acknowledge).
+	 * acknowledgment).
 	 */
 	if (CPU_ISFULLSET(&mask)) {
 		ipi_all_but_self(IPI_INVLOP);
@@ -695,13 +724,7 @@ smp_targeted_tlb_shootdown(cpuset_t mask, pmap_t pmap, vm_offset_t addr1,
 		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
 	} else {
 		other_cpus = mask;
-		while ((cpu = CPU_FFS(&mask)) != 0) {
-			cpu--;
-			CPU_CLR(cpu, &mask);
-			CTR3(KTR_SMP, "%s: cpu: %d invl ipi op: %x", __func__,
-			    cpu, op);
-			ipi_send_cpu(cpu, IPI_INVLOP);
-		}
+		ipi_selected(mask, IPI_INVLOP);
 	}
 	curcpu_cb(pmap, addr1, addr2);
 	while ((cpu = CPU_FFS(&other_cpus)) != 0) {
@@ -821,15 +844,14 @@ invltlb_invpcid_pti_handler(pmap_t smp_tlb_pmap)
 		invpcid(&d, INVPCID_CTXGLOB);
 	} else {
 		invpcid(&d, INVPCID_CTX);
-		d.pcid |= PMAP_PCID_USER_PT;
-		invpcid(&d, INVPCID_CTX);
+		if (smp_tlb_pmap == PCPU_GET(curpmap))
+			PCPU_SET(ucr3_load_mask, ~CR3_PCID_SAVE);
 	}
 }
 
 static void
 invltlb_pcid_handler(pmap_t smp_tlb_pmap)
 {
-	uint64_t kcr3, ucr3;
 	uint32_t pcid;
   
 #ifdef COUNT_XINVLTLB_HITS
@@ -849,15 +871,11 @@ invltlb_pcid_handler(pmap_t smp_tlb_pmap)
 		 * invalidation when switching to the pmap on this
 		 * CPU.
 		 */
-		if (PCPU_GET(curpmap) == smp_tlb_pmap) {
+		if (smp_tlb_pmap == PCPU_GET(curpmap)) {
 			pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
-			kcr3 = smp_tlb_pmap->pm_cr3 | pcid;
-			ucr3 = smp_tlb_pmap->pm_ucr3;
-			if (ucr3 != PMAP_NO_CR3) {
-				ucr3 |= PMAP_PCID_USER_PT | pcid;
-				pmap_pti_pcid_invalidate(ucr3, kcr3);
-			} else
-				load_cr3(kcr3);
+			load_cr3(smp_tlb_pmap->pm_cr3 | pcid);
+			if (smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3)
+				PCPU_SET(ucr3_load_mask, ~CR3_PCID_SAVE);
 		}
 	}
 }
@@ -888,7 +906,9 @@ invlpg_invpcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1)
 #endif /* COUNT_IPIS */
 
 	invlpg(smp_tlb_addr1);
-	if (smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3) {
+	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
+	    smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3 &&
+	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
 		d.pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid |
 		    PMAP_PCID_USER_PT;
 		d.pad = 0;
@@ -912,7 +932,8 @@ invlpg_pcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1)
 
 	invlpg(smp_tlb_addr1);
 	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
-	    (ucr3 = smp_tlb_pmap->pm_ucr3) != PMAP_NO_CR3) {
+	    (ucr3 = smp_tlb_pmap->pm_ucr3) != PMAP_NO_CR3 &&
+	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
 		pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
 		kcr3 = smp_tlb_pmap->pm_cr3 | pcid | CR3_PCID_SAVE;
 		ucr3 |= pcid | PMAP_PCID_USER_PT | CR3_PCID_SAVE;
@@ -960,7 +981,9 @@ invlrng_invpcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1,
 		invlpg(addr);
 		addr += PAGE_SIZE;
 	} while (addr < addr2);
-	if (smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3) {
+	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
+	    smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3 &&
+	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
 		d.pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid |
 		    PMAP_PCID_USER_PT;
 		d.pad = 0;
@@ -994,7 +1017,8 @@ invlrng_pcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1,
 		addr += PAGE_SIZE;
 	} while (addr < addr2);
 	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
-	    (ucr3 = smp_tlb_pmap->pm_ucr3) != PMAP_NO_CR3) {
+	    (ucr3 = smp_tlb_pmap->pm_ucr3) != PMAP_NO_CR3 &&
+	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
 		pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
 		kcr3 = smp_tlb_pmap->pm_cr3 | pcid | CR3_PCID_SAVE;
 		ucr3 |= pcid | PMAP_PCID_USER_PT | CR3_PCID_SAVE;
@@ -1080,7 +1104,7 @@ invlop_handler(void)
 
 		/*
 		 * This acquire fence and its corresponding release
-		 * fence in smp_targeted_tlb_shootdown(), is between
+		 * fence in smp_targeted_tlb_shootdown() is between
 		 * reading zero scoreboard slot and accessing PCPU of
 		 * initiator for pc_smp_tlb values.
 		 */
