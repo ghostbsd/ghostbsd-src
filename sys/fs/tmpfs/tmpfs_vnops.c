@@ -1244,7 +1244,6 @@ tmpfs_rmdir(struct vop_rmdir_args *v)
 		goto out;
 	}
 
-
 	/* Detach the directory entry from the directory (dnode). */
 	tmpfs_dir_detach(dvp, de);
 	if (v->a_cnp->cn_flags & DOWHITEOUT)
@@ -1436,8 +1435,6 @@ tmpfs_reclaim(struct vop_reclaim_args *v)
 	if (vp->v_type == VREG)
 		tmpfs_destroy_vobject(vp, node->tn_reg.tn_aobj);
 	vp->v_object = NULL;
-	if (tmpfs_use_nc(vp))
-		cache_purge(vp);
 
 	TMPFS_NODE_LOCK(node);
 	tmpfs_free_vp(vp);

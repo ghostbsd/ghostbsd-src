@@ -39,6 +39,13 @@
 #include <sys/epoch.h>
 #include <netinet/in.h>		/* struct sockaddr_in */
 #include <sys/counter.h>
+#include <net/route/nhop.h>
+
+#ifdef	RTDEBUG
+#define	DPRINTF(_fmt, ...)	printf("%s: " _fmt "\n", __func__ , ## __VA_ARGS__)
+#else
+#define	DPRINTF(_fmt, ...)
+#endif
 
 struct nh_control;
 typedef int rnh_preadd_entry_f_t(u_int fibnum, const struct sockaddr *addr,
@@ -119,7 +126,6 @@ VNET_PCPUSTAT_DECLARE(struct rtstat, rtstat);
 #define	RTSTAT_ADD(name, val)	\
 	VNET_PCPUSTAT_ADD(struct rtstat, rtstat, name, (val))
 #define	RTSTAT_INC(name)	RTSTAT_ADD(name, 1)
-
 
 /*
  * Convert a 'struct radix_node *' to a 'struct rtentry *'.
@@ -204,29 +210,50 @@ struct rtentry {
 #define	_RT_SELECT_NHOP(_nh, _flowid)	\
 	((!NH_IS_MULTIPATH(_nh)) ? (_nh) : _SELECT_NHOP(_nh, _flowid))
 #define	RT_SELECT_NHOP(_rt, _flowid)	_RT_SELECT_NHOP((_rt)->rt_nhop, _flowid)
- 
-/* rte<>nhop translation */
-static inline uint16_t
-fib_rte_to_nh_flags(int rt_flags)
-{
-	uint16_t res;
 
-	res = (rt_flags & RTF_REJECT) ? NHF_REJECT : 0;
-	res |= (rt_flags & RTF_HOST) ? NHF_HOST : 0;
-	res |= (rt_flags & RTF_BLACKHOLE) ? NHF_BLACKHOLE : 0;
-	res |= (rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) ? NHF_REDIRECT : 0;
-	res |= (rt_flags & RTF_BROADCAST) ? NHF_BROADCAST : 0;
-	res |= (rt_flags & RTF_GATEWAY) ? NHF_GATEWAY : 0;
-
-	return (res);
-}
-
+/* route_temporal.c */
 void tmproutes_update(struct rib_head *rnh, struct rtentry *rt);
 void tmproutes_init(struct rib_head *rh);
 void tmproutes_destroy(struct rib_head *rh);
 
 /* route_ctl.c */
+struct route_nhop_data {
+	struct nhop_object	*rnd_nhop;
+	uint32_t		rnd_weight;
+};
+int change_route_conditional(struct rib_head *rnh, struct rtentry *rt,
+    struct rt_addrinfo *info, struct route_nhop_data *nhd_orig,
+    struct route_nhop_data *nhd_new, struct rib_cmd_info *rc);
+
 void vnet_rtzone_init(void);
 void vnet_rtzone_destroy(void);
+
+/* subscriptions */
+void rib_init_subscriptions(struct rib_head *rnh);
+void rib_destroy_subscriptions(struct rib_head *rnh);
+
+/* Nexhops */
+void nhops_init(void);
+int nhops_init_rib(struct rib_head *rh);
+void nhops_destroy_rib(struct rib_head *rh);
+void nhop_ref_object(struct nhop_object *nh);
+int nhop_try_ref_object(struct nhop_object *nh);
+int nhop_ref_any(struct nhop_object *nh);
+void nhop_free_any(struct nhop_object *nh);
+
+void nhop_set_type(struct nhop_object *nh, enum nhop_type nh_type);
+void nhop_set_rtflags(struct nhop_object *nh, int rt_flags);
+
+int nhop_create_from_info(struct rib_head *rnh, struct rt_addrinfo *info,
+    struct nhop_object **nh_ret);
+int nhop_create_from_nhop(struct rib_head *rnh, const struct nhop_object *nh_orig,
+    struct rt_addrinfo *info, struct nhop_object **pnh_priv);
+
+void nhops_update_ifmtu(struct rib_head *rh, struct ifnet *ifp, uint32_t mtu);
+int nhops_dump_sysctl(struct rib_head *rh, struct sysctl_req *w);
+
+/* route */
+struct rtentry *rt_unlinkrte(struct rib_head *rnh, struct rt_addrinfo *info,
+    int *perror);
 
 #endif

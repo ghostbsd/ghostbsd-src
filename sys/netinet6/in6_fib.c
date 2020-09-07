@@ -51,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <net/route.h>
 #include <net/route/route_var.h>
 #include <net/route/nhop.h>
-#include <net/route/shared.h>
 #include <net/vnet.h>
 
 #ifdef RADIX_MPATH
@@ -155,7 +154,7 @@ inline static int
 check_urpf_mpath(struct rtentry *rt, uint32_t flags,
     const struct ifnet *src_if)
 {
-	
+
 	while (rt != NULL) {
 		if (check_urpf(rt->rt_nhop, flags, src_if) != 0)
 			return (1);
@@ -260,4 +259,3 @@ fib6_lookup_debugnet(uint32_t fibnum, const struct in6_addr *dst6,
 }
 
 #endif
-

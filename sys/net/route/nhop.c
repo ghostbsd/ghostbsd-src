@@ -46,7 +46,6 @@ __FBSDID("$FreeBSD$");
 #include <net/route/nhop_utils.h>
 #include <net/route/nhop.h>
 #include <net/route/nhop_var.h>
-#include <net/route/shared.h>
 #include <net/vnet.h>
 
 /*
@@ -66,7 +65,6 @@ __FBSDID("$FreeBSD$");
  */
 
 static MALLOC_DEFINE(M_NHOP, "nhops", "nexthops data");
-
 
 /* Hash management functions */
 
@@ -385,4 +383,3 @@ find_nhop(struct nh_control *ctl, const struct nhop_priv *nh_priv)
 
 	return (nh_priv_ret);
 }
-

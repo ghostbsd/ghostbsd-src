@@ -112,6 +112,8 @@ SYSCTL_INT(_vm, OID_AUTO, imply_prot_max, CTLFLAG_RWTUN, &imply_prot_max, 0,
 #define	MAP_32BIT_MAX_ADDR	((vm_offset_t)1 << 31)
 #endif
 
+_Static_assert(MAXPAGESIZES <= 4, "MINCORE_SUPER too narrow");
+
 #ifndef _SYS_SYSPROTO_H_
 struct sbrk_args {
 	int incr;
@@ -147,7 +149,6 @@ ogetpagesize(struct thread *td, struct ogetpagesize_args *uap)
 	return (0);
 }
 #endif				/* COMPAT_43 */
-
 
 /*
  * Memory Map (mmap) system call.  Note that the file offset
@@ -257,7 +258,7 @@ kern_mmap_req(struct thread *td, const struct mmap_req *mrp)
 	 * Ignore old flags that used to be defined but did not do anything.
 	 */
 	flags &= ~(MAP_RESERVED0020 | MAP_RESERVED0040);
-	
+
 	/*
 	 * Enforce the constraints.
 	 * Mapping of length 0 is only allowed for old binaries.
@@ -497,7 +498,6 @@ ommap(struct thread *td, struct ommap_args *uap)
 	    uap->fd, uap->pos));
 }
 #endif				/* COMPAT_43 */
-
 
 #ifndef _SYS_SYSPROTO_H_
 struct msync_args {
@@ -846,7 +846,6 @@ RestartScan:
 	 */
 	lastvecindex = -1;
 	while (entry->start < end) {
-
 		/*
 		 * check for contiguity
 		 */

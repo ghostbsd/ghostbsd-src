@@ -46,14 +46,12 @@
 #include <sys/sunddi.h>
 #include <sys/zfeature.h>
 #include <sys/policy.h>
+#include <sys/zfs_vfsops.h>
 #include <sys/zfs_znode.h>
 #include <sys/zvol.h>
 #include <sys/zthr.h>
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
-#ifdef _KERNEL
-#include <sys/zfs_vfsops.h>
-#endif
 
 /*
  * Filesystem and Snapshot Limits
@@ -121,13 +119,6 @@
  * and updated by dsl_fs_ss_count_adjust(). A new limit value is setup in
  * dsl_dir_activate_fs_ss_limit() and the counts are adjusted, if necessary, by
  * dsl_dir_init_fs_ss_count().
- *
- * There is a special case when we receive a filesystem that already exists. In
- * this case a temporary clone name of %X is created (see dmu_recv_begin). We
- * never update the filesystem counts for temporary clones.
- *
- * Likewise, we do not update the snapshot counts for temporary snapshots,
- * such as those created by zfs diff.
  */
 
 extern inline dsl_dir_phys_t *dsl_dir_phys(dsl_dir_t *dd);
@@ -593,11 +584,9 @@ dsl_dir_init_fs_ss_count(dsl_dir_t *dd, dmu_tx_t *tx)
 		    &chld_dd));
 
 		/*
-		 * Ignore hidden ($FREE, $MOS & $ORIGIN) objsets and
-		 * temporary datasets.
+		 * Ignore hidden ($FREE, $MOS & $ORIGIN) objsets.
 		 */
-		if (chld_dd->dd_myname[0] == '$' ||
-		    chld_dd->dd_myname[0] == '%') {
+		if (chld_dd->dd_myname[0] == '$') {
 			dsl_dir_rele(chld_dd, FTAG);
 			continue;
 		}
@@ -910,14 +899,12 @@ dsl_fs_ss_count_adjust(dsl_dir_t *dd, int64_t delta, const char *prop,
 	    strcmp(prop, DD_FIELD_SNAPSHOT_COUNT) == 0);
 
 	/*
-	 * When we receive an incremental stream into a filesystem that already
-	 * exists, a temporary clone is created.  We don't count this temporary
-	 * clone, whose name begins with a '%'. We also ignore hidden ($FREE,
-	 * $MOS & $ORIGIN) objsets.
+	 * We don't do accounting for hidden ($FREE, $MOS & $ORIGIN) objsets.
 	 */
-	if ((dd->dd_myname[0] == '%' || dd->dd_myname[0] == '$') &&
-	    strcmp(prop, DD_FIELD_FILESYSTEM_COUNT) == 0)
+	if (dd->dd_myname[0] == '$' && strcmp(prop,
+	    DD_FIELD_FILESYSTEM_COUNT) == 0) {
 		return;
+	}
 
 	/*
 	 * e.g. if renaming a dataset with no snapshots, count adjustment is 0
@@ -2135,6 +2122,8 @@ dsl_dir_rename_sync(void *arg, dmu_tx_t *tx)
 	VERIFY0(zap_add(mos, dsl_dir_phys(newparent)->dd_child_dir_zapobj,
 	    dd->dd_myname, 8, 1, &dd->dd_object, tx));
 
+	/* TODO: A rename callback to avoid these layering violations. */
+	zfsvfs_update_fromname(ddra->ddra_oldname, ddra->ddra_newname);
 	zvol_rename_minors(dp->dp_spa, ddra->ddra_oldname,
 	    ddra->ddra_newname, B_TRUE);
 

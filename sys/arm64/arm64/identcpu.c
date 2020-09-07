@@ -82,6 +82,7 @@ sysctl_hw_machine(SYSCTL_HANDLER_ARGS)
 	static const char machine32[] = "arm";
 #endif
 	int error;
+
 #ifdef SCTL_MASK32
 	if ((req->flags & SCTL_MASK32) != 0 && adaptive_machine_arch)
 		error = SYSCTL_OUT(req, machine32, sizeof(machine32));
@@ -188,6 +189,7 @@ static const struct cpu_parts cpu_parts_arm[] = {
 	{ CPU_PART_NEOVERSE_N1, "Neoverse-N1" },
 	CPU_PART_NONE,
 };
+
 /* Cavium */
 static const struct cpu_parts cpu_parts_cavium[] = {
 	{ CPU_PART_THUNDERX, "ThunderX" },

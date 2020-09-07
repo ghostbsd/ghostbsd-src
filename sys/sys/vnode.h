@@ -522,7 +522,6 @@ extern struct vnodeop_desc *vnodeop_descs[];
 #define	VOPARG_OFFSETTO(s_type, s_offset, struct_p) \
     ((s_type)(((char*)(struct_p)) + (s_offset)))
 
-
 #ifdef DEBUG_VFS_LOCKS
 /*
  * Support code to aid in debugging VFS locking problems.  Not totally
@@ -569,7 +568,6 @@ void	assert_vop_unlocked(struct vnode *vp, const char *str);
 #define ASSERT_VOP_NOT_IN_SEQC(vp)	((void)0)
 
 #endif /* DEBUG_VFS_LOCKS */
-
 
 /*
  * This call works for vnodes in the kernel.
@@ -690,7 +688,6 @@ void	vget_finish_ref(struct vnode *vp, enum vgetstate vs);
 void	vget_abort(struct vnode *vp, enum vgetstate vs);
 void	vgone(struct vnode *vp);
 void	vhold(struct vnode *);
-void	vholdl(struct vnode *);
 void	vholdnz(struct vnode *);
 bool	vhold_smr(struct vnode *);
 void	vinactive(struct vnode *vp);
@@ -976,6 +973,11 @@ vrefcnt(struct vnode *vp)
 
 	return (vp->v_usecount);
 }
+
+#define	vholdl(vp)	do {						\
+	ASSERT_VI_LOCKED(vp, __func__);					\
+	vhold(vp);							\
+} while (0)
 
 #define	vrefl(vp)	do {						\
 	ASSERT_VI_LOCKED(vp, __func__);					\

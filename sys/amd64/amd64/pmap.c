@@ -1521,7 +1521,7 @@ static void
 nkpt_init(vm_paddr_t addr)
 {
 	int pt_pages;
-	
+
 #ifdef NKPT
 	pt_pages = NKPT;
 #else
@@ -3682,7 +3682,6 @@ pmap_map(vm_offset_t *virt, vm_paddr_t start, vm_paddr_t end, int prot)
 	return PHYS_TO_DMAP(start);
 }
 
-
 /*
  * Add a list of wired pages to the kva
  * this routine is only used for temporary
@@ -3755,7 +3754,7 @@ pmap_add_delayed_free_list(vm_page_t m, struct spglist *free,
 		m->flags &= ~PG_ZERO;
 	SLIST_INSERT_HEAD(free, m, plinks.s.ss);
 }
-	
+
 /*
  * Inserts the specified page table page into the specified pmap's collection
  * of idle page table pages.  Each of a pmap's page table pages is responsible
@@ -4102,6 +4101,21 @@ pmap_pinit(pmap_t pmap)
 	return (pmap_pinit_type(pmap, PT_X86, pmap_flags));
 }
 
+static void
+pmap_allocpte_free_unref(pmap_t pmap, vm_offset_t va, pt_entry_t *pte)
+{
+	vm_page_t mpg;
+	struct spglist free;
+
+	mpg = PHYS_TO_VM_PAGE(*pte & PG_FRAME);
+	if (mpg->ref_count != 0)
+		return;
+	SLIST_INIT(&free);
+	_pmap_unwire_ptp(pmap, va, mpg, &free);
+	pmap_invalidate_page(pmap, va);
+	vm_page_free_pages_toq(&free, true);
+}
+
 static pml4_entry_t *
 pmap_allocpte_getpml4(pmap_t pmap, struct rwlock **lockp, vm_offset_t va,
     bool addref)
@@ -4158,8 +4172,12 @@ pmap_allocpte_getpdp(pmap_t pmap, struct rwlock **lockp, vm_offset_t va,
 	if ((*pml4 & PG_V) == 0) {
 		/* Have to allocate a new pdp, recurse */
 		if (_pmap_allocpte(pmap, pmap_pml4e_pindex(va), lockp, va) ==
-		    NULL)
+		    NULL) {
+			if (pmap_is_la57(pmap))
+				pmap_allocpte_free_unref(pmap, va,
+				    pmap_pml5e(pmap, va));
 			return (NULL);
+		}
 		allocated = true;
 	} else {
 		allocated = false;
@@ -4333,6 +4351,8 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp,
 			/* Have to allocate a new pd, recurse */
 			if (_pmap_allocpte(pmap, pmap_pdpe_pindex(va),
 			    lockp, va) == NULL) {
+				pmap_allocpte_free_unref(pmap, va,
+				    pmap_pml4e(pmap, va));
 				vm_page_unwire_noq(m);
 				vm_page_free_zero(m);
 				return (NULL);
@@ -4447,7 +4467,6 @@ retry:
 	}
 	return (m);
 }
-
 
 /***************************************************
  * Pmap allocation/deallocation routines.
@@ -4644,7 +4663,6 @@ pmap_growkernel(vm_offset_t addr)
 		}
 	}
 }
-
 
 /***************************************************
  * page management routines.
@@ -5871,7 +5889,6 @@ pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 
 	lock = NULL;
 	for (; sva < eva; sva = va_next) {
-
 		if (pmap->pm_stats.resident_count == 0)
 			break;
 
@@ -6159,10 +6176,9 @@ pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t prot)
 	 * fails.  In that case, stale TLB entries are immediately
 	 * invalidated.
 	 */
-	
+
 	PMAP_LOCK(pmap);
 	for (; sva < eva; sva = va_next) {
-
 		pml4e = pmap_pml4e(pmap, sva);
 		if ((*pml4e & PG_V) == 0) {
 			va_next = (sva + NBPML4) & ~PML4MASK;
@@ -9133,7 +9149,7 @@ pmap_mincore(pmap_t pmap, vm_offset_t addr, vm_paddr_t *pap)
 			/* Compute the physical address of the 4KB page. */
 			pa = ((*pdep & PG_PS_FRAME) | (addr & PDRMASK)) &
 			    PG_FRAME;
-			val = MINCORE_SUPER;
+			val = MINCORE_PSIND(1);
 		} else {
 			pte = *pmap_pde_to_pte(pdep, addr);
 			pa = pte & PG_FRAME;

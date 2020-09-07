@@ -148,6 +148,7 @@ _LIBRARIES=	\
 		ncurses \
 		ncursesw \
 		netgraph \
+		netmap \
 		ngatm \
 		nv \
 		nvpair \
@@ -392,6 +393,8 @@ _DP_zfs_core=	nvpair
 _DP_zpool=	md pthread z icp spl nvpair avl umem
 _DP_zutil=	avl tpool
 _DP_be=		zfs spl nvpair
+_DP_netmap=
+_DP_ifconfig=	m
 
 # OFED support
 .if ${MK_OFED} != "no"

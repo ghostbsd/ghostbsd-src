@@ -2625,7 +2625,6 @@ sched_sync(void)
 				wdog_kern_pat(WD_LASTVAL);
 				mtx_lock(&sync_mtx);
 			}
-
 		}
 		if (syncer_state == SYNCER_FINAL_DELAY && syncer_final_iter > 0)
 			syncer_final_iter--;
@@ -3225,15 +3224,6 @@ vhold(struct vnode *vp)
 	    ("%s: wrong hold count %d", __func__, old));
 	if (old == 0)
 		vn_freevnodes_dec();
-}
-
-void
-vholdl(struct vnode *vp)
-{
-
-	ASSERT_VI_LOCKED(vp, __func__);
-	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
-	vhold(vp);
 }
 
 void
@@ -3851,6 +3841,7 @@ vgonel(struct vnode *vp)
 		VNASSERT(vp->v_holdcnt > 0, vp, ("vnode without hold count"));
 		VI_UNLOCK(vp);
 	}
+	cache_purge_vgone(vp);
 	vfs_notify_upper(vp, VFS_NOTIFY_UPPER_RECLAIM);
 
 	/*
@@ -3924,7 +3915,6 @@ vgonel(struct vnode *vp)
 	 * Delete from old mount point vnode list.
 	 */
 	delmntque(vp);
-	cache_purge_vgone(vp);
 	/*
 	 * Done with purge, reset to the standard lock and invalidate
 	 * the vnode.

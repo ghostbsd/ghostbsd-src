@@ -2868,7 +2868,8 @@ spa_load(spa_t *spa, spa_load_state_t state, spa_import_type_t type)
 			spa->spa_loaded_ts.tv_nsec = 0;
 		}
 		if (error != EBADF) {
-			zfs_ereport_post(ereport, spa, NULL, NULL, NULL, 0, 0);
+			(void) zfs_ereport_post(ereport, spa,
+			    NULL, NULL, NULL, 0, 0);
 		}
 	}
 	spa->spa_load_state = error ? SPA_LOAD_ERROR : SPA_LOAD_NONE;
@@ -3201,7 +3202,8 @@ spa_verify_host(spa_t *spa, nvlist_t *mos_config)
 			cmn_err(CE_WARN, "pool '%s' could not be "
 			    "loaded as it was last accessed by "
 			    "another system (host: %s hostid: 0x%llx). "
-			    "See: http://illumos.org/msg/ZFS-8000-EY",
+			    "See: https://openzfs.github.io/openzfs-docs/msg/"
+			    "ZFS-8000-EY",
 			    spa_name(spa), hostname, (u_longlong_t)hostid);
 			spa_load_failed(spa, "hostid verification failed: pool "
 			    "last accessed by host: %s (hostid: 0x%llx)",

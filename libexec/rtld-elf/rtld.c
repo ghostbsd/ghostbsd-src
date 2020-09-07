@@ -1089,7 +1089,10 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
     *dyn_runpath = NULL;
 
     obj->bind_now = false;
-    for (dynp = obj->dynamic;  dynp->d_tag != DT_NULL;  dynp++) {
+    dynp = obj->dynamic;
+    if (dynp == NULL)
+	return;
+    for (;  dynp->d_tag != DT_NULL;  dynp++) {
 	switch (dynp->d_tag) {
 
 	case DT_REL:
@@ -3010,11 +3013,8 @@ relocate_object(Obj_Entry *obj, bool bind_now, Obj_Entry *rtldobj,
 		dbg("relocating \"%s\"", obj->path);
 
 	if (obj->symtab == NULL || obj->strtab == NULL ||
-	    !(obj->valid_hash_sysv || obj->valid_hash_gnu)) {
-		_rtld_error("%s: Shared object has no run-time symbol table",
-			    obj->path);
-		return (-1);
-	}
+	    !(obj->valid_hash_sysv || obj->valid_hash_gnu))
+		dbg("object %s has no run-time symbol table", obj->path);
 
 	/* There are relocations to the write-protected text segment. */
 	if (obj->textrel && reloc_textrel_prot(obj, true) != 0)
