@@ -303,6 +303,7 @@ device		mwl			# Marvell 88W8363 802.11n wireless NICs.
 device		ral			# Ralink Technology RT2500 wireless NICs.
 device		rsu			# Realtek RTL8188SU/RTL8192SU	USB IEEE 802.11b/g/n wireless NICs.
 device		rum			# Ralink Technology USB IEEE 802.11a/b/g wireless network device
+device		runfw			# Firmware Module for Ralink Technology USB IEEE 802.11a/b/g wireless network device
 device		rtwn		# Realtek IEEE 802.11 wireless network driver
 device		rtwnfw		# Firmware	Module for Realtek Wireless driver
 device		rtwn_usb	# Realtek USB device glue
