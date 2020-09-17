@@ -644,11 +644,19 @@ struct sysent freebsd32_sysent[] = {
 	{ AS(freebsd32_mknodat_args), (sy_call_t *)freebsd32_mknodat, AUE_MKNODAT, NULL, 0, 0, SYF_CAPENABLED, SY_THR_STATIC },	/* 559 = freebsd32_mknodat */
 #endif
 	{ AS(freebsd32_kevent_args), (sy_call_t *)freebsd32_kevent, AUE_KEVENT, NULL, 0, 0, SYF_CAPENABLED, SY_THR_STATIC },	/* 560 = freebsd32_kevent */
-	{ AS(freebsd32_cpuset_getdomain_args), (sy_call_t *)freebsd32_cpuset_getdomain, AUE_NULL, NULL, 0, 0, 0, SY_THR_STATIC },	/* 561 = freebsd32_cpuset_getdomain */
-	{ AS(freebsd32_cpuset_setdomain_args), (sy_call_t *)freebsd32_cpuset_setdomain, AUE_NULL, NULL, 0, 0, 0, SY_THR_STATIC },	/* 562 = freebsd32_cpuset_setdomain */
+	{ AS(freebsd32_cpuset_getdomain_args), (sy_call_t *)freebsd32_cpuset_getdomain, AUE_NULL, NULL, 0, 0, SYF_CAPENABLED, SY_THR_STATIC },	/* 561 = freebsd32_cpuset_getdomain */
+	{ AS(freebsd32_cpuset_setdomain_args), (sy_call_t *)freebsd32_cpuset_setdomain, AUE_NULL, NULL, 0, 0, SYF_CAPENABLED, SY_THR_STATIC },	/* 562 = freebsd32_cpuset_setdomain */
 	{ AS(getrandom_args), (sy_call_t *)sys_getrandom, AUE_NULL, NULL, 0, 0, SYF_CAPENABLED, SY_THR_STATIC },	/* 563 = getrandom */
 	{ AS(getfhat_args), (sy_call_t *)sys_getfhat, AUE_NULL, NULL, 0, 0, 0, SY_THR_STATIC },	/* 564 = getfhat */
 	{ AS(fhlink_args), (sy_call_t *)sys_fhlink, AUE_NULL, NULL, 0, 0, 0, SY_THR_STATIC },	/* 565 = fhlink */
 	{ AS(fhlinkat_args), (sy_call_t *)sys_fhlinkat, AUE_NULL, NULL, 0, 0, 0, SY_THR_STATIC },	/* 566 = fhlinkat */
 	{ AS(fhreadlink_args), (sy_call_t *)sys_fhreadlink, AUE_NULL, NULL, 0, 0, 0, SY_THR_STATIC },	/* 567 = fhreadlink */
+	{ 0, (sy_call_t *)nosys, AUE_NULL, NULL, 0, 0, 0, SY_THR_ABSENT },			/* 568 = funlinkat */
+	{ 0, (sy_call_t *)nosys, AUE_NULL, NULL, 0, 0, 0, SY_THR_ABSENT },			/* 569 = copy_file_range */
+	{ AS(freebsd32___sysctlbyname_args), (sy_call_t *)freebsd32___sysctlbyname, AUE_SYSCTL, NULL, 0, 0, SYF_CAPENABLED, SY_THR_STATIC },	/* 570 = freebsd32___sysctlbyname */
+	{ 0, (sy_call_t *)nosys, AUE_NULL, NULL, 0, 0, 0, SY_THR_ABSENT },			/* 571 = shm_open2 */
+	{ 0, (sy_call_t *)nosys, AUE_NULL, NULL, 0, 0, 0, SY_THR_ABSENT },			/* 572 = shm_rename */
+	{ 0, (sy_call_t *)nosys, AUE_NULL, NULL, 0, 0, 0, SY_THR_ABSENT },			/* 573 = sigfastblock */
+	{ 0, (sy_call_t *)nosys, AUE_NULL, NULL, 0, 0, 0, SY_THR_ABSENT },			/* 574 = __realpathat */
+	{ AS(close_range_args), (sy_call_t *)sys_close_range, AUE_CLOSERANGE, NULL, 0, 0, SYF_CAPENABLED, SY_THR_STATIC },	/* 575 = close_range */
 };

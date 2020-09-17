@@ -143,6 +143,7 @@ __DEFAULT_YES_OPTIONS = \
     MAIL \
     MAILWRAPPER \
     MAKE \
+    MALLOC_PRODUCTION \
     NDIS \
     NETCAT \
     NETGRAPH \
@@ -198,7 +199,9 @@ __DEFAULT_NO_OPTIONS = \
     BSD_CRTBEGIN \
     BSD_GREP \
     CLANG_EXTRAS \
+    CLANG_FORMAT \
     DTRACE_TESTS \
+    GH_BC \
     GNU_GREP_COMPAT \
     HESIOD \
     LIBSOFT \
@@ -407,7 +410,8 @@ BROKEN_OPTIONS+=BSD_CRTBEGIN
 .endif
 
 .if ${COMPILER_FEATURES:Mc++11} && \
-    (${__T} == "amd64" || ${__T} == "i386" || ${__T} == "powerpc64")
+    (${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "i386" || \
+     ${__T} == "powerpc64")
 __DEFAULT_YES_OPTIONS+=OPENMP
 .else
 __DEFAULT_NO_OPTIONS+=OPENMP
@@ -505,6 +509,10 @@ MK_DMAGENT:=	no
 MK_OPENSSH:=	no
 MK_KERBEROS:=	no
 MK_LDNS:=	no
+MK_PKGBOOTSTRAP:=	no
+MK_SVN:=		no
+MK_SVNLITE:=		no
+MK_WIRELESS:=		no
 .endif
 
 .if ${MK_LDNS} == "no"
@@ -518,11 +526,6 @@ MK_AUTHPF:=	no
 
 .if ${MK_OFED} == "no"
 MK_OFED_EXTRA:=	no
-.endif
-
-.if ${MK_PORTSNAP} == "no"
-# freebsd-update depends on phttpget from portsnap
-MK_FREEBSD_UPDATE:=	no
 .endif
 
 .if ${MK_TESTS} == "no"
@@ -557,6 +560,7 @@ MK_LLDB:=	no
 
 .if ${MK_CLANG} == "no"
 MK_CLANG_EXTRAS:= no
+MK_CLANG_FORMAT:= no
 MK_CLANG_FULL:= no
 MK_LLVM_COV:= no
 .endif

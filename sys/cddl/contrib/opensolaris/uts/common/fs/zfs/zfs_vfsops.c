@@ -268,7 +268,7 @@ zfs_quotactl(vfs_t *vfsp, int cmds, uid_t id, void *arg)
 		vfs_unbusy(vfsp);
 		break;
 	case Q_SETQUOTA:
-		error = copyin(&dqblk, arg, sizeof(dqblk));
+		error = copyin(arg, &dqblk, sizeof(dqblk));
 		if (error == 0)
 			error = zfs_set_userquota(zfsvfs, quota_type,
 						  "", id, dbtob(dqblk.dqb_bhardlimit));
@@ -1245,6 +1245,9 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 	if (mounting) {
 		boolean_t readonly;
 
+		ASSERT3P(zfsvfs->z_kstat.dk_kstats, ==, NULL);
+		dataset_kstats_create(&zfsvfs->z_kstat, zfsvfs->z_os);
+
 		/*
 		 * During replay we remove the read only flag to
 		 * allow replays to succeed.
@@ -1333,6 +1336,7 @@ zfsvfs_free(zfsvfs_t *zfsvfs)
 	rw_destroy(&zfsvfs->z_fuid_lock);
 	for (i = 0; i != ZFS_OBJ_MTX_SZ; i++)
 		mutex_destroy(&zfsvfs->z_hold_mtx[i]);
+	dataset_kstats_destroy(&zfsvfs->z_kstat);
 	kmem_free(zfsvfs, sizeof (zfsvfs_t));
 }
 

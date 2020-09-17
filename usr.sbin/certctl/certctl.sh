@@ -30,11 +30,7 @@
 ############################################################ CONFIGURATION
 
 : ${DESTDIR:=}
-: ${TRUSTPATH:=${DESTDIR}/usr/share/certs/trusted:${DESTDIR}/usr/local/share/certs:${DESTDIR}/usr/local/etc/ssl/certs}
-: ${BLACKLISTPATH:=${DESTDIR}/usr/share/certs/blacklisted:${DESTDIR}/usr/local/etc/ssl/blacklisted}
-: ${CERTDESTDIR:=${DESTDIR}/etc/ssl/certs}
-: ${BLACKLISTDESTDIR:=${DESTDIR}/etc/ssl/blacklisted}
-: ${FILEPAT:="\.pem$|\.crt$|\.cer$|\.crl$|\.0$"}
+: ${FILEPAT:="\.pem$|\.crt$|\.cer$|\.crl$"}
 : ${VERBOSE:=0}
 
 ############################################################ GLOBALS
@@ -42,6 +38,7 @@
 SCRIPTNAME="${0##*/}"
 ERRORS=0
 NOOP=0
+UNPRIV=0
 
 ############################################################ FUNCTIONS
 
@@ -59,36 +56,63 @@ do_hash()
 	fi
 }
 
+get_decimal()
+{
+	local checkdir hash decimal
+
+	checkdir=$1
+	hash=$2
+	decimal=0
+
+	while [ -e "$checkdir/$hash.$decimal" ]; do
+		decimal=$((decimal + 1))
+	done
+
+	echo ${decimal}
+	return 0
+}
+
 create_trusted_link()
 {
-	local hash
+	local blisthash certhash hash
+	local suffix
 
 	hash=$( do_hash "$1" ) || return
-	if [ -e "$BLACKLISTDESTDIR/$hash.0" ]; then
-		echo "Skipping blacklisted certificate $1 ($BLACKLISTDESTDIR/$hash.0)"
-		return 1
-	fi
-	[ $VERBOSE -gt 0 ] && echo "Adding $hash.0 to trust store"
-	[ $NOOP -eq 0 ] && install -lrs $(realpath "$1") "$CERTDESTDIR/$hash.0"
+	certhash=$( openssl x509 -sha1 -in "$1" -noout -fingerprint )
+	for blistfile in $(find $BLACKLISTDESTDIR -name "$hash.*"); do
+		blisthash=$( openssl x509 -sha1 -in "$blistfile" -noout -fingerprint )
+		if [ "$certhash" = "$blisthash" ]; then
+			echo "Skipping blacklisted certificate $1 ($blistfile)"
+			return 1
+		fi
+	done
+	suffix=$(get_decimal "$CERTDESTDIR" "$hash")
+	[ $VERBOSE -gt 0 ] && echo "Adding $hash.$suffix to trust store"
+	[ $NOOP -eq 0 ] && \
+		install ${INSTALLFLAGS} -lrs $(realpath "$1") "$CERTDESTDIR/$hash.$suffix"
 }
 
 create_blacklisted()
 {
 	local hash srcfile filename
+	local suffix
 
 	# If it exists as a file, we'll try that; otherwise, we'll scan
 	if [ -e "$1" ]; then
 		hash=$( do_hash "$1" ) || return
 		srcfile=$(realpath "$1")
-		filename="$hash.0"
+		suffix=$(get_decimal "$BLACKLISTDESTDIR" "$hash")
+		filename="$hash.$suffix"
 	elif [ -e "${CERTDESTDIR}/$1" ];  then
 		srcfile=$(realpath "${CERTDESTDIR}/$1")
-		filename="$1"
+		hash=$(echo "$1" | sed -Ee 's/\.([0-9])+$//')
+		suffix=$(get_decimal "$BLACKLISTDESTDIR" "$hash")
+		filename="$hash.$suffix"
 	else
 		return
 	fi
 	[ $VERBOSE -gt 0 ] && echo "Adding $filename to blacklist"
-	[ $NOOP -eq 0 ] && install -lrs "$srcfile" "$BLACKLISTDESTDIR/$filename"
+	[ $NOOP -eq 0 ] && install ${INSTALLFLAGS} -lrs "$srcfile" "$BLACKLISTDESTDIR/$filename"
 }
 
 do_scan()
@@ -105,7 +129,7 @@ do_scan()
 		[ -d "$CPATH" ] || continue
 		echo "Scanning $CPATH for certificates..."
 		for CFILE in $(ls -1 "${CPATH}" | grep -Ee "${FILEPAT}"); do
-			[ -e "$CPATH/$CFILE" ] || continue
+			[ -e "$CPATH/$CFILE" -a $UNPRIV -eq 0 ] || continue
 			[ $VERBOSE -gt 0 ] && echo "Reading $CFILE"
 			"$CFUNC" "$CPATH/$CFILE"
 		done
@@ -118,7 +142,7 @@ do_list()
 
 	if [ -e "$1" ]; then
 		cd "$1"
-		for CFILE in *.0; do
+		for CFILE in *.[0-9]; do
 			if [ ! -s "$CFILE" ]; then
 				echo "Unable to read $CFILE" >&2
 				ERRORS=$(( $ERRORS + 1 ))
@@ -177,14 +201,20 @@ cmd_blacklist()
 
 cmd_unblacklist()
 {
-	local BFILE hash
+	local BFILE blisthash certhash hash
 
 	shift # verb
 	for BFILE in "$@"; do
 		if [ -s "$BFILE" ]; then
 			hash=$( do_hash "$BFILE" )
-			echo "Removing $hash.0 from blacklist"
-			[ $NOOP -eq 0 ] && rm -f "$BLACKLISTDESTDIR/$hash.0"
+			certhash=$( openssl x509 -sha1 -in "$BFILE" -noout -fingerprint )
+			for BLISTEDFILE in $(find $BLACKLISTDESTDIR -name "$hash.*"); do
+				blisthash=$( openssl x509 -sha1 -in "$BLISTEDFILE" -noout -fingerprint )
+				if [ "$certhash" = "$blisthash" ]; then
+					echo "Removing $(basename "$BLISTEDFILE") from blacklist"
+					[ $NOOP -eq 0 ] && rm -f $BLISTEDFILE
+				fi
+			done
 		elif [ -e "$BLACKLISTDESTDIR/$BFILE" ]; then
 			echo "Removing $BFILE from blacklist"
 			[ $NOOP -eq 0 ] && rm -f "$BLACKLISTDESTDIR/$BFILE"
@@ -209,7 +239,7 @@ usage()
 	echo "		List trusted certificates"
 	echo "	$SCRIPTNAME [-v] blacklisted"
 	echo "		List blacklisted certificates"
-	echo "	$SCRIPTNAME [-nv] rehash"
+	echo "	$SCRIPTNAME [-nUv] [-D <destdir>] [-M <metalog>] rehash"
 	echo "		Generate hash links for all certificates"
 	echo "	$SCRIPTNAME [-nv] blacklist <file>"
 	echo "		Add <file> to the list of blacklisted certificates"
@@ -220,13 +250,24 @@ usage()
 
 ############################################################ MAIN
 
-while getopts nv flag; do
+while getopts D:M:nUv flag; do
 	case "$flag" in
+	D) DESTDIR=${OPTARG} ;;
+	M) METALOG=${OPTARG} ;;
 	n) NOOP=1 ;;
+	U) UNPRIV=1 ;;
 	v) VERBOSE=$(( $VERBOSE + 1 )) ;;
 	esac
 done
 shift $(( $OPTIND - 1 ))
+
+: ${METALOG:=${DESTDIR}/METALOG}
+INSTALLFLAGS=
+[ $UNPRIV -eq 1 ] && INSTALLFLAGS=-U -M ${METALOG} -D ${DESTDIR}
+: ${TRUSTPATH:=${DESTDIR}/usr/share/certs/trusted:${DESTDIR}/usr/local/share/certs:${DESTDIR}/usr/local/etc/ssl/certs}
+: ${BLACKLISTPATH:=${DESTDIR}/usr/share/certs/blacklisted:${DESTDIR}/usr/local/etc/ssl/blacklisted}
+: ${CERTDESTDIR:=${DESTDIR}/etc/ssl/certs}
+: ${BLACKLISTDESTDIR:=${DESTDIR}/etc/ssl/blacklisted}
 
 [ $# -gt 0 ] || usage
 case "$1" in

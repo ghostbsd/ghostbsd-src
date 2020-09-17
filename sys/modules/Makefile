@@ -8,6 +8,8 @@ SUBDIR_PARALLEL=
 # Modules that include binary-only blobs of microcode should be selectable by
 # MK_SOURCELESS_UCODE option (see below).
 
+.include "${SYSDIR}/conf/config.mk"
+
 .if defined(MODULES_OVERRIDE) && !defined(ALL_MODULES)
 SUBDIR=${MODULES_OVERRIDE}
 .else
@@ -158,6 +160,8 @@ SUBDIR=	\
         ${_ibcore} \
 	${_ibcs2} \
 	${_ichwd} \
+	${_ice} \
+	${_ice_ddp} \
 	${_ida} \
 	if_bridge \
 	if_disc \
@@ -339,9 +343,11 @@ SUBDIR=	\
 	${_rtwnfw} \
 	${_s3} \
 	${_safe} \
+	safexcel \
 	${_sbni} \
 	scc \
 	${_scsi_low} \
+	${_sctp} \
 	sdhci \
 	${_sdhci_acpi} \
 	sdhci_pci \
@@ -368,6 +374,7 @@ SUBDIR=	\
 	ste \
 	${_stg} \
 	stge \
+	${_sume} \
 	${_superio} \
 	${_sym} \
 	${_syscons} \
@@ -418,6 +425,7 @@ SUBDIR=	\
 	${_wpi} \
 	${_wpifw} \
 	${_x86bios} \
+	xdr \
 	${_xe} \
 	xl \
 	xz \
@@ -457,8 +465,11 @@ _if_enc=	if_enc
 _if_gif=	if_gif
 _if_gre=	if_gre
 _ipfw_pmod=	ipfw_pmod
-.if ${MK_IPSEC_SUPPORT} != "no"
+.if ${KERN_OPTS:MIPSEC_SUPPORT} && !${KERN_OPTS:MIPSEC}
 _ipsec=		ipsec
+.endif
+.if ${MK_SCTP_SUPPORT} != "no" || ${MK_SCTP} != "no"
+_sctp=		sctp
 .endif
 .endif
 
@@ -557,6 +568,13 @@ _rtwnfw=	rtwnfw
 	${MACHINE_ARCH} != "powerpc" && ${MACHINE_ARCH} != "powerpcspe" && \
 	${MACHINE_CPUARCH} != "riscv"
 _cxgbe=		cxgbe
+.endif
+
+.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "arm64"
+_ice=		ice
+.if ${MK_SOURCELESS_UCODE} != "no"
+_ice_ddp=	ice_ddp
+.endif
 .endif
 
 # These rely on 64bit atomics
@@ -744,6 +762,7 @@ _nvdimm=	nvdimm
 _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
+_sume=		sume
 .if ${MK_SOURCELESS_UCODE} != "no"
 _qlxgbe=	qlxgbe
 _qlnx=		qlnx
@@ -819,6 +838,8 @@ _wi=		wi
 _drm2=		drm2
 .endif
 _ipmi=		ipmi
+_ixl=		ixl
+_nvram=		opal_nvram
 .endif
 .if ${MACHINE_ARCH} == "powerpc64" || ${MACHINE_ARCH} == "powerpc"
 # Don't build powermac_nvram for powerpcspe, it's never supported.
@@ -861,8 +882,6 @@ afterinstall: .PHONY
 		kldxref ${DESTDIR}${KMODDIR}; \
 	fi
 .endif
-
-.include "${SYSDIR}/conf/config.mk"
 
 SUBDIR:= ${SUBDIR:u:O}
 

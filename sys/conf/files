@@ -163,6 +163,7 @@ cddl/contrib/opensolaris/uts/common/fs/zfs/bpobj.c			optional zfs compile-with "
 cddl/contrib/opensolaris/uts/common/fs/zfs/bptree.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/bqueue.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/cityhash.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/dataset_kstats.c		optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/dbuf.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/dbuf_stats.c		optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/ddt.c			optional zfs compile-with "${ZFS_C}"
@@ -740,6 +741,7 @@ dev/acpica/Osd/OsdSynch.c	optional acpi
 dev/acpica/Osd/OsdTable.c	optional acpi
 dev/acpica/acpi.c		optional acpi
 dev/acpica/acpi_acad.c		optional acpi
+dev/acpica/acpi_apei.c		optional acpi
 dev/acpica/acpi_battery.c	optional acpi
 dev/acpica/acpi_button.c	optional acpi
 dev/acpica/acpi_cmbat.c		optional acpi
@@ -1705,6 +1707,10 @@ dev/e1000/e1000_osdep.c		optional em \
 	compile-with "${NORMAL_C} -I$S/dev/e1000"
 dev/et/if_et.c			optional et
 dev/ena/ena.c			optional ena \
+	compile-with "${NORMAL_C} -I$S/contrib"
+dev/ena/ena_datapath.c		optional ena \
+	compile-with "${NORMAL_C} -I$S/contrib"
+dev/ena/ena_netmap.c		optional ena \
 	compile-with "${NORMAL_C} -I$S/contrib"
 dev/ena/ena_sysctl.c 		optional ena \
 	compile-with "${NORMAL_C} -I$S/contrib"
@@ -3437,6 +3443,7 @@ dev/usb/serial/usb_serial.c 	optional ucom | u3g | uark | ubsa | ubser | \
 #
 # USB misc drivers
 #
+dev/usb/misc/cp2112.c		optional cp2112
 dev/usb/misc/ufm.c		optional ufm
 dev/usb/misc/udbp.c		optional udbp
 dev/usb/misc/ugold.c		optional ugold
@@ -4070,6 +4077,7 @@ kgssapi/gsstest.c		optional kgssapi_debug
 # the file should be moved to conf/files.<arch> from here.
 #
 libkern/arc4random.c		standard
+libkern/arc4random_uniform.c	standard
 crypto/chacha20/chacha.c	standard
 libkern/asprintf.c		standard
 libkern/bcd.c			standard
@@ -5041,9 +5049,9 @@ xen/xenbus/xenbusb.c		optional xenhvm
 xen/xenbus/xenbusb_front.c	optional xenhvm
 xen/xenbus/xenbusb_back.c	optional xenhvm
 xen/xenmem/xenmem_if.m		optional xenhvm
-xdr/xdr.c			optional krpc | nfslockd | nfscl | nfsd
-xdr/xdr_array.c			optional krpc | nfslockd | nfscl | nfsd
-xdr/xdr_mbuf.c			optional krpc | nfslockd | nfscl | nfsd
-xdr/xdr_mem.c			optional krpc | nfslockd | nfscl | nfsd
-xdr/xdr_reference.c		optional krpc | nfslockd | nfscl | nfsd
-xdr/xdr_sizeof.c		optional krpc | nfslockd | nfscl | nfsd
+xdr/xdr.c			optional xdr | krpc | nfslockd | nfscl | nfsd
+xdr/xdr_array.c			optional xdr | krpc | nfslockd | nfscl | nfsd
+xdr/xdr_mbuf.c			optional xdr | krpc | nfslockd | nfscl | nfsd
+xdr/xdr_mem.c			optional xdr | krpc | nfslockd | nfscl | nfsd
+xdr/xdr_reference.c		optional xdr | krpc | nfslockd | nfscl | nfsd
+xdr/xdr_sizeof.c		optional xdr | krpc | nfslockd | nfscl | nfsd

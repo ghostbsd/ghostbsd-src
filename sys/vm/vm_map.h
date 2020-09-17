@@ -224,6 +224,8 @@ struct vm_map {
 #define	vm_map_max(map)		vm_map_max_KBI((map))
 #define	vm_map_min(map)		vm_map_min_KBI((map))
 #define	vm_map_pmap(map)	vm_map_pmap_KBI((map))
+#define	vm_map_range_valid(map, start, end)	\
+	vm_map_range_valid_KBI((map), (start), (end))
 #else
 static __inline vm_offset_t
 vm_map_max(const struct vm_map *map)
@@ -325,6 +327,7 @@ void vm_map_wait_busy(vm_map_t map);
 vm_offset_t vm_map_max_KBI(const struct vm_map *map);
 vm_offset_t vm_map_min_KBI(const struct vm_map *map);
 pmap_t vm_map_pmap_KBI(vm_map_t map);
+bool vm_map_range_valid_KBI(vm_map_t map, vm_offset_t start, vm_offset_t end);
 
 #define	vm_map_lock(map)	_vm_map_lock(map, LOCK_FILE, LOCK_LINE)
 #define	vm_map_unlock(map)	_vm_map_unlock(map, LOCK_FILE, LOCK_LINE)
@@ -416,6 +419,8 @@ int vm_map_find(vm_map_t, vm_object_t, vm_ooffset_t, vm_offset_t *, vm_size_t,
     vm_offset_t, int, vm_prot_t, vm_prot_t, int);
 int vm_map_find_min(vm_map_t, vm_object_t, vm_ooffset_t, vm_offset_t *,
     vm_size_t, vm_offset_t, vm_offset_t, int, vm_prot_t, vm_prot_t, int);
+int vm_map_find_aligned(vm_map_t map, vm_offset_t *addr, vm_size_t length,
+    vm_offset_t max_addr, vm_offset_t alignment);
 int vm_map_fixed(vm_map_t, vm_object_t, vm_ooffset_t, vm_offset_t, vm_size_t,
     vm_prot_t, vm_prot_t, int);
 vm_offset_t vm_map_findspace(vm_map_t, vm_offset_t, vm_size_t);

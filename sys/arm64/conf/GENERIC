@@ -146,6 +146,7 @@ device  	smc		# SMSC LAN91C111
 device		vnic		# Cavium ThunderX NIC
 device		al_eth		# Annapurna Alpine Ethernet NIC
 device		dwc_rk		# Rockchip Designware
+device		dwc_socfpga	# Altera SOCFPGA Ethernet MAC
 
 # Block devices
 device		ahci
@@ -237,6 +238,9 @@ device		mv_ap806_gicp	# Marvell AP806 GICP
 # Real-time clock support
 device		aw_rtc		# Allwinner Real-time Clock
 device		mv_rtc		# Marvell Real-time Clock
+
+# Crypto accelerators
+device		safexcel	# Inside Secure EIP-97
 
 # Watchdog controllers
 device		aw_wdog		# Allwinner Watchdog

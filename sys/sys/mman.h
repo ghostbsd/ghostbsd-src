@@ -207,7 +207,7 @@ typedef	__size_t	size_t;
 struct file;
 
 struct shmfd {
-	size_t		shm_size;
+	size_t		shm_oldsize;
 	vm_object_t	shm_object;
 	int		shm_refs;
 	uid_t		shm_uid;
@@ -230,6 +230,7 @@ struct shmfd {
 
 	struct rangelock shm_rl;
 	struct mtx	shm_mtx;
+	vm_ooffset_t	shm_size;
 };
 #endif
 
@@ -244,6 +245,9 @@ void	shm_drop(struct shmfd *shmfd);
 int	shm_dotruncate(struct shmfd *shmfd, off_t length);
 
 extern struct fileops shm_ops;
+
+#define	MAP_32BIT_MAX_ADDR	((vm_offset_t)1 << 31)
+
 #else /* !_KERNEL */
 
 __BEGIN_DECLS

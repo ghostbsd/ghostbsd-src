@@ -48,7 +48,7 @@
 # upper case variables starting in column 1 are on one line w/o continuation.
 
 TYPE="FreeBSD"
-REVISION="12.1"
+REVISION="12.2"
 BRANCH=${BRANCH_OVERRIDE:-STABLE}
 RELEASE="${REVISION}-${BRANCH}"
 VERSION="${TYPE} ${RELEASE}"

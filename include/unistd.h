@@ -399,7 +399,7 @@ int	 ftruncate(int, off_t);
 #endif
 
 #if __POSIX_VISIBLE >= 199506
-int	 getlogin_r(char *, int);
+int	 getlogin_r(char *, size_t);
 #endif
 
 /* 1003.1-2001 */
@@ -494,6 +494,7 @@ struct crypt_data {
 int	 acct(const char *);
 int	 async_daemon(void);
 int	 check_utility_compat(const char *);
+int	 close_range(unsigned int, unsigned int, int);
 const char *
 	 crypt_get_format(void);
 char	*crypt_r(const char *, const char *, struct crypt_data *);

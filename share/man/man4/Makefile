@@ -119,6 +119,7 @@ MAN=	aac.4 \
 	cloudabi.4 \
 	cmx.4 \
 	${_coretemp.4} \
+	cp2112.4 \
 	${_cpuctl.4} \
 	cpufreq.4 \
 	crypto.4 \
@@ -182,6 +183,7 @@ MAN=	aac.4 \
 	gif.4 \
 	gpio.4 \
 	gpioiic.4 \
+	gpiokeys.4 \
 	gpioled.4 \
 	gpioths.4 \
 	gre.4 \
@@ -461,6 +463,7 @@ MAN=	aac.4 \
 	rue.4 \
 	sa.4 \
 	safe.4 \
+	safexcel.4 \
 	sbp.4 \
 	sbp_targ.4 \
 	scc.4 \
@@ -529,6 +532,7 @@ MAN=	aac.4 \
 	stf.4 \
 	stg.4 \
 	stge.4 \
+	${_sume.4} \
 	${_superio.4} \
 	sym.4 \
 	syncache.4 \
@@ -878,12 +882,14 @@ _qlxgbe.4=	qlxgbe.4
 _qlnxe.4=	qlnxe.4
 _sfxge.4=	sfxge.4
 _smartpqi.4=	smartpqi.4
+_sume.4=	sume.4
 
 MLINKS+=qlxge.4 if_qlxge.4
 MLINKS+=qlxgb.4 if_qlxgb.4
 MLINKS+=qlxgbe.4 if_qlxgbe.4
 MLINKS+=qlnxe.4 if_qlnxe.4
 MLINKS+=sfxge.4 if_sfxge.4
+MLINKS+=sume.4 if_sume.4
 
 .if ${MK_BHYVE} != "no"
 _bhyve.4=	bhyve.4

@@ -1066,7 +1066,10 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
     *dyn_runpath = NULL;
 
     obj->bind_now = false;
-    for (dynp = obj->dynamic;  dynp->d_tag != DT_NULL;  dynp++) {
+    dynp = obj->dynamic;
+    if (dynp == NULL)
+	return;
+    for (;  dynp->d_tag != DT_NULL;  dynp++) {
 	switch (dynp->d_tag) {
 
 	case DT_REL:
@@ -2807,7 +2810,7 @@ objlist_call_init(Objlist *list, RtldLockState *lockstate)
 	        (void *)elm->obj->init);
 	    LD_UTRACE(UTRACE_INIT_CALL, elm->obj, (void *)elm->obj->init,
 	        0, 0, elm->obj->path);
-	    call_initfini_pointer(elm->obj, elm->obj->init);
+	    call_init_pointer(elm->obj, elm->obj->init);
 	}
 	init_addr = (Elf_Addr *)elm->obj->init_array;
 	if (init_addr != NULL) {
@@ -2976,11 +2979,8 @@ relocate_object(Obj_Entry *obj, bool bind_now, Obj_Entry *rtldobj,
 		dbg("relocating \"%s\"", obj->path);
 
 	if (obj->symtab == NULL || obj->strtab == NULL ||
-	    !(obj->valid_hash_sysv || obj->valid_hash_gnu)) {
-		_rtld_error("%s: Shared object has no run-time symbol table",
-			    obj->path);
-		return (-1);
-	}
+	    !(obj->valid_hash_sysv || obj->valid_hash_gnu))
+		dbg("object %s has no run-time symbol table", obj->path);
 
 	/* There are relocations to the write-protected text segment. */
 	if (obj->textrel && reloc_textrel_prot(obj, true) != 0)
@@ -3064,7 +3064,8 @@ resolve_object_ifunc(Obj_Entry *obj, bool bind_now, int flags,
 		return (0);
 	obj->ifuncs_resolved = true;
 	if (!obj->irelative && !obj->irelative_nonplt &&
-	    !((obj->bind_now || bind_now) && obj->gnu_ifunc))
+	    !((obj->bind_now || bind_now) && obj->gnu_ifunc) &&
+	    !obj->non_plt_gnu_ifunc)
 		return (0);
 	if (obj_disable_relro(obj) == -1 ||
 	    (obj->irelative && reloc_iresolve(obj, lockstate) == -1) ||
@@ -3072,6 +3073,8 @@ resolve_object_ifunc(Obj_Entry *obj, bool bind_now, int flags,
 	    lockstate) == -1) ||
 	    ((obj->bind_now || bind_now) && obj->gnu_ifunc &&
 	    reloc_gnu_ifunc(obj, flags, lockstate) == -1) ||
+	    (obj->non_plt_gnu_ifunc && reloc_non_plt(obj, &obj_rtld,
+	    flags | SYMLOOK_IFUNC, lockstate) == -1) ||
 	    obj_enforce_relro(obj) == -1)
 		return (-1);
 	return (0);

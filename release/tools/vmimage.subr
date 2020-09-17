@@ -24,6 +24,7 @@ write_partition_layout() {
 			mkimg -s gpt -f ${VMFORMAT} \
 				-b ${BOOTFILES}/i386/pmbr/pmbr \
 				-p freebsd-boot/bootfs:=${BOOTFILES}/i386/gptboot/gptboot \
+				-p efi:=${BOOTFILES}/efi/boot1/boot1.efifat \
 				${SWAPOPT} \
 				-p freebsd-ufs/rootfs:=${VMBASE} \
 				-o ${VMIMAGE}
