@@ -335,19 +335,12 @@ device		bpf			# Berkeley packet filter
 # USB support
 options 	USB_DEBUG		      # enable debug msgs
 options 	USB_HOST_ALIGN=64	# Align usb buffers to cache line size.  
-device		aw_usbphy		      # Allwinner USB PHY
-device		rk_usb2phy		    # Rockchip USB2PHY
-device		rk_typec_phy		  # Rockchip TypeC PHY
 device		dwcotg			      # DWC OTG controller
 device		musb			        # Mentor Graphics USB OTG controller
 device		ohci			        # OHCI USB interface
 device		uhci			        # UHCI USB interface
 device		ehci			        # EHCI USB interface (USB 2.0)
-device		ehci_mv			      # Marvell EHCI USB interface
 device		xhci			        # XHCI USB interface (USB 3.0)
-device		dwc3			        # Synopsys DWC controller
-device		aw_dwc3			      # Allwinner DWC3 controller
-device		rk_dwc3			      # Rockchip DWC3 controller
 device		usb			          # USB Bus (required)
 device		ukbd			        # Keyboard
 device		umass			        # Disks/Mass storage - Requires scbus and da
