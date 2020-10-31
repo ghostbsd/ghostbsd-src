@@ -339,6 +339,7 @@ device		dwcotg			      # DWC OTG controller
 device		musb			        # Mentor Graphics USB OTG controller
 device		ohci			        # OHCI USB interface
 device		uhci			        # UHCI USB interface
+device    uhid              # USB generic HID support
 device		ehci			        # EHCI USB interface (USB 2.0)
 device		xhci			        # XHCI USB interface (USB 3.0)
 device		usb			          # USB Bus (required)
