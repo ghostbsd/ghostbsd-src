@@ -620,6 +620,11 @@ static struct cmd vxlan_cmds[] = {
 
 	DEF_CMD("vxlanflush", 0,		setvxlan_flush),
 	DEF_CMD("vxlanflushall", 1,		setvxlan_flush),
+
+	DEF_CMD("vxlanhwcsum",	IFCAP_VXLAN_HWCSUM,	setifcap),
+	DEF_CMD("-vxlanhwcsum",	-IFCAP_VXLAN_HWCSUM,	setifcap),
+	DEF_CMD("vxlanhwtso",	IFCAP_VXLAN_HWTSO,	setifcap),
+	DEF_CMD("-vxlanhwtso",	-IFCAP_VXLAN_HWTSO,	setifcap),
 };
 
 static struct afswtch af_vxlan = {
@@ -637,5 +642,5 @@ vxlan_ctor(void)
 		cmd_register(&vxlan_cmds[i]);
 	af_register(&af_vxlan);
 	callback_register(vxlan_cb, NULL);
-	clone_setdefcallback("vxlan", vxlan_create);
+	clone_setdefcallback_prefix("vxlan", vxlan_create);
 }

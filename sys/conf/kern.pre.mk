@@ -51,24 +51,14 @@ OBJCOPY?=	objcopy
 SIZE?=		size
 
 .if defined(DEBUG)
-_MINUS_O=	-O
 CTFFLAGS+=	-g
-.else
-.if ${MACHINE_CPUARCH} == "powerpc"
-_MINUS_O=	-O	# gcc miscompiles some code at -O2
-.else
-_MINUS_O=	-O2
 .endif
-.endif
-.if ${MACHINE_CPUARCH} == "amd64"
-.if ${COMPILER_TYPE} == "clang"
-COPTFLAGS?=-O2 -pipe
+.if ${MACHINE_CPUARCH} == "amd64" && ${COMPILER_TYPE} != "clang"
+_COPTFLAGS_EXTRA=-frename-registers
 .else
-COPTFLAGS?=-O2 -frename-registers -pipe
+_COPTFLAGS_EXTRA=
 .endif
-.else
-COPTFLAGS?=${_MINUS_O} -pipe
-.endif
+COPTFLAGS?=-O2 -pipe ${_COPTFLAGS_EXTRA}
 .if !empty(COPTFLAGS:M-O[23s]) && empty(COPTFLAGS:M-fno-strict-aliasing)
 COPTFLAGS+= -fno-strict-aliasing
 .endif
@@ -366,37 +356,6 @@ MKMODULESENV+=	DEBUG_FLAGS="${DEBUG}"
 .endif
 .if !defined(NO_MODULES)
 MKMODULESENV+=	__MPATH="${__MPATH}"
-.endif
-
-# Architecture and output format arguments for objcopy to convert image to
-# object file
-
-.if ${MFS_IMAGE:Uno} != "no"
-.if empty(MD_ROOT_SIZE_CONFIGURED)
-.if !defined(EMBEDFS_FORMAT.${MACHINE_ARCH})
-EMBEDFS_FORMAT.${MACHINE_ARCH}!= awk -F'"' '/OUTPUT_FORMAT/ {print $$2}' ${LDSCRIPT}
-.if empty(EMBEDFS_FORMAT.${MACHINE_ARCH})
-.undef EMBEDFS_FORMAT.${MACHINE_ARCH}
-.endif
-.endif
-
-.if !defined(EMBEDFS_ARCH.${MACHINE_ARCH})
-EMBEDFS_ARCH.${MACHINE_ARCH}!= sed -n '/OUTPUT_ARCH/s/.*(\(.*\)).*/\1/p' ${LDSCRIPT}
-.if empty(EMBEDFS_ARCH.${MACHINE_ARCH})
-.undef EMBEDFS_ARCH.${MACHINE_ARCH}
-.endif
-.endif
-
-EMBEDFS_FORMAT.arm?=		elf32-littlearm
-EMBEDFS_FORMAT.armv6?=		elf32-littlearm
-EMBEDFS_FORMAT.armv7?=		elf32-littlearm
-EMBEDFS_FORMAT.aarch64?=	elf64-littleaarch64
-EMBEDFS_FORMAT.mips?=		elf32-tradbigmips
-EMBEDFS_FORMAT.mipsel?=		elf32-tradlittlemips
-EMBEDFS_FORMAT.mips64?=		elf64-tradbigmips
-EMBEDFS_FORMAT.mips64el?=	elf64-tradlittlemips
-EMBEDFS_FORMAT.riscv64?=	elf64-littleriscv
-.endif
 .endif
 
 # Detect kernel config options that force stack frames to be turned on.

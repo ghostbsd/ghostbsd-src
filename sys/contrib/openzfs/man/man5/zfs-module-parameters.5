@@ -1,6 +1,6 @@
 '\" te
 .\" Copyright (c) 2013 by Turbo Fredriksson <turbo@bayour.com>. All rights reserved.
-.\" Copyright (c) 2019 by Delphix. All rights reserved.
+.\" Copyright (c) 2019, 2020 by Delphix. All rights reserved.
 .\" Copyright (c) 2019 Datto Inc.
 .\" The contents of this file are subject to the terms of the Common Development
 .\" and Distribution License (the "License").  You may not use this file except
@@ -196,6 +196,22 @@ successfully compressed before writing. A value of \fB100\fR disables this
 feature.
 .sp
 Default value: \fB200\fR%.
+.RE
+
+.sp
+.ne 2
+.na
+\fBl2arc_mfuonly\fR (int)
+.ad
+.RS 12n
+Controls whether only MFU metadata and data are cached from ARC into L2ARC.
+This may be desired to avoid wasting space on L2ARC when reading/writing large
+amounts of data that are not expected to be accessed more than once. The
+default is \fB0\fR, meaning both MRU and MFU data and metadata are cached.
+When turning off (\fB0\fR) this feature some MRU buffers will still be present
+in ARC and eventually cached on L2ARC.
+.sp
+Use \fB0\fR for no (default) and \fB1\fR for yes.
 .RE
 
 .sp
@@ -744,6 +760,28 @@ Default value: \fB32,768\fR.
 .sp
 .ne 2
 .na
+\fBvdev_file_logical_ashift\fR (ulong)
+.ad
+.RS 12n
+Logical ashift for file-based devices.
+.sp
+Default value: \fB9\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBvdev_file_physical_ashift\fR (ulong)
+.ad
+.RS 12n
+Physical ashift for file-based devices.
+.sp
+Default value: \fB9\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzap_iterate_prefetch\fR (int)
 .ad
 .RS 12n
@@ -771,9 +809,20 @@ Default value: \fB1,048,576\fR.
 \fBzfetch_max_distance\fR (uint)
 .ad
 .RS 12n
-Max bytes to prefetch per stream (default 8MB).
+Max bytes to prefetch per stream.
 .sp
-Default value: \fB8,388,608\fR.
+Default value: \fB8,388,608\fR (8MB).
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfetch_max_idistance\fR (uint)
+.ad
+.RS 12n
+Max bytes to prefetch indirects for per stream.
+.sp
+Default vaule: \fB67,108,864\fR (64MB).
 .RE
 
 .sp
@@ -1517,7 +1566,7 @@ Default value: \fB500,000\fR.
 .RS 12n
 Disables requirement for IVset guids to be present and match when doing a raw
 receive of encrypted datasets. Intended for users whose pools were created with
-ZFS on Linux pre-release versions and now have compatibility issues.
+OpenZFS pre-release versions and now have compatibility issues.
 .sp
 Default value: \fB0\fR.
 .RE
@@ -3656,6 +3705,27 @@ Default value: \fB0\fR.
 
 .sp
 .ne 2
+.na
+\fBzfs_zevent_retain_max\fR (int)
+.ad
+.RS 12n
+Maximum recent zevent records to retain for duplicate checking.  Setting
+this value to zero disables duplicate detection.
+.sp
+Default value: \fB2000\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_zevent_retain_expire_secs\fR (int)
+.ad
+.RS 12n
+Lifespan for a recent ereport that was retained for duplicate checking.
+.sp
+Default value: \fB900\fR.
+.RE
+
 .na
 \fBzfs_zil_clean_taskq_maxalloc\fR (int)
 .ad

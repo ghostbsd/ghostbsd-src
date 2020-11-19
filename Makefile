@@ -89,6 +89,17 @@
 # 10.  `reboot'
 # 11.  `make delete-old-libs' (in case no 3rd party program uses them anymore)
 #
+# For individuals wanting to build from source with GCC from ports, first
+# install the appropriate GCC cross toolchain package:
+#   `pkg install ${TARGET_ARCH}-gccN`
+#
+# Once you have installed the necessary cross toolchain, simply pass
+# CROSS_TOOLCHAIN=${TARGET_ARCH}-gccN while building with the above steps,
+# e.g., `make buildworld CROSS_TOOLCHAIN=amd64-gcc6`.
+#
+# The ${TARGET_ARCH}-gccN packages are provided as flavors of the
+# devel/freebsd-gccN ports.
+#
 # See src/UPDATING `COMMON ITEMS' for more complete information.
 #
 # If TARGET=machine (e.g. powerpc, arm64, ...) is specified you can
@@ -153,8 +164,8 @@ TGTS=	all all-man buildenv buildenvvars buildkernel buildworld \
 	xdev-links native-xtools native-xtools-install stageworld stagekernel \
 	stage-packages stage-packages-kernel stage-packages-world \
 	create-packages-world create-packages-kernel create-packages \
-	packages installconfig real-packages sign-packages package-pkg \
-	print-dir test-system-compiler test-system-linker
+	update-packages packages installconfig real-packages real-update-packages \
+	sign-packages package-pkg print-dir test-system-compiler test-system-linker
 
 # These targets require a TARGET and TARGET_ARCH be defined.
 XTGTS=	native-xtools native-xtools-install xdev xdev-build xdev-install \
@@ -500,7 +511,7 @@ worlds: .PHONY
 EXTRA_ARCHES_mips=	mipsel mipshf mipselhf mips64el mips64hf mips64elhf
 EXTRA_ARCHES_mips+=	mipsn32
 # powerpcspe excluded from main list until clang fixed
-EXTRA_ARCHES_powerpc=	powerpcspe
+EXTRA_ARCHES_powerpc=	powerpcspe powerpc64le
 .endif
 TARGETS?=amd64 arm arm64 i386 mips powerpc riscv
 _UNIVERSE_TARGETS=	${TARGETS}
@@ -682,13 +693,6 @@ universe_${target}_${target_arch}: universe_${target}_prologue .MAKE .PHONY
 universe_${target}_done: universe_${target}_kernels .PHONY
 universe_${target}_kernels: universe_${target}_worlds .PHONY
 universe_${target}_kernels: universe_${target}_prologue .MAKE .PHONY
-	@if [ -e "${KERNSRCDIR}/${target}/conf/NOTES" ]; then \
-	  (cd ${KERNSRCDIR}/${target}/conf && env __MAKE_CONF=/dev/null \
-	    ${SUB_MAKE} LINT \
-	    > ${.CURDIR}/_.${target}.makeLINT 2>&1 || \
-	    (echo "${target} 'make LINT' failed," \
-	    "check _.${target}.makeLINT for details"| ${MAKEFAIL})); \
-	fi
 	@cd ${.CURDIR}; ${SUB_MAKE} ${.MAKEFLAGS} TARGET=${target} \
 	    universe_kernels
 .endif # ${__DO_KERNELS} == "yes"
@@ -760,9 +764,6 @@ universe_epilogue: .PHONY
 	fi
 .endif
 .endif
-
-buildLINT: .PHONY
-	${MAKE} -C ${.CURDIR}/sys/${_TARGET}/conf LINT
 
 .if defined(.PARSEDIR)
 # This makefile does not run in meta mode

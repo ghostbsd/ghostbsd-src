@@ -46,6 +46,10 @@ u_long sbi_spec_version;
 u_long sbi_impl_id;
 u_long sbi_impl_version;
 
+static bool has_time_extension = false;
+static bool has_ipi_extension = false;
+static bool has_rfnc_extension = false;
+
 static struct sbi_ret
 sbi_get_spec_version(void)
 {
@@ -104,7 +108,7 @@ sbi_print_version(void)
 
 	switch (sbi_impl_id) {
 	case (SBI_IMPL_ID_BBL):
-		printf("SBI: Berkely Boot Loader %u\n", sbi_impl_version);
+		printf("SBI: Berkely Boot Loader %lu\n", sbi_impl_version);
 		break;
 	case (SBI_IMPL_ID_OPENSBI):
 		major = sbi_impl_version >> OPENSBI_VERSION_MAJOR_OFFSET;
@@ -112,7 +116,7 @@ sbi_print_version(void)
 		printf("SBI: OpenSBI v%u.%u\n", major, minor);
 		break;
 	default:
-		printf("SBI: Unrecognized Implementation: %u\n", sbi_impl_id);
+		printf("SBI: Unrecognized Implementation: %lu\n", sbi_impl_id);
 		break;
 	}
 
@@ -120,6 +124,83 @@ sbi_print_version(void)
 	    SBI_SPEC_VERS_MAJOR_OFFSET;
 	minor = (sbi_spec_version & SBI_SPEC_VERS_MINOR_MASK);
 	printf("SBI Specification Version: %u.%u\n", major, minor);
+}
+
+void
+sbi_set_timer(uint64_t val)
+{
+	struct sbi_ret ret;
+
+	/* Use the TIME legacy replacement extension, if available. */
+	if (has_time_extension) {
+		ret = SBI_CALL1(SBI_EXT_ID_TIME, SBI_TIME_SET_TIMER, val);
+		MPASS(ret.error == SBI_SUCCESS);
+	} else {
+		(void)SBI_CALL1(SBI_SET_TIMER, 0, val);
+	}
+}
+
+void
+sbi_send_ipi(const u_long *hart_mask)
+{
+	struct sbi_ret ret;
+
+	/* Use the IPI legacy replacement extension, if available. */
+	if (has_ipi_extension) {
+		ret = SBI_CALL2(SBI_EXT_ID_IPI, SBI_IPI_SEND_IPI,
+		    *hart_mask, 0);
+		MPASS(ret.error == SBI_SUCCESS);
+	} else {
+		(void)SBI_CALL1(SBI_SEND_IPI, 0, (uint64_t)hart_mask);
+	}
+}
+
+void
+sbi_remote_fence_i(const u_long *hart_mask)
+{
+	struct sbi_ret ret;
+
+	/* Use the RFENCE legacy replacement extension, if available. */
+	if (has_rfnc_extension) {
+		ret = SBI_CALL2(SBI_EXT_ID_RFNC, SBI_RFNC_REMOTE_FENCE_I,
+		    *hart_mask, 0);
+		MPASS(ret.error == SBI_SUCCESS);
+	} else {
+		(void)SBI_CALL1(SBI_REMOTE_FENCE_I, 0, (uint64_t)hart_mask);
+	}
+}
+
+void
+sbi_remote_sfence_vma(const u_long *hart_mask, u_long start, u_long size)
+{
+	struct sbi_ret ret;
+
+	/* Use the RFENCE legacy replacement extension, if available. */
+	if (has_rfnc_extension) {
+		ret = SBI_CALL4(SBI_EXT_ID_RFNC, SBI_RFNC_REMOTE_SFENCE_VMA,
+		    *hart_mask, 0, start, size);
+		MPASS(ret.error == SBI_SUCCESS);
+	} else {
+		(void)SBI_CALL3(SBI_REMOTE_SFENCE_VMA, 0, (uint64_t)hart_mask,
+		    start, size);
+	}
+}
+
+void
+sbi_remote_sfence_vma_asid(const u_long *hart_mask, u_long start, u_long size,
+    u_long asid)
+{
+	struct sbi_ret ret;
+
+	/* Use the RFENCE legacy replacement extension, if available. */
+	if (has_rfnc_extension) {
+		ret = SBI_CALL5(SBI_EXT_ID_RFNC, SBI_RFNC_REMOTE_SFENCE_VMA_ASID,
+		    *hart_mask, 0, start, size, asid);
+		MPASS(ret.error == SBI_SUCCESS);
+	} else {
+		(void)SBI_CALL4(SBI_REMOTE_SFENCE_VMA_ASID, 0,
+		    (uint64_t)hart_mask, start, size, asid);
+	}
 }
 
 int
@@ -173,25 +254,34 @@ sbi_init(void)
 	marchid = sbi_get_marchid().value;
 	mimpid = sbi_get_mimpid().value;
 
+	/* Probe for legacy replacement extensions. */
+	if (sbi_probe_extension(SBI_EXT_ID_TIME) != 0)
+		has_time_extension = true;
+	if (sbi_probe_extension(SBI_EXT_ID_IPI) != 0)
+		has_ipi_extension = true;
+	if (sbi_probe_extension(SBI_EXT_ID_RFNC) != 0)
+		has_rfnc_extension = true;
+
 	/*
-	 * Probe for legacy extensions. Currently we rely on all of them
-	 * to be implemented, but this is not guaranteed by the spec.
+	 * Probe for legacy extensions. We still rely on many of them to be
+	 * implemented, but this is not guaranteed by the spec.
 	 */
-	KASSERT(sbi_probe_extension(SBI_SET_TIMER) != 0,
+	KASSERT(has_time_extension || sbi_probe_extension(SBI_SET_TIMER) != 0,
 	    ("SBI doesn't implement sbi_set_timer()"));
 	KASSERT(sbi_probe_extension(SBI_CONSOLE_PUTCHAR) != 0,
 	    ("SBI doesn't implement sbi_console_putchar()"));
 	KASSERT(sbi_probe_extension(SBI_CONSOLE_GETCHAR) != 0,
 	    ("SBI doesn't implement sbi_console_getchar()"));
-	KASSERT(sbi_probe_extension(SBI_CLEAR_IPI) != 0,
-	    ("SBI doesn't implement sbi_clear_ipi()"));
-	KASSERT(sbi_probe_extension(SBI_SEND_IPI) != 0,
+	KASSERT(has_ipi_extension || sbi_probe_extension(SBI_SEND_IPI) != 0,
 	    ("SBI doesn't implement sbi_send_ipi()"));
-	KASSERT(sbi_probe_extension(SBI_REMOTE_FENCE_I) != 0,
+	KASSERT(has_rfnc_extension ||
+	    sbi_probe_extension(SBI_REMOTE_FENCE_I) != 0,
 	    ("SBI doesn't implement sbi_remote_fence_i()"));
-	KASSERT(sbi_probe_extension(SBI_REMOTE_SFENCE_VMA) != 0,
+	KASSERT(has_rfnc_extension ||
+	    sbi_probe_extension(SBI_REMOTE_SFENCE_VMA) != 0,
 	    ("SBI doesn't implement sbi_remote_sfence_vma()"));
-	KASSERT(sbi_probe_extension(SBI_REMOTE_SFENCE_VMA_ASID) != 0,
+	KASSERT(has_rfnc_extension ||
+	    sbi_probe_extension(SBI_REMOTE_SFENCE_VMA_ASID) != 0,
 	    ("SBI doesn't implement sbi_remote_sfence_vma_asid()"));
 	KASSERT(sbi_probe_extension(SBI_SHUTDOWN) != 0,
 	    ("SBI doesn't implement sbi_shutdown()"));

@@ -3220,7 +3220,7 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 	if ((error = getvnode(td, cmd.handle,
 	    cap_rights_init(&rights, CAP_FSCK), &fp)) != 0)
 		return (error);
-	vp = fp->f_data;
+	vp = fp->f_vnode;
 	if (vp->v_type != VREG && vp->v_type != VDIR) {
 		fdrop(fp, td);
 		return (EINVAL);
@@ -3468,7 +3468,7 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 			break;
 		}
 		dp = VTOI(dvp);
-		dp->i_offset = 12;	/* XXX mastertemplate.dot_reclen */
+		SET_I_OFFSET(dp, 12);	/* XXX mastertemplate.dot_reclen */
 		error = ufs_dirrewrite(dp, VTOI(fdvp), (ino_t)cmd.size,
 		    DT_DIR, 0);
 		cache_purge(fdvp);

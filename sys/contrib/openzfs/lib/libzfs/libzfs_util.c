@@ -1010,8 +1010,7 @@ libzfs_init(void)
 	int error;
 	char *env;
 
-	error = libzfs_load_module();
-	if (error) {
+	if ((error = libzfs_load_module()) != 0) {
 		errno = error;
 		return (NULL);
 	}
@@ -1060,6 +1059,9 @@ libzfs_init(void)
 		if ((error = zfs_nicestrtonum(hdl, env,
 		    &hdl->libzfs_max_nvlist))) {
 			errno = error;
+			(void) close(hdl->libzfs_fd);
+			(void) fclose(hdl->libzfs_mnttab);
+			free(hdl);
 			return (NULL);
 		}
 	} else {

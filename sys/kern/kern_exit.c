@@ -104,7 +104,7 @@ proc_realparent(struct proc *child)
 	sx_assert(&proctree_lock, SX_LOCKED);
 	if ((child->p_treeflag & P_TREE_ORPHANED) == 0)
 		return (child->p_pptr->p_pid == child->p_oppid ?
-			    child->p_pptr : initproc);
+		    child->p_pptr : child->p_reaper);
 	for (p = child; (p->p_treeflag & P_TREE_FIRST_ORPHAN) == 0;) {
 		/* Cannot use LIST_PREV(), since the list head is not known. */
 		p = __containerof(p->p_orphan.le_prev, struct proc,
@@ -355,10 +355,11 @@ exit1(struct thread *td, int rval, int signo)
 	PROC_UNLOCK(p);
 
 	umtx_thread_exit(td);
+	seltdfini(td);
 
 	/*
 	 * Reset any sigio structures pointing to us as a result of
-	 * F_SETOWN with our pid.
+	 * F_SETOWN with our pid.  The P_WEXIT flag interlocks with fsetown().
 	 */
 	funsetownlst(&p->p_sigiolst);
 
@@ -366,6 +367,7 @@ exit1(struct thread *td, int rval, int signo)
 	 * Close open files and release open-file table.
 	 * This may block!
 	 */
+	pdescfree(td);
 	fdescfree(td);
 
 	/*

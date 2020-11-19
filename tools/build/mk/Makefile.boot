@@ -44,7 +44,6 @@ LIBELF:=${WORLDTMP}/legacy/usr/lib/libelf.a
 CFLAGS+=	-Werror=implicit-function-declaration -Werror=implicit-int \
 		-Werror=return-type -Wundef
 CFLAGS+=	-DHAVE_NBTOOL_CONFIG_H=1
-CFLAGS+=	-D__BSD_VISIBLE=1
 CFLAGS+=	-I${SRCTOP}/tools/build/cross-build/include/common
 
 # b64_pton and b64_ntop is in libresolv on MacOS and Linux:
@@ -96,3 +95,6 @@ UPDATE_DEPENDFILE= no
     Error was caused by Makefile in ${.CURDIR}
 .endif
 .endif
+
+# GCC doesn't allow silencing warn_unused_result calls with (void) casts.
+CFLAGS.gcc+=-Wno-unused-result

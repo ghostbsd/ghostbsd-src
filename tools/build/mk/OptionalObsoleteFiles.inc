@@ -1172,6 +1172,41 @@ OLD_LIBS+=usr/lib32/libzpool.so.2
 OLD_FILES+=usr/sbin/zfsd
 OLD_FILES+=usr/sbin/zhack
 OLD_FILES+=usr/sbin/zdb
+OLD_FILES+=usr/share/man/man3/be_activate.3.gz
+OLD_FILES+=usr/share/man/man3/be_active_name.3.gz
+OLD_FILES+=usr/share/man/man3/be_active_path.3.gz
+OLD_FILES+=usr/share/man/man3/be_create_depth.3.gz
+OLD_FILES+=usr/share/man/man3/be_create_from_existing_snap.3.gz
+OLD_FILES+=usr/share/man/man3/be_create_from_existing.3.gz
+OLD_FILES+=usr/share/man/man3/be_create.3.gz
+OLD_FILES+=usr/share/man/man3/be_deactivate.3.gz
+OLD_FILES+=usr/share/man/man3/be_destroy.3.gz
+OLD_FILES+=usr/share/man/man3/be_exists.3.gz
+OLD_FILES+=usr/share/man/man3/be_export.3.gz
+OLD_FILES+=usr/share/man/man3/be_get_bootenv_props.3.gz
+OLD_FILES+=usr/share/man/man3/be_get_dataset_props.3.gz
+OLD_FILES+=usr/share/man/man3/be_get_dataset_snapshots.3.gz
+OLD_FILES+=usr/share/man/man3/be_import.3.gz
+OLD_FILES+=usr/share/man/man3/be_is_auto_snapshot_name.3.gz
+OLD_FILES+=usr/share/man/man3/be_mount.3.gz
+OLD_FILES+=usr/share/man/man3/be_mounted_at.3.gz
+OLD_FILES+=usr/share/man/man3/be_nextboot_name.3.gz
+OLD_FILES+=usr/share/man/man3/be_nextboot_path.3.gz
+OLD_FILES+=usr/share/man/man3/be_nicenum.3.gz
+OLD_FILES+=usr/share/man/man3/be_prop_list_alloc.3.gz
+OLD_FILES+=usr/share/man/man3/be_prop_list_free.3.gz
+OLD_FILES+=usr/share/man/man3/be_rename.3.gz
+OLD_FILES+=usr/share/man/man3/be_root_concat.3.gz
+OLD_FILES+=usr/share/man/man3/be_root_path.3.gz
+OLD_FILES+=usr/share/man/man3/be_snapshot.3.gz
+OLD_FILES+=usr/share/man/man3/be_unmount.3.gz
+OLD_FILES+=usr/share/man/man3/be_validate_name.3.gz
+OLD_FILES+=usr/share/man/man3/be_validate_snap.3.gz
+OLD_FILES+=usr/share/man/man3/libbe_close.3.gz
+OLD_FILES+=usr/share/man/man3/libbe_errno.3.gz
+OLD_FILES+=usr/share/man/man3/libbe_error_description.3.gz
+OLD_FILES+=usr/share/man/man3/libbe_init.3.gz
+OLD_FILES+=usr/share/man/man3/libbe_print_on_error.3.gz
 OLD_FILES+=usr/share/man/man3/libbe.3.gz
 OLD_FILES+=usr/share/man/man5/zpool-features.5.gz
 OLD_FILES+=usr/share/man/man8/bectl.8.gz
@@ -1503,7 +1538,6 @@ OLD_FILES+=usr/bin/lli
 OLD_FILES+=usr/bin/llvm-as
 OLD_FILES+=usr/bin/llvm-bcanalyzer
 OLD_FILES+=usr/bin/llvm-cxxdump
-OLD_FILES+=usr/bin/llvm-cxxfilt
 OLD_FILES+=usr/bin/llvm-diff
 OLD_FILES+=usr/bin/llvm-dis
 OLD_FILES+=usr/bin/llvm-dwarfdump
@@ -1527,7 +1561,6 @@ OLD_FILES+=usr/share/man/man1/llc.1.gz
 OLD_FILES+=usr/share/man/man1/lli.1.gz
 OLD_FILES+=usr/share/man/man1/llvm-as.1.gz
 OLD_FILES+=usr/share/man/man1/llvm-bcanalyzer.1.gz
-OLD_FILES+=usr/share/man/man1/llvm-cxxfilt.1.gz
 OLD_FILES+=usr/share/man/man1/llvm-diff.1.gz
 OLD_FILES+=usr/share/man/man1/llvm-dis.1.gz
 OLD_FILES+=usr/share/man/man1/llvm-dwarfdump.1
@@ -1542,6 +1575,11 @@ OLD_FILES+=usr/share/man/man1/opt.1.gz
 
 .if ${MK_CLANG_EXTRAS} == no && ${MK_CLANG_FORMAT} == no
 OLD_FILES+=usr/bin/clang-format
+.endif
+
+.if ${MK_CLANG_EXTRAS} == no && ${MK_LLVM_CXXFILT} == no
+OLD_FILES+=usr/bin/llvm-cxxfilt
+OLD_FILES+=usr/share/man/man1/llvm-cxxfilt.1.gz
 .endif
 
 .if ${MK_CPP} == no
@@ -2041,6 +2079,11 @@ OLD_FILES+=usr/sbin/freebsd-update
 OLD_FILES+=usr/share/examples/etc/freebsd-update.conf
 OLD_FILES+=usr/share/man/man5/freebsd-update.conf.5.gz
 OLD_FILES+=usr/share/man/man8/freebsd-update.8.gz
+.endif
+
+.if ${MK_FREEBSD_UPDATE} == no && ${MK_PORTSNAP} == no
+OLD_FILES+=usr/libexec/phttpget
+OLD_FILES+=usr/share/man/man8/phttpget.8.gz
 .endif
 
 .if ${MK_GAMES} == no
@@ -7330,10 +7373,8 @@ OLD_FILES+=usr/share/man/man8/pmcstudy.8.gz
 .if ${MK_PORTSNAP} == no
 OLD_FILES+=etc/portsnap.conf
 OLD_FILES+=usr/libexec/make_index
-OLD_FILES+=usr/libexec/phttpget
 OLD_FILES+=usr/sbin/portsnap
 OLD_FILES+=usr/share/examples/etc/portsnap.conf
-OLD_FILES+=usr/share/man/man8/phttpget.8.gz
 OLD_FILES+=usr/share/man/man8/portsnap.8.gz
 .endif
 

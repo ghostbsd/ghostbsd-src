@@ -135,7 +135,7 @@ opal_heartbeat(void)
 		events = 0;
 		/* Turn the OPAL state crank */
 		opal_call(OPAL_POLL_EVENTS, vtophys(&events));
-		if (events & OPAL_EVENT_MSG_PENDING)
+		if (be64toh(events) & OPAL_EVENT_MSG_PENDING)
 			opal_handle_messages();
 		tsleep(opal_hb_proc, 0, "opal",
 		    MSEC_2_TICKS(opal_heartbeat_ms));
@@ -256,15 +256,15 @@ bin2bcd32(int bin)
 	int tmp;
 
 	tmp = bin % 100;
-	out += bin2bcd(tmp) * 1;
+	out += bin2bcd(tmp) * 0x1;
 	bin = bin / 100;
 
 	tmp = bin % 100;
-	out += bin2bcd(tmp) * 100;
+	out += bin2bcd(tmp) * 0x100;
 	bin = bin / 100;
 
 	tmp = bin % 100;
-	out += bin2bcd(tmp) * 10000;
+	out += bin2bcd(tmp) * 0x10000;
 
 	return (out);
 }
@@ -297,7 +297,7 @@ opal_gettime(device_t dev, struct timespec *ts)
 
 	ct.day	= bcd2bin((ymd & 0x000000ff) >> 0);
 	ct.mon	= bcd2bin((ymd & 0x0000ff00) >> 8);
-	ct.year	= bcd2bin32((ymd & 0xffff0000) >> 16);
+	ct.year = bcd2bin32((ymd & 0xffff0000) >> 16);
 
 	return (clock_ct_to_ts(&ct, ts));
 }
@@ -321,11 +321,12 @@ opal_settime(device_t dev, struct timespec *ts)
 	hmsm |= ((uint64_t)bin2bcd(ct.min) << 48);
 	hmsm |= ((uint64_t)bin2bcd(ct.hour) << 56);
 
-	hmsm = htobe64(hmsm);
-	ymd = htobe32(ymd);
-
+	/*
+	 * We do NOT swap endian here, because the values are being sent
+	 * via registers instead of indirect via memory.
+	 */
 	do {
-		rv = opal_call(OPAL_RTC_WRITE, vtophys(&ymd), vtophys(&hmsm));
+		rv = opal_call(OPAL_RTC_WRITE, ymd, hmsm);
 		if (rv == OPAL_BUSY_EVENT) {
 			rv = opal_call(OPAL_POLL_EVENTS, 0);
 			pause("opalrtc", 1);

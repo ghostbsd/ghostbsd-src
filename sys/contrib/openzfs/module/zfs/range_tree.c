@@ -24,6 +24,7 @@
  */
 /*
  * Copyright (c) 2013, 2019 by Delphix. All rights reserved.
+ * Copyright (c) 2015, Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -313,7 +314,6 @@ range_tree_add_impl(void *arg, uint64_t start, uint64_t size, uint64_t fill)
 			return;
 		}
 
-		zfs_btree_remove(&rt->rt_root, rs);
 		if (rt->rt_ops != NULL && rt->rt_ops->rtop_remove != NULL)
 			rt->rt_ops->rtop_remove(rt, rs, rt->rt_arg);
 
@@ -325,6 +325,7 @@ range_tree_add_impl(void *arg, uint64_t start, uint64_t size, uint64_t fill)
 		end = MAX(end, rend);
 		size = end - start;
 
+		zfs_btree_remove(&rt->rt_root, rs);
 		range_tree_add_impl(rt, start, size, fill);
 		return;
 	}

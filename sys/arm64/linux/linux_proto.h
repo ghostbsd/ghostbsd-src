@@ -967,10 +967,16 @@ struct linux_fanotify_mark_args {
 	register_t dummy;
 };
 struct linux_name_to_handle_at_args {
-	register_t dummy;
+	char dirfd_l_[PADL_(l_int)]; l_int dirfd; char dirfd_r_[PADR_(l_int)];
+	char name_l_[PADL_(const char *)]; const char * name; char name_r_[PADR_(const char *)];
+	char handle_l_[PADL_(struct l_file_handle *)]; struct l_file_handle * handle; char handle_r_[PADR_(struct l_file_handle *)];
+	char mnt_id_l_[PADL_(l_int *)]; l_int * mnt_id; char mnt_id_r_[PADR_(l_int *)];
+	char flags_l_[PADL_(l_int)]; l_int flags; char flags_r_[PADR_(l_int)];
 };
 struct linux_open_by_handle_at_args {
-	register_t dummy;
+	char mountdirfd_l_[PADL_(l_int)]; l_int mountdirfd; char mountdirfd_r_[PADR_(l_int)];
+	char handle_l_[PADL_(struct l_file_handle *)]; struct l_file_handle * handle; char handle_r_[PADR_(struct l_file_handle *)];
+	char flags_l_[PADL_(l_int)]; l_int flags; char flags_r_[PADR_(l_int)];
 };
 struct linux_clock_adjtime_args {
 	register_t dummy;
@@ -1343,11 +1349,13 @@ int	linux_pkey_free(struct thread *, struct linux_pkey_free_args *);
 
 #endif /* COMPAT_43 */
 
+
 #ifdef COMPAT_FREEBSD4
 
 #define	nosys	linux_nosys
 
 #endif /* COMPAT_FREEBSD4 */
+
 
 #ifdef COMPAT_FREEBSD6
 
@@ -1355,11 +1363,13 @@ int	linux_pkey_free(struct thread *, struct linux_pkey_free_args *);
 
 #endif /* COMPAT_FREEBSD6 */
 
+
 #ifdef COMPAT_FREEBSD7
 
 #define	nosys	linux_nosys
 
 #endif /* COMPAT_FREEBSD7 */
+
 
 #ifdef COMPAT_FREEBSD10
 
@@ -1367,11 +1377,13 @@ int	linux_pkey_free(struct thread *, struct linux_pkey_free_args *);
 
 #endif /* COMPAT_FREEBSD10 */
 
+
 #ifdef COMPAT_FREEBSD11
 
 #define	nosys	linux_nosys
 
 #endif /* COMPAT_FREEBSD11 */
+
 
 #ifdef COMPAT_FREEBSD12
 

@@ -25,7 +25,8 @@
 #	LOCAL_XTOOL_DIRS="list of dirs" to add additional dirs to the
 #	    cross-tools target
 #	METALOG="path to metadata log" to write permission and ownership
-#	    when NO_ROOT is set.  (default: ${DESTDIR}/METALOG)
+#	    when NO_ROOT is set.  (default: ${DESTDIR}/${DISTDIR}/METALOG,
+#           check /etc/make.conf for DISTDIR)
 #	TARGET="machine" to crossbuild world for a different machine type
 #	TARGET_ARCH= may be required when a TARGET supports multiple endians
 #	BUILDENV_SHELL= shell to launch for the buildenv target (def:${SHELL})
@@ -152,6 +153,7 @@ KNOWN_ARCHES?=	aarch64/arm64 \
 		mips64hf/mips \
 		powerpc \
 		powerpc64/powerpc \
+		powerpc64le/powerpc \
 		powerpcspe/powerpc \
 		riscv64/riscv \
 		riscv64sf/riscv
@@ -441,8 +443,12 @@ SUBDIR+=etc
 .endif	# !empty(SUBDIR_OVERRIDE)
 
 .if defined(NOCLEAN)
-.warning NOCLEAN option is deprecated. Use NO_CLEAN instead.
-NO_CLEAN=	${NOCLEAN}
+.warning The src.conf WITHOUT_CLEAN option can now be used instead of NOCLEAN.
+MK_CLEAN:=	no
+.endif
+.if defined(NO_CLEAN)
+.info The src.conf WITHOUT_CLEAN option can now be used instead of NO_CLEAN.
+MK_CLEAN:=	no
 .endif
 .if defined(NO_CLEANDIR)
 CLEANDIR=	clean cleandepend
@@ -451,7 +457,7 @@ CLEANDIR=	cleandir
 .endif
 
 .if defined(WORLDFAST)
-NO_CLEAN=	t
+MK_CLEAN:=	no
 NO_OBJWALK=	t
 .endif
 
@@ -460,7 +466,7 @@ NO_OBJWALK=	t
 # The .meta files will also track the build command and rebuild should
 # it change.
 .if empty(.MAKE.MODE:Mnofilemon)
-NO_CLEAN=	t
+MK_CLEAN:=	no
 .endif
 .endif
 .if defined(NO_OBJWALK) || ${MK_AUTO_OBJ} == "yes"
@@ -563,12 +569,12 @@ EXTRA_REVISION= _${_BRANCH:C/-PRERELEASE/.p/}
 .elif ${_BRANCH:M*-p*}
 EXTRA_REVISION=	_${_BRANCH:C/.*-p([0-9]+$)/\1/}
 .endif
-PKG_VERSION=	${_REVISION}${EXTRA_REVISION}
+PKG_VERSION:=	${_REVISION}${EXTRA_REVISION}
 .endif
 .endif	# !defined(PKG_VERSION)
 
 .if !defined(PKG_TIMESTAMP)
-TIMEEPOCHNOW=	%s
+TIMEEPOCHNOW=		%s
 SOURCE_DATE_EPOCH=	${TIMEEPOCHNOW:gmtime}
 .else
 SOURCE_DATE_EPOCH=	${PKG_TIMESTAMP}
@@ -719,7 +725,7 @@ BSARGS= 	DESTDIR= \
 		BOOTSTRAPPING=${BOOTSTRAPPING_OSRELDATE} \
 		BWPHASE=${.TARGET:C,^_,,} \
 		SSP_CFLAGS= \
-		MK_HTML=no NO_LINT=yes MK_MAN=no \
+		MK_HTML=no NO_LINT=yes MK_MAN=no MK_MAN_UTILS=yes \
 		-DNO_PIC MK_PROFILE=no -DNO_SHARED \
 		-DNO_CPU_CFLAGS MK_WARNS=no MK_CTF=no \
 		MK_CLANG_EXTRAS=no MK_CLANG_FORMAT=no MK_CLANG_FULL=no \
@@ -837,7 +843,7 @@ _LIBCOMPAT= SOFT
 # timestamps (see NO_META_IGNORE_HOST in sys.mk).  There are known times
 # when the ABI breaks though that we want to force rebuilding WORLDTMP
 # to get updated host tools.
-.if ${MK_META_MODE} == "yes" && defined(NO_CLEAN) && \
+.if ${MK_META_MODE} == "yes" && ${MK_CLEAN} == "no" && \
     !defined(NO_META_IGNORE_HOST) && !defined(NO_META_IGNORE_HOST_HEADERS) && \
     !defined(_MKSHOWCONFIG)
 # r318736 - ino64 major ABI breakage
@@ -869,7 +875,7 @@ NO_META_IGNORE_HOST_HEADERS=	1
 .export NO_META_IGNORE_HOST_HEADERS
 .endif	# defined(_meta_mode_need_rebuild)
 .endif	# defined(OBJDIR_HOST_OSRELDATE)
-.endif	# ${MK_META_MODE} == "yes" && defined(NO_CLEAN) ...
+.endif	# ${MK_META_MODE} == "yes" && ${MK_CLEAN} == "no" ...
 # This is only used for META_MODE+filemon to track what the oldest
 # __FreeBSD_version is in WORLDTMP.  This purposely does NOT have
 # a make dependency on /usr/include/osreldate.h as the file should
@@ -920,7 +926,9 @@ INSTALL_DDIR=	${_INSTALL_DDIR:S://:/:g:C:/$::}
 METALOG?=	${DESTDIR}/${DISTDIR}/METALOG
 METALOG:=	${METALOG:C,//+,/,g}
 IMAKE+=		-DNO_ROOT METALOG=${METALOG}
-INSTALLFLAGS+=	-U -M ${METALOG} -D ${INSTALL_DDIR}
+METALOG_INSTALLFLAGS=	-U -M ${METALOG} -D ${INSTALL_DDIR}
+INSTALLFLAGS+=	${METALOG_INSTALLFLAGS}
+CERTCTLFLAGS=	${METALOG_INSTALLFLAGS}
 MTREEFLAGS+=	-W
 .endif
 .if defined(BUILD_PKGS)
@@ -929,6 +937,11 @@ INSTALLFLAGS+=	-h sha256
 .if defined(DB_FROM_SRC) || defined(NO_ROOT)
 IMAKE_INSTALL=	INSTALL="${INSTALL_CMD} ${INSTALLFLAGS}"
 IMAKE_MTREE=	MTREE_CMD="${MTREE_CMD} ${MTREEFLAGS}"
+.endif
+.if make(distributeworld)
+CERTCTLDESTDIR=	${DESTDIR}/${DISTDIR}/base
+.else
+CERTCTLDESTDIR=	${DESTDIR}
 .endif
 
 DESTDIR_MTREEFLAGS=	-deU
@@ -979,41 +992,13 @@ _sanity_check: .PHONY .MAKE
 _cleanobj_fast_depend_hack: .PHONY
 	@echo ">>> Deleting stale dependencies...";
 	sh ${.CURDIR}/tools/build/depend-cleanup.sh ${OBJTOP}
-# Date      SVN Rev  Syscalls/Changes
-# Syscall stubs rewritten in C and obsolete MD assembly implementations
-# 20191009  r353340  removal of opensolaris_atomic.S (also r353381)
-.if ${MACHINE} != i386
-.for f in opensolaris_atomic
-	@if [ -e "${OBJTOP}/cddl/lib/libzpool/.depend.${f}.o" ] && \
-	    egrep -qw 'opensolaris_atomic\.S' ${OBJTOP}/cddl/lib/libzpool/.depend.${f}.o; then \
-		echo "Removing stale dependencies for opensolaris_atomic"; \
-		rm -f ${OBJTOP}/cddl/lib/libzpool/.depend.${f}.* \
-		   ${LIBCOMPAT:D${LIBCOMPAT_OBJTOP}/cddl/lib/libzpool/.depend.${f}.*}; \
-	fi
-.endfor
-.endif
-# 20190925  r352689  removal of obsolete i386 memchr.S
-.for f in memchr
-	@if [ -e "${OBJTOP}/lib/libc/.depend.${f}.o" ] && \
-	    egrep -qw 'i386/string/memchr\.S' ${OBJTOP}/lib/libc/.depend.${f}.o; then \
-		echo "Removing stale dependencies for memchr"; \
-		rm -f ${OBJTOP}/lib/libc/.depend.${f}.*; \
-	fi
-.if defined(_LIBCOMPAT)
-	@if [ -e "${LIBCOMPAT_OBJTOP}/lib/libc/.depend.${f}.o" ] && \
-	    egrep -qw 'i386/string/memchr\.S' ${LIBCOMPAT_OBJTOP}/lib/libc/.depend.${f}.o; then \
-		echo "Removing stale dependencies for memchr"; \
-		rm -f ${LIBCOMPAT_OBJTOP}/lib/libc/.depend.${f}.*; \
-	fi
-.endif
-.endfor
 
 _worldtmp: .PHONY
 	@echo
 	@echo "--------------------------------------------------------------"
 	@echo ">>> Rebuilding the temporary build tree"
 	@echo "--------------------------------------------------------------"
-.if !defined(NO_CLEAN)
+.if ${MK_CLEAN} == "yes"
 	rm -rf ${WORLDTMP}
 .else
 # Note: for delete-old we need to set $PATH to also include the host $PATH
@@ -1038,7 +1023,7 @@ _worldtmp: .PHONY
 .if ${USING_SYSTEM_LINKER} == "yes"
 	@rm -f ${WORLDTMP}/usr/bin/ld ${WORLDTMP}/usr/bin/ld.lld
 .endif	# ${USING_SYSTEM_LINKER} == "yes"
-.endif	# !defined(NO_CLEAN)
+.endif	# ${MK_CLEAN} == "yes"
 	@mkdir -p ${WORLDTMP}
 	@touch ${WORLDTMP}/${.TARGET}
 # We can't use mtree to create the worldtmp directories since it may not be
@@ -1077,7 +1062,7 @@ _bootstrap-tools:
 	${WORLDTMP_MTREE} -f ${.CURDIR}/${_mtree} -p ${WORLDTMP} > /dev/null
 .endfor
 _cleanobj:
-.if !defined(NO_CLEAN)
+.if ${MK_CLEAN} == "yes"
 	@echo
 	@echo "--------------------------------------------------------------"
 	@echo ">>> stage 2.1: cleaning up the object tree"
@@ -1090,7 +1075,7 @@ _cleanobj:
 .endif
 .else
 	${_+_}cd ${.CURDIR}; ${WMAKE} _NO_INCLUDE_COMPILERMK=t _cleanobj_fast_depend_hack
-.endif	# !defined(NO_CLEAN)
+.endif	# ${MK_CLEAN} == "yes"
 _obj:
 	@echo
 	@echo "--------------------------------------------------------------"
@@ -1466,6 +1451,14 @@ distributeworld installworld stageworld: _installcheck_world .PHONY
 .endfor
 .endif
 .endif # make(distributeworld)
+.if !make(packageworld) && ${MK_CAROOT} != "no"
+	@if which openssl>/dev/null; then \
+		DESTDIR=${CERTCTLDESTDIR} PATH=${TMPPATH}:${PATH} \
+		    sh ${SRCTOP}/usr.sbin/certctl/certctl.sh ${CERTCTLFLAGS} rehash \
+	else \
+		echo "No openssl on the host, not rehashing certificates target -- /etc/ssl may not be populated."; \
+	fi
+.endif
 
 packageworld: .PHONY
 .for dist in base ${EXTRA_DISTRIBUTIONS}
@@ -1511,10 +1504,14 @@ _sysent_dirs+=	sys/amd64/linux		\
 		sys/arm/linux		\
 		sys/arm64/linux		\
 		sys/i386/linux
+
 sysent: .PHONY
 .for _dir in ${_sysent_dirs}
+sysent-${_dir}: .PHONY
 	@echo "${MAKE} -C ${.CURDIR}/${_dir} sysent"
 	${_+_}@env PATH=${_sysent_PATH} ${MAKE} -C ${.CURDIR}/${_dir} sysent
+
+sysent: sysent-${_dir}
 .endfor
 
 #
@@ -1672,7 +1669,7 @@ buildkernel: .MAKE .PHONY
 			-I '${KERNCONFDIR}' -I '${KRNLCONFDIR}' \
 			'${KERNCONFDIR}/${_kernel}'
 .endif
-.if !defined(NO_CLEAN) && !defined(NO_KERNELCLEAN)
+.if ${MK_CLEAN} == "yes" && !defined(NO_KERNELCLEAN)
 	@echo
 	@echo "--------------------------------------------------------------"
 	@echo ">>> stage 2.1: cleaning up the object tree"
@@ -1859,8 +1856,21 @@ _pkgbootstrap: .PHONY
 	@env ASSUME_ALWAYS_YES=YES pkg bootstrap
 .endif
 
+.if make(create-world-packages-jobs) || make(create-kernel-packages*) || make(real-update-packages)
+PKG_ABI!=${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI
+.endif
+
+.if !defined(PKG_VERSION_FROM)
+.if defined(PKG_ABI)
+PKG_VERSION_FROM!=/usr/bin/readlink ${REPODIR}/${PKG_ABI}/latest
+.endif
+.endif
+
 packages: .PHONY
 	${_+_}${MAKE} -C ${.CURDIR} PKG_VERSION=${PKG_VERSION} real-packages
+
+update-packages: .PHONY
+	${_+_}${MAKE} -C ${.CURDIR} PKG_VERSION=${PKG_VERSION} real-update-packages
 
 package-pkg: .PHONY
 	rm -rf /tmp/ports.${TARGET} || :
@@ -1870,6 +1880,28 @@ package-pkg: .PHONY
 		sh ${.CURDIR}/release/scripts/make-pkg-package.sh
 
 real-packages:	stage-packages create-packages sign-packages .PHONY
+
+real-update-packages: stage-packages .PHONY
+	${_+_}${MAKE} -C ${.CURDIR} PKG_VERSION=${PKG_VERSION} create-packages
+	@echo "==> Checking for new packages (comparing ${PKG_VERSION} to ${PKG_VERSION_FROM})"
+	@for pkg in ${REPODIR}/${PKG_ABI}/${PKG_VERSION_FROM}/${PKG_NAME_PREFIX}-*; do \
+	  pkgname=$$(pkg query -F $${pkg} '%n' | sed 's/${PKG_NAME_PREFIX}-\(.*\)/\1/') ; \
+	  newpkgname=${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION}.${PKG_FORMAT} ; \
+	  oldsum=$$(pkg query -F $${pkg} '%X') ; \
+	  if [ ! -f ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} ]; then \
+	    continue; \
+	  fi ; \
+	  newsum=$$(pkg query -F ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} '%X') ; \
+	  if [ "$${oldsum}" == "$${newsum}" ]; then \
+	   echo "==> Keeping old ${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION_FROM}.${PKG_FORMAT}" ; \
+	   rm ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} ; \
+	   cp $${pkg} ${REPODIR}/${PKG_ABI}/${PKG_VERSION} ; \
+	  else \
+	    echo "==> New package $${newpkgname}" ; \
+	  fi ; \
+	done
+	${_+_}@cd ${.CURDIR}; \
+		${MAKE} -f Makefile.inc1 PKG_VERSION=${PKG_VERSION} sign-packages
 
 stage-packages-world: .PHONY
 	@mkdir -p ${WSTAGEDIR}
@@ -1919,10 +1951,6 @@ create-world-packages:	_pkgbootstrap .PHONY
 
 .if make(create-world-packages-jobs)
 .include "${WSTAGEDIR}/packages.mk"
-.endif
-
-.if make(create-world-packages-jobs) || make(create-kernel-packages*)
-PKG_ABI!=${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI
 .endif
 
 create-world-packages-jobs: .PHONY
@@ -2089,11 +2117,6 @@ update: .PHONY
 # which don't have the APIs required by the targets built in bootstrap-tools,
 # build-tools or cross-tools.
 #
-
-# libnv and libsbuf are requirements for config(8), which is an unconditional
-# bootstrap-tool.
-_config_deps= lib/libnv lib/libsbuf
-
 legacy: .PHONY
 .if ${BOOTSTRAPPING} < ${MINIMUM_SUPPORTED_OSREL} && ${BOOTSTRAPPING} != 0
 	@echo "ERROR: Source upgrades from versions prior to ${MINIMUM_SUPPORTED_REL} are not supported."; \
@@ -2235,12 +2258,9 @@ _crunchide=	usr.sbin/crunch/crunchide
 _bootstrap_tools_links+=crunchide
 .endif
 
-# r285986 crunchen: use STRIPBIN rather than STRIP
-# 1100113: Support MK_AUTO_OBJ
-# 1200006: META_MODE fixes
-.if ${BOOTSTRAPPING} < 1100078 || \
-    (${MK_AUTO_OBJ} == "yes" && ${BOOTSTRAPPING} < 1100114) || \
-    (${MK_META_MODE} == "yes" && ${BOOTSTRAPPING} < 1200006)
+# 1300115: Higher WARNS fixes
+.if ${BOOTSTRAPPING} < 1202502 || \
+	(${BOOTSTRAPPING} > 1300000 && ${BOOTSTRAPPING} < 1300115)
 _crunchgen=	usr.sbin/crunch/crunchgen
 .else
 _bootstrap_tools_links+=crunchgen
@@ -2337,7 +2357,10 @@ _basic_bootstrap_tools+=usr.bin/ldd
 .endif
 # sysctl/chflags are required for installkernel:
 .if !defined(CROSSBUILD_HOST)
-_basic_bootstrap_tools+=sbin/sysctl bin/chflags
+_basic_bootstrap_tools+=bin/chflags
+# Note: sysctl does not bootstrap on FreeBSD < 13 anymore, but that doesn't
+# matter since we don't need any of the new features for the build.
+_bootstrap_tools_links+=sysctl
 .else
 # When building on non-FreeBSD, install a fake chflags instead since the
 # version from the source tree cannot work. We also don't need sysctl since we
@@ -2346,6 +2369,8 @@ _other_bootstrap_tools+=tools/build/cross-build/fake_chflags
 .endif
 # mkfifo is used by sys/conf/newvers.sh
 _basic_bootstrap_tools+=usr.bin/mkfifo
+# jot is needed for the mkimg tests
+_basic_bootstrap_tools+=usr.bin/jot
 
 .if ${MK_BOOT} != "no"
 # md5 is used by boot/beri (and possibly others)
@@ -2478,7 +2503,7 @@ _jevents=lib/libpmc/pmu-events
 
 # kernel-toolchain skips _cleanobj, so handle cleaning up previous
 # build-tools directories if needed.
-.if !defined(NO_CLEAN) && make(kernel-toolchain)
+.if ${MK_CLEAN} == "yes" && make(kernel-toolchain)
 _bt_clean=	${CLEANDIR}
 .endif
 
@@ -2831,6 +2856,7 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 		lib/libelf lib/libexpat \
 		lib/libfigpar \
 		${_lib_libgssapi} \
+		lib/libjail \
 		lib/libkiconv lib/libkvm lib/liblzma lib/libmd lib/libnv \
 		lib/libzstd \
 		${_lib_casper} \
@@ -2847,7 +2873,7 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 		${_cddl_lib_libtpool} \
 		${_cddl_lib_libzfs_core} ${_cddl_lib_libzfs} \
 		${_cddl_lib_libzutil} \
-		${_cddl_lib_libctf} \
+		${_cddl_lib_libctf} ${_cddl_lib_libzfsbootenv} \
 		lib/libufs \
 		lib/libutil lib/libpjdlog ${_lib_libypclnt} lib/libz lib/msun \
 		${_secure_lib_libcrypto} ${_secure_lib_libssl} \
@@ -2927,6 +2953,7 @@ _cddl_lib_libtpool= cddl/lib/libtpool
 _cddl_lib_libzutil= cddl/lib/libzutil
 _cddl_lib_libzfs_core= cddl/lib/libzfs_core
 _cddl_lib_libzfs= cddl/lib/libzfs
+_cddl_lib_libzfsbootenv= cddl/lib/libzfsbootenv
 
 cddl/lib/libtpool__L: cddl/lib/libspl__L
 
@@ -2940,7 +2967,8 @@ cddl/lib/libzfs__L: cddl/lib/libuutil__L cddl/lib/libavl__L lib/libgeom__L
 cddl/lib/libzfs__L: cddl/lib/libnvpair__L cddl/lib/libzutil__L
 cddl/lib/libzfs__L: secure/lib/libcrypto__L
 
-lib/libbe__L: cddl/lib/libzfs__L
+cddl/lib/libzfsbootenv__L: cddl/lib/libzfs__L
+lib/libbe__L: cddl/lib/libzfs__L cddl/lib/libzfsbootenv__L
 .endif
 _cddl_lib_libctf= cddl/lib/libctf
 _cddl_lib= cddl/lib

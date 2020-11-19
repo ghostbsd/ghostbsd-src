@@ -2254,6 +2254,13 @@ print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
 			break;
 		}
 		color_end();
+	} else if (children == 0 && !isspare &&
+	    getenv("ZPOOL_STATUS_NON_NATIVE_ASHIFT_IGNORE") == NULL &&
+	    VDEV_STAT_VALID(vs_physical_ashift, vsc) &&
+	    vs->vs_configured_ashift < vs->vs_physical_ashift) {
+		(void) printf(
+		    gettext("  block size: %dB configured, %dB native"),
+		    1 << vs->vs_configured_ashift, 1 << vs->vs_physical_ashift);
 	}
 
 	/* The root vdev has the scrub/resilver stats */
@@ -2652,6 +2659,13 @@ show_import(nvlist_t *config)
 		printf_color(ANSI_BOLD, gettext("status: "));
 		printf_color(ANSI_YELLOW, gettext("Errata #%d detected.\n"),
 		    errata);
+		break;
+
+	case ZPOOL_STATUS_NON_NATIVE_ASHIFT:
+		printf_color(ANSI_BOLD, gettext("status: "));
+		printf_color(ANSI_YELLOW, gettext("One or more devices are "
+		    "configured to use a non-native block size.\n"
+		    "\tExpect reduced performance.\n"));
 		break;
 
 	default:
@@ -10229,6 +10243,7 @@ main(int argc, char **argv)
 	char **newargv;
 
 	(void) setlocale(LC_ALL, "");
+	(void) setlocale(LC_NUMERIC, "C");
 	(void) textdomain(TEXT_DOMAIN);
 	srand(time(NULL));
 

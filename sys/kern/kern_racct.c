@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2010 The FreeBSD Foundation
- * All rights reserved.
  *
  * This software was developed by Edward Tomasz Napierala under sponsorship
  * from the FreeBSD Foundation.
@@ -1146,6 +1145,8 @@ racct_proc_throttle(struct proc *p, int timeout)
 
 	FOREACH_THREAD_IN_PROC(p, td) {
 		thread_lock(td);
+		td->td_flags |= TDF_ASTPENDING;
+
 		switch (td->td_state) {
 		case TDS_RUNQ:
 			/*

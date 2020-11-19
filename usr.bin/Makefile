@@ -7,6 +7,7 @@ SUBDIR=	alias \
 	apply \
 	asa \
 	awk \
+	backlight \
 	banner \
 	basename \
 	brandelf \
@@ -259,14 +260,12 @@ SUBDIR.${MK_TOOLCHAIN}+=	ar
 SUBDIR.${MK_TOOLCHAIN}+=	c89
 SUBDIR.${MK_TOOLCHAIN}+=	c99
 SUBDIR.${MK_TOOLCHAIN}+=	ctags
+.if ${MK_LLVM_CXXFILT} == "no"
 SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
+.endif
 SUBDIR.${MK_TOOLCHAIN}+=	objcopy
 SUBDIR.${MK_TOOLCHAIN}+=	file2c
-# ARM64TODO gprof does not build
-# RISCVTODO gprof does not build
-.if ${MACHINE_ARCH} != "aarch64"
 SUBDIR.${MK_TOOLCHAIN}+=	gprof
-.endif
 SUBDIR.${MK_TOOLCHAIN}+=	indent
 SUBDIR.${MK_TOOLCHAIN}+=	lex
 SUBDIR.${MK_TOOLCHAIN}+=	mkstr

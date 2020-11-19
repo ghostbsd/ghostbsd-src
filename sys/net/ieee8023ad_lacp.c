@@ -54,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/ethernet.h>
+#include <net/infiniband.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
 
@@ -831,7 +832,8 @@ lacp_stop(struct lagg_softc *sc)
 }
 
 struct lagg_port *
-lacp_select_tx_port_by_hash(struct lagg_softc *sc, uint32_t hash, uint8_t numa_domain)
+lacp_select_tx_port_by_hash(struct lagg_softc *sc, uint32_t hash,
+    uint8_t numa_domain, int *err)
 {
 	struct lacp_softc *lsc = LACP_SOFTC(sc);
 	struct lacp_portmap *pm;
@@ -841,12 +843,14 @@ lacp_select_tx_port_by_hash(struct lagg_softc *sc, uint32_t hash, uint8_t numa_d
 
 	if (__predict_false(lsc->lsc_suppress_distributing)) {
 		LACP_DPRINTF((NULL, "%s: waiting transit\n", __func__));
+		*err = ENOBUFS;
 		return (NULL);
 	}
 
 	pm = &lsc->lsc_pmap[lsc->lsc_activemap];
 	if (pm->pm_count == 0) {
 		LACP_DPRINTF((NULL, "%s: no active aggregator\n", __func__));
+		*err = ENETDOWN;
 		return (NULL);
 	}
 
@@ -878,7 +882,7 @@ lacp_select_tx_port_by_hash(struct lagg_softc *sc, uint32_t hash, uint8_t numa_d
 }
 
 struct lagg_port *
-lacp_select_tx_port(struct lagg_softc *sc, struct mbuf *m)
+lacp_select_tx_port(struct lagg_softc *sc, struct mbuf *m, int *err)
 {
 	struct lacp_softc *lsc = LACP_SOFTC(sc);
 	uint32_t hash;
@@ -891,7 +895,7 @@ lacp_select_tx_port(struct lagg_softc *sc, struct mbuf *m)
 		hash = m_ether_tcpip_hash(sc->sc_flags, m, lsc->lsc_hashkey);
 
 	numa_domain = m->m_pkthdr.numa_domain;
-	return (lacp_select_tx_port_by_hash(sc, hash, numa_domain));
+	return (lacp_select_tx_port_by_hash(sc, hash, numa_domain, err));
 }
 
 /*
@@ -1213,6 +1217,7 @@ lacp_compose_key(struct lacp_port *lp)
 		case IFM_40G_CR4:
 		case IFM_40G_SR4:
 		case IFM_40G_LR4:
+		case IFM_40G_LM4:
 		case IFM_40G_XLPPI:
 		case IFM_40G_KR4:
 		case IFM_40G_XLAUI:

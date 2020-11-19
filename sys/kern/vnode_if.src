@@ -225,6 +225,17 @@ vop_read {
 };
 
 
+%% read_pgcache	vp	- - -
+%! read_pgcache	post	vop_read_pgcache_post
+
+vop_read_pgcache {
+	IN struct vnode *vp;
+	INOUT struct uio *uio;
+	IN int ioflag;
+	IN struct ucred *cred;
+};
+
+
 %% write	vp	L L L
 %! write	pre	VOP_WRITE_PRE
 %! write	post	VOP_WRITE_POST
@@ -325,6 +336,7 @@ vop_rename {
 %% mkdir	vpp	- E -
 %! mkdir	pre	vop_mkdir_pre
 %! mkdir	post	vop_mkdir_post
+%! mkdir	debugpost vop_mkdir_debugpost
 
 vop_mkdir {
 	IN struct vnode *dvp;
@@ -386,7 +398,6 @@ vop_readlink {
 
 vop_inactive {
 	IN struct vnode *vp;
-	IN struct thread *td;
 };
 
 %! need_inactive	debugpre	vop_need_inactive_debugpre
@@ -671,7 +682,6 @@ vop_vptofh {
 vop_vptocnp {
 	IN struct vnode *vp;
 	OUT struct vnode **vpp;
-	IN struct ucred *cred;
 	INOUT char *buf;
 	INOUT size_t *buflen;
 };

@@ -72,53 +72,53 @@ SDT_PROBE_DEFINE1(opencrypto, dev, ioctl, error, "int"/*line number*/);
 #include <compat/freebsd32/freebsd32.h>
 
 struct session_op32 {
-	u_int32_t	cipher;
-	u_int32_t	mac;
-	u_int32_t	keylen;
-	u_int32_t	key;
+	uint32_t	cipher;
+	uint32_t	mac;
+	uint32_t	keylen;
+	uint32_t	key;
 	int		mackeylen;
-	u_int32_t	mackey;
-	u_int32_t	ses;
+	uint32_t	mackey;
+	uint32_t	ses;
 };
 
 struct session2_op32 {
-	u_int32_t	cipher;
-	u_int32_t	mac;
-	u_int32_t	keylen;
-	u_int32_t	key;
+	uint32_t	cipher;
+	uint32_t	mac;
+	uint32_t	keylen;
+	uint32_t	key;
 	int		mackeylen;
-	u_int32_t	mackey;
-	u_int32_t	ses;
+	uint32_t	mackey;
+	uint32_t	ses;
 	int		crid;
 	int		pad[4];
 };
 
 struct crypt_op32 {
-	u_int32_t	ses;
-	u_int16_t	op;
-	u_int16_t	flags;
+	uint32_t	ses;
+	uint16_t	op;
+	uint16_t	flags;
 	u_int		len;
-	u_int32_t	src, dst;
-	u_int32_t	mac;
-	u_int32_t	iv;
+	uint32_t	src, dst;
+	uint32_t	mac;
+	uint32_t	iv;
 };
 
 struct crypt_aead32 {
-	u_int32_t	ses;
-	u_int16_t	op;
-	u_int16_t	flags;
+	uint32_t	ses;
+	uint16_t	op;
+	uint16_t	flags;
 	u_int		len;
 	u_int		aadlen;
 	u_int		ivlen;
-	u_int32_t	src;
-	u_int32_t	dst;
-	u_int32_t	aad;
-	u_int32_t	tag;
-	u_int32_t	iv;
+	uint32_t	src;
+	uint32_t	dst;
+	uint32_t	aad;
+	uint32_t	tag;
+	uint32_t	iv;
 };
 
 struct crparam32 {
-	u_int32_t	crp_p;
+	uint32_t	crp_p;
 	u_int		crp_nbits;
 };
 
@@ -309,7 +309,7 @@ struct csession {
 	TAILQ_ENTRY(csession) next;
 	crypto_session_t cses;
 	volatile u_int	refs;
-	u_int32_t	ses;
+	uint32_t	ses;
 	struct mtx	lock;		/* for op submission */
 
 	struct enc_xform *txform;
@@ -346,13 +346,18 @@ SYSCTL_BOOL(_kern_crypto, OID_AUTO, cryptodev_separate_aad, CTLFLAG_RW,
     &use_separate_aad, 0,
     "Use separate AAD buffer for /dev/crypto requests.");
 
-static	int cryptof_ioctl(struct file *, u_long, void *,
-		    struct ucred *, struct thread *);
-static	int cryptof_stat(struct file *, struct stat *,
-		    struct ucred *, struct thread *);
-static	int cryptof_close(struct file *, struct thread *);
-static	int cryptof_fill_kinfo(struct file *, struct kinfo_file *,
-		    struct filedesc *);
+static struct timeval warninterval = { .tv_sec = 60, .tv_usec = 0 };
+SYSCTL_TIMEVAL_SEC(_kern, OID_AUTO, cryptodev_warn_interval, CTLFLAG_RW,
+    &warninterval,
+    "Delay in seconds between warnings of deprecated /dev/crypto algorithms");
+
+static int cryptof_ioctl(struct file *, u_long, void *, struct ucred *,
+    struct thread *);
+static int cryptof_stat(struct file *, struct stat *, struct ucred *,
+    struct thread *);
+static int cryptof_close(struct file *, struct thread *);
+static int cryptof_fill_kinfo(struct file *, struct kinfo_file *,
+    struct filedesc *);
 
 static struct fileops cryptofops = {
     .fo_read = invfo_rdwr,
@@ -368,20 +373,6 @@ static struct fileops cryptofops = {
     .fo_sendfile = invfo_sendfile,
     .fo_fill_kinfo = cryptof_fill_kinfo,
 };
-
-static struct csession *csefind(struct fcrypt *, u_int);
-static bool csedelete(struct fcrypt *, u_int);
-static struct csession *csecreate(struct fcrypt *, crypto_session_t,
-    struct crypto_session_params *, struct enc_xform *, void *,
-    struct auth_hash *, void *);
-static void csefree(struct csession *);
-
-static	int cryptodev_op(struct csession *, struct crypt_op *,
-			struct ucred *, struct thread *td);
-static	int cryptodev_aead(struct csession *, struct crypt_aead *,
-			struct ucred *, struct thread *);
-static	int cryptodev_key(struct crypt_kop *);
-static	int cryptodev_find(struct crypt_find_op *);
 
 /*
  * Check a crypto identifier to see if it requested
@@ -410,491 +401,365 @@ checkforsoftware(int *cridp)
 	return 0;
 }
 
-/* ARGSUSED */
 static int
-cryptof_ioctl(
-	struct file *fp,
-	u_long cmd,
-	void *data,
-	struct ucred *active_cred,
-	struct thread *td)
+cse_create(struct fcrypt *fcr, struct session2_op *sop)
 {
 	struct crypto_session_params csp;
-	struct fcrypt *fcr = fp->f_data;
 	struct csession *cse;
-	struct session2_op *sop;
-	struct crypt_op *cop;
-	struct crypt_aead *caead;
-	struct enc_xform *txform = NULL;
-	struct auth_hash *thash = NULL;
+	struct enc_xform *txform;
+	struct auth_hash *thash;
 	void *key = NULL;
 	void *mackey = NULL;
-	struct crypt_kop *kop;
 	crypto_session_t cses;
-	u_int32_t ses;
-	int error = 0, crid;
-	union {
-		struct session2_op sopc;
-#ifdef COMPAT_FREEBSD32
-		struct crypt_op copc;
-		struct crypt_aead aeadc;
-		struct crypt_kop kopc;
-#endif
-	} thunk;
-#ifdef COMPAT_FREEBSD32
-	u_long cmd32;
-	void *data32;
+	int crid, error;
 
-	cmd32 = 0;
-	data32 = NULL;
-	switch (cmd) {
-	case CIOCGSESSION32:
-		cmd32 = cmd;
-		data32 = data;
-		cmd = CIOCGSESSION;
-		data = &thunk.sopc;
-		session_op_from_32((struct session_op32 *)data32, &thunk.sopc);
+	switch (sop->cipher) {
+	case 0:
+		txform = NULL;
 		break;
-	case CIOCGSESSION232:
-		cmd32 = cmd;
-		data32 = data;
-		cmd = CIOCGSESSION2;
-		data = &thunk.sopc;
-		session2_op_from_32((struct session2_op32 *)data32,
-		    &thunk.sopc);
+	case CRYPTO_AES_CBC:
+		txform = &enc_xform_rijndael128;
 		break;
-	case CIOCCRYPT32:
-		cmd32 = cmd;
-		data32 = data;
-		cmd = CIOCCRYPT;
-		data = &thunk.copc;
-		crypt_op_from_32((struct crypt_op32 *)data32, &thunk.copc);
+	case CRYPTO_AES_XTS:
+		txform = &enc_xform_aes_xts;
 		break;
-	case CIOCCRYPTAEAD32:
-		cmd32 = cmd;
-		data32 = data;
-		cmd = CIOCCRYPTAEAD;
-		data = &thunk.aeadc;
-		crypt_aead_from_32((struct crypt_aead32 *)data32, &thunk.aeadc);
+	case CRYPTO_NULL_CBC:
+		txform = &enc_xform_null;
 		break;
-	case CIOCKEY32:
-	case CIOCKEY232:
-		cmd32 = cmd;
-		data32 = data;
-		if (cmd == CIOCKEY32)
-			cmd = CIOCKEY;
-		else
-			cmd = CIOCKEY2;
-		data = &thunk.kopc;
-		crypt_kop_from_32((struct crypt_kop32 *)data32, &thunk.kopc);
+	case CRYPTO_CAMELLIA_CBC:
+		txform = &enc_xform_camellia;
 		break;
+	case CRYPTO_AES_ICM:
+		txform = &enc_xform_aes_icm;
+		break;
+	case CRYPTO_AES_NIST_GCM_16:
+		txform = &enc_xform_aes_nist_gcm;
+		break;
+	case CRYPTO_CHACHA20:
+		txform = &enc_xform_chacha20;
+		break;
+	case CRYPTO_AES_CCM_16:
+		txform = &enc_xform_ccm;
+		break;
+	default:
+		CRYPTDEB("invalid cipher");
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		return (EINVAL);
 	}
-#endif
 
-	switch (cmd) {
-	case CIOCGSESSION:
-	case CIOCGSESSION2:
-		if (cmd == CIOCGSESSION) {
-			session2_op_from_op(data, &thunk.sopc);
-			sop = &thunk.sopc;
-		} else
-			sop = (struct session2_op *)data;
-
-		switch (sop->cipher) {
-		case 0:
-			break;
-		case CRYPTO_AES_CBC:
-			txform = &enc_xform_rijndael128;
-			break;
-		case CRYPTO_AES_XTS:
-			txform = &enc_xform_aes_xts;
-			break;
-		case CRYPTO_NULL_CBC:
-			txform = &enc_xform_null;
-			break;
- 		case CRYPTO_CAMELLIA_CBC:
- 			txform = &enc_xform_camellia;
- 			break;
-		case CRYPTO_AES_ICM:
-			txform = &enc_xform_aes_icm;
- 			break;
-		case CRYPTO_AES_NIST_GCM_16:
-			txform = &enc_xform_aes_nist_gcm;
- 			break;
-		case CRYPTO_CHACHA20:
-			txform = &enc_xform_chacha20;
-			break;
-		case CRYPTO_AES_CCM_16:
-			txform = &enc_xform_ccm;
-			break;
-
-		default:
-			CRYPTDEB("invalid cipher");
+	switch (sop->mac) {
+	case 0:
+		thash = NULL;
+		break;
+	case CRYPTO_POLY1305:
+		thash = &auth_hash_poly1305;
+		break;
+	case CRYPTO_SHA1_HMAC:
+		thash = &auth_hash_hmac_sha1;
+		break;
+	case CRYPTO_SHA2_224_HMAC:
+		thash = &auth_hash_hmac_sha2_224;
+		break;
+	case CRYPTO_SHA2_256_HMAC:
+		thash = &auth_hash_hmac_sha2_256;
+		break;
+	case CRYPTO_SHA2_384_HMAC:
+		thash = &auth_hash_hmac_sha2_384;
+		break;
+	case CRYPTO_SHA2_512_HMAC:
+		thash = &auth_hash_hmac_sha2_512;
+		break;
+	case CRYPTO_RIPEMD160_HMAC:
+		thash = &auth_hash_hmac_ripemd_160;
+		break;
+#ifdef COMPAT_FREEBSD12
+	case CRYPTO_AES_128_NIST_GMAC:
+	case CRYPTO_AES_192_NIST_GMAC:
+	case CRYPTO_AES_256_NIST_GMAC:
+		/* Should always be paired with GCM. */
+		if (sop->cipher != CRYPTO_AES_NIST_GCM_16) {
+			CRYPTDEB("GMAC without GCM");
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			return (EINVAL);
 		}
+		break;
+#endif
+	case CRYPTO_AES_NIST_GMAC:
+		switch (sop->mackeylen * 8) {
+		case 128:
+			thash = &auth_hash_nist_gmac_aes_128;
+			break;
+		case 192:
+			thash = &auth_hash_nist_gmac_aes_192;
+			break;
+		case 256:
+			thash = &auth_hash_nist_gmac_aes_256;
+			break;
+		default:
+			CRYPTDEB("invalid GMAC key length");
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			return (EINVAL);
+		}
+		break;
+	case CRYPTO_AES_CCM_CBC_MAC:
+		switch (sop->mackeylen) {
+		case 16:
+			thash = &auth_hash_ccm_cbc_mac_128;
+			break;
+		case 24:
+			thash = &auth_hash_ccm_cbc_mac_192;
+			break;
+		case 32:
+			thash = &auth_hash_ccm_cbc_mac_256;
+			break;
+		default:
+			CRYPTDEB("Invalid CBC MAC key size %d", sop->keylen);
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			return (EINVAL);
+		}
+		break;
+	case CRYPTO_SHA1:
+		thash = &auth_hash_sha1;
+		break;
+	case CRYPTO_SHA2_224:
+		thash = &auth_hash_sha2_224;
+		break;
+	case CRYPTO_SHA2_256:
+		thash = &auth_hash_sha2_256;
+		break;
+	case CRYPTO_SHA2_384:
+		thash = &auth_hash_sha2_384;
+		break;
+	case CRYPTO_SHA2_512:
+		thash = &auth_hash_sha2_512;
+		break;
 
+	case CRYPTO_NULL_HMAC:
+		thash = &auth_hash_null;
+		break;
+
+	case CRYPTO_BLAKE2B:
+		thash = &auth_hash_blake2b;
+		break;
+	case CRYPTO_BLAKE2S:
+		thash = &auth_hash_blake2s;
+		break;
+
+	default:
+		CRYPTDEB("invalid mac");
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		return (EINVAL);
+	}
+
+	if (txform == NULL && thash == NULL) {
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		return (EINVAL);
+	}
+
+	memset(&csp, 0, sizeof(csp));
+	if (use_outputbuffers)
+		csp.csp_flags |= CSP_F_SEPARATE_OUTPUT;
+
+	if (sop->cipher == CRYPTO_AES_NIST_GCM_16) {
 		switch (sop->mac) {
-		case 0:
-			break;
-		case CRYPTO_POLY1305:
-			thash = &auth_hash_poly1305;
-			break;
-		case CRYPTO_SHA1_HMAC:
-			thash = &auth_hash_hmac_sha1;
-			break;
-		case CRYPTO_SHA2_224_HMAC:
-			thash = &auth_hash_hmac_sha2_224;
-			break;
-		case CRYPTO_SHA2_256_HMAC:
-			thash = &auth_hash_hmac_sha2_256;
-			break;
-		case CRYPTO_SHA2_384_HMAC:
-			thash = &auth_hash_hmac_sha2_384;
-			break;
-		case CRYPTO_SHA2_512_HMAC:
-			thash = &auth_hash_hmac_sha2_512;
-			break;
-		case CRYPTO_RIPEMD160_HMAC:
-			thash = &auth_hash_hmac_ripemd_160;
-			break;
 #ifdef COMPAT_FREEBSD12
 		case CRYPTO_AES_128_NIST_GMAC:
 		case CRYPTO_AES_192_NIST_GMAC:
 		case CRYPTO_AES_256_NIST_GMAC:
-			/* Should always be paired with GCM. */
-			if (sop->cipher != CRYPTO_AES_NIST_GCM_16) {
-				CRYPTDEB("GMAC without GCM");
+			if (sop->keylen != sop->mackeylen) {
 				SDT_PROBE1(opencrypto, dev, ioctl, error,
 				    __LINE__);
 				return (EINVAL);
 			}
 			break;
 #endif
-		case CRYPTO_AES_NIST_GMAC:
-			switch (sop->mackeylen * 8) {
-			case 128:
-				thash = &auth_hash_nist_gmac_aes_128;
-				break;
-			case 192:
-				thash = &auth_hash_nist_gmac_aes_192;
-				break;
-			case 256:
-				thash = &auth_hash_nist_gmac_aes_256;
-				break;
-			default:
-				CRYPTDEB("invalid GMAC key length");
-				SDT_PROBE1(opencrypto, dev, ioctl, error,
-				    __LINE__);
-				return (EINVAL);
-			}
+		case 0:
 			break;
-		case CRYPTO_AES_CCM_CBC_MAC:
-			switch (sop->mackeylen) {
-			case 16:
-				thash = &auth_hash_ccm_cbc_mac_128;
-				break;
-			case 24:
-				thash = &auth_hash_ccm_cbc_mac_192;
-				break;
-			case 32:
-				thash = &auth_hash_ccm_cbc_mac_256;
-				break;
-			default:
-				CRYPTDEB("Invalid CBC MAC key size %d",
-				    sop->keylen);
-				SDT_PROBE1(opencrypto, dev, ioctl,
-				    error, __LINE__);
-				return (EINVAL);
-			}
-			break;
-		case CRYPTO_SHA1:
-			thash = &auth_hash_sha1;
-			break;
-		case CRYPTO_SHA2_224:
-			thash = &auth_hash_sha2_224;
-			break;
-		case CRYPTO_SHA2_256:
-			thash = &auth_hash_sha2_256;
-			break;
-		case CRYPTO_SHA2_384:
-			thash = &auth_hash_sha2_384;
-			break;
-		case CRYPTO_SHA2_512:
-			thash = &auth_hash_sha2_512;
-			break;
-
-		case CRYPTO_NULL_HMAC:
-			thash = &auth_hash_null;
-			break;
-
-		case CRYPTO_BLAKE2B:
-			thash = &auth_hash_blake2b;
-			break;
-		case CRYPTO_BLAKE2S:
-			thash = &auth_hash_blake2s;
-			break;
-
 		default:
-			CRYPTDEB("invalid mac");
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
 			return (EINVAL);
 		}
-
-		if (txform == NULL && thash == NULL) {
-			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			return (EINVAL);
-		}
-
-		memset(&csp, 0, sizeof(csp));
-		if (use_outputbuffers)
-			csp.csp_flags |= CSP_F_SEPARATE_OUTPUT;
-
-		if (sop->cipher == CRYPTO_AES_NIST_GCM_16) {
-			switch (sop->mac) {
+		csp.csp_mode = CSP_MODE_AEAD;
+	} else if (sop->cipher == CRYPTO_AES_CCM_16) {
+		switch (sop->mac) {
 #ifdef COMPAT_FREEBSD12
-			case CRYPTO_AES_128_NIST_GMAC:
-			case CRYPTO_AES_192_NIST_GMAC:
-			case CRYPTO_AES_256_NIST_GMAC:
-				if (sop->keylen != sop->mackeylen) {
-					SDT_PROBE1(opencrypto, dev, ioctl,
-					    error, __LINE__);
-					return (EINVAL);
-				}
-				break;
-#endif
-			case 0:
-				break;
-			default:
+		case CRYPTO_AES_CCM_CBC_MAC:
+			if (sop->keylen != sop->mackeylen) {
 				SDT_PROBE1(opencrypto, dev, ioctl, error,
 				    __LINE__);
 				return (EINVAL);
 			}
-			csp.csp_mode = CSP_MODE_AEAD;
-		} else if (sop->cipher == CRYPTO_AES_CCM_16) {
-			switch (sop->mac) {
-#ifdef COMPAT_FREEBSD12
-			case CRYPTO_AES_CCM_CBC_MAC:
-				if (sop->keylen != sop->mackeylen) {
-					SDT_PROBE1(opencrypto, dev, ioctl,
-					    error, __LINE__);
-					return (EINVAL);
-				}
-				thash = NULL;
-				break;
-#endif
-			case 0:
-				break;
-			default:
-				SDT_PROBE1(opencrypto, dev, ioctl, error,
-				    __LINE__);
-				return (EINVAL);
-			}
-			csp.csp_mode = CSP_MODE_AEAD;
-		} else if (txform && thash)
-			csp.csp_mode = CSP_MODE_ETA;
-		else if (txform)
-			csp.csp_mode = CSP_MODE_CIPHER;
-		else
-			csp.csp_mode = CSP_MODE_DIGEST;
-
-		switch (csp.csp_mode) {
-		case CSP_MODE_AEAD:
-		case CSP_MODE_ETA:
-			if (use_separate_aad)
-				csp.csp_flags |= CSP_F_SEPARATE_AAD;
+			thash = NULL;
 			break;
-		}
-
-		if (txform) {
-			csp.csp_cipher_alg = txform->type;
-			csp.csp_cipher_klen = sop->keylen;
-			if (sop->keylen > txform->maxkey ||
-			    sop->keylen < txform->minkey) {
-				CRYPTDEB("invalid cipher parameters");
-				error = EINVAL;
-				SDT_PROBE1(opencrypto, dev, ioctl, error,
-				    __LINE__);
-				goto bail;
-			}
-
-			key = malloc(csp.csp_cipher_klen, M_XDATA, M_WAITOK);
-			error = copyin(sop->key, key, csp.csp_cipher_klen);
-			if (error) {
-				CRYPTDEB("invalid key");
-				SDT_PROBE1(opencrypto, dev, ioctl, error,
-				    __LINE__);
-				goto bail;
-			}
-			csp.csp_cipher_key = key;
-			csp.csp_ivlen = txform->ivsize;
-		}
-
-		if (thash) {
-			csp.csp_auth_alg = thash->type;
-			csp.csp_auth_klen = sop->mackeylen;
-			if (sop->mackeylen > thash->keysize ||
-			    sop->mackeylen < 0) {
-				CRYPTDEB("invalid mac key length");
-				error = EINVAL;
-				SDT_PROBE1(opencrypto, dev, ioctl, error,
-				    __LINE__);
-				goto bail;
-			}
-
-			if (csp.csp_auth_klen) {
-				mackey = malloc(csp.csp_auth_klen, M_XDATA,
-				    M_WAITOK);
-				error = copyin(sop->mackey, mackey,
-				    csp.csp_auth_klen);
-				if (error) {
-					CRYPTDEB("invalid mac key");
-					SDT_PROBE1(opencrypto, dev, ioctl,
-					    error, __LINE__);
-					goto bail;
-				}
-				csp.csp_auth_key = mackey;
-			}
-
-			if (csp.csp_auth_alg == CRYPTO_AES_NIST_GMAC)
-				csp.csp_ivlen = AES_GCM_IV_LEN;
-			if (csp.csp_auth_alg == CRYPTO_AES_CCM_CBC_MAC)
-				csp.csp_ivlen = AES_CCM_IV_LEN;
-		}
-
-		crid = sop->crid;
-		error = checkforsoftware(&crid);
-		if (error) {
-			CRYPTDEB("checkforsoftware");
-			SDT_PROBE1(opencrypto, dev, ioctl, error,
-			    __LINE__);
-			goto bail;
-		}
-		error = crypto_newsession(&cses, &csp, crid);
-		if (error) {
-			CRYPTDEB("crypto_newsession");
+#endif
+		case 0:
+			break;
+		default:
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			goto bail;
+			return (EINVAL);
 		}
+		csp.csp_mode = CSP_MODE_AEAD;
+	} else if (txform != NULL && thash != NULL)
+		csp.csp_mode = CSP_MODE_ETA;
+	else if (txform != NULL)
+		csp.csp_mode = CSP_MODE_CIPHER;
+	else
+		csp.csp_mode = CSP_MODE_DIGEST;
 
-		cse = csecreate(fcr, cses, &csp, txform, key, thash, mackey);
+	switch (csp.csp_mode) {
+	case CSP_MODE_AEAD:
+	case CSP_MODE_ETA:
+		if (use_separate_aad)
+			csp.csp_flags |= CSP_F_SEPARATE_AAD;
+		break;
+	}
 
-		if (cse == NULL) {
-			crypto_freesession(cses);
+	if (txform != NULL) {
+		csp.csp_cipher_alg = txform->type;
+		csp.csp_cipher_klen = sop->keylen;
+		if (sop->keylen > txform->maxkey ||
+		    sop->keylen < txform->minkey) {
+			CRYPTDEB("invalid cipher parameters");
 			error = EINVAL;
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			CRYPTDEB("csecreate");
 			goto bail;
 		}
-		sop->ses = cse->ses;
 
-		/* return hardware/driver id */
-		sop->crid = crypto_ses2hid(cse->cses);
-bail:
+		key = malloc(csp.csp_cipher_klen, M_XDATA, M_WAITOK);
+		error = copyin(sop->key, key, csp.csp_cipher_klen);
 		if (error) {
-			free(key, M_XDATA);
-			free(mackey, M_XDATA);
+			CRYPTDEB("invalid key");
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
+		}
+		csp.csp_cipher_key = key;
+		csp.csp_ivlen = txform->ivsize;
+	}
+
+	if (thash != NULL) {
+		csp.csp_auth_alg = thash->type;
+		csp.csp_auth_klen = sop->mackeylen;
+		if (sop->mackeylen > thash->keysize || sop->mackeylen < 0) {
+			CRYPTDEB("invalid mac key length");
+			error = EINVAL;
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			goto bail;
 		}
 
-		if (cmd == CIOCGSESSION && error == 0)
-			session2_op_to_op(sop, data);
-		break;
-	case CIOCFSESSION:
-		ses = *(u_int32_t *)data;
-		if (!csedelete(fcr, ses)) {
-			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			return (EINVAL);
-		}
-		break;
-	case CIOCCRYPT:
-		cop = (struct crypt_op *)data;
-		cse = csefind(fcr, cop->ses);
-		if (cse == NULL) {
-			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			return (EINVAL);
-		}
-		error = cryptodev_op(cse, cop, active_cred, td);
-		csefree(cse);
-		break;
-	case CIOCKEY:
-	case CIOCKEY2:
-		if (!crypto_userasymcrypto) {
-			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			return (EPERM);		/* XXX compat? */
-		}
-		kop = (struct crypt_kop *)data;
-		if (cmd == CIOCKEY) {
-			/* NB: crypto core enforces s/w driver use */
-			kop->crk_crid =
-			    CRYPTOCAP_F_HARDWARE | CRYPTOCAP_F_SOFTWARE;
-		}
-		mtx_lock(&Giant);
-		error = cryptodev_key(kop);
-		mtx_unlock(&Giant);
-		break;
-	case CIOCASYMFEAT:
-		if (!crypto_userasymcrypto) {
-			/*
-			 * NB: if user asym crypto operations are
-			 * not permitted return "no algorithms"
-			 * so well-behaved applications will just
-			 * fallback to doing them in software.
-			 */
-			*(int *)data = 0;
-		} else {
-			error = crypto_getfeat((int *)data);
-			if (error)
+		if (csp.csp_auth_klen != 0) {
+			mackey = malloc(csp.csp_auth_klen, M_XDATA, M_WAITOK);
+			error = copyin(sop->mackey, mackey, csp.csp_auth_klen);
+			if (error) {
+				CRYPTDEB("invalid mac key");
 				SDT_PROBE1(opencrypto, dev, ioctl, error,
 				    __LINE__);
+				goto bail;
+			}
+			csp.csp_auth_key = mackey;
 		}
-		break;
-	case CIOCFINDDEV:
-		error = cryptodev_find((struct crypt_find_op *)data);
-		break;
-	case CIOCCRYPTAEAD:
-		caead = (struct crypt_aead *)data;
-		cse = csefind(fcr, caead->ses);
-		if (cse == NULL) {
-			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-			return (EINVAL);
-		}
-		error = cryptodev_aead(cse, caead, active_cred, td);
-		csefree(cse);
-		break;
-	default:
-		error = EINVAL;
-		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
-		break;
+
+		if (csp.csp_auth_alg == CRYPTO_AES_NIST_GMAC)
+			csp.csp_ivlen = AES_GCM_IV_LEN;
+		if (csp.csp_auth_alg == CRYPTO_AES_CCM_CBC_MAC)
+			csp.csp_ivlen = AES_CCM_IV_LEN;
 	}
 
-#ifdef COMPAT_FREEBSD32
-	switch (cmd32) {
-	case CIOCGSESSION32:
-		if (error == 0)
-			session_op_to_32(data, data32);
-		break;
-	case CIOCGSESSION232:
-		if (error == 0)
-			session2_op_to_32(data, data32);
-		break;
-	case CIOCCRYPT32:
-		if (error == 0)
-			crypt_op_to_32(data, data32);
-		break;
-	case CIOCCRYPTAEAD32:
-		if (error == 0)
-			crypt_aead_to_32(data, data32);
-		break;
-	case CIOCKEY32:
-	case CIOCKEY232:
-		crypt_kop_to_32(data, data32);
-		break;
+	crid = sop->crid;
+	error = checkforsoftware(&crid);
+	if (error) {
+		CRYPTDEB("checkforsoftware");
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		goto bail;
 	}
-#endif
+	error = crypto_newsession(&cses, &csp, crid);
+	if (error) {
+		CRYPTDEB("crypto_newsession");
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		goto bail;
+	}
+
+	cse = malloc(sizeof(struct csession), M_XDATA, M_WAITOK | M_ZERO);
+	mtx_init(&cse->lock, "cryptodev", "crypto session lock", MTX_DEF);
+	refcount_init(&cse->refs, 1);
+	cse->key = key;
+	cse->mackey = mackey;
+	cse->mode = csp.csp_mode;
+	cse->cses = cses;
+	cse->txform = txform;
+	if (thash != NULL)
+		cse->hashsize = thash->hashsize;
+	else if (csp.csp_cipher_alg == CRYPTO_AES_NIST_GCM_16)
+		cse->hashsize = AES_GMAC_HASH_LEN;
+	else if (csp.csp_cipher_alg == CRYPTO_AES_CCM_16)
+		cse->hashsize = AES_CBC_MAC_HASH_LEN;
+	cse->ivsize = csp.csp_ivlen;
+
+	mtx_lock(&fcr->lock);
+	TAILQ_INSERT_TAIL(&fcr->csessions, cse, next);
+	cse->ses = fcr->sesn++;
+	mtx_unlock(&fcr->lock);
+
+	sop->ses = cse->ses;
+
+	/* return hardware/driver id */
+	sop->crid = crypto_ses2hid(cse->cses);
+bail:
+	if (error) {
+		free(key, M_XDATA);
+		free(mackey, M_XDATA);
+	}
 	return (error);
 }
 
-static int cryptodev_cb(struct cryptop *);
+static struct csession *
+cse_find(struct fcrypt *fcr, u_int ses)
+{
+	struct csession *cse;
+
+	mtx_lock(&fcr->lock);
+	TAILQ_FOREACH(cse, &fcr->csessions, next) {
+		if (cse->ses == ses) {
+			refcount_acquire(&cse->refs);
+			mtx_unlock(&fcr->lock);
+			return (cse);
+		}
+	}
+	mtx_unlock(&fcr->lock);
+	return (NULL);
+}
+
+static void
+cse_free(struct csession *cse)
+{
+
+	if (!refcount_release(&cse->refs))
+		return;
+	crypto_freesession(cse->cses);
+	mtx_destroy(&cse->lock);
+	if (cse->key)
+		free(cse->key, M_XDATA);
+	if (cse->mackey)
+		free(cse->mackey, M_XDATA);
+	free(cse, M_XDATA);
+}
+
+static bool
+cse_delete(struct fcrypt *fcr, u_int ses)
+{
+	struct csession *cse;
+
+	mtx_lock(&fcr->lock);
+	TAILQ_FOREACH(cse, &fcr->csessions, next) {
+		if (cse->ses == ses) {
+			TAILQ_REMOVE(&fcr->csessions, cse, next);
+			mtx_unlock(&fcr->lock);
+			cse_free(cse);
+			return (true);
+		}
+	}
+	mtx_unlock(&fcr->lock);
+	return (false);
+}
 
 static struct cryptop_data *
 cod_alloc(struct csession *cse, size_t aad_len, size_t len, struct thread *td)
@@ -926,14 +791,29 @@ cod_free(struct cryptop_data *cod)
 }
 
 static int
-cryptodev_op(
-	struct csession *cse,
-	struct crypt_op *cop,
-	struct ucred *active_cred,
-	struct thread *td)
+cryptodev_cb(struct cryptop *crp)
+{
+	struct cryptop_data *cod = crp->crp_opaque;
+
+	/*
+	 * Lock to ensure the wakeup() is not missed by the loops
+	 * waiting on cod->done in cryptodev_op() and
+	 * cryptodev_aead().
+	 */
+	mtx_lock(&cod->cse->lock);
+	cod->done = true;
+	mtx_unlock(&cod->cse->lock);
+	wakeup(cod);
+	return (0);
+}
+
+static int
+cryptodev_op(struct csession *cse, const struct crypt_op *cop,
+    struct ucred *active_cred, struct thread *td)
 {
 	struct cryptop_data *cod = NULL;
 	struct cryptop *crp = NULL;
+	char *dst;
 	int error;
 
 	if (cop->len > 256*1024-4) {
@@ -966,6 +846,7 @@ cryptodev_op(
 	}
 
 	cod = cod_alloc(cse, 0, cop->len + cse->hashsize, td);
+	dst = cop->dst;
 
 	crp = crypto_getreq(cse->cses, M_WAITOK);
 
@@ -1068,7 +949,7 @@ cryptodev_op(
 		crp->crp_iv_start = 0;
 		crp->crp_payload_start += cse->ivsize;
 		crp->crp_payload_length -= cse->ivsize;
-		cop->dst += cse->ivsize;
+		dst += cse->ivsize;
 	}
 
 	if (cop->mac != NULL && crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) {
@@ -1113,7 +994,7 @@ again:
 
 	if (cop->dst != NULL) {
 		error = copyout(cod->obuf != NULL ? cod->obuf :
-		    cod->buf + crp->crp_payload_start, cop->dst,
+		    cod->buf + crp->crp_payload_start, dst,
 		    crp->crp_payload_length);
 		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
@@ -1138,14 +1019,12 @@ bail:
 }
 
 static int
-cryptodev_aead(
-	struct csession *cse,
-	struct crypt_aead *caead,
-	struct ucred *active_cred,
-	struct thread *td)
+cryptodev_aead(struct csession *cse, struct crypt_aead *caead,
+    struct ucred *active_cred, struct thread *td)
 {
 	struct cryptop_data *cod = NULL;
 	struct cryptop *crp = NULL;
+	char *dst;
 	int error;
 
 	if (caead->len > 256*1024-4 || caead->aadlen > 256*1024-4) {
@@ -1172,6 +1051,7 @@ cryptodev_aead(
 	}
 
 	cod = cod_alloc(cse, caead->aadlen, caead->len + cse->hashsize, td);
+	dst = caead->dst;
 
 	crp = crypto_getreq(cse->cses, M_WAITOK);
 
@@ -1263,7 +1143,7 @@ cryptodev_aead(
 		crp->crp_iv_start = crp->crp_payload_start;
 		crp->crp_payload_start += cse->ivsize;
 		crp->crp_payload_length -= cse->ivsize;
-		caead->dst += cse->ivsize;
+		dst += cse->ivsize;
 	}
 
 	if (crp->crp_op & CRYPTO_OP_VERIFY_DIGEST) {
@@ -1308,7 +1188,7 @@ again:
 
 	if (caead->dst != NULL) {
 		error = copyout(cod->obuf != NULL ? cod->obuf :
-		    cod->buf + crp->crp_payload_start, caead->dst,
+		    cod->buf + crp->crp_payload_start, dst,
 		    crp->crp_payload_length);
 		if (error) {
 			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
@@ -1330,23 +1210,6 @@ bail:
 	cod_free(cod);
 
 	return (error);
-}
-
-static int
-cryptodev_cb(struct cryptop *crp)
-{
-	struct cryptop_data *cod = crp->crp_opaque;
-
-	/*
-	 * Lock to ensure the wakeup() is not missed by the loops
-	 * waiting on cod->done in cryptodev_op() and
-	 * cryptodev_aead().
-	 */
-	mtx_lock(&cod->cse->lock);
-	cod->done = true;
-	mtx_unlock(&cod->cse->lock);
-	wakeup(cod);
-	return (0);
 }
 
 static void
@@ -1495,13 +1358,197 @@ cryptodev_find(struct crypt_find_op *find)
 	return (0);
 }
 
+static int
+cryptof_ioctl(struct file *fp, u_long cmd, void *data,
+    struct ucred *active_cred, struct thread *td)
+{
+	static struct timeval keywarn, featwarn;
+	struct fcrypt *fcr = fp->f_data;
+	struct csession *cse;
+	struct session2_op *sop;
+	struct crypt_op *cop;
+	struct crypt_aead *caead;
+	struct crypt_kop *kop;
+	uint32_t ses;
+	int error = 0;
+	union {
+		struct session2_op sopc;
+#ifdef COMPAT_FREEBSD32
+		struct crypt_op copc;
+		struct crypt_aead aeadc;
+		struct crypt_kop kopc;
+#endif
+	} thunk;
+#ifdef COMPAT_FREEBSD32
+	u_long cmd32;
+	void *data32;
+
+	cmd32 = 0;
+	data32 = NULL;
+	switch (cmd) {
+	case CIOCGSESSION32:
+		cmd32 = cmd;
+		data32 = data;
+		cmd = CIOCGSESSION;
+		data = &thunk.sopc;
+		session_op_from_32((struct session_op32 *)data32, &thunk.sopc);
+		break;
+	case CIOCGSESSION232:
+		cmd32 = cmd;
+		data32 = data;
+		cmd = CIOCGSESSION2;
+		data = &thunk.sopc;
+		session2_op_from_32((struct session2_op32 *)data32,
+		    &thunk.sopc);
+		break;
+	case CIOCCRYPT32:
+		cmd32 = cmd;
+		data32 = data;
+		cmd = CIOCCRYPT;
+		data = &thunk.copc;
+		crypt_op_from_32((struct crypt_op32 *)data32, &thunk.copc);
+		break;
+	case CIOCCRYPTAEAD32:
+		cmd32 = cmd;
+		data32 = data;
+		cmd = CIOCCRYPTAEAD;
+		data = &thunk.aeadc;
+		crypt_aead_from_32((struct crypt_aead32 *)data32, &thunk.aeadc);
+		break;
+	case CIOCKEY32:
+	case CIOCKEY232:
+		cmd32 = cmd;
+		data32 = data;
+		if (cmd == CIOCKEY32)
+			cmd = CIOCKEY;
+		else
+			cmd = CIOCKEY2;
+		data = &thunk.kopc;
+		crypt_kop_from_32((struct crypt_kop32 *)data32, &thunk.kopc);
+		break;
+	}
+#endif
+
+	switch (cmd) {
+	case CIOCGSESSION:
+	case CIOCGSESSION2:
+		if (cmd == CIOCGSESSION) {
+			session2_op_from_op(data, &thunk.sopc);
+			sop = &thunk.sopc;
+		} else
+			sop = (struct session2_op *)data;
+
+		error = cse_create(fcr, sop);
+		if (cmd == CIOCGSESSION && error == 0)
+			session2_op_to_op(sop, data);
+		break;
+	case CIOCFSESSION:
+		ses = *(uint32_t *)data;
+		if (!cse_delete(fcr, ses)) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			return (EINVAL);
+		}
+		break;
+	case CIOCCRYPT:
+		cop = (struct crypt_op *)data;
+		cse = cse_find(fcr, cop->ses);
+		if (cse == NULL) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			return (EINVAL);
+		}
+		error = cryptodev_op(cse, cop, active_cred, td);
+		cse_free(cse);
+		break;
+	case CIOCKEY:
+	case CIOCKEY2:
+		if (ratecheck(&keywarn, &warninterval))
+			gone_in(14,
+			    "Asymmetric crypto operations via /dev/crypto");
+
+		if (!crypto_userasymcrypto) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			return (EPERM);		/* XXX compat? */
+		}
+		kop = (struct crypt_kop *)data;
+		if (cmd == CIOCKEY) {
+			/* NB: crypto core enforces s/w driver use */
+			kop->crk_crid =
+			    CRYPTOCAP_F_HARDWARE | CRYPTOCAP_F_SOFTWARE;
+		}
+		mtx_lock(&Giant);
+		error = cryptodev_key(kop);
+		mtx_unlock(&Giant);
+		break;
+	case CIOCASYMFEAT:
+		if (ratecheck(&featwarn, &warninterval))
+			gone_in(14,
+			    "Asymmetric crypto features via /dev/crypto");
+
+		if (!crypto_userasymcrypto) {
+			/*
+			 * NB: if user asym crypto operations are
+			 * not permitted return "no algorithms"
+			 * so well-behaved applications will just
+			 * fallback to doing them in software.
+			 */
+			*(int *)data = 0;
+		} else {
+			error = crypto_getfeat((int *)data);
+			if (error)
+				SDT_PROBE1(opencrypto, dev, ioctl, error,
+				    __LINE__);
+		}
+		break;
+	case CIOCFINDDEV:
+		error = cryptodev_find((struct crypt_find_op *)data);
+		break;
+	case CIOCCRYPTAEAD:
+		caead = (struct crypt_aead *)data;
+		cse = cse_find(fcr, caead->ses);
+		if (cse == NULL) {
+			SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+			return (EINVAL);
+		}
+		error = cryptodev_aead(cse, caead, active_cred, td);
+		cse_free(cse);
+		break;
+	default:
+		error = EINVAL;
+		SDT_PROBE1(opencrypto, dev, ioctl, error, __LINE__);
+		break;
+	}
+
+#ifdef COMPAT_FREEBSD32
+	switch (cmd32) {
+	case CIOCGSESSION32:
+		if (error == 0)
+			session_op_to_32(data, data32);
+		break;
+	case CIOCGSESSION232:
+		if (error == 0)
+			session2_op_to_32(data, data32);
+		break;
+	case CIOCCRYPT32:
+		if (error == 0)
+			crypt_op_to_32(data, data32);
+		break;
+	case CIOCCRYPTAEAD32:
+		if (error == 0)
+			crypt_aead_to_32(data, data32);
+		break;
+	case CIOCKEY32:
+	case CIOCKEY232:
+		crypt_kop_to_32(data, data32);
+		break;
+	}
+#endif
+	return (error);
+}
+
 /* ARGSUSED */
 static int
-cryptof_stat(
-	struct file *fp,
-	struct stat *sb,
-	struct ucred *active_cred,
-	struct thread *td)
+cryptof_stat(struct file *fp, struct stat *sb, struct ucred *active_cred,
+    struct thread *td)
 {
 
 	return (EOPNOTSUPP);
@@ -1519,7 +1566,7 @@ cryptof_close(struct file *fp, struct thread *td)
 		KASSERT(cse->refs == 1,
 		    ("%s: crypto session %p with %d refs", __func__, cse,
 		    cse->refs));
-		csefree(cse);
+		cse_free(cse);
 	}
 	free(fcr, M_XDATA);
 	fp->f_data = NULL;
@@ -1527,96 +1574,17 @@ cryptof_close(struct file *fp, struct thread *td)
 }
 
 static int
-cryptof_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
+cryptof_fill_kinfo(struct file *fp, struct kinfo_file *kif,
+    struct filedesc *fdp)
 {
 
 	kif->kf_type = KF_TYPE_CRYPTO;
 	return (0);
 }
 
-static struct csession *
-csefind(struct fcrypt *fcr, u_int ses)
-{
-	struct csession *cse;
-
-	mtx_lock(&fcr->lock);
-	TAILQ_FOREACH(cse, &fcr->csessions, next) {
-		if (cse->ses == ses) {
-			refcount_acquire(&cse->refs);
-			mtx_unlock(&fcr->lock);
-			return (cse);
-		}
-	}
-	mtx_unlock(&fcr->lock);
-	return (NULL);
-}
-
-static bool
-csedelete(struct fcrypt *fcr, u_int ses)
-{
-	struct csession *cse;
-
-	mtx_lock(&fcr->lock);
-	TAILQ_FOREACH(cse, &fcr->csessions, next) {
-		if (cse->ses == ses) {
-			TAILQ_REMOVE(&fcr->csessions, cse, next);
-			mtx_unlock(&fcr->lock);
-			csefree(cse);
-			return (true);
-		}
-	}
-	mtx_unlock(&fcr->lock);
-	return (false);
-}
-	
-struct csession *
-csecreate(struct fcrypt *fcr, crypto_session_t cses,
-    struct crypto_session_params *csp, struct enc_xform *txform,
-    void *key, struct auth_hash *thash, void *mackey)
-{
-	struct csession *cse;
-
-	cse = malloc(sizeof(struct csession), M_XDATA, M_NOWAIT | M_ZERO);
-	if (cse == NULL)
-		return NULL;
-	mtx_init(&cse->lock, "cryptodev", "crypto session lock", MTX_DEF);
-	refcount_init(&cse->refs, 1);
-	cse->key = key;
-	cse->mackey = mackey;
-	cse->mode = csp->csp_mode;
-	cse->cses = cses;
-	cse->txform = txform;
-	if (thash != NULL)
-		cse->hashsize = thash->hashsize;
-	else if (csp->csp_cipher_alg == CRYPTO_AES_NIST_GCM_16)
-		cse->hashsize = AES_GMAC_HASH_LEN;
-	else if (csp->csp_cipher_alg == CRYPTO_AES_CCM_16)
-		cse->hashsize = AES_CBC_MAC_HASH_LEN;
-	cse->ivsize = csp->csp_ivlen;
-	mtx_lock(&fcr->lock);
-	TAILQ_INSERT_TAIL(&fcr->csessions, cse, next);
-	cse->ses = fcr->sesn++;
-	mtx_unlock(&fcr->lock);
-	return (cse);
-}
-
-static void
-csefree(struct csession *cse)
-{
-
-	if (!refcount_release(&cse->refs))
-		return;
-	crypto_freesession(cse->cses);
-	mtx_destroy(&cse->lock);
-	if (cse->key)
-		free(cse->key, M_XDATA);
-	if (cse->mackey)
-		free(cse->mackey, M_XDATA);
-	free(cse, M_XDATA);
-}
-
 static int
-cryptoioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag, struct thread *td)
+cryptoioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag,
+    struct thread *td)
 {
 	struct file *f;
 	struct fcrypt *fcr;

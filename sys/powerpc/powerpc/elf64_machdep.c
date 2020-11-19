@@ -62,8 +62,6 @@ static void exec_setregs_funcdesc(struct thread *td, struct image_params *imgp,
 struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_size	= SYS_MAXSYSCALL,
 	.sv_table	= sysent,
-	.sv_errsize	= 0,
-	.sv_errtbl	= NULL,
 	.sv_transtrap	= NULL,
 	.sv_fixup	= __elfN(freebsd_fixup),
 	.sv_sendsig	= sendsig,
@@ -83,7 +81,8 @@ struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_setregs	= exec_setregs_funcdesc,
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP | SV_ASLR,
+	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP | SV_ASLR |
+			    SV_TIMEKEEP | SV_RNG_SEED_VER,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -95,18 +94,15 @@ struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_hwcap	= &cpu_features,
 	.sv_hwcap2	= &cpu_features2,
 };
-INIT_SYSENTVEC(elf64_sysvec_v1, &elf64_freebsd_sysvec_v1);
 
 struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_size	= SYS_MAXSYSCALL,
 	.sv_table	= sysent,
-	.sv_errsize	= 0,
-	.sv_errtbl	= NULL,
 	.sv_transtrap	= NULL,
 	.sv_fixup	= __elfN(freebsd_fixup),
 	.sv_sendsig	= sendsig,
-	.sv_sigcode	= sigcode64_elfv2,
-	.sv_szsigcode	= &szsigcode64_elfv2,
+	.sv_sigcode	= sigcode64, /* Fixed up in ppc64_init_sysvecs(). */
+	.sv_szsigcode	= &szsigcode64,
 	.sv_name	= "FreeBSD ELF64 V2",
 	.sv_coredump	= __elfN(coredump),
 	.sv_imgact_try	= NULL,
@@ -121,7 +117,8 @@ struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_setregs	= exec_setregs,
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP,
+	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP |
+			    SV_TIMEKEEP | SV_RNG_SEED_VER,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -133,7 +130,6 @@ struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_hwcap	= &cpu_features,
 	.sv_hwcap2	= &cpu_features2,
 };
-INIT_SYSENTVEC(elf64_sysvec_v2, &elf64_freebsd_sysvec_v2);
 
 static boolean_t ppc64_elfv1_header_match(struct image_params *params,
     int32_t *, uint32_t *);
@@ -192,6 +188,26 @@ SYSINIT(oelf64, SI_SUB_EXEC, SI_ORDER_ANY,
 	&freebsd_brand_oinfo);
 
 void elf_reloc_self(Elf_Dyn *dynp, Elf_Addr relocbase);
+
+static void
+ppc64_init_sysvecs(void *arg)
+{
+	exec_sysvec_init(&elf64_freebsd_sysvec_v2);
+	exec_sysvec_init_secondary(&elf64_freebsd_sysvec_v2,
+	    &elf64_freebsd_sysvec_v1);
+	/*
+	 * Adjust elfv2 sigcode after elfv1 sysvec is initialized.
+	 * exec_sysvec_init_secondary() assumes secondary sysvecs use
+	 * identical signal code, and skips allocating a second copy.
+	 * Since the ELFv2 trampoline is a strict subset of the ELFv1 code,
+	 * we can work around this by adjusting the base address. This also
+	 * avoids two copies of the trampoline code being allocated!
+	 */
+	elf64_freebsd_sysvec_v2.sv_sigcode_base +=
+	    (uintptr_t)sigcode64_elfv2 - (uintptr_t)&sigcode64;
+	elf64_freebsd_sysvec_v2.sv_szsigcode = &szsigcode64_elfv2;
+}
+SYSINIT(elf64_sysvec, SI_SUB_EXEC, SI_ORDER_ANY, ppc64_init_sysvecs, NULL);
 
 static boolean_t
 ppc64_elfv1_header_match(struct image_params *params, int32_t *osrel __unused,
@@ -326,7 +342,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 	case R_PPC64_ADDR64:	/* doubleword64 S + A */
 		error = lookup(lf, symidx, 1, &addr);
 		if (error != 0)
-			return -1;
+			return (-1);
 		addr += addend;
 		*where = addr;
 		break;
@@ -353,11 +369,11 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		break;
 
 	default:
-		printf("kldload: unexpected relocation type %d\n",
-		    (int) rtype);
-		return -1;
+		printf("kldload: unexpected relocation type %d, "
+		    "symbol index %d\n", (int)rtype, symidx);
+		return (-1);
 	}
-	return(0);
+	return (0);
 }
 
 void

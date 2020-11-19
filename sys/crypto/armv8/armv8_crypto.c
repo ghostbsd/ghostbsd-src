@@ -207,6 +207,7 @@ armv8_crypto_probesession(device_t dev,
 		default:
 			return (EINVAL);
 		}
+		break;
 	default:
 		return (EINVAL);
 	}
@@ -281,7 +282,7 @@ armv8_crypto_process(device_t dev, struct cryptop *crp, int hint __unused)
 out:
 	crp->crp_etype = error;
 	crypto_done(crp);
-	return (error);
+	return (0);
 }
 
 static uint8_t *

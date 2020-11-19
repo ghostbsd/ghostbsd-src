@@ -84,6 +84,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/thr.h>
 #include <sys/unistd.h>
 #include <sys/ucontext.h>
+#include <sys/umtx.h>
 #include <sys/vnode.h>
 #include <sys/wait.h>
 #include <sys/ipc.h>
@@ -440,8 +441,9 @@ freebsd32_execve(struct thread *td, struct freebsd32_execve_args *uap)
 	error = freebsd32_exec_copyin_args(&eargs, uap->fname, UIO_USERSPACE,
 	    uap->argv, uap->envv);
 	if (error == 0)
-		error = kern_execve(td, &eargs, NULL);
+		error = kern_execve(td, &eargs, NULL, oldvmspace);
 	post_execve(td, error, oldvmspace);
+	AUDIT_SYSCALL_EXIT(error == EJUSTRETURN ? 0 : error, td);
 	return (error);
 }
 
@@ -459,9 +461,10 @@ freebsd32_fexecve(struct thread *td, struct freebsd32_fexecve_args *uap)
 	    uap->argv, uap->envv);
 	if (error == 0) {
 		eargs.fd = uap->fd;
-		error = kern_execve(td, &eargs, NULL);
+		error = kern_execve(td, &eargs, NULL, oldvmspace);
 	}
 	post_execve(td, error, oldvmspace);
+	AUDIT_SYSCALL_EXIT(error == EJUSTRETURN ? 0 : error, td);
 	return (error);
 }
 
@@ -3762,4 +3765,12 @@ freebsd32_sched_rr_get_interval(struct thread *td,
 		error = copyout(&ts32, uap->interval, sizeof(ts32));
 	}
 	return (error);
+}
+
+int
+freebsd32__umtx_op(struct thread *td, struct freebsd32__umtx_op_args *uap)
+{
+
+	return (kern__umtx_op(td, uap->obj, uap->op, uap->val, uap->uaddr,
+	    uap->uaddr2, &umtx_native_ops32));
 }

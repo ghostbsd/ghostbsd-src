@@ -216,15 +216,15 @@
 
 /* NB: deprecated */
 struct session_op {
-	u_int32_t	cipher;		/* ie. CRYPTO_AES_CBC */
-	u_int32_t	mac;		/* ie. CRYPTO_SHA2_256_HMAC */
+	uint32_t	cipher;		/* ie. CRYPTO_AES_CBC */
+	uint32_t	mac;		/* ie. CRYPTO_SHA2_256_HMAC */
 
-	u_int32_t	keylen;		/* cipher key */
-	c_caddr_t	key;
+	uint32_t	keylen;		/* cipher key */
+	const void	*key;
 	int		mackeylen;	/* mac key */
-	c_caddr_t	mackey;
+	const void	*mackey;
 
-  	u_int32_t	ses;		/* returns: session # */ 
+  	uint32_t	ses;		/* returns: session # */ 
 };
 
 /*
@@ -233,47 +233,47 @@ struct session_op {
  * "cryptop" (no underscore).
  */
 struct session2_op {
-	u_int32_t	cipher;		/* ie. CRYPTO_AES_CBC */
-	u_int32_t	mac;		/* ie. CRYPTO_SHA2_256_HMAC */
+	uint32_t	cipher;		/* ie. CRYPTO_AES_CBC */
+	uint32_t	mac;		/* ie. CRYPTO_SHA2_256_HMAC */
 
-	u_int32_t	keylen;		/* cipher key */
-	c_caddr_t	key;
+	uint32_t	keylen;		/* cipher key */
+	const void	*key;
 	int		mackeylen;	/* mac key */
-	c_caddr_t	mackey;
+	const void	*mackey;
 
-  	u_int32_t	ses;		/* returns: session # */ 
+  	uint32_t	ses;		/* returns: session # */ 
 	int		crid;		/* driver id + flags (rw) */
 	int		pad[4];		/* for future expansion */
 };
 
 struct crypt_op {
-	u_int32_t	ses;
-	u_int16_t	op;		/* i.e. COP_ENCRYPT */
+	uint32_t	ses;
+	uint16_t	op;		/* i.e. COP_ENCRYPT */
 #define COP_ENCRYPT	1
 #define COP_DECRYPT	2
-	u_int16_t	flags;
+	uint16_t	flags;
 #define	COP_F_CIPHER_FIRST	0x0001	/* Cipher before MAC. */
 #define	COP_F_BATCH		0x0008	/* Batch op if possible */
 	u_int		len;
-	c_caddr_t	src;		/* become iov[] inside kernel */
-	caddr_t		dst;
-	caddr_t		mac;		/* must be big enough for chosen MAC */
-	c_caddr_t	iv;
+	const void	*src;		/* become iov[] inside kernel */
+	void		*dst;
+	void		*mac;		/* must be big enough for chosen MAC */
+	const void	*iv;
 };
 
 /* op and flags the same as crypt_op */
 struct crypt_aead {
-	u_int32_t	ses;
-	u_int16_t	op;		/* i.e. COP_ENCRYPT */
-	u_int16_t	flags;
+	uint32_t	ses;
+	uint16_t	op;		/* i.e. COP_ENCRYPT */
+	uint16_t	flags;
 	u_int		len;
 	u_int		aadlen;
 	u_int		ivlen;
-	c_caddr_t	src;		/* become iov[] inside kernel */
-	caddr_t		dst;
-	c_caddr_t	aad;		/* additional authenticated data */
-	caddr_t		tag;		/* must fit for chosen TAG length */
-	c_caddr_t	iv;
+	const void	*src;		/* become iov[] inside kernel */
+	void		*dst;
+	const void	*aad;		/* additional authenticated data */
+	void		*tag;		/* must fit for chosen TAG length */
+	const void	*iv;
 };
 
 /*
@@ -288,7 +288,7 @@ struct crypt_find_op {
 
 /* bignum parameter, in packed bytes, ... */
 struct crparam {
-	caddr_t		crp_p;
+	void		*crp_p;
 	u_int		crp_nbits;
 };
 
@@ -320,16 +320,16 @@ struct crypt_kop {
  * done against open of /dev/crypto, to get a cloned descriptor.
  * Please use F_SETFD against the cloned descriptor.
  */
-#define	CRIOGET		_IOWR('c', 100, u_int32_t)
+#define	CRIOGET		_IOWR('c', 100, uint32_t)
 #define	CRIOASYMFEAT	CIOCASYMFEAT
 #define	CRIOFINDDEV	CIOCFINDDEV
 
 /* the following are done against the cloned descriptor */
 #define	CIOCGSESSION	_IOWR('c', 101, struct session_op)
-#define	CIOCFSESSION	_IOW('c', 102, u_int32_t)
+#define	CIOCFSESSION	_IOW('c', 102, uint32_t)
 #define CIOCCRYPT	_IOWR('c', 103, struct crypt_op)
 #define CIOCKEY		_IOWR('c', 104, struct crypt_kop)
-#define CIOCASYMFEAT	_IOR('c', 105, u_int32_t)
+#define CIOCASYMFEAT	_IOR('c', 105, uint32_t)
 #define	CIOCGSESSION2	_IOWR('c', 106, struct session2_op)
 #define	CIOCKEY2	_IOWR('c', 107, struct crypt_kop)
 #define	CIOCFINDDEV	_IOWR('c', 108, struct crypt_find_op)
@@ -377,6 +377,7 @@ struct crypto_session_params {
 
 #define	CSP_F_SEPARATE_OUTPUT	0x0001	/* Requests can use separate output */
 #define	CSP_F_SEPARATE_AAD	0x0002	/* Requests can use separate AAD */
+#define CSP_F_ESN		0x0004  /* Requests can use seperate ESN field */ 
 
 	int		csp_ivlen;	/* IV length in bytes. */
 
@@ -485,6 +486,8 @@ struct cryptop {
 	void		*crp_aad;	/* AAD buffer. */
 	int		crp_aad_start;	/* Location of AAD. */
 	int		crp_aad_length;	/* 0 => no AAD. */
+	uint8_t		crp_esn[4];	/* high-order ESN */
+
 	int		crp_iv_start;	/* Location of IV.  IV length is from
 					 * the session.
 					 */
@@ -653,13 +656,13 @@ extern	int32_t crypto_get_driverid(device_t dev, size_t session_size,
 extern	int crypto_find_driver(const char *);
 extern	device_t crypto_find_device_byhid(int hid);
 extern	int crypto_getcaps(int hid);
-extern	int crypto_kregister(u_int32_t, int, u_int32_t);
-extern	int crypto_unregister_all(u_int32_t driverid);
+extern	int crypto_kregister(uint32_t, int, uint32_t);
+extern	int crypto_unregister_all(uint32_t driverid);
 extern	int crypto_dispatch(struct cryptop *crp);
 extern	int crypto_kdispatch(struct cryptkop *);
 #define	CRYPTO_SYMQ	0x1
 #define	CRYPTO_ASYMQ	0x2
-extern	int crypto_unblock(u_int32_t, int);
+extern	int crypto_unblock(uint32_t, int);
 extern	void crypto_done(struct cryptop *crp);
 extern	void crypto_kdone(struct cryptkop *);
 extern	int crypto_getfeat(int *);
@@ -680,9 +683,9 @@ SYSCTL_DECL(_kern_crypto);
 /* Helper routines for drivers to initialize auth contexts for HMAC. */
 struct auth_hash;
 
-void	hmac_init_ipad(struct auth_hash *axf, const char *key, int klen,
+void	hmac_init_ipad(const struct auth_hash *axf, const char *key, int klen,
     void *auth_ctx);
-void	hmac_init_opad(struct auth_hash *axf, const char *key, int klen,
+void	hmac_init_opad(const struct auth_hash *axf, const char *key, int klen,
     void *auth_ctx);
 
 /*

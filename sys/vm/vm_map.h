@@ -149,6 +149,10 @@ struct vm_map_entry {
 #define	MAP_ENTRY_STACK_GAP_UP		0x00040000
 #define	MAP_ENTRY_HEADER		0x00080000
 
+#define	MAP_ENTRY_SPLIT_BOUNDARY_MASK	0x00300000
+
+#define	MAP_ENTRY_SPLIT_BOUNDARY_SHIFT	20
+
 #ifdef	_KERNEL
 static __inline u_char
 vm_map_entry_behavior(vm_map_entry_t entry)
@@ -223,6 +227,7 @@ struct vm_map {
 #define	MAP_IS_SUB_MAP		0x04	/* has parent */
 #define	MAP_ASLR		0x08	/* enabled ASLR */
 #define	MAP_ASLR_IGNSTART	0x10
+#define	MAP_REPLENISH		0x20
 
 #ifdef	_KERNEL
 #if defined(KLD_MODULE) && !defined(KLD_TIED)
@@ -287,7 +292,7 @@ struct vmspace {
 	caddr_t vm_taddr;	/* (c) user virtual address of text */
 	caddr_t vm_daddr;	/* (c) user virtual address of data */
 	caddr_t vm_maxsaddr;	/* user VA at max stack growth */
-	volatile int vm_refcnt;	/* number of references */
+	u_int vm_refcnt;	/* number of references */
 	/*
 	 * Keep the PMAP last, so that CPU-specific variations of that
 	 * structure on a single architecture don't result in offset
@@ -373,13 +378,17 @@ long vmspace_resident_count(struct vmspace *vmspace);
 #define	MAP_CREATE_STACK_GAP_UP	0x00010000
 #define	MAP_CREATE_STACK_GAP_DN	0x00020000
 #define	MAP_VN_EXEC		0x00040000
+#define	MAP_SPLIT_BOUNDARY_MASK	0x00180000
+
+#define	MAP_SPLIT_BOUNDARY_SHIFT 19
 
 /*
  * vm_fault option flags
  */
-#define	VM_FAULT_NORMAL	0		/* Nothing special */
-#define	VM_FAULT_WIRE	1		/* Wire the mapped page */
-#define	VM_FAULT_DIRTY	2		/* Dirty the page; use w/VM_PROT_COPY */
+#define	VM_FAULT_NORMAL	0x00	/* Nothing special */
+#define	VM_FAULT_WIRE	0x01	/* Wire the mapped page */
+#define	VM_FAULT_DIRTY	0x02	/* Dirty the page; use w/VM_PROT_COPY */
+#define	VM_FAULT_NOFILL	0x04	/* Fail if the pager doesn't have a copy */
 
 /*
  * Initially, mappings are slightly sequential.  The maximum window size must
@@ -460,6 +469,8 @@ int vm_map_find(vm_map_t, vm_object_t, vm_ooffset_t, vm_offset_t *, vm_size_t,
     vm_offset_t, int, vm_prot_t, vm_prot_t, int);
 int vm_map_find_min(vm_map_t, vm_object_t, vm_ooffset_t, vm_offset_t *,
     vm_size_t, vm_offset_t, vm_offset_t, int, vm_prot_t, vm_prot_t, int);
+int vm_map_find_aligned(vm_map_t map, vm_offset_t *addr, vm_size_t length,
+    vm_offset_t max_addr, vm_offset_t alignment);
 int vm_map_fixed(vm_map_t, vm_object_t, vm_ooffset_t, vm_offset_t, vm_size_t,
     vm_prot_t, vm_prot_t, int);
 vm_offset_t vm_map_findspace(vm_map_t, vm_offset_t, vm_size_t);

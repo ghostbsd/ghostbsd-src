@@ -15,6 +15,7 @@ SUBDIR=	${_atf} \
 	${_mail.local} \
 	${_makewhatis.local} \
 	${_mknetid} \
+	${_phttpget} \
 	${_pppoed} \
 	rc \
 	revnetgroup \
@@ -48,6 +49,10 @@ SUBDIR+=	bootpd
 
 .if ${MK_FINGER} != "no"
 SUBDIR+=	fingerd
+.endif
+
+.if ${MK_FREEBSD_UPDATE} != "no" || ${MK_PORTSNAP} != "no"
+_phttpget=	phttpget
 .endif
 
 .if ${MK_FTP} != "no"

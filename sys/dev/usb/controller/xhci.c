@@ -432,6 +432,19 @@ xhci_start_controller(struct xhci_softc *sc)
 	phwr->hwr_ring_seg[0].qwEvrsTablePtr = htole64(addr);
 	phwr->hwr_ring_seg[0].dwEvrsTableSize = htole32(XHCI_MAX_EVENTS);
 
+	/*
+	 * PR 237666:
+	 *
+	 * According to the XHCI specification, the XWRITE4's to
+	 * XHCI_ERSTBA_LO and _HI lead to the XHCI to copy the
+	 * qwEvrsTablePtr and dwEvrsTableSize values above at that
+	 * time, as the XHCI initializes its event ring support. This
+	 * is before the event ring starts to pay attention to the
+	 * RUN/STOP bit. Thus, make sure the values are observable to
+	 * the XHCI before that point.
+	 */
+	usb_bus_mem_flush_all(&sc->sc_bus, &xhci_iterate_hw_softc);
+
 	DPRINTF("ERDP(0)=0x%016llx\n", (unsigned long long)addr);
 
 	XWRITE4(sc, runt, XHCI_ERDP_LO(0), (uint32_t)addr);
@@ -4007,6 +4020,9 @@ xhci_ep_init(struct usb_device *udev, struct usb_endpoint_descriptor *edesc,
     struct usb_endpoint *ep)
 {
 	struct xhci_endpoint_ext *pepext;
+	struct xhci_softc *sc;
+	uint8_t index;
+	uint8_t epno;
 
 	DPRINTFN(2, "endpoint=%p, addr=%d, endpt=%d, mode=%d\n",
 	    ep, udev->address, edesc->bEndpointAddress, udev->flags.usb_mode);
@@ -4023,6 +4039,18 @@ xhci_ep_init(struct usb_device *udev, struct usb_endpoint_descriptor *edesc,
 	USB_BUS_LOCK(udev->bus);
 	pepext->trb_halted = 1;
 	pepext->trb_running = 0;
+
+	/*
+	 * When doing an alternate setting, except for control
+	 * endpoints, we need to re-configure the XHCI endpoint
+	 * context:
+	 */
+	if ((edesc->bEndpointAddress & UE_ADDR) != 0) {
+		sc = XHCI_BUS2SC(udev->bus);
+		index = udev->controller_slot_id;
+		epno = XHCI_EPNO2EPID(edesc->bEndpointAddress);
+		sc->sc_hw.devs[index].ep_configured &= ~(1U << epno);
+	}
 	USB_BUS_UNLOCK(udev->bus);
 }
 

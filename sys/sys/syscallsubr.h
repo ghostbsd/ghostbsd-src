@@ -62,6 +62,9 @@ struct sockaddr;
 struct stat;
 struct thr_param;
 struct uio;
+struct umtx_copyops;
+struct vm_map;
+struct vmspace;
 
 typedef int (*mmap_check_fp_fn)(struct file *, int, int, int);
 
@@ -77,6 +80,8 @@ struct mmap_req {
 
 int	kern___getcwd(struct thread *td, char *buf, enum uio_seg bufseg,
 	    size_t buflen, size_t path_max);
+int	kern__umtx_op(struct thread *td, void *obj, int op, unsigned long val,
+	    void *uaddr1, void *uaddr2, const struct umtx_copyops *ops);
 int	kern_accept(struct thread *td, int s, struct sockaddr **name,
 	    socklen_t *namelen, struct file **fp);
 int	kern_accept4(struct thread *td, int s, struct sockaddr **name,
@@ -128,13 +133,14 @@ int	kern_cpuset_setid(struct thread *td, cpuwhich_t which,
 	    id_t id, cpusetid_t setid);
 int	kern_dup(struct thread *td, u_int mode, int flags, int old, int new);
 int	kern_execve(struct thread *td, struct image_args *args,
-	    struct mac *mac_p);
+	    struct mac *mac_p, struct vmspace *oldvmspace);
 int	kern_fchmodat(struct thread *td, int fd, const char *path,
 	    enum uio_seg pathseg, mode_t mode, int flag);
 int	kern_fchownat(struct thread *td, int fd, const char *path,
 	    enum uio_seg pathseg, int uid, int gid, int flag);
 int	kern_fcntl(struct thread *td, int fd, int cmd, intptr_t arg);
 int	kern_fcntl_freebsd(struct thread *td, int fd, int cmd, long arg);
+int	kern_fhopen(struct thread *td, const struct fhandle *u_fhp, int flags);
 int	kern_fhstat(struct thread *td, fhandle_t fh, struct stat *buf);
 int	kern_fhstatfs(struct thread *td, fhandle_t fh, struct statfs *buf);
 int	kern_fpathconf(struct thread *td, int fd, int name, long *valuep);
@@ -148,6 +154,8 @@ int	kern_futimens(struct thread *td, int fd, struct timespec *tptr,
 	    enum uio_seg tptrseg);
 int	kern_getdirentries(struct thread *td, int fd, char *buf, size_t count,
 	    off_t *basep, ssize_t *residp, enum uio_seg bufseg);
+int	kern_getfhat(struct thread *td, int flags, int fd, const char *path,
+	    enum uio_seg pathseg, fhandle_t *fhp, enum uio_seg fhseg);
 int	kern_getfsstat(struct thread *td, struct statfs **buf, size_t bufsize,
 	    size_t *countp, enum uio_seg bufseg, int mode);
 int	kern_getitimer(struct thread *, u_int, struct itimerval *);
@@ -197,8 +205,10 @@ int	kern_mlock(struct proc *proc, struct ucred *cred, uintptr_t addr,
 	    size_t len);
 int	kern_mmap(struct thread *td, uintptr_t addr, size_t len, int prot,
 	    int flags, int fd, off_t pos);
-int	kern_mmap_req(struct thread *td, const struct mmap_req *mrp);
+int	kern_mmap_racct_check(struct thread *td, struct vm_map *map,
+	    vm_size_t size);
 int	kern_mmap_maxprot(struct proc *p, int prot);
+int	kern_mmap_req(struct thread *td, const struct mmap_req *mrp);
 int	kern_mprotect(struct thread *td, uintptr_t addr, size_t size, int prot);
 int	kern_msgctl(struct thread *, int, int, struct msqid_ds *);
 int	kern_msgrcv(struct thread *, int, void *, size_t, long, int, long *);

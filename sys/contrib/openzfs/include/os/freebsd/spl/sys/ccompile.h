@@ -113,9 +113,9 @@ extern "C" {
 #define	__VPRINTFLIKE(__n)	__sun_attr__((__VPRINTFLIKE__(__n)))
 #define	__KPRINTFLIKE(__n)	__sun_attr__((__KPRINTFLIKE__(__n)))
 #define	__KVPRINTFLIKE(__n)	__sun_attr__((__KVPRINTFLIKE__(__n)))
-#ifdef _KERNEL
+#if	defined(_KERNEL) || defined(_STANDALONE)
 #define	__NORETURN		__sun_attr__((__noreturn__))
-#endif
+#endif /* _KERNEL || _STANDALONE */
 #define	__CONST			__sun_attr__((__const__))
 #define	__PURE			__sun_attr__((__pure__))
 
@@ -174,7 +174,7 @@ typedef int enum_t;
 #define	__exit
 #endif
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_STANDALONE)
 #define	param_set_charp(a, b) (0)
 #define	ATTR_UID AT_UID
 #define	ATTR_GID AT_GID
@@ -183,9 +183,15 @@ typedef int enum_t;
 #define	ATTR_CTIME	AT_CTIME
 #define	ATTR_MTIME	AT_MTIME
 #define	ATTR_ATIME	AT_ATIME
+#if defined(_STANDALONE)
+#define	vmem_free kmem_free
+#define	vmem_zalloc kmem_zalloc
+#define	vmem_alloc kmem_zalloc
+#else
 #define	vmem_free zfs_kmem_free
 #define	vmem_zalloc(size, flags) zfs_kmem_alloc(size, flags | M_ZERO)
 #define	vmem_alloc zfs_kmem_alloc
+#endif
 #define	MUTEX_NOLOCKDEP 0
 #define	RW_NOLOCKDEP 0
 
@@ -206,8 +212,10 @@ typedef int enum_t;
 #define	__XSI_VISIBLE 1000
 #endif
 #define	ARRAY_SIZE(a) (sizeof (a) / sizeof (a[0]))
-#define	open64 open
 #define	mmap64 mmap
+/* Note: this file can be used on linux/macOS when bootstrapping tools. */
+#if defined(__FreeBSD__)
+#define	open64 open
 #define	pwrite64 pwrite
 #define	ftruncate64 ftruncate
 #define	lseek64 lseek
@@ -217,6 +225,7 @@ typedef int enum_t;
 #define	statfs64 statfs
 #define	readdir64 readdir
 #define	dirent64 dirent
+#endif
 #define	P2ALIGN(x, align)		((x) & -(align))
 #define	P2CROSS(x, y, align)	(((x) ^ (y)) > (align) - 1)
 #define	P2ROUNDUP(x, align)		((((x) - 1) | ((align) - 1)) + 1)

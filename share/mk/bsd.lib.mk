@@ -85,6 +85,25 @@ LDFLAGS+= -Wl,-zretpolineplt
 .endif
 .endif
 
+# Initialize stack variables on function entry
+.if ${MK_INIT_ALL_ZERO} == "yes"
+.if ${COMPILER_FEATURES:Minit-all}
+CFLAGS+= -ftrivial-auto-var-init=zero \
+    -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang
+CXXFLAGS+= -ftrivial-auto-var-init=zero \
+    -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang
+.else
+.warning InitAll (zeros) requested but not support by compiler
+.endif
+.elif ${MK_INIT_ALL_PATTERN} == "yes"
+.if ${COMPILER_FEATURES:Minit-all}
+CFLAGS+= -ftrivial-auto-var-init=pattern
+CXXFLAGS+= -ftrivial-auto-var-init=pattern
+.else
+.warning InitAll (pattern) requested but not support by compiler
+.endif
+.endif
+
 .if ${MK_DEBUG_FILES} != "no" && empty(DEBUG_FLAGS:M-g) && \
     empty(DEBUG_FLAGS:M-gdwarf*)
 CFLAGS+= ${DEBUG_FILES_CFLAGS}
@@ -245,9 +264,7 @@ _LIBS=		lib${LIB_PRIVATE}${LIB}.a
 lib${LIB_PRIVATE}${LIB}.a: ${OBJS} ${STATICOBJS}
 	@${ECHO} building static ${LIB} library
 	@rm -f ${.TARGET}
-	${AR} ${ARFLAGS} ${.TARGET} `NM='${NM}' NMFLAGS='${NMFLAGS}' \
-	    ${LORDER} ${OBJS} ${STATICOBJS} | ${TSORT} ${TSORTFLAGS}` ${ARADD}
-	${RANLIB} ${RANLIBFLAGS} ${.TARGET}
+	${AR} ${ARFLAGS} ${.TARGET} ${OBJS} ${STATICOBJS} ${ARADD}
 .endif
 
 .if !defined(INTERNALLIB)
@@ -261,9 +278,7 @@ CLEANFILES+=	${POBJS}
 lib${LIB_PRIVATE}${LIB}_p.a: ${POBJS}
 	@${ECHO} building profiled ${LIB} library
 	@rm -f ${.TARGET}
-	${AR} ${ARFLAGS} ${.TARGET} `NM='${NM}' NMFLAGS='${NMFLAGS}' \
-	    ${LORDER} ${POBJS} | ${TSORT} ${TSORTFLAGS}` ${ARADD}
-	${RANLIB} ${RANLIBFLAGS} ${.TARGET}
+	${AR} ${ARFLAGS} ${.TARGET} ${POBJS} ${ARADD}
 .endif
 
 .if defined(LLVM_LINK)
@@ -316,12 +331,11 @@ ${SHLIB_NAME_FULL}: ${SOBJS}
 	@${ECHO} building shared library ${SHLIB_NAME}
 	@rm -f ${SHLIB_NAME} ${SHLIB_LINK}
 .if defined(SHLIB_LINK) && !commands(${SHLIB_LINK:R}.ld) && ${MK_DEBUG_FILES} == "no"
-	@${INSTALL_LIBSYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} ${SHLIB_NAME} ${SHLIB_LINK}
+	# Note: This uses ln instead of ${INSTALL_LIBSYMLINK} since we are in OBJDIR
+	@${LN:Uln} -fs ${SHLIB_NAME} ${SHLIB_LINK}
 .endif
 	${_LD:N${CCACHE_BIN}} ${LDFLAGS} ${SSP_CFLAGS} ${SOLINKOPTS} \
-	    -o ${.TARGET} -Wl,-soname,${SONAME} \
-	    `NM='${NM}' NMFLAGS='${NMFLAGS}' ${LORDER} ${SOBJS} | \
-	    ${TSORT} ${TSORTFLAGS}` ${LDADD}
+	    -o ${.TARGET} -Wl,-soname,${SONAME} ${SOBJS} ${LDADD}
 .if ${MK_CTF} != "no"
 	${CTFMERGE} ${CTFFLAGS} -o ${.TARGET} ${SOBJS}
 .endif
@@ -332,7 +346,8 @@ ${SHLIB_NAME}: ${SHLIB_NAME_FULL} ${SHLIB_NAME}.debug
 	${OBJCOPY} --strip-debug --add-gnu-debuglink=${SHLIB_NAME}.debug \
 	    ${SHLIB_NAME_FULL} ${.TARGET}
 .if defined(SHLIB_LINK) && !commands(${SHLIB_LINK:R}.ld)
-	@${INSTALL_LIBSYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} ${SHLIB_NAME} ${SHLIB_LINK}
+	# Note: This uses ln instead of ${INSTALL_LIBSYMLINK} since we are in OBJDIR
+	@${LN:Uln} -fs ${SHLIB_NAME} ${SHLIB_LINK}
 .endif
 
 ${SHLIB_NAME}.debug: ${SHLIB_NAME_FULL}
@@ -347,7 +362,6 @@ lib${LIB_PRIVATE}${LIB}_pic.a: ${SOBJS}
 	@${ECHO} building special pic ${LIB} library
 	@rm -f ${.TARGET}
 	${AR} ${ARFLAGS} ${.TARGET} ${SOBJS} ${ARADD}
-	${RANLIB} ${RANLIBFLAGS} ${.TARGET}
 .endif
 
 .if defined(BUILD_NOSSP_PIC_ARCHIVE) && defined(LIB) && !empty(LIB)
@@ -360,7 +374,6 @@ lib${LIB_PRIVATE}${LIB}_nossp_pic.a: ${NOSSPSOBJS}
 	@${ECHO} building special nossp pic ${LIB} library
 	@rm -f ${.TARGET}
 	${AR} ${ARFLAGS} ${.TARGET} ${NOSSPSOBJS} ${ARADD}
-	${RANLIB} ${RANLIBFLAGS} ${.TARGET}
 .endif
 
 .endif # !defined(INTERNALLIB)
@@ -376,7 +389,6 @@ lib${LIB_PRIVATE}${LIB}_pie.a: ${PIEOBJS}
 	@${ECHO} building pie ${LIB} library
 	@rm -f ${.TARGET}
 	${AR} ${ARFLAGS} ${.TARGET} ${PIEOBJS} ${ARADD}
-	${RANLIB} ${RANLIBFLAGS} ${.TARGET}
 .endif
 
 .if defined(_SKIP_BUILD)
@@ -412,6 +424,7 @@ SHLINSTALLFLAGS+= -fschg
 # that are only creating an image.
 .if !defined(NO_SAFE_LIBINSTALL) && !defined(NO_ROOT)
 SHLINSTALLFLAGS+= -S
+SHLINSTALLSYMLINKFLAGS+= -S
 .endif
 
 _INSTALLFLAGS:=	${INSTALLFLAGS}
@@ -419,6 +432,7 @@ _INSTALLFLAGS:=	${INSTALLFLAGS}
 _INSTALLFLAGS:=	${_INSTALLFLAGS${ie}}
 .endfor
 _SHLINSTALLFLAGS:=	${SHLINSTALLFLAGS}
+_SHLINSTALLSYMLINKFLAGS:= ${SHLINSTALLSYMLINKFLAGS}
 .for ie in ${INSTALLFLAGS_EDIT}
 _SHLINSTALLFLAGS:=	${_SHLINSTALLFLAGS${ie}}
 .endfor
@@ -453,29 +467,31 @@ _libinstall:
 	    ${_INSTALLFLAGS} ${SHLIB_LINK:R}.ld \
 	    ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .for _SHLIB_LINK_LINK in ${SHLIB_LDSCRIPT_LINKS}
-	${INSTALL_LIBSYMLINK} ${TAG_ARGS} ${SHLIB_LINK} ${DESTDIR}${_LIBDIR}/${_SHLIB_LINK_LINK}
+	${INSTALL_LIBSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS} ${SHLIB_LINK} \
+	    ${DESTDIR}${_LIBDIR}/${_SHLIB_LINK_LINK}
 .endfor
 .else
 .if ${_SHLIBDIR} == ${_LIBDIR}
 .if ${SHLIB_LINK:Mlib*}
-	${INSTALL_RSYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} ${SHLIB_NAME} ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS:D${TAG_ARGS},dev} \
+	    ${SHLIB_NAME} ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .else
-	${INSTALL_RSYMLINK} ${TAG_ARGS} ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} \
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS} ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} \
 	    ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .endif
 .else
 .if ${SHLIB_LINK:Mlib*}
-	${INSTALL_RSYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} \
-	    ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS:D${TAG_ARGS},dev} \
+	    ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .else
-	${INSTALL_RSYMLINK} ${TAG_ARGS} ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} \
-	    ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS} \
+	    ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .endif
 .if exists(${DESTDIR}${_LIBDIR}/${SHLIB_NAME})
 	-chflags noschg ${DESTDIR}${_LIBDIR}/${SHLIB_NAME}
 	rm -f ${DESTDIR}${_LIBDIR}/${SHLIB_NAME}
 .endif
-.endif
+.endif # _SHLIBDIR == _LIBDIR
 .endif # SHLIB_LDSCRIPT
 .endif # SHLIB_LINK
 .endif # SHIB_NAME

@@ -168,9 +168,15 @@ gic_v3_acpi_identify(driver_t *driver, device_t parent)
 		    "No gic interrupt or distributor table\n");
 		goto out;
 	}
-	/* This is for the wrong GIC version */
-	if (madt_data.dist->Version != ACPI_MADT_GIC_VERSION_V3)
+
+	/* Check the GIC version is supported by thiss driver */
+	switch(madt_data.dist->Version) {
+	case ACPI_MADT_GIC_VERSION_V3:
+	case ACPI_MADT_GIC_VERSION_V4:
+		break;
+	default:
 		goto out;
+	}
 
 	dev = BUS_ADD_CHILD(parent, BUS_PASS_INTERRUPT + BUS_PASS_ORDER_MIDDLE,
 	    "gic", -1);
@@ -199,6 +205,7 @@ gic_v3_acpi_probe(device_t dev)
 
 	switch((uintptr_t)acpi_get_private(dev)) {
 	case ACPI_MADT_GIC_VERSION_V3:
+	case ACPI_MADT_GIC_VERSION_V4:
 		break;
 	default:
 		return (ENXIO);
@@ -255,7 +262,7 @@ gic_v3_acpi_attach(device_t dev)
 
 	err = gic_v3_acpi_count_regions(dev);
 	if (err != 0)
-		goto error;
+		goto count_error;
 
 	err = gic_v3_attach(dev);
 	if (err != 0)
@@ -287,12 +294,13 @@ gic_v3_acpi_attach(device_t dev)
 	return (0);
 
 error:
+	/* Failure so free resources */
+	gic_v3_detach(dev);
+count_error:
 	if (bootverbose) {
 		device_printf(dev,
 		    "Failed to attach. Error %d\n", err);
 	}
-	/* Failure so free resources */
-	gic_v3_detach(dev);
 
 	return (err);
 }

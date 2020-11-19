@@ -342,48 +342,32 @@ release_lctx(struct adapter *sc, struct listen_ctx *lctx)
 }
 
 static void
-send_reset_synqe(struct toedev *tod, struct synq_entry *synqe)
+send_flowc_wr_synqe(struct adapter *sc, struct synq_entry *synqe)
 {
-	struct adapter *sc = tod->tod_softc;
 	struct mbuf *m = synqe->syn;
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	struct vi_info *vi = ifp->if_softc;
 	struct port_info *pi = vi->pi;
-	struct l2t_entry *e = &sc->l2t->l2tab[synqe->params.l2t_idx];
 	struct wrqe *wr;
 	struct fw_flowc_wr *flowc;
-	struct cpl_abort_req *req;
-	int flowclen;
 	struct sge_wrq *ofld_txq;
 	struct sge_ofld_rxq *ofld_rxq;
 	const int nparams = 6;
+	const int flowclen = sizeof(*flowc) + nparams * sizeof(struct fw_flowc_mnemval);
 	const u_int pfvf = sc->pf << S_FW_VIID_PFN;
 
 	INP_WLOCK_ASSERT(synqe->lctx->inp);
-
-	CTR5(KTR_CXGBE, "%s: synqe %p (0x%x), tid %d%s",
-	    __func__, synqe, synqe->flags, synqe->tid,
-	    synqe->flags & TPF_ABORT_SHUTDOWN ?
-	    " (abort already in progress)" : "");
-	if (synqe->flags & TPF_ABORT_SHUTDOWN)
-		return;	/* abort already in progress */
-	synqe->flags |= TPF_ABORT_SHUTDOWN;
+	MPASS((synqe->flags & TPF_FLOWC_WR_SENT) == 0);
 
 	ofld_txq = &sc->sge.ofld_txq[synqe->params.txq_idx];
 	ofld_rxq = &sc->sge.ofld_rxq[synqe->params.rxq_idx];
 
-	/* The wrqe will have two WRs - a flowc followed by an abort_req */
-	flowclen = sizeof(*flowc) + nparams * sizeof(struct fw_flowc_mnemval);
-
-	wr = alloc_wrqe(roundup2(flowclen, EQ_ESIZE) + sizeof(*req), ofld_txq);
+	wr = alloc_wrqe(roundup2(flowclen, 16), ofld_txq);
 	if (wr == NULL) {
 		/* XXX */
 		panic("%s: allocation failure.", __func__);
 	}
 	flowc = wrtod(wr);
-	req = (void *)((caddr_t)flowc + roundup2(flowclen, EQ_ESIZE));
-
-	/* First the flowc ... */
 	memset(flowc, 0, wr->wr_len);
 	flowc->op_to_nparams = htobe32(V_FW_WR_OP(FW_FLOWC_WR) |
 	    V_FW_FLOWC_WR_NPARAMS(nparams));
@@ -397,19 +381,47 @@ send_reset_synqe(struct toedev *tod, struct synq_entry *synqe)
 	flowc->mnemval[2].val = htobe32(pi->tx_chan);
 	flowc->mnemval[3].mnemonic = FW_FLOWC_MNEM_IQID;
 	flowc->mnemval[3].val = htobe32(ofld_rxq->iq.abs_id);
- 	flowc->mnemval[4].mnemonic = FW_FLOWC_MNEM_SNDBUF;
- 	flowc->mnemval[4].val = htobe32(512);
- 	flowc->mnemval[5].mnemonic = FW_FLOWC_MNEM_MSS;
- 	flowc->mnemval[5].val = htobe32(512);
-	synqe->flags |= TPF_FLOWC_WR_SENT;
+	flowc->mnemval[4].mnemonic = FW_FLOWC_MNEM_SNDBUF;
+	flowc->mnemval[4].val = htobe32(512);
+	flowc->mnemval[5].mnemonic = FW_FLOWC_MNEM_MSS;
+	flowc->mnemval[5].val = htobe32(512);
 
-	/* ... then ABORT request */
+	synqe->flags |= TPF_FLOWC_WR_SENT;
+	t4_wrq_tx(sc, wr);
+}
+
+static void
+send_reset_synqe(struct toedev *tod, struct synq_entry *synqe)
+{
+	struct adapter *sc = tod->tod_softc;
+	struct wrqe *wr;
+	struct cpl_abort_req *req;
+
+	INP_WLOCK_ASSERT(synqe->lctx->inp);
+
+	CTR5(KTR_CXGBE, "%s: synqe %p (0x%x), tid %d%s",
+	    __func__, synqe, synqe->flags, synqe->tid,
+	    synqe->flags & TPF_ABORT_SHUTDOWN ?
+	    " (abort already in progress)" : "");
+	if (synqe->flags & TPF_ABORT_SHUTDOWN)
+		return;	/* abort already in progress */
+	synqe->flags |= TPF_ABORT_SHUTDOWN;
+
+	if (!(synqe->flags & TPF_FLOWC_WR_SENT))
+		send_flowc_wr_synqe(sc, synqe);
+
+	wr = alloc_wrqe(sizeof(*req), &sc->sge.ofld_txq[synqe->params.txq_idx]);
+	if (wr == NULL) {
+		/* XXX */
+		panic("%s: allocation failure.", __func__);
+	}
+	req = wrtod(wr);
 	INIT_TP_WR_MIT_CPL(req, CPL_ABORT_REQ, synqe->tid);
 	req->rsvd0 = 0;	/* don't have a snd_nxt */
 	req->rsvd1 = 1;	/* no data sent yet */
 	req->cmd = CPL_ABORT_SEND_RST;
 
-	t4_l2t_send(sc, wr, e);
+	t4_l2t_send(sc, wr, &sc->l2t->l2tab[synqe->params.l2t_idx]);
 }
 
 static int
@@ -892,6 +904,9 @@ do_abort_req_synqe(struct sge_iq *iq, const struct rss_header *rss,
 
 	ofld_txq = &sc->sge.ofld_txq[synqe->params.txq_idx];
 
+	if (!(synqe->flags & TPF_FLOWC_WR_SENT))
+		send_flowc_wr_synqe(sc, synqe);
+
 	/*
 	 * If we'd initiated an abort earlier the reply to it is responsible for
 	 * cleaning up resources.  Otherwise we tear everything down right here
@@ -986,6 +1001,17 @@ t4opt_to_tcpopt(const struct tcp_options *t4opt, struct tcpopt *to)
 
 	if (t4opt->sack)
 		to->to_flags |= TOF_SACKPERM;
+}
+
+static bool
+encapsulated_syn(struct adapter *sc, const struct cpl_pass_accept_req *cpl)
+{
+	u_int hlen = be32toh(cpl->hdr_len);
+
+	if (chip_id(sc) >= CHELSIO_T6)
+		return (G_T6_ETH_HDR_LEN(hlen) > sizeof(struct ether_vlan_header));
+	else
+		return (G_ETH_HDR_LEN(hlen) > sizeof(struct ether_vlan_header));
 }
 
 static void
@@ -1179,22 +1205,38 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 	CTR4(KTR_CXGBE, "%s: stid %u, tid %u, lctx %p", __func__, stid, tid,
 	    lctx);
 
+	/*
+	 * Figure out the port the SYN arrived on.  We'll look for an exact VI
+	 * match in a bit but in case we don't find any we'll use the main VI as
+	 * the incoming ifnet.
+	 */
+	l2info = be16toh(cpl->l2info);
+	pi = sc->port[G_SYN_INTF(l2info)];
+	hw_ifp = pi->vi[0].ifp;
+	m->m_pkthdr.rcvif = hw_ifp;
+
 	CURVNET_SET(lctx->vnet);	/* before any potential REJECT */
+
+	/*
+	 * If VXLAN/NVGRE parsing is enabled then SYNs in the inner traffic will
+	 * also hit the listener.  We don't want to offload those.
+	 */
+	if (encapsulated_syn(sc, cpl)) {
+		REJECT_PASS_ACCEPT_REQ(true);
+	}
 
 	/*
 	 * Use the MAC index to lookup the associated VI.  If this SYN didn't
 	 * match a perfect MAC filter, punt.
 	 */
-	l2info = be16toh(cpl->l2info);
-	pi = sc->port[G_SYN_INTF(l2info)];
 	if (!(l2info & F_SYN_XACT_MATCH)) {
-		REJECT_PASS_ACCEPT_REQ(false);
+		REJECT_PASS_ACCEPT_REQ(true);
 	}
 	for_each_vi(pi, v, vi) {
 		if (vi->xact_addr_filt == G_SYN_MAC_IDX(l2info))
 			goto found;
 	}
-	REJECT_PASS_ACCEPT_REQ(false);
+	REJECT_PASS_ACCEPT_REQ(true);
 found:
 	hw_ifp = vi->ifp;	/* the cxgbe ifnet */
 	m->m_pkthdr.rcvif = hw_ifp;

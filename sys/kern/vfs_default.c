@@ -90,6 +90,7 @@ static int vop_stdadd_writecount(struct vop_add_writecount_args *ap);
 static int vop_stdcopy_file_range(struct vop_copy_file_range_args *ap);
 static int vop_stdfdatasync(struct vop_fdatasync_args *ap);
 static int vop_stdgetpages_async(struct vop_getpages_async_args *ap);
+static int vop_stdread_pgcache(struct vop_read_pgcache_args *ap);
 static int vop_stdstat(struct vop_stat_args *ap);
 
 /*
@@ -135,6 +136,7 @@ struct vop_vector default_vnodeops = {
 	.vop_poll =		vop_nopoll,
 	.vop_putpages =		vop_stdputpages,
 	.vop_readlink =		VOP_EINVAL,
+	.vop_read_pgcache =	vop_stdread_pgcache,
 	.vop_rename =		vop_norename,
 	.vop_revoke =		VOP_PANIC,
 	.vop_strategy =		vop_nostrategy,
@@ -193,6 +195,13 @@ vop_enoent(struct vop_generic_args *ap)
 {
 
 	return (ENOENT);
+}
+
+int
+vop_eagain(struct vop_generic_args *ap)
+{
+
+	return (EAGAIN);
 }
 
 int
@@ -654,6 +663,7 @@ vop_stdgetwritemount(ap)
 	} */ *ap;
 {
 	struct mount *mp;
+	struct mount_pcpu *mpcpu;
 	struct vnode *vp;
 
 	/*
@@ -671,12 +681,12 @@ vop_stdgetwritemount(ap)
 		*(ap->a_mpp) = NULL;
 		return (0);
 	}
-	if (vfs_op_thread_enter(mp)) {
+	if (vfs_op_thread_enter(mp, mpcpu)) {
 		if (mp == vp->v_mount) {
-			vfs_mp_count_add_pcpu(mp, ref, 1);
-			vfs_op_thread_exit(mp);
+			vfs_mp_count_add_pcpu(mpcpu, ref, 1);
+			vfs_op_thread_exit(mp, mpcpu);
 		} else {
-			vfs_op_thread_exit(mp);
+			vfs_op_thread_exit(mp, mpcpu);
 			mp = NULL;
 		}
 	} else {
@@ -810,7 +820,7 @@ vop_stdvptocnp(struct vop_vptocnp_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct vnode **dvp = ap->a_vpp;
-	struct ucred *cred = ap->a_cred;
+	struct ucred *cred;
 	char *buf = ap->a_buf;
 	size_t *buflen = ap->a_buflen;
 	char *dirbuf, *cpos;
@@ -827,6 +837,7 @@ vop_stdvptocnp(struct vop_vptocnp_args *ap)
 	error = 0;
 	covered = 0;
 	td = curthread;
+	cred = td->td_ucred;
 
 	if (vp->v_type != VDIR)
 		return (ENOENT);
@@ -1574,4 +1585,10 @@ vop_stdstat(struct vop_stat_args *a)
 	sb->st_gen = vap->va_gen;
 out:
 	return (vop_stat_helper_post(a, error));
+}
+
+static int
+vop_stdread_pgcache(struct vop_read_pgcache_args *ap __unused)
+{
+	return (EJUSTRETURN);
 }

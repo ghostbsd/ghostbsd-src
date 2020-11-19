@@ -61,6 +61,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_kstack_pages.h"
 #include "opt_platform.h"
 
+#include <sys/endian.h>
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/systm.h>
@@ -257,6 +258,11 @@ aim_cpu_init(vm_offset_t toc)
 	psl_kernset |= PSL_SF;
 	if (mfmsr() & PSL_HV)
 		psl_kernset |= PSL_HV;
+
+#if BYTE_ORDER == LITTLE_ENDIAN
+	psl_kernset |= PSL_LE;
+#endif
+
 #endif
 	psl_userset = psl_kernset | PSL_PR;
 #ifdef __powerpc64__
@@ -629,7 +635,8 @@ flush_disable_caches(void)
 	mtspr(SPR_MSSCR0, msscr0);
 	powerpc_sync();
 	isync();
-	__asm__ __volatile__("dssall; sync");
+	/* 7e00066c: dssall */
+	__asm__ __volatile__(".long 0x7e00066c; sync");
 	powerpc_sync();
 	isync();
 	__asm__ __volatile__("dcbf 0,%0" :: "r"(0));

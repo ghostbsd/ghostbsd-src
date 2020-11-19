@@ -30,6 +30,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	.WAIT \
 	libsqlite3 \
 	geom \
+	lib9p \
 	libalias \
 	libarchive \
 	libauditd \
@@ -141,6 +142,11 @@ SUBDIR_DEPEND_libunbound= ${_libldns}
 SUBDIR_DEPEND_liblzma= ${_libthr}
 .if ${MK_OFED} != "no"
 SUBDIR_DEPEND_libpcap= ofed
+.endif
+
+.if !defined(COMPAT_32BIT)
+SUBDIR+=	flua
+SUBDIR_DEPEND_flua=	libjail
 .endif
 
 # NB: keep these sorted by MK_* knobs
