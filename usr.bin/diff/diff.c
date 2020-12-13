@@ -27,6 +27,7 @@ __FBSDID("$FreeBSD$");
 
 #include <ctype.h>
 #include <err.h>
+#include <errno.h>
 #include <getopt.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -209,17 +210,6 @@ main(int argc, char **argv)
 			diff_format = D_NREVERSE;
 			break;
 		case 'p':
-			/*
-			 * If it's not unset and it's not set to context or
-			 * unified, we'll error out here as a conflicting
-			 * format.  If it's unset, we'll go ahead and set it to
-			 * context.
-			 */
-			if (FORMAT_MISMATCHED(D_CONTEXT) &&
-			    FORMAT_MISMATCHED(D_UNIFIED))
-				conflicting_format();
-			if (diff_format == D_UNSET)
-				diff_format = D_CONTEXT;
 			dflags |= D_PROTOTYPE;
 			break;
 		case 'P':
@@ -319,6 +309,8 @@ main(int argc, char **argv)
 		newarg = optind != prevoptind;
 		prevoptind = optind;
 	}
+	if (diff_format == D_UNSET && (dflags & D_PROTOTYPE) != 0)
+		diff_format = D_CONTEXT;
 	if (diff_format == D_UNSET)
 		diff_format = D_NORMAL;
 	argc -= optind;
@@ -351,13 +343,33 @@ main(int argc, char **argv)
 	if (strcmp(argv[0], "-") == 0) {
 		fstat(STDIN_FILENO, &stb1);
 		gotstdin = 1;
-	} else if (stat(argv[0], &stb1) != 0)
-		err(2, "%s", argv[0]);
+	} else if (stat(argv[0], &stb1) != 0) {
+		if (!Nflag || errno != ENOENT)
+			err(2, "%s", argv[0]);
+		dflags |= D_EMPTY1;
+		memset(&stb1, 0, sizeof(struct stat));
+	}
+
 	if (strcmp(argv[1], "-") == 0) {
 		fstat(STDIN_FILENO, &stb2);
 		gotstdin = 1;
-	} else if (stat(argv[1], &stb2) != 0)
-		err(2, "%s", argv[1]);
+	} else if (stat(argv[1], &stb2) != 0) {
+		if (!Nflag || errno != ENOENT)
+			err(2, "%s", argv[1]);
+		dflags |= D_EMPTY2;
+		memset(&stb2, 0, sizeof(stb2));
+		stb2.st_mode = stb1.st_mode;
+	}
+
+	if (dflags & D_EMPTY1 && dflags & D_EMPTY2){
+		warn("%s", argv[0]);	
+		warn("%s", argv[1]);
+		exit(2);	
+	}
+
+	if (stb1.st_mode == 0)
+		stb1.st_mode = stb2.st_mode;
+
 	if (gotstdin && (S_ISDIR(stb1.st_mode) || S_ISDIR(stb2.st_mode)))
 		errx(2, "can't compare - to a directory");
 	set_argstr(oargv, argv);
@@ -465,6 +477,9 @@ print_only(const char *path, size_t dirlen, const char *entry)
 void
 print_status(int val, char *path1, char *path2, const char *entry)
 {
+	if (label[0] != NULL) path1 = label[0];
+	if (label[1] != NULL) path2 = label[1];
+
 	switch (val) {
 	case D_BINARY:
 		printf("Binary files %s%s and %s%s differ\n",

@@ -61,8 +61,10 @@ union semun;
 struct sockaddr;
 struct stat;
 struct thr_param;
+struct timex;
 struct uio;
 struct vm_map;
+struct vmspace;
 
 typedef int (*mmap_check_fp_fn)(struct file *, int, int, int);
 
@@ -117,7 +119,7 @@ int	kern_cpuset_setid(struct thread *td, cpuwhich_t which,
 	    id_t id, cpusetid_t setid);
 int	kern_dup(struct thread *td, u_int mode, int flags, int old, int new);
 int	kern_execve(struct thread *td, struct image_args *args,
-	    struct mac *mac_p);
+	    struct mac *mac_p, struct vmspace *oldvmspace);
 int	kern_fchmodat(struct thread *td, int fd, char *path,
 	    enum uio_seg pathseg, mode_t mode, int flag);
 int	kern_fchownat(struct thread *td, int fd, char *path,
@@ -197,6 +199,7 @@ int	kern_munlock(struct thread *td, uintptr_t addr, size_t size);
 int	kern_munmap(struct thread *td, uintptr_t addr, size_t size);
 int     kern_nanosleep(struct thread *td, struct timespec *rqt,
 	    struct timespec *rmt);
+int	kern_ntp_adjtime(struct thread *td, struct timex *ntv, int *retvalp);
 int	kern_ogetdirentries(struct thread *td, struct ogetdirentries_args *uap,
 	    long *ploff);
 int	kern_openat(struct thread *td, int fd, char *path,
@@ -232,7 +235,7 @@ int	kern_recvit(struct thread *td, int s, struct msghdr *mp,
 int	kern_renameat(struct thread *td, int oldfd, char *old, int newfd,
 	    char *new, enum uio_seg pathseg);
 int	kern_rmdirat(struct thread *td, int fd, char *path,
-	    enum uio_seg pathseg);
+	    enum uio_seg pathseg, int flag);
 int	kern_sched_getparam(struct thread *td, struct thread *targettd,
 	    struct sched_param *param);
 int	kern_sched_getscheduler(struct thread *td, struct thread *targettd,
@@ -299,7 +302,7 @@ int	kern_thr_suspend(struct thread *td, struct timespec *tsp);
 int	kern_truncate(struct thread *td, char *path, enum uio_seg pathseg,
 	    off_t length);
 int	kern_unlinkat(struct thread *td, int fd, char *path,
-	    enum uio_seg pathseg, ino_t oldinum);
+	    enum uio_seg pathseg, int flag, ino_t oldinum);
 int	kern_utimesat(struct thread *td, int fd, char *path,
 	    enum uio_seg pathseg, struct timeval *tptr, enum uio_seg tptrseg);
 int	kern_utimensat(struct thread *td, int fd, char *path,

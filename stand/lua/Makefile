@@ -16,8 +16,6 @@ FILES=	cli.lua \
 FILESDIR=	/boot/lua
 
 FILES=	brand-ghostbsd.lua \
-	brand-trident.lua \
-	brand-trueos.lua \
 	cli.lua \
 	color.lua \
 	config.lua \
@@ -25,13 +23,12 @@ FILES=	brand-ghostbsd.lua \
 	drawer.lua \
 	hook.lua \
 	loader.lua \
-	logo-beastie.lua \
-	logo-beastiebw.lua \
-	logo-fbsdbw.lua \
+	gfx-beastie.lua \
+	gfx-beastiebw.lua \
+	gfx-fbsdbw.lua \
 	logo-ghostbsd.lua \
-	logo-orb.lua \
-	logo-orbbw.lua \
-	logo-trident.lua \
+	gfx-orb.lua \
+	gfx-orbbw.lua \
 	menu.lua \
 	password.lua \
 	screen.lua

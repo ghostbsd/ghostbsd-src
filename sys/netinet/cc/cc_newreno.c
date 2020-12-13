@@ -213,12 +213,19 @@ newreno_after_idle(struct cc_var *ccv)
 	 * wirespeed, overloading router and switch buffers along the way.
 	 *
 	 * See RFC5681 Section 4.1. "Restarting Idle Connections".
+	 *
+	 * In addition, per RFC2861 Section 2, the ssthresh is set to the
+	 * maximum of the former ssthresh or 3/4 of the old cwnd, to
+	 * not exit slow-start prematurely.
 	 */
 	if (V_tcp_do_rfc3390)
 		rw = min(4 * CCV(ccv, t_maxseg),
 		    max(2 * CCV(ccv, t_maxseg), 4380));
 	else
 		rw = CCV(ccv, t_maxseg) * 2;
+
+	CCV(ccv, snd_ssthresh) = max(CCV(ccv, snd_ssthresh),
+	    CCV(ccv, snd_cwnd)-(CCV(ccv, snd_cwnd)>>2));
 
 	CCV(ccv, snd_cwnd) = min(rw, CCV(ccv, snd_cwnd));
 }
@@ -234,7 +241,7 @@ newreno_cong_signal(struct cc_var *ccv, uint32_t type)
 	u_int mss;
 
 	cwin = CCV(ccv, snd_cwnd);
-	mss = CCV(ccv, t_maxseg);
+	mss = tcp_maxseg(ccv->ccvc.tcp);
 	nreno = ccv->cc_data;
 	beta = (nreno == NULL) ? V_newreno_beta : nreno->beta;
 	beta_ecn = (nreno == NULL) ? V_newreno_beta_ecn : nreno->beta_ecn;
@@ -271,6 +278,12 @@ newreno_cong_signal(struct cc_var *ccv, uint32_t type)
 			CCV(ccv, snd_cwnd) = cwin;
 			ENTER_CONGRECOVERY(CCV(ccv, t_flags));
 		}
+		break;
+	case CC_RTO:
+		CCV(ccv, snd_ssthresh) = max(min(CCV(ccv, snd_wnd),
+						 CCV(ccv, snd_cwnd)) / 2 / mss,
+					     2) * mss;
+		CCV(ccv, snd_cwnd) = mss;
 		break;
 	}
 }

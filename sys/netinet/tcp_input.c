@@ -403,8 +403,6 @@ cc_conn_init(struct tcpcb *tp)
 void inline
 cc_cong_signal(struct tcpcb *tp, struct tcphdr *th, uint32_t type)
 {
-	u_int maxseg;
-
 	INP_WLOCK_ASSERT(tp->t_inpcb);
 
 	switch(type) {
@@ -430,13 +428,9 @@ cc_cong_signal(struct tcpcb *tp, struct tcphdr *th, uint32_t type)
 		}
 		break;
 	case CC_RTO:
-		maxseg = tcp_maxseg(tp);
 		tp->t_dupacks = 0;
 		tp->t_bytes_acked = 0;
 		EXIT_RECOVERY(tp->t_flags);
-		tp->snd_ssthresh = max(2, min(tp->snd_wnd, tp->snd_cwnd) / 2 /
-		    maxseg) * maxseg;
-		tp->snd_cwnd = maxseg;
 		if (tp->t_flags & TF_ECN_PERMIT)
 			tp->t_flags |= TF_ECN_SND_CWR;
 		break;
@@ -981,8 +975,8 @@ findpcb:
 		}
 		INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 
-		if (thflags & TH_SYN)
-			tcp_dooptions(&to, optp, optlen, TO_SYN);
+		tcp_dooptions(&to, optp, optlen,
+		    (thflags & TH_SYN) ? TO_SYN : 0);
 		/*
 		 * NB: tcp_twcheck unlocks the INP and frees the mbuf.
 		 */
@@ -1712,20 +1706,29 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	}
 
 	/*
-	 * If timestamps were negotiated during SYN/ACK they should
-	 * appear on every segment during this session and vice versa.
+	 * If timestamps were negotiated during SYN/ACK and a
+	 * segment without a timestamp is received, silently drop
+	 * the segment.
+	 * See section 3.2 of RFC 7323.
 	 */
 	if ((tp->t_flags & TF_RCVD_TSTMP) && !(to.to_flags & TOF_TS)) {
 		if ((s = tcp_log_addrs(inc, th, NULL, NULL))) {
 			log(LOG_DEBUG, "%s; %s: Timestamp missing, "
-			    "no action\n", s, __func__);
+			    "segment silently dropped\n", s, __func__);
 			free(s, M_TCPLOG);
 		}
+		goto drop;
 	}
+	/*
+	 * If timestamps were not negotiated during SYN/ACK and a
+	 * segment with a timestamp is received, ignore the
+	 * timestamp and process the packet normally.
+	 * See section 3.2 of RFC 7323.
+	 */
 	if (!(tp->t_flags & TF_RCVD_TSTMP) && (to.to_flags & TOF_TS)) {
 		if ((s = tcp_log_addrs(inc, th, NULL, NULL))) {
 			log(LOG_DEBUG, "%s; %s: Timestamp not expected, "
-			    "no action\n", s, __func__);
+			    "segment processed normally\n", s, __func__);
 			free(s, M_TCPLOG);
 		}
 	}

@@ -679,10 +679,10 @@ struct user_segment_descriptor gdt[NGDT * MAXCPU];/* global descriptor tables */
 static struct gate_descriptor idt0[NIDT];
 struct gate_descriptor *idt = &idt0[0];	/* interrupt descriptor table */
 
-static char dblfault_stack[PAGE_SIZE] __aligned(16);
-static char mce0_stack[PAGE_SIZE] __aligned(16);
-static char nmi0_stack[PAGE_SIZE] __aligned(16);
-static char dbg0_stack[PAGE_SIZE] __aligned(16);
+static char dblfault_stack[DBLFAULT_STACK_SIZE] __aligned(16);
+static char mce0_stack[MCE_STACK_SIZE] __aligned(16);
+static char nmi0_stack[NMI_STACK_SIZE] __aligned(16);
+static char dbg0_stack[DBG_STACK_SIZE] __aligned(16);
 CTASSERT(sizeof(struct nmi_pcpu) == 16);
 
 struct amd64tss common_tss[MAXCPU];
@@ -1909,8 +1909,6 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
         env = kern_getenv("kernelname");
 	if (env != NULL)
 		strlcpy(kernelname, env, sizeof(kernelname));
-
-	cpu_probe_amdc1e();
 
 #ifdef FDT
 	x86_init_fdt();

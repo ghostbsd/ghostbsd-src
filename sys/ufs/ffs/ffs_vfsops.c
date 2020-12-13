@@ -828,13 +828,6 @@ ffs_mountfs(devvp, mp, td)
 	if ((error = ffs_sbget(devvp, &fs, -1, M_UFSMNT, ffs_use_bread)) != 0)
 		goto out;
 	fs->fs_fmod = 0;
-	/* if we ran on a kernel without metadata check hashes, disable them */
-	if ((fs->fs_flags & FS_METACKHASH) == 0)
-		fs->fs_metackhash = 0;
-	/* none of these types of check-hashes are maintained by this kernel */
-	fs->fs_metackhash &= ~(CK_SUPERBLOCK | CK_INODE | CK_INDIR | CK_DIR);
-	/* no support for any undefined flags */
-	fs->fs_flags &= FS_SUPPORTED;
 	fs->fs_flags &= ~FS_UNCLEAN;
 	if (fs->fs_clean == 0) {
 		fs->fs_flags |= FS_UNCLEAN;
@@ -2247,6 +2240,7 @@ ffs_geom_strategy(struct bufobj *bo, struct buf *bp)
 					    error != EOPNOTSUPP) {
 						bp->b_error = error;
 						bp->b_ioflags |= BIO_ERROR;
+						bp->b_flags &= ~B_BARRIER;
 						bufdone(bp);
 						return;
 					}
@@ -2259,6 +2253,7 @@ ffs_geom_strategy(struct bufobj *bo, struct buf *bp)
 				if (error != 0 && error != EOPNOTSUPP) {
 					bp->b_error = error;
 					bp->b_ioflags |= BIO_ERROR;
+					bp->b_flags &= ~B_BARRIER;
 					bufdone(bp);
 					return;
 				}

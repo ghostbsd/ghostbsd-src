@@ -198,6 +198,19 @@ usage(void)
 	exit(1);
 }
 
+void
+ioctl_ifcreate(int s, struct ifreq *ifr)
+{
+	if (ioctl(s, SIOCIFCREATE2, ifr) < 0) {
+		switch (errno) {
+		case EEXIST:
+			errx(1, "interface %s already exists", ifr->ifr_name);
+		default:
+			err(1, "SIOCIFCREATE2");
+		}
+	}
+}
+
 #define ORDERS_SIZE(x) sizeof(x) / sizeof(x[0])
 
 static int
@@ -1344,7 +1357,8 @@ unsetifdescr(const char *val, int value, int s, const struct afswtch *afp)
 "\020\1RXCSUM\2TXCSUM\3NETCONS\4VLAN_MTU\5VLAN_HWTAGGING\6JUMBO_MTU\7POLLING" \
 "\10VLAN_HWCSUM\11TSO4\12TSO6\13LRO\14WOL_UCAST\15WOL_MCAST\16WOL_MAGIC" \
 "\17TOE4\20TOE6\21VLAN_HWFILTER\23VLAN_HWTSO\24LINKSTATE\25NETMAP" \
-"\26RXCSUM_IPV6\27TXCSUM_IPV6\31TXRTLMT\32HWRXTSTMP"
+"\26RXCSUM_IPV6\27TXCSUM_IPV6\31TXRTLMT\32HWRXTSTMP" \
+"\36VXLAN_HWCSUM\37VXLAN_HWTSO"
 
 /*
  * Print the status of the interface.  If an address family was

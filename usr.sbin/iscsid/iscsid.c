@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/capsicum.h>
 #include <sys/wait.h>
+#include <netinet/in.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -170,6 +171,7 @@ connection_new(int iscsi_fd, const struct iscsi_daemon_request *request)
 	/*
 	 * Default values, from RFC 3720, section 12.
 	 */
+	conn->conn_protocol_level = 0;
 	conn->conn_header_digest = CONN_DIGEST_NONE;
 	conn->conn_data_digest = CONN_DIGEST_NONE;
 	conn->conn_initial_r2t = true;
@@ -275,6 +277,25 @@ connection_new(int iscsi_fd, const struct iscsi_daemon_request *request)
 	if (setsockopt(conn->conn_socket, SOL_SOCKET, SO_SNDBUF,
 	    &sockbuf, sizeof(sockbuf)) == -1)
 		log_warn("setsockopt(SO_SNDBUF) failed");
+	if (conn->conn_conf.isc_dscp != -1) {
+		int tos = conn->conn_conf.isc_dscp << 2;
+		if (to_ai->ai_family == AF_INET) {
+			if (setsockopt(conn->conn_socket,
+			    IPPROTO_IP, IP_TOS,
+			    &tos, sizeof(tos)) == -1)
+				log_warn("setsockopt(IP_TOS) "
+				    "failed for %s",
+				    from_addr);
+		} else
+		if (to_ai->ai_family == AF_INET6) {
+			if (setsockopt(conn->conn_socket,
+			    IPPROTO_IPV6, IPV6_TCLASS,
+			    &tos, sizeof(tos)) == -1)
+				log_warn("setsockopt(IPV6_TCLASS) "
+				    "failed for %s",
+				    from_addr);
+		}
+	}
 	if (from_ai != NULL) {
 		error = bind(conn->conn_socket, from_ai->ai_addr,
 		    from_ai->ai_addrlen);
@@ -308,6 +329,7 @@ handoff(struct connection *conn)
 	    sizeof(idh.idh_target_alias));
 	idh.idh_tsih = conn->conn_tsih;
 	idh.idh_statsn = conn->conn_statsn;
+	idh.idh_protocol_level = conn->conn_protocol_level;
 	idh.idh_header_digest = conn->conn_header_digest;
 	idh.idh_data_digest = conn->conn_data_digest;
 	idh.idh_initial_r2t = conn->conn_initial_r2t;

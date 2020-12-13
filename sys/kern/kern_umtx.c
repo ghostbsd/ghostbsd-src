@@ -76,6 +76,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpu.h>
 
 #ifdef COMPAT_FREEBSD32
+#include <compat/freebsd32/freebsd32.h>
 #include <compat/freebsd32/freebsd32_proto.h>
 #endif
 
@@ -280,8 +281,6 @@ static void umtx_pi_free(struct umtx_pi *pi);
 static int do_unlock_pp(struct thread *td, struct umutex *m, uint32_t flags,
     bool rb);
 static void umtx_thread_cleanup(struct thread *td);
-static void umtx_exec_hook(void *arg __unused, struct proc *p __unused,
-    struct image_params *imgp __unused);
 SYSINIT(umtx, SI_SUB_EVENTHANDLER+1, SI_ORDER_MIDDLE, umtxq_sysinit, NULL);
 
 #define umtxq_signal(key, nwake)	umtxq_signal_queue((key), (nwake), UMTX_SHARED_QUEUE)
@@ -449,8 +448,6 @@ umtxq_sysinit(void *arg __unused)
 	umtx_init_profiling();
 #endif
 	mtx_init(&umtx_lock, "umtx lock", NULL, MTX_DEF);
-	EVENTHANDLER_REGISTER(process_exec, umtx_exec_hook, NULL,
-	    EVENTHANDLER_PRI_ANY);
 	umtx_shm_init();
 }
 
@@ -4122,11 +4119,6 @@ sys__umtx_op(struct thread *td, struct _umtx_op_args *uap)
 
 #ifdef COMPAT_FREEBSD32
 
-struct timespec32 {
-	int32_t tv_sec;
-	int32_t tv_nsec;
-};
-
 struct umtx_time32 {
 	struct	timespec32	timeout;
 	uint32_t		flags;
@@ -4368,10 +4360,10 @@ __umtx_op_sem2_wait_compat32(struct thread *td, struct _umtx_op_args *uap)
 static int
 __umtx_op_nwake_private32(struct thread *td, struct _umtx_op_args *uap)
 {
-	uint32_t uaddrs[BATCH_SIZE], **upp;
+	uint32_t uaddrs[BATCH_SIZE], *upp;
 	int count, error, i, pos, tocopy;
 
-	upp = (uint32_t **)uap->obj;
+	upp = (uint32_t *)uap->obj;
 	error = 0;
 	for (count = uap->val, pos = 0; count > 0; count -= tocopy,
 	    pos += tocopy) {
@@ -4380,7 +4372,7 @@ __umtx_op_nwake_private32(struct thread *td, struct _umtx_op_args *uap)
 		if (error != 0)
 			break;
 		for (i = 0; i < tocopy; ++i)
-			kern_umtx_wake(td, (void *)(intptr_t)uaddrs[i],
+			kern_umtx_wake(td, (void *)(uintptr_t)uaddrs[i],
 			    INT_MAX, 1);
 		maybe_yield();
 	}
@@ -4496,12 +4488,11 @@ umtx_thread_alloc(struct thread *td)
  * exec() hook.
  *
  * Clear robust lists for all process' threads, not delaying the
- * cleanup to thread_exit hook, since the relevant address space is
+ * cleanup to thread exit, since the relevant address space is
  * destroyed right now.
  */
-static void
-umtx_exec_hook(void *arg __unused, struct proc *p,
-    struct image_params *imgp __unused)
+void
+umtx_exec(struct proc *p)
 {
 	struct thread *td;
 
@@ -4523,7 +4514,7 @@ umtx_exec_hook(void *arg __unused, struct proc *p,
 }
 
 /*
- * thread_exit() hook.
+ * thread exit hook.
  */
 void
 umtx_thread_exit(struct thread *td)
