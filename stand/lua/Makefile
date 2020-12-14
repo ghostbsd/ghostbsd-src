@@ -15,8 +15,7 @@ FILESDIR=	${LUAPATH}
 FILES=	cli.lua \
 FILESDIR=	/boot/lua
 
-FILES=	brand-ghostbsd.lua \
-	cli.lua \
+FILES=	cli.lua \
 	color.lua \
 	config.lua \
 	core.lua \
@@ -26,7 +25,7 @@ FILES=	brand-ghostbsd.lua \
 	gfx-beastie.lua \
 	gfx-beastiebw.lua \
 	gfx-fbsdbw.lua \
-	logo-ghostbsd.lua \
+	gfx-ghostbsd.lua \
 	gfx-orb.lua \
 	gfx-orbbw.lua \
 	menu.lua \

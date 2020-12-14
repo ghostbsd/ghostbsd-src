@@ -1,7 +1,7 @@
 --
 -- SPDX-License-Identifier: BSD-2-Clause-FreeBSD
 --
--- Copyright (c) 2019 Eric Turgeon <ericbsd@FreeBSD.org>
+-- Copyright (c) 2020 Eric Turgeon <eribsd@FreeBSD.org>
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -27,20 +27,24 @@
 -- $FreeBSD$
 --
 
-local drawer = require("drawer")
-
-local ghostbsd_brand = {
-"   ____ _               _    ____   _____ _____  ",
-"  / ___| |             | |_ |  _ \\ / ____|  __ \\ ",
-" | |   | |__   ___  ___| __|| |_) | (___ | |  | |",
-" | |  _| '_ \\ / _ \\/ __| |  |  _ < \\___ \\| |  | |",
-" | |_| | | | | (_) \\__ \\ |_ | |_) |____) | |__| |",
-"  \\____|_| |_|\\___/|___/\\__||____/|_____/|_____/ "
+return {
+	logo = {
+		graphic = {
+		    "            ,gggggg.   ",
+		    "         ,agg9*   .g)  ",
+		    "       .agg* ._.,gg*   ",
+		    "     ,gga*  (ggg*'     ",
+		    "    ,ga*      ,ga*     ",
+		    "   ,ga'     .ag*       ",
+		    "  ,ga'   .agga'        ",
+		    "  9g' .agg'g*,a        ",
+		    "  'gggg*',gga'         ",
+		    "       .gg*'           ",
+		    "     .gga*             ",
+		    "   .gga*               ",
+		    "  (ga*                 "
+		},
+		requires_color = false,
+		shift = {x = 5, y = 4},
+	}
 }
-
-drawer.addBrand("ghostbsd", {
-	requires_color = false,
-	graphic = ghostbsd_brand,
-})
-
-return true
