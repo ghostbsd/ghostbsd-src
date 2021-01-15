@@ -32,6 +32,7 @@
 #include <sys/param.h>
 #include <sys/bitstring.h>
 #include <sys/conf.h>
+#include <sys/epoch.h>
 #include <sys/filio.h>
 #include <sys/fcntl.h>
 #include <sys/kernel.h>
@@ -125,23 +126,20 @@ evdev_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	mtx_init(&client->ec_buffer_mtx, "evclient", "evdev", MTX_DEF);
 	knlist_init_mtx(&client->ec_selp.si_note, &client->ec_buffer_mtx);
 
+	ret = EVDEV_LIST_LOCK_SIG(evdev);
+	if (ret != 0)
+		goto out;
 	/* Avoid race with evdev_unregister */
-	EVDEV_LOCK(evdev);
 	if (dev->si_drv1 == NULL)
 		ret = ENODEV;
 	else
 		ret = evdev_register_client(evdev, client);
-
-	if (ret != 0)
-		evdev_revoke_client(client);
-	/*
-	 * Unlock evdev here because non-sleepable lock held 
-	 * while calling devfs_set_cdevpriv upsets WITNESS
-	 */
-	EVDEV_UNLOCK(evdev);
-
-	if (!ret)
+	EVDEV_LIST_UNLOCK(evdev);
+out:
+	if (ret == 0)
 		ret = devfs_set_cdevpriv(client, evdev_dtor);
+	else
+		client->ec_revoked = true;
 
 	if (ret != 0) {
 		debugf(client, "cannot register evdev client");
@@ -156,11 +154,13 @@ evdev_dtor(void *data)
 {
 	struct evdev_client *client = (struct evdev_client *)data;
 
-	EVDEV_LOCK(client->ec_evdev);
+	EVDEV_LIST_LOCK(client->ec_evdev);
 	if (!client->ec_revoked)
 		evdev_dispose_client(client->ec_evdev, client);
-	EVDEV_UNLOCK(client->ec_evdev);
+	EVDEV_LIST_UNLOCK(client->ec_evdev);
 
+	if (client->ec_evdev->ev_lock_type != EV_LOCK_MTX)
+		epoch_wait_preempt(INPUT_EPOCH);
 	knlist_clear(&client->ec_selp.si_note, 0);
 	seldrain(&client->ec_selp);
 	knlist_destroy(&client->ec_selp.si_note);
@@ -396,6 +396,7 @@ evdev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
 	struct evdev_dev *evdev = dev->si_drv1;
 	struct evdev_client *client;
 	struct input_keymap_entry *ke;
+	struct epoch_tracker et;
 	int ret, len, limit, type_num;
 	uint32_t code;
 	size_t nvalues;
@@ -415,7 +416,11 @@ evdev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
 		EVDEV_LOCK(evdev);
 		if (evdev->ev_kdb_active) {
 			evdev->ev_kdb_active = false;
+			if (evdev->ev_lock_type == EV_LOCK_EXT_EPOCH)
+				epoch_enter_preempt(INPUT_EPOCH, &et);
 			evdev_restore_after_kdb(evdev);
+			if (evdev->ev_lock_type == EV_LOCK_EXT_EPOCH)
+				epoch_exit_preempt(INPUT_EPOCH, &et);
 		}
 		EVDEV_UNLOCK(evdev);
 	}
@@ -547,12 +552,12 @@ evdev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
 		if (*(int *)data != 0)
 			return (EINVAL);
 
-		EVDEV_LOCK(evdev);
+		EVDEV_LIST_LOCK(evdev);
 		if (dev->si_drv1 != NULL && !client->ec_revoked) {
 			evdev_dispose_client(evdev, client);
 			evdev_revoke_client(client);
 		}
-		EVDEV_UNLOCK(evdev);
+		EVDEV_LIST_UNLOCK(evdev);
 		return (0);
 
 	case EVIOCSCLOCKID:
@@ -717,7 +722,7 @@ void
 evdev_revoke_client(struct evdev_client *client)
 {
 
-	EVDEV_LOCK_ASSERT(client->ec_evdev);
+	EVDEV_LIST_LOCK_ASSERT(client->ec_evdev);
 
 	client->ec_revoked = true;
 }

@@ -22,6 +22,8 @@
         ..
         firmware
         ..
+        loader.conf.d             tags=package=bootloader
+        ..
         lua
         ..
         kernel
@@ -58,7 +60,7 @@
 	..
 	init.d
         ..
-        kyua
+        kyua             tags=package=tests
         ..
         mail
         ..

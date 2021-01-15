@@ -153,6 +153,7 @@ APMPACKAGE=	apm
 CONFGROUPS+=	AUDIT
 AUDIT+=		auditd
 AUDIT+=		auditdistd
+AUDITPACKAGE=	rc
 .endif
 
 .if ${MK_AUTOFS} != "no"
@@ -313,19 +314,15 @@ CONFS+=		hostapd
 CONFS+=		wpa_supplicant
 .endif
 
-#.if ${MK_ZFS} != "no"
+.if ${MK_ZFS} != "no"
 CONFGROUPS+=	ZFS
 ZFS+=		zfs
 ZFS+=		zfsbe
 ZFS+=		zfsd
 ZFS+=		zpool
 ZFS+=		zvol
-ZFSPACKAGE=	zfs
-DIRS+=	ETC_ZFS
-ETC_ZFS=	/etc/zfs
-ETC_ZFSPACKAGE=	zfs
-#.endif
-
+ZFSPACKAGE=	rc
+.endif
 
 .for fg in ${CONFGROUPS}
 ${fg}MODE?=	${BINMODE}

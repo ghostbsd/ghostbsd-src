@@ -803,12 +803,6 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	    obj_main->fini_array = (Elf_Addr)NULL;
     }
 
-    /*
-     * Execute MD initializers required before we call the objects'
-     * init functions.
-     */
-    pre_init();
-
     if (direct_exec) {
 	/* Set osrel for direct-execed binary */
 	mib[0] = CTL_KERN;
@@ -2988,7 +2982,8 @@ reloc_textrel_prot(Obj_Entry *obj, bool before)
 		base = obj->relocbase + trunc_page(ph->p_vaddr);
 		sz = round_page(ph->p_vaddr + ph->p_filesz) -
 		    trunc_page(ph->p_vaddr);
-		prot = convert_prot(ph->p_flags) | (before ? PROT_WRITE : 0);
+		prot = before ? (PROT_READ | PROT_WRITE) :
+		    convert_prot(ph->p_flags);
 		if (mprotect(base, sz, prot) == -1) {
 			_rtld_error("%s: Cannot write-%sable text segment: %s",
 			    obj->path, before ? "en" : "dis",

@@ -540,14 +540,12 @@ OSRELDATE=	0
 .endif
 
 # Set VERSION for CTFMERGE to use via the default CTFFLAGS=-L VERSION.
-.if !defined(_REVISION)
-_REVISION!=	${MAKE} -C ${SRCDIR}/release MK_AUTO_OBJ=no -V REVISION
-.export _REVISION
+.for _V in BRANCH REVISION
+.if !defined(_${_V})
+_${_V}!=	eval $$(awk '/^${_V}=/{print}' ${SRCTOP}/sys/conf/newvers.sh); echo $$${_V}
+.export _${_V}
 .endif
-.if !defined(_BRANCH)
-_BRANCH!=	${MAKE} -C ${SRCDIR}/release MK_AUTO_OBJ=no -V BRANCH
-.export _BRANCH
-.endif
+.endfor
 .if !defined(SRCRELDATE)
 SRCRELDATE!=	awk '/^\#define[[:space:]]*__FreeBSD_version/ { print $$3 }' \
 		${SRCDIR}/sys/sys/param.h
@@ -731,7 +729,7 @@ BSARGS= 	DESTDIR= \
 		SSP_CFLAGS= \
 		MK_HTML=no NO_LINT=yes MK_MAN=no MK_MAN_UTILS=yes \
 		-DNO_PIC MK_PROFILE=no -DNO_SHARED \
-		-DNO_CPU_CFLAGS MK_WARNS=no MK_CTF=no \
+		-DNO_CPU_CFLAGS MK_WERROR=no MK_CTF=no \
 		MK_CLANG_EXTRAS=no MK_CLANG_FORMAT=no MK_CLANG_FULL=no \
 		MK_LLDB=no MK_RETPOLINE=no MK_TESTS=no \
 		MK_INCLUDES=yes
@@ -752,7 +750,7 @@ TMAKE=		\
 		BWPHASE=${.TARGET:C,^_,,} \
 		SSP_CFLAGS= \
 		-DNO_LINT \
-		-DNO_CPU_CFLAGS MK_WARNS=no MK_CTF=no \
+		-DNO_CPU_CFLAGS MK_WERROR=no MK_CTF=no \
 		MK_CLANG_EXTRAS=no MK_CLANG_FORMAT=no MK_CLANG_FULL=no \
 		MK_LLDB=no MK_RETPOLINE=no MK_TESTS=no
 
@@ -780,7 +778,7 @@ KTMAKE=		\
 		SSP_CFLAGS= \
 		MK_HTML=no -DNO_LINT MK_MAN=no \
 		-DNO_PIC MK_PROFILE=no -DNO_SHARED \
-		-DNO_CPU_CFLAGS MK_RETPOLINE=no MK_WARNS=no MK_CTF=no
+		-DNO_CPU_CFLAGS MK_RETPOLINE=no MK_WERROR=no MK_CTF=no
 
 # world stage
 WMAKEENV=	${CROSSENV} \
@@ -1851,7 +1849,7 @@ WSTAGEDIR?=	${OBJTOP}/worldstage
 KSTAGEDIR?=	${OBJTOP}/kernelstage
 REPODIR?=	${OBJROOT}repo
 PKG_FORMAT?=	txz
-PKGSIGNKEY?=	# empty
+PKG_REPO_SIGNING_KEY?=	# empty
 PKG_OUTPUT_DIR?=	${PKG_VERSION}
 
 .ORDER:		stage-packages create-packages
@@ -2064,7 +2062,7 @@ sign-packages:	_pkgbootstrap .PHONY
 		-m ${WSTAGEDIR}/meta \
 		-o ${REPODIR}/$$(${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI)/${PKG_VERSION} \
 		${REPODIR}/$$(${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI)/${PKG_VERSION} \
-		${PKGSIGNKEY} ; \
+		${PKG_REPO_SIGNING_KEY} ; \
 	cd ${REPODIR}/$$(${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI); \
 	ln -s ${PKG_OUTPUT_DIR} latest
 
@@ -2190,9 +2188,9 @@ ${_bt}-usr.sbin/config: ${_bt}-lib/libnv ${_bt}-lib/libsbuf
 _strfile=	usr.bin/fortune/strfile
 .endif
 
-.if ${MK_VT} != "no"
+# vtfontcvt is used to build font files for loader and to generate
+# C source for loader built in font (8x16.c).
 _vtfontcvt=	usr.bin/vtfontcvt
-.endif
 
 # If we are not building the bootstrap because BOOTSTRAPPING is sufficient
 # we symlink the host version to $WORLDTMP instead. By doing this we can also
@@ -2285,6 +2283,14 @@ _kbdcontrol=	usr.sbin/kbdcontrol
 .else
 _bootstrap_tools_links+=kbdcontrol
 .endif
+.endif
+
+# 1300102: VHDX support
+.if ${BOOTSTRAPPING} < 1201520 || \
+	(${BOOTSTRAPPING} > 1300000 && ${BOOTSTRAPPING} < 1300102)
+_mkimg=	usr.bin/mkimg
+.else
+_bootstrap_tools_links+=mkimg
 .endif
 
 _yacc=		usr.bin/yacc
@@ -2462,6 +2468,7 @@ bootstrap-tools: ${_bt}-links .PHONY
     ${_flua} \
     ${_crunchide} \
     ${_crunchgen} \
+    ${_mkimg} \
     ${_nmtree} \
     ${_vtfontcvt} \
     ${_localedef} \
@@ -2524,7 +2531,6 @@ _bt_clean=	${CLEANDIR}
     ${LOCAL_TOOL_DIRS} \
     ${_jevents} \
     lib/ncurses/ncurses \
-    lib/ncurses/ncursesw \
     ${_rescue} \
     ${_share} \
     usr.bin/awk \
@@ -2740,7 +2746,7 @@ NXBMAKEARGS+= \
 	MK_SENDMAIL=no \
 	MK_SVNLITE=no \
 	MK_TESTS=no \
-	MK_WARNS=no \
+	MK_WERROR=no \
 	MK_ZFS=no
 
 .if make(native-xtools*) && \
@@ -2870,7 +2876,7 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 		lib/libkiconv lib/libkvm lib/liblzma lib/libmd lib/libnv \
 		lib/libzstd \
 		${_lib_casper} \
-		lib/ncurses/ncurses lib/ncurses/ncursesw \
+		lib/ncurses/ncurses \
 		lib/libopie lib/libpam/libpam ${_lib_libthr} \
 		${_lib_libradius} lib/libsbuf lib/libtacplus \
 		lib/libgeom \
@@ -2891,7 +2897,7 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 
 .if ${MK_DIALOG} != "no"
 _prebuild_libs+= gnu/lib/libdialog
-gnu/lib/libdialog__L: lib/msun__L lib/ncurses/ncursesw__L
+gnu/lib/libdialog__L: lib/msun__L lib/ncurses/ncurses__L
 .endif
 
 .if ${MK_GOOGLETEST} != "no"
@@ -3359,7 +3365,7 @@ XDEV_CPUTYPE?=${TARGET_CPUTYPE}
 
 NOFUN=-DNO_FSCHG MK_HTML=no -DNO_LINT \
 	MK_MAN=no MK_NLS=no MK_PROFILE=no \
-	MK_KERBEROS=no MK_RESCUE=no MK_TESTS=no MK_WARNS=no \
+	MK_KERBEROS=no MK_RESCUE=no MK_TESTS=no MK_WERROR=no \
 	TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
 	CPUTYPE=${XDEV_CPUTYPE}
 

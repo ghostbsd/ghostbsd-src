@@ -91,7 +91,6 @@ SUBDIR=	\
 	cloudabi \
 	${_cloudabi32} \
 	${_cloudabi64} \
-	${_cmx} \
 	${_coretemp} \
 	${_cp} \
 	${_cpsw} \
@@ -105,8 +104,11 @@ SUBDIR=	\
 	dc \
 	dcons \
 	dcons_crom \
+	${_dpdk_lpm4} \
+	${_dpdk_lpm6} \
 	${_dpms} \
 	dummynet \
+	${_dwwdt} \
 	${_efirt} \
 	${_em} \
 	${_ena} \
@@ -129,6 +131,7 @@ SUBDIR=	\
 	${_glxiic} \
 	${_glxsb} \
 	gpio \
+	hid \
 	hifn \
 	${_hpt27xx} \
 	${_hptiop} \
@@ -384,7 +387,6 @@ SUBDIR=	\
 	vr \
 	vte \
 	${_wbwd} \
-	${_wi} \
 	wlan \
 	wlan_acl \
 	wlan_amrr \
@@ -473,6 +475,14 @@ _ipfw_nptv6=	ipfw_nptv6
 _ipfilter=	ipfilter
 .endif
 
+.if ${MK_INET_SUPPORT} != "no" && ${KERN_OPTS:MFIB_ALGO}
+_dpdk_lpm4=	dpdk_lpm4
+.endif
+
+.if ${MK_INET6_SUPPORT} != "no" && ${KERN_OPTS:MFIB_ALGO}
+_dpdk_lpm6=	dpdk_lpm6
+.endif
+
 .if ${MK_ISCSI} != "no" || defined(ALL_MODULES)
 SUBDIR+=	cfiscsi
 SUBDIR+=	iscsi
@@ -505,6 +515,7 @@ _ibcore=	ibcore
 _ipoib=		ipoib
 _iser=		iser
 .endif
+_ipmi=		ipmi
 _mlx4=		mlx4
 _mlx5=		mlx5
 .if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
@@ -601,6 +612,7 @@ _cxgb=		cxgb
 .if ${MACHINE_CPUARCH} == "aarch64"
 _allwinner=	allwinner
 _armv8crypto=	armv8crypto
+_dwwdt=		dwwdt
 _em=		em
 _rockchip=	rockchip
 .endif
@@ -645,7 +657,6 @@ _speaker=	speaker
 _splash=	splash
 _sppp=		sppp
 _wbwd=		wbwd
-_wi=		wi
 
 _aac=		aac
 _aacraid=	aacraid
@@ -666,7 +677,6 @@ _bytgpio=	bytgpio
 _chvgpio=	chvgpio
 _ciss=		ciss
 _chromebook_platform=	chromebook_platform
-_cmx=		cmx
 _coretemp=	coretemp
 .if ${MK_SOURCELESS_HOST} != "no" && empty(KCSAN_ENABLED)
 _hpt27xx=	hpt27xx
@@ -682,7 +692,6 @@ _ichwd=		ichwd
 _ida=		ida
 _iir=		iir
 _intelspi=	intelspi
-_ipmi=		ipmi
 _ips=		ips
 _isci=		isci
 _ipw=		ipw
@@ -757,7 +766,7 @@ _3dfx_linux=	3dfx_linux
 .if ${MK_SOURCELESS_HOST} != "no"
 _ce=		ce
 .endif
-.if ${MK_SOURCELESS_UCODE} != "no"
+.if ${MK_SOURCELESS_HOST} != "no"
 _cp=		cp
 .endif
 _glxiic=	glxiic
@@ -785,7 +794,6 @@ _ffec=		ffec
 _nvd=		nvd
 _nvme=		nvme
 _pccard=	pccard
-_wi=		wi
 _virtio=	virtio
 .endif
 

@@ -2227,9 +2227,9 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 		 * is default; don't stop the process below if sleeping,
 		 * and don't clear any pending SIGCONT.
 		 */
-		if ((prop & SIGPROP_TTYSTOP) &&
-		    (p->p_pgrp->pg_jobc == 0) &&
-		    (action == SIG_DFL)) {
+		if ((prop & SIGPROP_TTYSTOP) != 0 &&
+		    (p->p_pgrp->pg_flags & PGRP_ORPHANED) != 0 &&
+		    action == SIG_DFL) {
 			if (ksi && (ksi->ksi_flags & KSI_INS))
 				ksiginfo_tryfree(ksi);
 			return (ret);
@@ -2984,17 +2984,20 @@ issignal(struct thread *td)
 			 * should ignore tty stops.
 			 */
 			if (prop & SIGPROP_STOP) {
-				if (p->p_flag &
-				    (P_TRACED | P_WEXIT | P_SINGLE_EXIT) ||
-				    (p->p_pgrp->pg_jobc == 0 &&
-				     prop & SIGPROP_TTYSTOP))
+				mtx_unlock(&ps->ps_mtx);
+				if ((p->p_flag & (P_TRACED | P_WEXIT |
+				    P_SINGLE_EXIT)) != 0 || ((p->p_pgrp->
+				    pg_flags & PGRP_ORPHANED) != 0 &&
+				    (prop & SIGPROP_TTYSTOP) != 0)) {
+					mtx_lock(&ps->ps_mtx);
 					break;	/* == ignore */
+				}
 				if (TD_SBDRY_INTR(td)) {
 					KASSERT((td->td_flags & TDF_SBDRY) != 0,
 					    ("lost TDF_SBDRY"));
+					mtx_lock(&ps->ps_mtx);
 					return (-1);
 				}
-				mtx_unlock(&ps->ps_mtx);
 				WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK,
 				    &p->p_mtx.lock_object, "Catching SIGSTOP");
 				sigqueue_delete(&td->td_sigqueue, sig);
@@ -4210,7 +4213,7 @@ sigfastblock_setpend1(struct thread *td)
 	int res;
 	uint32_t oldval;
 
-	if ((td->td_pflags & TDP_SIGFASTBLOCK) == 0)
+	if ((td->td_pflags & TDP_SIGFASTPENDING) == 0)
 		return;
 	res = fueword32((void *)td->td_sigblock_ptr, &oldval);
 	if (res == -1) {

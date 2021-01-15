@@ -118,7 +118,6 @@ _LIBRARIES=	\
 		fetch \
 		figpar \
 		geom \
-		gnuregex \
 		gpio \
 		gssapi \
 		gssapi_krb5 \
@@ -146,7 +145,6 @@ _LIBRARIES=	\
 		memstat \
 		mp \
 		mt \
-		ncurses \
 		ncursesw \
 		netgraph \
 		netmap \
@@ -185,7 +183,6 @@ _LIBRARIES=	\
 		supcplusplus \
 		sysdecode \
 		tacplus \
-		termcap \
 		termcapw \
 		tpool \
 		ufs \
@@ -381,7 +378,6 @@ _DP_c+=		ssp_nonshared
 _DP_stats=	sbuf pthread
 _DP_stdthreads=	pthread
 _DP_tacplus=	md
-_DP_panel=	ncurses
 _DP_panelw=	ncursesw
 _DP_rpcsec_gss=	gssapi
 _DP_smb=	kiconv
@@ -628,7 +624,6 @@ LIBOPENSMDIR=	${OBJTOP}/lib/ofed/libopensm
 LIBOSMVENDORDIR=${OBJTOP}/lib/ofed/libvendor
 
 LIBDIALOGDIR=	${OBJTOP}/gnu/lib/libdialog
-LIBGNUREGEXDIR=	${OBJTOP}/gnu/lib/libregex
 LIBSSPDIR=	${OBJTOP}/lib/libssp
 LIBSSP_NONSHAREDDIR=	${OBJTOP}/lib/libssp_nonshared
 LIBASN1DIR=	${OBJTOP}/kerberos5/lib/libasn1
@@ -669,15 +664,10 @@ LIBBSDXMLDIR=	${OBJTOP}/lib/libexpat
 LIBKVMDIR=	${OBJTOP}/lib/libkvm
 LIBPTHREADDIR=	${OBJTOP}/lib/libthr
 LIBMDIR=	${OBJTOP}/lib/msun
-LIBEINFODIR=	${OBJTOP}/lib/libeinfo
-LIBFORMDIR=	${OBJTOP}/lib/ncurses/form
-LIBFORMLIBWDIR=	${OBJTOP}/lib/ncurses/formw
-LIBMENUDIR=	${OBJTOP}/lib/ncurses/menu
-LIBMENULIBWDIR=	${OBJTOP}/lib/ncurses/menuw
-LIBNCURSESDIR=	${OBJTOP}/lib/ncurses/ncurses
-LIBNCURSESWDIR=	${OBJTOP}/lib/ncurses/ncursesw
-LIBPANELDIR=	${OBJTOP}/lib/ncurses/panel
-LIBPANELWDIR=	${OBJTOP}/lib/ncurses/panelw
+LIBFORMWDIR=	${OBJTOP}/lib/ncurses/form
+LIBMENUWDIR=	${OBJTOP}/lib/ncurses/menu
+LIBNCURSESWDIR=	${OBJTOP}/lib/ncurses/ncurses
+LIBPANELWDIR=	${OBJTOP}/lib/ncurses/panel
 LIBCRYPTODIR=	${OBJTOP}/secure/lib/libcrypto
 LIBRCDIR=	${OBJTOP}/lib/librc
 LIBSPLDIR=	${OBJTOP}/cddl/lib/libspl
@@ -687,7 +677,6 @@ LIBTEKENDIR=	${OBJTOP}/sys/teken/libteken
 LIBEGACYDIR=	${OBJTOP}/tools/build
 LIBLNDIR=	${OBJTOP}/usr.bin/lex/lib
 
-LIBTERMCAPDIR=	${LIBNCURSESDIR}
 LIBTERMCAPWDIR=	${LIBNCURSESWDIR}
 
 # Default other library directories to lib/libNAME.

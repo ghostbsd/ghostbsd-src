@@ -881,7 +881,7 @@ atomic_testandclear_32(volatile uint32_t *ptr, u_int bit)
 	      [oldv] "=&r"   (oldv),
 	      [newv] "=&r"   (newv)
 	    : [ptr]  "r"     (ptr),
-	             "[bit]" (bit)
+	             "[bit]" (bit & 0x1f)
 	    : "cc", "ip", "memory");
 
 	return (result);
@@ -901,6 +901,22 @@ atomic_testandclear_long(volatile u_long *p, u_int v)
 	return (atomic_testandclear_32((volatile uint32_t *)p, v));
 }
 #define	atomic_testandclear_long	atomic_testandclear_long
+
+
+static __inline int
+atomic_testandclear_64(volatile uint64_t *p, u_int v)
+{
+	volatile uint32_t *p32;
+
+	p32 = (volatile uint32_t *)p;
+	/*
+	 * Assume little-endian,
+	 * atomic_testandclear_32() uses only last 5 bits of v
+	 */
+	if ((v & 0x20) != 0)
+		p32++;
+	return (atomic_testandclear_32(p32, v));
+}
 
 static __inline int
 atomic_testandset_32(volatile uint32_t *ptr, u_int bit)
@@ -925,7 +941,7 @@ atomic_testandset_32(volatile uint32_t *ptr, u_int bit)
 	      [oldv] "=&r"   (oldv),
 	      [newv] "=&r"   (newv)
 	    : [ptr]  "r"     (ptr),
-	             "[bit]" (bit)
+	             "[bit]" (bit & 0x1f)
 	    : "cc", "ip", "memory");
 
 	return (result);
@@ -952,11 +968,12 @@ atomic_testandset_64(volatile uint64_t *p, u_int v)
 	volatile uint32_t *p32;
 
 	p32 = (volatile uint32_t *)p;
-	/* Assume little-endian */
-	if (v >= 32) {
-		v &= 0x1f;
+	/*
+	 * Assume little-endian,
+	 * atomic_testandset_32() uses only last 5 bits of v
+	 */
+	if ((v & 0x20) != 0)
 		p32++;
-	}
 	return (atomic_testandset_32(p32, v));
 }
 

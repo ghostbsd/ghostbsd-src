@@ -454,6 +454,7 @@ PCBGROUP		opt_pcbgroup.h
 PF_DEFAULT_TO_DROP	opt_pf.h
 ROUTE_MPATH		opt_route.h
 ROUTETABLES		opt_route.h
+FIB_ALGO		opt_route.h
 RSS			opt_rss.h
 SLIP_IFF_OPTS		opt_slip.h
 TCPDEBUG
@@ -1012,3 +1013,10 @@ AMDSBWD_DEBUG	opt_amdsbwd.h
 # gcov support
 GCOV		opt_global.h
 LINDEBUGFS
+
+# options for HID support
+HID_DEBUG	opt_hid.h
+IICHID_DEBUG	opt_hid.h
+IICHID_SAMPLING	opt_hid.h
+HKBD_DFLT_KEYMAP	opt_hkbd.h
+HIDRAW_MAKE_UHID_ALIAS	opt_hid.h

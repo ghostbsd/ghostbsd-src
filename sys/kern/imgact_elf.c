@@ -190,6 +190,11 @@ SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO, sigfastblock,
     CTLFLAG_RWTUN, &__elfN(sigfastblock), 0,
     "enable sigfastblock for new processes");
 
+static bool __elfN(allow_wx) = true;
+SYSCTL_BOOL(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO, allow_wx,
+    CTLFLAG_RWTUN, &__elfN(allow_wx), 0,
+    "Allow pages to be mapped simultaneously writable and executable");
+
 static Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
 
 #define	aligned(a, t)	(rounddown2((u_long)(a), sizeof(t)) == (u_long)(a))
@@ -687,7 +692,7 @@ __elfN(load_section)(struct image_params *imgp, vm_ooffset_t offset,
 	 */
 	if ((prot & VM_PROT_WRITE) == 0)
 		vm_map_protect(map, trunc_page(map_addr), round_page(map_addr +
-		    map_len), prot, FALSE);
+		    map_len), prot, 0, VM_MAP_PROTECT_SET_PROT);
 
 	return (0);
 }
@@ -1236,6 +1241,9 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		    (imgp->proc->p_flag2 & P2_ASLR_IGNSTART) != 0)
 			imgp->map_flags |= MAP_ASLR_IGNSTART;
 	}
+
+	if (!__elfN(allow_wx) && (fctl0 & NT_FREEBSD_FCTL_WXNEEDED) == 0)
+		imgp->map_flags |= MAP_WXORX;
 
 	error = exec_new_vmspace(imgp, sv);
 	vmspace = imgp->proc->p_vmspace;
@@ -2386,8 +2394,10 @@ __elfN(note_procstat_proc)(void *arg, struct sbuf *sb, size_t *sizep)
 		KASSERT(*sizep == size, ("invalid size"));
 		structsize = sizeof(elf_kinfo_proc_t);
 		sbuf_bcat(sb, &structsize, sizeof(structsize));
+		sx_slock(&proctree_lock);
 		PROC_LOCK(p);
 		kern_proc_out(p, sb, ELF_KERN_PROC_MASK);
+		sx_sunlock(&proctree_lock);
 	}
 	*sizep = size;
 }

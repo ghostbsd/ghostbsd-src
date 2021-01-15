@@ -340,7 +340,7 @@ kern_statfs(struct thread *td, const char *path, enum uio_seg pathseg,
 		return (error);
 	mp = nd.ni_vp->v_mount;
 	vfs_ref(mp);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	vput(nd.ni_vp);
 	return (kern_do_statfs(td, mp, buf));
 }
@@ -949,11 +949,11 @@ kern_chdir(struct thread *td, const char *path, enum uio_seg pathseg)
 		return (error);
 	if ((error = change_dir(nd.ni_vp, td)) != 0) {
 		vput(nd.ni_vp);
-		NDFREE(&nd, NDF_ONLY_PNBUF);
+		NDFREE_NOTHING(&nd);
 		return (error);
 	}
 	VOP_UNLOCK(nd.ni_vp);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	pwd_chdir(td, nd.ni_vp);
 	return (0);
 }
@@ -991,12 +991,12 @@ sys_chroot(struct thread *td, struct chroot_args *uap)
 	VOP_UNLOCK(nd.ni_vp);
 	error = pwd_chroot(td, nd.ni_vp);
 	vrele(nd.ni_vp);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	return (error);
 e_vunlock:
 	vput(nd.ni_vp);
 error:
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	return (error);
 }
 
@@ -1129,15 +1129,11 @@ kern_openat(struct thread *td, int fd, const char *path, enum uio_seg pathseg,
 
 	/*
 	 * Allocate a file structure. The descriptor to reference it
-	 * is allocated and set by finstall() below.
+	 * is allocated and used by finstall_refed() below.
 	 */
 	error = falloc_noinstall(td, &fp);
 	if (error != 0)
 		return (error);
-	/*
-	 * An extra reference on `fp' has been held for us by
-	 * falloc_noinstall().
-	 */
 	/* Set the flags early so the finit in devfs can pick them up. */
 	fp->f_flag = flags & FMASK;
 	cmode = ((mode & ~pdp->pd_cmask) & ALLPERMS) & ~S_ISTXT;
@@ -1210,26 +1206,22 @@ success:
 		else
 #endif
 			fcaps = NULL;
-		error = finstall(td, fp, &indx, flags, fcaps);
-		/* On success finstall() consumes fcaps. */
+		error = finstall_refed(td, fp, &indx, flags, fcaps);
+		/* On success finstall_refed() consumes fcaps. */
 		if (error != 0) {
 			filecaps_free(&nd.ni_filecaps);
 			goto bad;
 		}
 	} else {
 		filecaps_free(&nd.ni_filecaps);
+		falloc_abort(td, fp);
 	}
 
-	/*
-	 * Release our private reference, leaving the one associated with
-	 * the descriptor table intact.
-	 */
-	fdrop(fp, td);
 	td->td_retval[0] = indx;
 	return (0);
 bad:
 	KASSERT(indx == -1, ("indx=%d, should be -1", indx));
-	fdrop_close(fp, td);
+	falloc_abort(td, fp);
 	return (error);
 }
 
@@ -2118,7 +2110,7 @@ kern_accessat(struct thread *td, int fd, const char *path,
 	vp = nd.ni_vp;
 
 	error = vn_access(vp, amode, usecred, td);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	vput(vp);
 out:
 	if (usecred != cred) {
@@ -2417,7 +2409,7 @@ kern_statat(struct thread *td, int flag, int fd, const char *path,
 		if (__predict_false(hook != NULL))
 			hook(nd.ni_vp, sbp);
 	}
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	vput(nd.ni_vp);
 #ifdef __STAT_TIME_T_EXT
 	sbp->st_atim_ext = 0;
@@ -2557,7 +2549,7 @@ kern_pathconf(struct thread *td, const char *path, enum uio_seg pathseg,
 	    pathseg, path, td);
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 
 	error = VOP_PATHCONF(nd.ni_vp, name, valuep);
 	vput(nd.ni_vp);
@@ -2613,7 +2605,7 @@ kern_readlinkat(struct thread *td, int fd, const char *path,
 
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	vp = nd.ni_vp;
 
 	error = kern_readlink_vp(vp, buf, bufseg, count, td);
@@ -2764,7 +2756,7 @@ kern_chflagsat(struct thread *td, int fd, const char *path,
 	    &cap_fchflags_rights, td);
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	error = setfflags(td, nd.ni_vp, flags);
 	vrele(nd.ni_vp);
 	return (error);
@@ -2893,7 +2885,7 @@ kern_fchmodat(struct thread *td, int fd, const char *path,
 	    &cap_fchmod_rights, td);
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	error = setfmode(td, td->td_ucred, nd.ni_vp, mode);
 	vrele(nd.ni_vp);
 	return (error);
@@ -3006,7 +2998,7 @@ kern_fchownat(struct thread *td, int fd, const char *path,
 
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	error = setfown(td, td->td_ucred, nd.ni_vp, uid, gid);
 	vrele(nd.ni_vp);
 	return (error);
@@ -3219,7 +3211,7 @@ kern_utimesat(struct thread *td, int fd, const char *path,
 
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	error = setutimes(td, nd.ni_vp, ts, 2, tptr == NULL);
 	vrele(nd.ni_vp);
 	return (error);
@@ -3255,7 +3247,7 @@ kern_lutimes(struct thread *td, const char *path, enum uio_seg pathseg,
 	NDINIT(&nd, LOOKUP, NOFOLLOW | AUDITVNODE1, pathseg, path, td);
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	error = setutimes(td, nd.ni_vp, ts, 2, tptr == NULL);
 	vrele(nd.ni_vp);
 	return (error);
@@ -3370,7 +3362,7 @@ kern_utimensat(struct thread *td, int fd, const char *path,
 	 * "If both tv_nsec fields are UTIME_OMIT... EACCESS may be detected."
 	 * "Search permission is denied by a component of the path prefix."
 	 */
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	if ((flags & UTIMENS_EXIT) == 0)
 		error = setutimes(td, nd.ni_vp, ts, 2, flags & UTIMENS_NULL);
 	vrele(nd.ni_vp);
@@ -3610,6 +3602,7 @@ kern_renameat(struct thread *td, int oldfd, const char *old, int newfd,
 	struct mount *mp = NULL;
 	struct vnode *tvp, *fvp, *tdvp;
 	struct nameidata fromnd, tond;
+	u_int64_t tondflags;
 	int error;
 
 again:
@@ -3630,11 +3623,11 @@ again:
 	}
 #endif
 	fvp = fromnd.ni_vp;
-	NDINIT_ATRIGHTS(&tond, RENAME, LOCKPARENT | LOCKLEAF | NOCACHE |
-	    SAVESTART | AUDITVNODE2, pathseg, new, newfd,
-	    &cap_renameat_target_rights, td);
+	tondflags = LOCKPARENT | LOCKLEAF | NOCACHE | SAVESTART | AUDITVNODE2;
 	if (fromnd.ni_vp->v_type == VDIR)
-		tond.ni_cnd.cn_flags |= WILLBEDIR;
+		tondflags |= WILLBEDIR;
+	NDINIT_ATRIGHTS(&tond, RENAME, tondflags, pathseg, new, newfd,
+	    &cap_renameat_target_rights, td);
 	if ((error = namei(&tond)) != 0) {
 		/* Translate error code for rename("dir1", "dir2/."). */
 		if (error == EISDIR && fvp->v_type == VDIR)
@@ -3768,7 +3761,6 @@ kern_mkdirat(struct thread *td, int fd, const char *path, enum uio_seg segflg,
     int mode)
 {
 	struct mount *mp;
-	struct vnode *vp;
 	struct vattr vattr;
 	struct nameidata nd;
 	int error;
@@ -3777,26 +3769,10 @@ kern_mkdirat(struct thread *td, int fd, const char *path, enum uio_seg segflg,
 restart:
 	bwillwrite();
 	NDINIT_ATRIGHTS(&nd, CREATE, LOCKPARENT | SAVENAME | AUDITVNODE1 |
-	    NC_NOMAKEENTRY | NC_KEEPPOSENTRY, segflg, path, fd,
-	    &cap_mkdirat_rights, td);
-	nd.ni_cnd.cn_flags |= WILLBEDIR;
+	    NC_NOMAKEENTRY | NC_KEEPPOSENTRY | FAILIFEXISTS | WILLBEDIR,
+	    segflg, path, fd, &cap_mkdirat_rights, td);
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	vp = nd.ni_vp;
-	if (vp != NULL) {
-		NDFREE(&nd, NDF_ONLY_PNBUF);
-		/*
-		 * XXX namei called with LOCKPARENT but not LOCKLEAF has
-		 * the strange behaviour of leaving the vnode unlocked
-		 * if the target is the same vnode as the parent.
-		 */
-		if (vp == nd.ni_dvp)
-			vrele(nd.ni_dvp);
-		else
-			vput(nd.ni_dvp);
-		vrele(vp);
-		return (EEXIST);
-	}
 	if (vn_start_write(nd.ni_dvp, &mp, V_NOWAIT) != 0) {
 		NDFREE(&nd, NDF_ONLY_PNBUF);
 		vput(nd.ni_dvp);
@@ -4242,7 +4218,7 @@ sys_revoke(struct thread *td, struct revoke_args *uap)
 	if ((error = namei(&nd)) != 0)
 		return (error);
 	vp = nd.ni_vp;
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	if (vp->v_type != VCHR || vp->v_rdev == NULL) {
 		error = EINVAL;
 		goto out;
@@ -4377,7 +4353,7 @@ kern_getfhat(struct thread *td, int flags, int fd, const char *path,
 	error = namei(&nd);
 	if (error != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_NOTHING(&nd);
 	vp = nd.ni_vp;
 	bzero(&fh, sizeof(fh));
 	fh.fh_fsid = vp->v_mount->mnt_stat.f_fsid;

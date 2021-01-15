@@ -40,9 +40,10 @@ __FBSDID("$FreeBSD$");
 #include <efipciio.h>
 #include <machine/metadata.h>
 
+#include "bootstrap.h"
 #include "framebuffer.h"
 
-static EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID pciio_guid = EFI_PCI_IO_PROTOCOL_GUID;
 static EFI_GUID uga_guid = EFI_UGA_DRAW_PROTOCOL_GUID;
 
@@ -104,6 +105,7 @@ efifb_mask_from_pixfmt(struct efi_fb *efifb, EFI_GRAPHICS_PIXEL_FORMAT pixfmt,
 	result = 0;
 	switch (pixfmt) {
 	case PixelRedGreenBlueReserved8BitPerColor:
+	case PixelBltOnly:
 		efifb->fb_mask_red = 0x000000ff;
 		efifb->fb_mask_green = 0x0000ff00;
 		efifb->fb_mask_blue = 0x00ff0000;
@@ -462,21 +464,57 @@ efifb_from_uga(struct efi_fb *efifb, EFI_UGA_DRAW_PROTOCOL *uga)
 }
 
 int
-efi_find_framebuffer(struct efi_fb *efifb)
+efi_find_framebuffer(teken_gfx_t *gfx_state)
 {
+	struct efi_fb efifb;
 	EFI_GRAPHICS_OUTPUT *gop;
 	EFI_UGA_DRAW_PROTOCOL *uga;
 	EFI_STATUS status;
+	int rv;
+
+	gfx_state->tg_fb_type = FB_TEXT;
 
 	status = BS->LocateProtocol(&gop_guid, NULL, (VOID **)&gop);
-	if (status == EFI_SUCCESS)
-		return (efifb_from_gop(efifb, gop->Mode, gop->Mode->Info));
+	if (status == EFI_SUCCESS) {
+		gfx_state->tg_fb_type = FB_GOP;
+		gfx_state->tg_private = gop;
+	} else {
+		status = BS->LocateProtocol(&uga_guid, NULL, (VOID **)&uga);
+		if (status == EFI_SUCCESS) {
+			gfx_state->tg_fb_type = FB_UGA;
+			gfx_state->tg_private = uga;
+		} else {
+			return (1);
+		}
+	}
 
-	status = BS->LocateProtocol(&uga_guid, NULL, (VOID **)&uga);
-	if (status == EFI_SUCCESS)
-		return (efifb_from_uga(efifb, uga));
+	switch (gfx_state->tg_fb_type) {
+	case FB_GOP:
+		rv = efifb_from_gop(&efifb, gop->Mode, gop->Mode->Info);
+		break;
 
-	return (1);
+	case FB_UGA:
+		rv = efifb_from_uga(&efifb, uga);
+		break;
+
+	default:
+		return (1);
+	}
+
+	gfx_state->tg_fb.fb_addr = efifb.fb_addr;
+	gfx_state->tg_fb.fb_size = efifb.fb_size;
+	gfx_state->tg_fb.fb_height = efifb.fb_height;
+	gfx_state->tg_fb.fb_width = efifb.fb_width;
+	gfx_state->tg_fb.fb_stride = efifb.fb_stride;
+	gfx_state->tg_fb.fb_mask_red = efifb.fb_mask_red;
+	gfx_state->tg_fb.fb_mask_green = efifb.fb_mask_green;
+	gfx_state->tg_fb.fb_mask_blue = efifb.fb_mask_blue;
+	gfx_state->tg_fb.fb_mask_reserved = efifb.fb_mask_reserved;
+
+	gfx_state->tg_fb.fb_bpp = fls(efifb.fb_mask_red | efifb.fb_mask_green |
+	    efifb.fb_mask_blue | efifb.fb_mask_reserved);
+
+	return (0);
 }
 
 static void
@@ -586,7 +624,7 @@ gop_autoresize(EFI_GRAPHICS_OUTPUT *gop)
 			    mode, EFI_ERROR_CODE(status));
 			return (CMD_ERROR);
 		}
-		(void) efi_cons_update_mode();
+		(void) cons_update_mode(true);
 	}
 	return (CMD_OK);
 }
@@ -611,7 +649,7 @@ text_autoresize()
 	}
 	if (max_dim > 0)
 		conout->SetMode(conout, best_mode);
-	(void) efi_cons_update_mode();
+	(void) cons_update_mode(true);
 	return (CMD_OK);
 }
 
@@ -699,8 +737,10 @@ command_gop(int argc, char *argv[])
 			    argv[0], mode, EFI_ERROR_CODE(status));
 			return (CMD_ERROR);
 		}
-		(void) efi_cons_update_mode();
-	} else if (!strcmp(argv[1], "get")) {
+		(void) cons_update_mode(true);
+	} else if (strcmp(argv[1], "off") == 0) {
+		(void) cons_update_mode(false);
+	} else if (strcmp(argv[1], "get") == 0) {
 		if (argc != 2)
 			goto usage;
 		efifb_from_gop(&efifb, gop->Mode, gop->Mode->Info);
@@ -728,7 +768,7 @@ command_gop(int argc, char *argv[])
 
  usage:
 	snprintf(command_errbuf, sizeof(command_errbuf),
-	    "usage: %s [list | get | set <mode>]", argv[0]);
+	    "usage: %s [list | get | set <mode> | off]", argv[0]);
 	return (CMD_ERROR);
 }
 

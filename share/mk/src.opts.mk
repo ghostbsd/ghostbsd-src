@@ -68,7 +68,6 @@ __DEFAULT_YES_OPTIONS = \
     BOOTPARAMD \
     BOOTPD \
     BSD_CPIO \
-    BSD_GREP \
     BSDINSTALL \
     BSNMP \
     BZIP2 \
@@ -206,7 +205,6 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_FORMAT \
     DTRACE_TESTS \
     EXPERIMENTAL \
-    GNU_GREP \
     HESIOD \
     LIBSOFT \
     LOADER_FIREWIRE \
@@ -440,7 +438,6 @@ MK_LDNS:=	no
 MK_PKGBOOTSTRAP:=	no
 MK_SVN:=		no
 MK_SVNLITE:=		no
-MK_WIRELESS:=		no
 .endif
 
 .if ${MK_LDNS} == "no"

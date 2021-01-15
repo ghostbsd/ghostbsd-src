@@ -218,7 +218,7 @@ contrib/openzfs/module/os/freebsd/zfs/zfs_file_os.c		optional zfs compile-with "
 contrib/openzfs/module/os/freebsd/zfs/zfs_ioctl_compat.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zfs_ioctl_os.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zfs_vfsops.c		optional zfs compile-with "${ZFS_C}"
-contrib/openzfs/module/os/freebsd/zfs/zfs_vnops.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/os/freebsd/zfs/zfs_vnops_os.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zfs_znode.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zio_crypt.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zvol_os.c		optional zfs compile-with "${ZFS_C}"
@@ -311,6 +311,8 @@ contrib/openzfs/module/zfs/uberblock.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/unique.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/vdev.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/vdev_cache.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zfs/vdev_draid.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zfs/vdev_draid_rand.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/vdev_indirect.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/vdev_indirect_births.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/vdev_indirect_mapping.c		optional zfs compile-with "${ZFS_C}"
@@ -347,6 +349,7 @@ contrib/openzfs/module/zfs/zfs_ratelimit.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zfs_replay.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zfs_rlock.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zfs_sa.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zfs/zfs_vnops.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zstd/zfs_zstd.c		optional zfs zstdio compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zil.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zio.c		optional zfs compile-with "${ZFS_C}"
@@ -910,7 +913,6 @@ dev/amr/amr_linux.c		optional amr compat_linux
 dev/amr/amr_pci.c		optional amr pci
 dev/an/if_an.c			optional an
 dev/an/if_an_isa.c		optional an isa
-dev/an/if_an_pccard.c		optional an pccard
 dev/an/if_an_pci.c		optional an pci
 #
 dev/ata/ata_if.m		optional ata | atacore
@@ -918,7 +920,6 @@ dev/ata/ata-all.c		optional ata | atacore
 dev/ata/ata-dma.c		optional ata | atacore
 dev/ata/ata-lowlevel.c		optional ata | atacore
 dev/ata/ata-sata.c		optional ata | atacore
-dev/ata/ata-card.c		optional ata pccard | atapccard
 dev/ata/ata-isa.c		optional ata isa | ataisa
 dev/ata/ata-pci.c		optional ata pci | atapci
 dev/ata/chipsets/ata-acard.c	optional ata pci | ataacard
@@ -1408,6 +1409,7 @@ dev/cadence/if_cgem.c		optional cgem fdt
 dev/cardbus/cardbus.c		optional cardbus
 dev/cardbus/cardbus_cis.c	optional cardbus
 dev/cardbus/cardbus_device.c	optional cardbus
+dev/cardbus/power_if.m		standard
 dev/cas/if_cas.c		optional cas
 dev/cfi/cfi_bus_fdt.c		optional cfi fdt
 dev/cfi/cfi_bus_nexus.c		optional cfi
@@ -1416,8 +1418,6 @@ dev/cfi/cfi_dev.c		optional cfi
 dev/cfi/cfi_disk.c		optional cfid
 dev/chromebook_platform/chromebook_platform.c	optional chromebook_platform
 dev/ciss/ciss.c			optional ciss
-dev/cmx/cmx.c			optional cmx
-dev/cmx/cmx_pccard.c		optional cmx pccard
 dev/cpufreq/ichss.c		optional cpufreq pci
 dev/cxgb/cxgb_main.c		optional cxgb pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgb"
@@ -1815,6 +1815,22 @@ dev/gpio/gpio_if.m		optional gpio
 dev/gpio/gpiobus_if.m		optional gpio
 dev/gpio/gpiopps.c		optional gpiopps fdt
 dev/gpio/ofw_gpiobus.c		optional fdt gpio
+dev/hid/hconf.c			optional hconf
+dev/hid/hcons.c			optional hcons
+dev/hid/hgame.c			optional hgame
+dev/hid/hid.c			optional hid
+dev/hid/hid_if.m		optional hid
+dev/hid/hidbus.c		optional hidbus
+dev/hid/hidmap.c		optional hidmap
+dev/hid/hidquirk.c		optional hid
+dev/hid/hidraw.c		optional hidraw
+dev/hid/hkbd.c			optional hkbd
+dev/hid/hms.c			optional hms
+dev/hid/hmt.c			optional hmt hconf
+dev/hid/hpen.c			optional hpen
+dev/hid/hsctrl.c		optional hsctrl
+dev/hid/ps4dshock.c		optional ps4dshock
+dev/hid/xb360gp.c		optional xb360gp
 dev/hifn/hifn7751.c		optional hifn
 dev/hptiop/hptiop.c		optional hptiop scbus
 dev/hwpmc/hwpmc_logging.c	optional hwpmc
@@ -1844,6 +1860,7 @@ dev/iicbus/iicbb.c		optional iicbb
 dev/iicbus/iicbb_if.m		optional iicbb
 dev/iicbus/iicbus.c		optional iicbus
 dev/iicbus/iicbus_if.m		optional iicbus
+dev/iicbus/iichid.c		optional iichid acpi hid iicbus
 dev/iicbus/iiconf.c		optional iicbus
 dev/iicbus/iicsmb.c		optional iicsmb				\
 	dependency	"iicbus_if.h"
@@ -2320,7 +2337,7 @@ dev/ixgbe/ixgbe_dcb_82599.c	optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/jedec_dimm/jedec_dimm.c	optional jedec_dimm smbus
 dev/jme/if_jme.c		optional jme pci
-dev/kbd/kbd.c			optional atkbd | pckbd | sc | ukbd | vt
+dev/kbd/kbd.c			optional atkbd | pckbd | sc | ukbd | vt | hkbd
 dev/kbdmux/kbdmux.c		optional kbdmux
 dev/ksyms/ksyms.c		optional ksyms
 dev/le/am7990.c			optional le
@@ -2388,7 +2405,6 @@ lio_23xx_nic.bin.fw	optional lio					\
 dev/malo/if_malo.c		optional malo
 dev/malo/if_malohal.c		optional malo
 dev/malo/if_malo_pci.c		optional malo pci
-dev/mc146818/mc146818.c		optional mc146818
 dev/md/md.c			optional md
 dev/mdio/mdio_if.m		optional miiproxy | mdio
 dev/mdio/mdio.c			optional miiproxy | mdio
@@ -2421,7 +2437,6 @@ dev/mii/mii_bitbang.c		optional miibus | mii_bitbang
 dev/mii/mii_physubr.c		optional miibus | mii
 dev/mii/mii_fdt.c		optional miibus fdt | mii fdt
 dev/mii/miibus_if.m		optional miibus | mii
-dev/mii/mlphy.c			optional miibus | mlphy
 dev/mii/nsgphy.c		optional miibus | nsgphy
 dev/mii/nsphy.c			optional miibus | nsphy
 dev/mii/nsphyter.c		optional miibus | nsphyter
@@ -2434,13 +2449,11 @@ dev/mii/rlswitch.c		optional rlswitch
 dev/mii/smcphy.c		optional miibus | smcphy
 dev/mii/smscphy.c		optional miibus | smscphy
 dev/mii/tdkphy.c		optional miibus | tdkphy
-dev/mii/tlphy.c			optional miibus | tlphy
 dev/mii/truephy.c		optional miibus | truephy
 dev/mii/ukphy.c			optional miibus | mii
 dev/mii/ukphy_subr.c		optional miibus | mii
 dev/mii/vscphy.c		optional miibus | vscphy
 dev/mii/xmphy.c			optional miibus | xmphy
-dev/mk48txx/mk48txx.c		optional mk48txx
 dev/mlxfw/mlxfw_fsm.c			optional mlxfw \
 	compile-with "${MLXFW_C}"
 dev/mlxfw/mlxfw_mfa2.c			optional mlxfw \
@@ -2610,7 +2623,6 @@ dev/pccard/pccard.c		optional pccard
 dev/pccard/pccard_cis.c		optional pccard
 dev/pccard/pccard_cis_quirks.c	optional pccard
 dev/pccard/pccard_device.c	optional pccard
-dev/pccard/power_if.m		standard
 dev/pccbb/pccbb.c		optional cbb
 dev/pccbb/pccbb_pci.c		optional cbb pci
 dev/pcf/pcf.c			optional pcf
@@ -2751,7 +2763,6 @@ dev/pst/pst-raid.c		optional pst
 dev/pty/pty.c			optional pty
 dev/puc/puc.c			optional puc
 dev/puc/puc_cfg.c		optional puc
-dev/puc/puc_pccard.c		optional puc pccard
 dev/puc/puc_pci.c		optional puc pci
 dev/pwm/pwmc.c			optional pwm | pwmc
 dev/pwm/pwmbus.c		optional pwm | pwmbus
@@ -3068,7 +3079,6 @@ dev/scc/scc_if.m		optional scc
 dev/scc/scc_bfe_quicc.c		optional scc quicc
 dev/scc/scc_core.c		optional scc
 dev/scc/scc_dev_quicc.c		optional scc quicc
-dev/scc/scc_dev_sab82532.c	optional scc
 dev/scc/scc_dev_z8530.c		optional scc
 dev/sdhci/sdhci.c		optional sdhci
 dev/sdhci/sdhci_fdt.c		optional sdhci fdt
@@ -3229,7 +3239,6 @@ dev/tws/tws_user.c		optional tws
 dev/uart/uart_bus_acpi.c	optional uart acpi
 dev/uart/uart_bus_fdt.c		optional uart fdt
 dev/uart/uart_bus_isa.c		optional uart isa
-dev/uart/uart_bus_pccard.c	optional uart pccard
 dev/uart/uart_bus_pci.c		optional uart pci
 dev/uart/uart_bus_puc.c		optional uart puc
 dev/uart/uart_bus_scc.c		optional uart scc
@@ -3242,7 +3251,6 @@ dev/uart/uart_dev_mvebu.c	optional uart uart_mvebu
 dev/uart/uart_dev_ns8250.c	optional uart uart_ns8250 | uart uart_snps
 dev/uart/uart_dev_pl011.c	optional uart pl011
 dev/uart/uart_dev_quicc.c	optional uart quicc
-dev/uart/uart_dev_sab82532.c	optional uart uart_sab82532 | uart scc
 dev/uart/uart_dev_snps.c	optional uart uart_snps fdt
 dev/uart/uart_dev_z8530.c	optional uart uart_z8530 | uart scc
 dev/uart/uart_if.m		optional uart
@@ -3407,6 +3415,7 @@ dev/usb/input/uhid.c		optional uhid
 dev/usb/input/uhid_snes.c	optional uhid_snes
 dev/usb/input/ukbd.c		optional ukbd
 dev/usb/input/ums.c		optional ums
+dev/usb/input/usbhid.c		optional usbhid
 dev/usb/input/wmt.c		optional wmt
 dev/usb/input/wsp.c		optional wsp
 #
@@ -3490,9 +3499,6 @@ dev/vt/vt_font.c		optional vt
 dev/vt/vt_sysmouse.c		optional vt
 dev/vte/if_vte.c		optional vte pci
 dev/watchdog/watchdog.c		standard
-dev/wi/if_wi.c			optional wi
-dev/wi/if_wi_pccard.c		optional wi pccard
-dev/wi/if_wi_pci.c		optional wi pci
 dev/wpi/if_wpi.c		optional wpi pci
 wpifw.c			optional wpifw					\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk wpi.fw:wpifw:153229 -mwpi -c${.TARGET}" \
@@ -3932,6 +3938,7 @@ kern/subr_unit.c		standard
 kern/subr_vmem.c		standard
 kern/subr_witness.c		optional witness
 kern/sys_capability.c		standard
+kern/sys_eventfd.c		standard
 kern/sys_generic.c		standard
 kern/sys_getrandom.c		standard
 kern/sys_pipe.c			standard
@@ -4063,6 +4070,7 @@ libkern/qsort_r.c		standard
 libkern/random.c		standard
 libkern/scanc.c			standard
 libkern/strcasecmp.c		standard
+libkern/strcasestr.c		standard
 libkern/strcat.c		standard
 libkern/strchr.c		standard
 libkern/strchrnul.c		optional gdb
@@ -4178,6 +4186,7 @@ net/route/nhgrp_ctl.c		optional route_mpath
 net/route/nhop.c		standard
 net/route/nhop_ctl.c		standard
 net/route/nhop_utils.c		standard
+net/route/fib_algo.c		optional fib_algo
 net/route/route_ctl.c		standard
 net/route/route_ddb.c		optional ddb
 net/route/route_helpers.c	standard
@@ -4247,7 +4256,6 @@ netgraph/atm/sscop/ng_sscop.c optional ngatm_sscop \
 netgraph/atm/uni/ng_uni.c	optional ngatm_uni \
 	compile-with "${NORMAL_C} -I$S/contrib/ngatm"
 netgraph/bluetooth/common/ng_bluetooth.c optional netgraph_bluetooth
-netgraph/bluetooth/drivers/bt3c/ng_bt3c_pccard.c optional netgraph_bluetooth_bt3c
 netgraph/bluetooth/drivers/h4/ng_h4.c optional netgraph_bluetooth_h4
 netgraph/bluetooth/drivers/ubt/ng_ubt.c optional netgraph_bluetooth_ubt usb
 netgraph/bluetooth/drivers/ubt/ng_ubt_intel.c optional netgraph_bluetooth_ubt usb
@@ -4329,6 +4337,7 @@ netinet/in_debug.c		optional inet ddb
 netinet/in_kdtrace.c		optional inet | inet6
 netinet/ip_carp.c		optional inet carp | inet6 carp
 netinet/in_fib.c		optional inet
+netinet/in_fib_algo.c		optional inet fib_algo
 netinet/in_gif.c		optional gif inet | netgraph_gif inet
 netinet/ip_gre.c		optional gre inet
 netinet/ip_id.c			optional inet
@@ -4405,6 +4414,7 @@ netinet6/icmp6.c		optional inet6
 netinet6/in6.c			optional inet6
 netinet6/in6_cksum.c		optional inet6
 netinet6/in6_fib.c		optional inet6
+netinet6/in6_fib_algo.c		optional inet6 fib_algo
 netinet6/in6_gif.c		optional gif inet6 | netgraph_gif inet6
 netinet6/in6_ifattach.c		optional inet6
 netinet6/in6_jail.c		optional inet6
@@ -4565,6 +4575,8 @@ compat/linuxkpi/common/src/linux_rcu.c		optional compat_linuxkpi \
 compat/linuxkpi/common/src/linux_schedule.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_shmemfs.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_shrinker.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_slab.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"

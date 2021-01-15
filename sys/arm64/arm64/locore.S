@@ -43,22 +43,6 @@
 	.globl	kernbase
 	.set	kernbase, KERNBASE
 
-
-/* U-Boot booti related constants. */
-#if defined(LINUX_BOOT_ABI)
-#ifndef UBOOT_IMAGE_OFFSET
-#define	UBOOT_IMAGE_OFFSET	0		/* Image offset from start of */
-#endif						/*  2 MiB page */
-
-#ifndef UBOOT_IMAGE_SIZE			/* Total size of image */
-#define	UBOOT_IMAGE_SIZE	 _end - _start
-#endif
-
-#ifndef UBOOT_IMAGE_FLAGS
-#define	UBOOT_IMAGE_FLAGS	0		/* LE kernel, unspecified */
-#endif						/*  page size */
-#endif /* defined(LINUX_BOOT_ABI) */
-
 /*
  * We assume:
  *  MMU      on with an identity map, or off
@@ -67,24 +51,7 @@
  *  We are loaded at a 2MiB aligned address
  */
 
-	.text
-	.globl _start
-_start:
-#if defined(LINUX_BOOT_ABI)
-	/* U-boot image header */
-	b	1f			/* code 0 */
-	.long	0			/* code 1 */
-	.quad	UBOOT_IMAGE_OFFSET	/* Image offset in 2 MiB page, LE */
-	.quad	UBOOT_IMAGE_SIZE	/* Image size, LE */
-	.quad	UBOOT_IMAGE_FLAGS	/* Flags for kernel. LE */
-	.quad 	0			/* Reserved */
-	.quad 	0			/* Reserved */
-	.quad 	0			/* Reserved */
-	.long 	0x644d5241		/* Magic  "ARM\x64", LE */
-	.long 	0			/* Reserved for PE COFF offset*/
-1:
-#endif /* defined(LINUX_BOOT_ABI) */
-
+ENTRY(_start)
 	/* Drop to EL1 */
 	bl	drop_to_el1
 
@@ -127,7 +94,8 @@ _start:
 	bl	start_mmu
 
 	/* Load the new ttbr0 pagetable */
-	adr	x27, pagetable_l0_ttbr0
+	adrp	x27, pagetable_l0_ttbr0
+	add	x27, x27, :lo12:pagetable_l0_ttbr0
 
 	/* Jump to the virtual address space */
 	ldr	x15, .Lvirtdone
@@ -135,7 +103,8 @@ _start:
 
 virtdone:
 	/* Set up the stack */
-	adr	x25, initstack_end
+	adrp	x25, initstack_end
+	add	x25, x25, :lo12:initstack_end
 	mov	sp, x25
 	sub	sp, sp, #PCB_SIZE
 
@@ -163,7 +132,8 @@ virtdone:
 	str	x1,  [x0, #BP_MODULEP]
 	str	x26, [x0, #BP_KERN_L1PT]
 	str	x29, [x0, #BP_KERN_DELTA]
-	adr	x25, initstack
+	adrp	x25, initstack
+	add	x25, x25, :lo12:initstack
 	str	x25, [x0, #BP_KERN_STACK]
 	str	x24, [x0, #BP_KERN_L0PT]
 	str	x27, [x0, #BP_KERN_TTBR0]
@@ -186,7 +156,8 @@ virtdone:
 .Lbss:
 	.quad	__bss_start
 .Lend:
-	.quad	_end
+	.quad	__bss_end
+END(_start)
 
 #ifdef SMP
 /*
@@ -206,15 +177,18 @@ ENTRY(mpentry)
 	msr	contextidr_el1, xzr
 
 	/* Load the kernel page table */
-	adr	x24, pagetable_l0_ttbr1
+	adrp	x24, pagetable_l0_ttbr1
+	add	x24, x24, :lo12:pagetable_l0_ttbr1
 	/* Load the identity page table */
-	adr	x27, pagetable_l0_ttbr0_boostrap
+	adrp	x27, pagetable_l0_ttbr0_boostrap
+	add	x27, x27, :lo12:pagetable_l0_ttbr0_boostrap
 
 	/* Enable the mmu */
 	bl	start_mmu
 
 	/* Load the new ttbr0 pagetable */
-	adr	x27, pagetable_l0_ttbr0
+	adrp	x27, pagetable_l0_ttbr0
+	add	x27, x27, :lo12:pagetable_l0_ttbr0
 
 	/* Jump to the virtual address space */
 	ldr	x15, =mp_virtdone
@@ -243,7 +217,7 @@ END(mpentry)
  * If we are started in EL2, configure the required hypervisor
  * registers and drop to EL1.
  */
-drop_to_el1:
+LENTRY(drop_to_el1)
 	mrs	x23, CurrentEL
 	lsr	x23, x23, #2
 	cmp	x23, #0x2
@@ -282,7 +256,8 @@ drop_to_el1:
 	msr	cntvoff_el2, xzr
 
 	/* Hypervisor trap functions */
-	adr	x2, hyp_vectors
+	adrp	x2, hyp_vectors
+	add	x2, x2, :lo12:hyp_vectors
 	msr	vbar_el2, x2
 
 	mov	x2, #(PSR_F | PSR_I | PSR_A | PSR_D | PSR_M_EL1h)
@@ -311,6 +286,7 @@ drop_to_el1:
 	.align 3
 .Lsctlr_res1:
 	.quad SCTLR_RES1
+LEND(drop_to_el1)
 
 #define	VECT_EMPTY	\
 	.align 7;	\
@@ -343,9 +319,10 @@ hyp_vectors:
  * virtual address we expect to run from. This is used when building the
  * initial page table.
  */
-get_virt_delta:
+LENTRY(get_virt_delta)
 	/* Load the physical address of virt_map */
-	adr	x29, virt_map
+	adrp	x29, virt_map
+	add	x29, x29, :lo12:virt_map
 	/* Load the virtual address of virt_map stored in virt_map */
 	ldr	x28, [x29]
 	/* Find PA - VA as PA' = VA' - VA + PA = VA' + (PA - VA) = VA' + x29 */
@@ -358,6 +335,7 @@ get_virt_delta:
 	.align 3
 virt_map:
 	.quad	virt_map
+LEND(get_virt_delta)
 
 /*
  * This builds the page tables containing the identity map, and the kernel
@@ -378,14 +356,16 @@ virt_map:
  *    - The identity (PA = VA) L0 table (TTBR0)
  *    - The DMAP L1 tables
  */
-create_pagetables:
+LENTRY(create_pagetables)
 	/* Save the Link register */
 	mov	x5, x30
 
 	/* Clean the page table */
-	adr	x6, pagetable
+	adrp	x6, pagetable
+	add	x6, x6, :lo12:pagetable
 	mov	x26, x6
-	adr	x27, pagetable_end
+	adrp	x27, pagetable_end
+	add	x27, x27, :lo12:pagetable_end
 1:
 	stp	xzr, xzr, [x6], #16
 	stp	xzr, xzr, [x6], #16
@@ -474,7 +454,8 @@ common:
 
 	/* Link the DMAP tables */
 	ldr	x8, =DMAP_MIN_ADDRESS
-	adr	x9, pagetable_dmap;
+	adrp	x9, pagetable_dmap
+	add	x9, x9, :lo12:pagetable_dmap
 	mov	x10, #DMAP_TABLES
 	bl	link_l0_pagetable
 
@@ -510,7 +491,7 @@ common:
 
 	/* Create the VA = PA map */
 	mov	x7, #(ATTR_S1_nG | ATTR_S1_IDX(VM_MEMATTR_WRITE_BACK))
-	mov	x9, x27
+	mov	x9, x28
 	mov	x8, x9		/* VA start (== PA start) */
 	mov	x10, #1
 	bl	build_l1_block_pagetable
@@ -527,6 +508,7 @@ common:
 	/* Restore the Link register */
 	mov	x30, x5
 	ret
+LEND(create_pagetables)
 
 /*
  * Builds an L0 -> L1 table descriptor
@@ -540,7 +522,7 @@ common:
  *  x10 = Entry count
  *  x11, x12 and x13 are trashed
  */
-link_l0_pagetable:
+LENTRY(link_l0_pagetable)
 	/*
 	 * Link an L0 -> L1 table entry.
 	 */
@@ -564,6 +546,7 @@ link_l0_pagetable:
 	cbnz	x10, 1b
 
 	ret
+LEND(link_l0_pagetable)
 
 /*
  * Builds an L1 -> L2 table descriptor
@@ -576,7 +559,7 @@ link_l0_pagetable:
  *  x9  = L2 PA (trashed)
  *  x11, x12 and x13 are trashed
  */
-link_l1_pagetable:
+LENTRY(link_l1_pagetable)
 	/*
 	 * Link an L1 -> L2 table entry.
 	 */
@@ -595,6 +578,7 @@ link_l1_pagetable:
 	str	x13, [x6, x11, lsl #3]
 
 	ret
+LEND(link_l1_pagetable)
 
 /*
  * Builds count 1 GiB page table entry
@@ -605,7 +589,7 @@ link_l1_pagetable:
  *  x10 = Entry count
  *  x11, x12 and x13 are trashed
  */
-build_l1_block_pagetable:
+LENTRY(build_l1_block_pagetable)
 	/*
 	 * Build the L1 table entry.
 	 */
@@ -632,6 +616,7 @@ build_l1_block_pagetable:
 	cbnz	x10, 1b
 
 	ret
+LEND(build_l1_block_pagetable)
 
 /*
  * Builds count 2 MiB page table entry
@@ -642,7 +627,7 @@ build_l1_block_pagetable:
  *  x10 = Entry count
  *  x11, x12 and x13 are trashed
  */
-build_l2_block_pagetable:
+LENTRY(build_l2_block_pagetable)
 	/*
 	 * Build the L2 table entry.
 	 */
@@ -671,8 +656,9 @@ build_l2_block_pagetable:
 	cbnz	x10, 1b
 
 	ret
+LEND(build_l2_block_pagetable)
 
-start_mmu:
+LENTRY(start_mmu)
 	dsb	sy
 
 	/* Load the exception vectors */
@@ -764,13 +750,18 @@ sctlr_clear:
 	/* Bits to clear */
 	.quad (SCTLR_EE | SCTLR_EOE | SCTLR_IESB | SCTLR_WXN | SCTLR_UMA | \
 	    SCTLR_ITD | SCTLR_A)
+LEND(start_mmu)
 
-	.globl abort
-abort:
+ENTRY(abort)
 	b abort
+END(abort)
 
-	//.section .init_pagetable
-	.align 12 /* 4KiB aligned */
+	.align 3
+init_pt_va:
+	.quad pagetable		/* XXX: Keep page tables VA */
+
+	.section .init_pagetable, "aw", %nobits
+	.align PAGE_SHIFT
 	/*
 	 * 6 initial tables (in the following order):
 	 *           L2 for kernel (High addresses)
@@ -802,8 +793,6 @@ el2_pagetable:
 	.space	PAGE_SIZE
 
 	.globl init_pt_va
-init_pt_va:
-	.quad pagetable		/* XXX: Keep page tables VA */
 
 	.align	4
 initstack:

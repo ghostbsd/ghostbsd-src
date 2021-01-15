@@ -228,8 +228,8 @@ device		e6000sw
 device		miibus
 
 device		awg			# 10/100/1000 integrated EMAC controller
+device		cgem			# Cadence GEM Gigabit Ethernet device
 device		cpsw			# TI Common Platform Ethernet Switch (CPSW)
-device		cgem			# Zynq-7000 gig ethernet device
 device		dwc			# 10/100/1000 integrated GMAC controller
 device		emac			# 10/100 integrated EMAC controller
 device		ffec			# Freescale Fast Ethernet Controller
@@ -279,6 +279,9 @@ device		aw_sid		# Allwinner Secure ID EFUSE
 
 # Thermal sensors
 device		aw_thermal	# Allwinner Thermal Sensor Controller
+
+# HID support
+device		hid		# Generic HID support
 
 # Flattened Device Tree
 options 	FDT			# Configure using FDT/DTB data

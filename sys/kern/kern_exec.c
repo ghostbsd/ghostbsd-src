@@ -1043,6 +1043,7 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	struct rlimit rlim_stack;
 	vm_offset_t sv_minuser, stack_addr;
 	vm_map_t map;
+	vm_prot_t stack_prot;
 	u_long ssiz;
 
 	imgp->vmspace_destroyed = 1;
@@ -1074,12 +1075,12 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 		pmap_remove_pages(vmspace_pmap(vmspace));
 		vm_map_remove(map, vm_map_min(map), vm_map_max(map));
 		/*
-		 * An exec terminates mlockall(MCL_FUTURE), ASLR state
-		 * must be re-evaluated.
+		 * An exec terminates mlockall(MCL_FUTURE).
+		 * ASLR and W^X states must be re-evaluated.
 		 */
 		vm_map_lock(map);
 		vm_map_modflags(map, 0, MAP_WIREFUTURE | MAP_ASLR |
-		    MAP_ASLR_IGNSTART);
+		    MAP_ASLR_IGNSTART | MAP_WXORX);
 		vm_map_unlock(map);
 	} else {
 		error = vmspace_exec(p, sv_minuser, sv->sv_maxuser);
@@ -1126,11 +1127,16 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	if (ssiz < imgp->eff_stack_sz)
 		imgp->eff_stack_sz = ssiz;
 	stack_addr = sv->sv_usrstack - ssiz;
-	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz,
-	    obj != NULL && imgp->stack_prot != 0 ? imgp->stack_prot :
-	    sv->sv_stackprot, VM_PROT_ALL, MAP_STACK_GROWS_DOWN);
-	if (error != KERN_SUCCESS)
+	stack_prot = obj != NULL && imgp->stack_prot != 0 ?
+	    imgp->stack_prot : sv->sv_stackprot;
+	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz, stack_prot,
+	    VM_PROT_ALL, MAP_STACK_GROWS_DOWN);
+	if (error != KERN_SUCCESS) {
+		uprintf("exec_new_vmspace: mapping stack size %#jx prot %#x "
+		    "failed mach error %d errno %d\n", (uintmax_t)ssiz,
+		    stack_prot, error, vm_mmap_to_errno(error));
 		return (vm_mmap_to_errno(error));
+	}
 
 	/*
 	 * vm_ssize and vm_maxsaddr are somewhat antiquated concepts, but they

@@ -1070,7 +1070,7 @@ freebsd32_ptrace(struct thread *td, struct freebsd32_ptrace_args *uap)
 	return (error);
 }
 
-static int
+int
 freebsd32_copyinuio(struct iovec32 *iovp, u_int iovcnt, struct uio **uiop)
 {
 	struct iovec32 iov32;
@@ -2095,7 +2095,7 @@ freebsd32_do_sendfile(struct thread *td,
 	AUDIT_ARG_FD(uap->fd);
 
 	if ((error = fget_read(td, uap->fd,
-	    cap_rights_init(&rights, CAP_PREAD), &fp)) != 0)
+	    cap_rights_init_one(&rights, CAP_PREAD), &fp)) != 0)
 		goto out;
 
 	error = fo_sendfile(fp, uap->s, hdr_uio, trl_uio, offset,

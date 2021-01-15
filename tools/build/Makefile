@@ -105,9 +105,6 @@ INCS+=		libcasper.h
 # not match.
 RPCINCS+=	${SRCTOP}/sys/rpc/types.h
 
-.if ${.MAKE.OS} != "FreeBSD"
-.PATH: ${.CURDIR}/cross-build
-
 INCS+=	${SRCTOP}/include/mpool.h
 INCS+=	${SRCTOP}/include/ndbm.h
 INCS+=	${SRCTOP}/include/err.h
@@ -143,6 +140,9 @@ INCS+=	${SRCTOP}/include/nlist.h
 SYSINCS+=	${SRCTOP}/sys/sys/imgact_aout.h
 SYSINCS+=	${SRCTOP}/sys/sys/nlist_aout.h
 
+
+.if ${.MAKE.OS} != "FreeBSD"
+.PATH: ${.CURDIR}/cross-build
 # dbopen() behaves differently on Linux and FreeBSD so we ensure that we
 # bootstrap the FreeBSD db code. The cross-build headers #define dbopen() to
 # __freebsd_dbopen() so that we don't ever use the host version
@@ -174,6 +174,8 @@ CFLAGS.closefrom.c+=	-DSTDC_HEADERS -DHAVE_SYS_DIR_H -DHAVE_DIRENT_H \
 	-DHAVE_DIRFD -DHAVE_SYSCONF
 # Provide warnc/errc/getprogname/setprograme
 SRCS+=	err.c progname.c
+# Stub implementations of fflagstostr/strtofflags
+SRCS+=	fflags.c
 .endif
 # Provide the same arc4random implementation on Linux/macOS
 CFLAGS.arc4random.c+=	-I${SRCTOP}/sys/crypto/chacha20 -D__isthreaded=1

@@ -62,13 +62,14 @@ struct ControlFeatures {
 };
 
 static struct ControlFeatures featurelist[] = {
-	{ "aslr",	NT_FREEBSD_FCTL_ASLR_DISABLE,	"Disable ASLR" },
-	{ "protmax",	NT_FREEBSD_FCTL_PROTMAX_DISABLE,
+	{ "noaslr",	NT_FREEBSD_FCTL_ASLR_DISABLE,	"Disable ASLR" },
+	{ "noprotmax",	NT_FREEBSD_FCTL_PROTMAX_DISABLE,
 	    "Disable implicit PROT_MAX" },
-	{ "stackgap",	NT_FREEBSD_FCTL_STKGAP_DISABLE, "Disable stack gap" },
+	{ "nostackgap",	NT_FREEBSD_FCTL_STKGAP_DISABLE, "Disable stack gap" },
 	{ "wxneeded",	NT_FREEBSD_FCTL_WXNEEDED, "Requires W+X mappings" },
 	{ "la48",	NT_FREEBSD_FCTL_LA48, "amd64: Limit user VA to 48bit" },
-	{ "aslrstkgap", NT_FREEBSD_FCTL_ASG_DISABLE, "Disable ASLR stack gap" },
+	{ "noaslrstkgap", NT_FREEBSD_FCTL_ASG_DISABLE,
+	    "Disable ASLR stack gap" },
 };
 
 static struct option long_opts[] = {
@@ -81,7 +82,9 @@ static struct option long_opts[] = {
 #else
 #define SUPPORTED_ENDIAN ELFDATA2MSB
 #endif
-		
+
+static bool iflag;
+
 int
 main(int argc, char **argv)
 {
@@ -100,8 +103,11 @@ main(int argc, char **argv)
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		errx(EXIT_FAILURE, "elf_version error");
 
-	while ((ch = getopt_long(argc, argv, "hle:", long_opts, NULL)) != -1) {
+	while ((ch = getopt_long(argc, argv, "hile:", long_opts, NULL)) != -1) {
 		switch (ch) {
+		case 'i':
+			iflag = true;
+			break;
 		case 'l':
 			print_features();
 			lflag = true;
@@ -197,6 +203,7 @@ Usage: %s [options] file...\n\
   Set or display the control features for an ELF object.\n\n\
   Supported options are:\n\
   -l                        List known control features.\n\
+  -i                        Ignore unknown features.\n\
   -e [+-=]feature,list      Edit features from a comma separated list.\n\
   -h | --help               Print a usage message and exit.\n"
 
@@ -226,10 +233,21 @@ convert_to_feature_val(char *feature_str, uint32_t *feature_val)
 				input |= featurelist[i].value;
 				break;
 			}
+			/* XXX Backwards compatibility for "no"-prefix flags. */
+			if (strncmp(featurelist[i].alias, "no", 2) == 0 &&
+			    strcmp(featurelist[i].alias + 2, feature) == 0) {
+				input |= featurelist[i].value;
+				warnx(
+				    "interpreting %s as %s; please specify %s",
+				    feature, featurelist[i].alias,
+				    featurelist[i].alias);
+				break;
+			}
 		}
 		if (i == len) {
 			warnx("%s is not a valid feature", feature);
-			return (false);
+			if (!iflag)
+				return (false);
 		}
 	}
 
