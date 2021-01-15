@@ -295,6 +295,7 @@ preload_bootstrap_relocate(vm_offset_t offset)
 	    /* Deal with the ones that we know we have to fix */
 	    switch (hdr[0]) {
 	    case MODINFO_ADDR:
+	    case MODINFO_METADATA|MODINFOMD_FONT:
 	    case MODINFO_METADATA|MODINFOMD_SSYM:
 	    case MODINFO_METADATA|MODINFOMD_ESYM:
 		ptr = (vm_offset_t *)(curp + (sizeof(uint32_t) * 2));
@@ -416,6 +417,11 @@ preload_modinfo_type(struct sbuf *sbp, int type)
 		sbuf_cat(sbp, "MODINFOMD_MODULEP");
 		break;
 #endif
+#ifdef MODINFOMD_VBE_FB
+	case MODINFOMD_VBE_FB:
+		sbuf_cat(sbp, "MODINFOMD_VBE_FB");
+		break;
+#endif
 	default:
 		sbuf_cat(sbp, "unrecognized metadata type");
 	}
@@ -461,6 +467,9 @@ preload_modinfo_value(struct sbuf *sbp, uint32_t *bptr, int type, int len)
 #endif
 #ifdef MODINFOMD_EFI_FB
 	case MODINFO_METADATA | MODINFOMD_EFI_FB:
+#endif
+#ifdef MODINFOMD_VBE_FB
+	case MODINFO_METADATA | MODINFOMD_VBE_FB:
 #endif
 		sbuf_print_vmoffset(sbp, *(vm_offset_t *)bptr);
 		break;

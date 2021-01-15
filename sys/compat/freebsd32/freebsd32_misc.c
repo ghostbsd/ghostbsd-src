@@ -82,6 +82,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysproto.h>
 #include <sys/systm.h>
 #include <sys/thr.h>
+#include <sys/timex.h>
 #include <sys/unistd.h>
 #include <sys/ucontext.h>
 #include <sys/umtx.h>
@@ -3423,8 +3424,7 @@ freebsd32_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	destp = rounddown2(destp, sizeof(uint32_t));
 	ustringp = destp;
 
-	if (imgp->sysent->sv_stackgap != NULL)
-		imgp->sysent->sv_stackgap(imgp, &destp);
+	exec_stackgap(imgp, &destp);
 
 	if (imgp->auxargs) {
 		/*
@@ -3767,10 +3767,67 @@ freebsd32_sched_rr_get_interval(struct thread *td,
 	return (error);
 }
 
-int
-freebsd32__umtx_op(struct thread *td, struct freebsd32__umtx_op_args *uap)
+static void
+timex_to_32(struct timex32 *dst, struct timex *src)
 {
+	CP(*src, *dst, modes);
+	CP(*src, *dst, offset);
+	CP(*src, *dst, freq);
+	CP(*src, *dst, maxerror);
+	CP(*src, *dst, esterror);
+	CP(*src, *dst, status);
+	CP(*src, *dst, constant);
+	CP(*src, *dst, precision);
+	CP(*src, *dst, tolerance);
+	CP(*src, *dst, ppsfreq);
+	CP(*src, *dst, jitter);
+	CP(*src, *dst, shift);
+	CP(*src, *dst, stabil);
+	CP(*src, *dst, jitcnt);
+	CP(*src, *dst, calcnt);
+	CP(*src, *dst, errcnt);
+	CP(*src, *dst, stbcnt);
+}
 
-	return (kern__umtx_op(td, uap->obj, uap->op, uap->val, uap->uaddr,
-	    uap->uaddr2, &umtx_native_ops32));
+static void
+timex_from_32(struct timex *dst, struct timex32 *src)
+{
+	CP(*src, *dst, modes);
+	CP(*src, *dst, offset);
+	CP(*src, *dst, freq);
+	CP(*src, *dst, maxerror);
+	CP(*src, *dst, esterror);
+	CP(*src, *dst, status);
+	CP(*src, *dst, constant);
+	CP(*src, *dst, precision);
+	CP(*src, *dst, tolerance);
+	CP(*src, *dst, ppsfreq);
+	CP(*src, *dst, jitter);
+	CP(*src, *dst, shift);
+	CP(*src, *dst, stabil);
+	CP(*src, *dst, jitcnt);
+	CP(*src, *dst, calcnt);
+	CP(*src, *dst, errcnt);
+	CP(*src, *dst, stbcnt);
+}
+
+int
+freebsd32_ntp_adjtime(struct thread *td, struct freebsd32_ntp_adjtime_args *uap)
+{
+	struct timex tx;
+	struct timex32 tx32;
+	int error, retval;
+
+	error = copyin(uap->tp, &tx32, sizeof(tx32));
+	if (error == 0) {
+		timex_from_32(&tx, &tx32);
+		error = kern_ntp_adjtime(td, &tx, &retval);
+		if (error == 0) {
+			timex_to_32(&tx32, &tx);
+			error = copyout(&tx32, uap->tp, sizeof(tx32));
+			if (error == 0)
+				td->td_retval[0] = retval;
+		}
+	}
+	return (error);
 }

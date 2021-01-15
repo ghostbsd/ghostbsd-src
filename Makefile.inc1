@@ -20,8 +20,12 @@
 #	LOCAL_LIB_DIRS="list of dirs" to add additional dirs to libraries target
 #	LOCAL_MTREE="list of mtree files" to process to allow local directories
 #	    to be created before files are installed
+#	LOCAL_LEGACY_DIRS="list of dirs" to add additional dirs to the legacy
+#	    target
+#	LOCAL_BSTOOL_DIRS="list of dirs" to add additional dirs to the
+#	    bootstrap-tools target
 #	LOCAL_TOOL_DIRS="list of dirs" to add additional dirs to the build-tools
-#	    list
+#	    target
 #	LOCAL_XTOOL_DIRS="list of dirs" to add additional dirs to the
 #	    cross-tools target
 #	METALOG="path to metadata log" to write permission and ownership
@@ -757,7 +761,7 @@ TMAKE=		\
 XMAKE=		${BMAKE} \
 		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
 		MK_CLANG_IS_CC=${MK_CLANG_BOOTSTRAP} \
-		MK_GDB=no MK_TESTS=no
+		MK_TESTS=no
 
 # kernel-tools stage
 KTMAKEENV=	INSTALL="sh ${.CURDIR}/tools/install.sh" \
@@ -1591,6 +1595,10 @@ KERNCONF=${KERNFAST}
 .endif
 .if ${TARGET_ARCH} == "powerpc64"
 KERNCONF?=	GENERIC64
+.elif ${TARGET_ARCH} == "powerpc64le"
+KERNCONF?=	GENERIC64LE
+.elif ${TARGET_ARCH} == "powerpcspe"
+KERNCONF?=	MPC85XXSPE
 .else
 KERNCONF?=	GENERIC
 .endif
@@ -2123,7 +2131,9 @@ legacy: .PHONY
 	false
 .endif
 
-.for _tool in tools/build
+.for _tool in \
+  tools/build \
+  ${LOCAL_LEGACY_DIRS}
 	${_+_}@${ECHODIR} "===> ${_tool} (obj,includes,all,install)"; \
 	    cd ${.CURDIR}/${_tool}; \
 	    if [ -z "${NO_OBJWALK}" ]; then ${MAKE} DIRPRFX=${_tool}/ obj; fi; \
@@ -2260,7 +2270,7 @@ _bootstrap_tools_links+=crunchide
 
 # 1300115: Higher WARNS fixes
 .if ${BOOTSTRAPPING} < 1202502 || \
-	(${BOOTSTRAPPING} > 1300000 && ${BOOTSTRAPPING} < 1300115)
+	(${BOOTSTRAPPING} > 1300000 && ${BOOTSTRAPPING} < 1300131)
 _crunchgen=	usr.sbin/crunch/crunchgen
 .else
 _bootstrap_tools_links+=crunchgen
@@ -2454,7 +2464,8 @@ bootstrap-tools: ${_bt}-links .PHONY
     ${_crunchgen} \
     ${_nmtree} \
     ${_vtfontcvt} \
-    ${_localedef}
+    ${_localedef} \
+    ${LOCAL_BSTOOL_DIRS}
 ${_bt}-${_tool}: ${_bt}-links .PHONY .MAKE
 	${_+_}@${ECHODIR} "===> ${_tool} (obj,all,install)"; \
 		cd ${.CURDIR}/${_tool}; \
@@ -2718,7 +2729,6 @@ NXBMAKEARGS+= \
 	MK_CLANG_FULL=no \
 	MK_CTF=no \
 	MK_DEBUG_FILES=no \
-	MK_GDB=no \
 	MK_HTML=no \
 	MK_LLDB=no \
 	MK_MAN=no \

@@ -36,6 +36,21 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20201215: in-tree gdb removed
+OLD_FILES+=usr/libexec/gdb
+OLD_FILES+=usr/libexec/kgdb
+
+# 20201211: hme(4) removed
+OLD_FILES+=usr/share/man/man4/hme.4.gz
+OLD_FILES+=usr/share/man/man4/if_hme.4.gz
+# 20201124: ping6(8) was merged into ping(8)
+OLD_FILES+=usr/lib/debug/sbin/ping6.debug
+OLD_FILES+=usr/share/man/man8/ping6.8.gz
+OLD_FILES+=usr/tests/sbin/ping6/Kyuafile
+OLD_FILES+=usr/tests/sbin/ping6/ping6_c1_s8_t1.out
+OLD_FILES+=usr/tests/sbin/ping6/ping6_test
+OLD_DIRS+=usr/tests/sbin/ping6
+
 # 20201025: Remove cal data files
 OLD_FILES+=usr/share/calendar/calendar.all
 OLD_FILES+=usr/share/calendar/calendar.australia
@@ -108,6 +123,10 @@ OLD_FILES+=boot/lua/logo-beastiebw.lua
 OLD_FILES+=boot/lua/logo-fbsdbw.lua
 OLD_FILES+=boot/lua/logo-orb.lua
 OLD_FILES+=boot/lua/logo-orbbw.lua
+
+# 20200825: merged OpenZFS support
+OLD_LIBS+=lib/libzfs.so.3
+OLD_LIBS+=usr/lib32/libzfs.so.3
 
 # 20200923: memfd_test moved to /usr/tests/sys/posixshm
 OLD_FILES+=usr/tests/sys/kern/memfd_test
@@ -914,9 +933,9 @@ OLD_FILES+=usr/share/man/man1/gdbserver.1.gz
 OLD_FILES+=usr/share/man/man1/kgdb.1.gz
 
 # 20200327: OCF refactoring
-OLD_FILES+=usr/share/man/man9/crypto_find_driver.9
-OLD_FILES+=usr/share/man/man9/crypto_register.9
-OLD_FILES+=usr/share/man/man9/crypto_unregister.9
+OLD_FILES+=usr/share/man/man9/crypto_find_driver.9.gz
+OLD_FILES+=usr/share/man/man9/crypto_register.9.gz
+OLD_FILES+=usr/share/man/man9/crypto_unregister.9.gz
 
 # 20200323: INTERNALLIB don't install headers anymore
 OLD_FILES+=usr/include/libelftc.h
@@ -2358,6 +2377,7 @@ OLD_FILES+=usr/include/sys/inflate.h
 # 20190722: cap_random(3) removed
 OLD_LIBS+=lib/casper/libcap_random.so.1
 OLD_FILES+=usr/include/casper/cap_random.h
+OLD_LIBS+=usr/lib/casper/libcap_random.so
 OLD_FILES+=usr/share/man/man3/cap_random.3.gz
 OLD_FILES+=usr/share/man/man3/cap_random_buf.3.gz
 # 20190708: vm_page_hold() and _unhold() removed

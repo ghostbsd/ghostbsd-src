@@ -72,6 +72,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/sdt.h>
 #include <sys/shm.h>
 #include <sys/sem.h>
+#include <sys/sysent.h>
+#include <sys/timers.h>
 #include <sys/umtx.h>
 #ifdef KTRACE
 #include <sys/ktrace.h>
@@ -324,6 +326,11 @@ exit1(struct thread *td, int rval, int signo)
 		mtx_unlock(&ppeers_lock);
 	}
 
+	itimers_exit(p);
+
+	if (p->p_sysent->sv_onexit != NULL)
+		p->p_sysent->sv_onexit(p);
+
 	/*
 	 * Check if any loadable modules need anything done at process exit.
 	 * E.g. SYSV IPC stuff.
@@ -557,6 +564,9 @@ exit1(struct thread *td, int rval, int signo)
 	/* Save exit status. */
 	PROC_LOCK(p);
 	p->p_xthread = td;
+
+	if (p->p_sysent->sv_ontdexit != NULL)
+		p->p_sysent->sv_ontdexit(td);
 
 #ifdef KDTRACE_HOOKS
 	/*

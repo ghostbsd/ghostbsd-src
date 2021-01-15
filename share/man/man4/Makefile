@@ -130,6 +130,7 @@ MAN=	aac.4 \
 	ddb.4 \
 	devctl.4 \
 	disc.4 \
+	disk.4 \
 	divert.4 \
 	${_dpms.4} \
 	ds1307.4 \
@@ -157,6 +158,7 @@ MAN=	aac.4 \
 	ffclock.4 \
 	filemon.4 \
 	firewire.4 \
+	${_ftwd.4} \
 	full.4 \
 	fwe.4 \
 	fwip.4 \
@@ -178,7 +180,6 @@ MAN=	aac.4 \
 	gre.4 \
 	h_ertt.4 \
 	hifn.4 \
-	hme.4 \
 	hpet.4 \
 	${_hpt27xx.4} \
 	${_hptiop.4} \
@@ -249,6 +250,7 @@ MAN=	aac.4 \
 	kld.4 \
 	ksyms.4 \
 	ksz8995ma.4 \
+	ktls.4 \
 	ktr.4 \
 	kue.4 \
 	lagg.4 \
@@ -353,6 +355,7 @@ MAN=	aac.4 \
 	ng_l2cap.4 \
 	ng_l2tp.4 \
 	ng_lmi.4 \
+	ng_macfilter.4 \
 	ng_mppc.4 \
 	ng_nat.4 \
 	ng_netflow.4 \
@@ -445,6 +448,7 @@ MAN=	aac.4 \
 	rl.4 \
 	rndtest.4 \
 	route.4 \
+	rtsx.4 \
 	rtwn.4 \
 	rtwnfw.4 \
 	rtwn_pci.4 \
@@ -660,7 +664,6 @@ MLINKS+=gpio.4 gpiobus.4
 MLINKS+=gpioths.4 dht11.4
 MLINKS+=gpioths.4 dht22.4
 MLINKS+=gre.4 if_gre.4
-MLINKS+=hme.4 if_hme.4
 MLINKS+=hpet.4 acpi_hpet.4
 MLINKS+=${_hptrr.4} ${_rr232x.4}
 MLINKS+=${_attimer.4} ${_i8254.4}
@@ -782,6 +785,7 @@ _chvgpio.4=	chvgpio.4
 _coretemp.4=	coretemp.4
 _cpuctl.4=	cpuctl.4
 _dpms.4=	dpms.4
+_ftwd.4=	ftwd.4
 _hpt27xx.4=	hpt27xx.4
 _hptiop.4=	hptiop.4
 _hptmv.4=	hptmv.4

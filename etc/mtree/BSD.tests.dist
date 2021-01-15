@@ -448,8 +448,6 @@
         ..
         ping
         ..
-        ping6
-        ..
         route
         ..
     ..
@@ -800,6 +798,8 @@
         ..
         net
         ..
+        netgraph
+        ..
         netinet
         ..
         netinet6
@@ -810,8 +810,8 @@
             tunnel
             ..
         ..
-    netmap
-    ..
+        netmap
+        ..
         netpfil
             common
             ..

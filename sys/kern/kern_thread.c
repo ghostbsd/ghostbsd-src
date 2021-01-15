@@ -50,8 +50,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/sleepqueue.h>
 #include <sys/selinfo.h>
 #include <sys/syscallsubr.h>
+#include <sys/dtrace_bsd.h>
 #include <sys/sysent.h>
 #include <sys/turnstile.h>
+#include <sys/taskqueue.h>
 #include <sys/ktr.h>
 #include <sys/rwlock.h>
 #include <sys/umtx.h>
@@ -64,9 +66,11 @@ __FBSDID("$FreeBSD$");
 
 #include <security/audit/audit.h>
 
+#include <vm/pmap.h>
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
 #include <vm/uma.h>
+#include <vm/vm_phys.h>
 #include <sys/eventhandler.h>
 
 /*
@@ -128,9 +132,21 @@ SDT_PROBE_DEFINE(proc, , , lwp__exit);
  */
 static uma_zone_t thread_zone;
 
-static __exclusive_cache_line struct thread *thread_zombies;
+struct thread_domain_data {
+	struct thread	*tdd_zombies;
+	int		tdd_reapticks;
+} __aligned(CACHE_LINE_SIZE);
+
+static struct thread_domain_data thread_domain_data[MAXMEMDOM];
+
+static struct task	thread_reap_task;
+static struct callout  	thread_reap_callout;
 
 static void thread_zombie(struct thread *);
+static void thread_reap(void);
+static void thread_reap_all(void);
+static void thread_reap_task_cb(void *, int);
+static void thread_reap_callout_cb(void *);
 static int thread_unsuspend_one(struct thread *td, struct proc *p,
     bool boundary);
 static void thread_free_batched(struct thread *td);
@@ -159,28 +175,43 @@ EVENTHANDLER_LIST_DEFINE(thread_init);
 EVENTHANDLER_LIST_DEFINE(thread_fini);
 
 static bool
-thread_count_inc(void)
+thread_count_inc_try(void)
 {
-	static struct timeval lastfail;
-	static int curfail;
 	int nthreads_new;
-
-	thread_reap();
 
 	nthreads_new = atomic_fetchadd_int(&nthreads, 1) + 1;
 	if (nthreads_new >= maxthread - 100) {
 		if (priv_check_cred(curthread->td_ucred, PRIV_MAXPROC) != 0 ||
 		    nthreads_new >= maxthread) {
 			atomic_subtract_int(&nthreads, 1);
-			if (ppsratecheck(&lastfail, &curfail, 1)) {
-				printf("maxthread limit exceeded by uid %u "
-				"(pid %d); consider increasing kern.maxthread\n",
-				curthread->td_ucred->cr_ruid, curproc->p_pid);
-			}
 			return (false);
 		}
 	}
 	return (true);
+}
+
+static bool
+thread_count_inc(void)
+{
+	static struct timeval lastfail;
+	static int curfail;
+
+	thread_reap();
+	if (thread_count_inc_try()) {
+		return (true);
+	}
+
+	thread_reap_all();
+	if (thread_count_inc_try()) {
+		return (true);
+	}
+
+	if (ppsratecheck(&lastfail, &curfail, 1)) {
+		printf("maxthread limit exceeded by uid %u "
+		    "(pid %d); consider increasing kern.maxthread\n",
+		    curthread->td_ucred->cr_ruid, curproc->p_pid);
+	}
+	return (false);
 }
 
 static void
@@ -328,6 +359,9 @@ thread_ctor(void *mem, int size, void *arg, int flags)
 #ifdef AUDIT
 	audit_thread_alloc(td);
 #endif
+#ifdef KDTRACE_HOOKS
+	kdtrace_thread_ctor(td);
+#endif
 	umtx_thread_alloc(td);
 	MPASS(td->td_sel == NULL);
 	return (0);
@@ -366,6 +400,9 @@ thread_dtor(void *mem, int size, void *arg)
 #ifdef AUDIT
 	audit_thread_free(td);
 #endif
+#ifdef KDTRACE_HOOKS
+	kdtrace_thread_dtor(td);
+#endif
 	/* Free all OSD associated to this thread. */
 	osd_thread_exit(td);
 	td_softdep_cleanup(td);
@@ -383,6 +420,7 @@ thread_init(void *mem, int size, int flags)
 
 	td = (struct thread *)mem;
 
+	td->td_allocdomain = vm_phys_domain(vtophys(td));
 	td->td_sleepqueue = sleepq_alloc();
 	td->td_turnstile = turnstile_alloc();
 	td->td_rlqe = NULL;
@@ -500,6 +538,10 @@ threadinit(void)
 	    M_TIDHASH, M_WAITOK | M_ZERO);
 	for (i = 0; i < tidhashlock + 1; i++)
 		rw_init(&tidhashtbl_lock[i], "tidhash");
+
+	TASK_INIT(&thread_reap_task, 0, thread_reap_task_cb, NULL);
+	callout_init(&thread_reap_callout, 1);
+	callout_reset(&thread_reap_callout, 5 * hz, thread_reap_callout_cb, NULL);
 }
 
 /*
@@ -508,12 +550,14 @@ threadinit(void)
 void
 thread_zombie(struct thread *td)
 {
+	struct thread_domain_data *tdd;
 	struct thread *ztd;
 
-	ztd = atomic_load_ptr(&thread_zombies);
+	tdd = &thread_domain_data[td->td_allocdomain];
+	ztd = atomic_load_ptr(&tdd->tdd_zombies);
 	for (;;) {
 		td->td_zombie = ztd;
-		if (atomic_fcmpset_rel_ptr((uintptr_t *)&thread_zombies,
+		if (atomic_fcmpset_rel_ptr((uintptr_t *)&tdd->tdd_zombies,
 		    (uintptr_t *)&ztd, (uintptr_t)td))
 			break;
 		continue;
@@ -531,10 +575,10 @@ thread_stash(struct thread *td)
 }
 
 /*
- * Reap zombie threads.
+ * Reap zombies from passed domain.
  */
-void
-thread_reap(void)
+static void
+thread_reap_domain(struct thread_domain_data *tdd)
 {
 	struct thread *itd, *ntd;
 	struct tidbatch tidbatch;
@@ -547,19 +591,26 @@ thread_reap(void)
 	 * Reading upfront is pessimal if followed by concurrent atomic_swap,
 	 * but most of the time the list is empty.
 	 */
-	if (thread_zombies == NULL)
+	if (tdd->tdd_zombies == NULL)
 		return;
 
-	itd = (struct thread *)atomic_swap_ptr((uintptr_t *)&thread_zombies,
+	itd = (struct thread *)atomic_swap_ptr((uintptr_t *)&tdd->tdd_zombies,
 	    (uintptr_t)NULL);
 	if (itd == NULL)
 		return;
+
+	/*
+	 * Multiple CPUs can get here, the race is fine as ticks is only
+	 * advisory.
+	 */
+	tdd->tdd_reapticks = ticks;
 
 	tidbatch_prep(&tidbatch);
 	credbatch_prep(&credbatch);
 	tdcount = 0;
 	lim = NULL;
 	limcount = 0;
+
 	while (itd != NULL) {
 		ntd = itd->td_zombie;
 		EVENTHANDLER_DIRECT_INVOKE(thread_dtor, itd);
@@ -592,6 +643,68 @@ thread_reap(void)
 	}
 	MPASS(limcount != 0);
 	lim_freen(lim, limcount);
+}
+
+/*
+ * Reap zombies from all domains.
+ */
+static void
+thread_reap_all(void)
+{
+	struct thread_domain_data *tdd;
+	int i, domain;
+
+	domain = PCPU_GET(domain);
+	for (i = 0; i < vm_ndomains; i++) {
+		tdd = &thread_domain_data[(i + domain) % vm_ndomains];
+		thread_reap_domain(tdd);
+	}
+}
+
+/*
+ * Reap zombies from local domain.
+ */
+static void
+thread_reap(void)
+{
+	struct thread_domain_data *tdd;
+	int domain;
+
+	domain = PCPU_GET(domain);
+	tdd = &thread_domain_data[domain];
+
+	thread_reap_domain(tdd);
+}
+
+static void
+thread_reap_task_cb(void *arg __unused, int pending __unused)
+{
+
+	thread_reap_all();
+}
+
+static void
+thread_reap_callout_cb(void *arg __unused)
+{
+	struct thread_domain_data *tdd;
+	int i, cticks, lticks;
+	bool wantreap;
+
+	wantreap = false;
+	cticks = atomic_load_int(&ticks);
+	for (i = 0; i < vm_ndomains; i++) {
+		tdd = &thread_domain_data[i];
+		lticks = tdd->tdd_reapticks;
+		if (tdd->tdd_zombies != NULL &&
+		    (u_int)(cticks - lticks) > 5 * hz) {
+			wantreap = true;
+			break;
+		}
+	}
+
+	if (wantreap)
+		taskqueue_enqueue(taskqueue_thread, &thread_reap_task);
+	callout_reset(&thread_reap_callout, 5 * hz, thread_reap_callout_cb, NULL);
 }
 
 /*

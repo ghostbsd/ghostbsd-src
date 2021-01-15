@@ -68,6 +68,7 @@ __DEFAULT_YES_OPTIONS = \
     BOOTPARAMD \
     BOOTPD \
     BSD_CPIO \
+    BSD_GREP \
     BSDINSTALL \
     BSNMP \
     BZIP2 \
@@ -105,10 +106,8 @@ __DEFAULT_YES_OPTIONS = \
     FREEBSD_UPDATE \
     FTP \
     GAMES \
-    GDB \
     GH_BC \
     GNU_DIFF \
-    GNU_GREP \
     GOOGLETEST \
     GPIO \
     HAST \
@@ -203,12 +202,11 @@ __DEFAULT_YES_OPTIONS = \
 __DEFAULT_NO_OPTIONS = \
     BEARSSL \
     BHYVE_SNAPSHOT \
-    BSD_GREP \
     CLANG_EXTRAS \
     CLANG_FORMAT \
     DTRACE_TESTS \
     EXPERIMENTAL \
-    GNU_GREP_COMPAT \
+    GNU_GREP \
     HESIOD \
     LIBSOFT \
     LOADER_FIREWIRE \
@@ -290,10 +288,6 @@ __DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF
 
 .include <bsd.compiler.mk>
 
-# In-tree gdb is an older versions without modern architecture support.
-.if ${__T} == "aarch64" || ${__T:Mriscv*} != ""
-BROKEN_OPTIONS+=GDB
-.endif
 .if ${__T:Mriscv*} != ""
 BROKEN_OPTIONS+=OFED
 .endif
@@ -482,7 +476,6 @@ MK_LLD_BOOTSTRAP:= no
 
 .if ${MK_TOOLCHAIN} == "no"
 MK_CLANG:=	no
-MK_GDB:=	no
 MK_INCLUDES:=	no
 MK_LLD:=	no
 MK_LLDB:=	no

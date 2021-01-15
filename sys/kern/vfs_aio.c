@@ -248,8 +248,8 @@ struct aioproc {
  */
 struct aioliojob {
 	int	lioj_flags;			/* (a) listio flags */
-	int	lioj_count;			/* (a) listio flags */
-	int	lioj_finished_count;		/* (a) listio flags */
+	int	lioj_count;			/* (a) count of jobs */
+	int	lioj_finished_count;		/* (a) count of finished jobs */
 	struct	sigevent lioj_signal;		/* (a) signal on all I/O done */
 	TAILQ_ENTRY(aioliojob) lioj_list;	/* (a) lio list */
 	struct	knlist klist;			/* (a) list of knotes */
@@ -466,7 +466,7 @@ aio_init_aioinfo(struct proc *p)
 }
 
 static int
-aio_sendsig(struct proc *p, struct sigevent *sigev, ksiginfo_t *ksi)
+aio_sendsig(struct proc *p, struct sigevent *sigev, ksiginfo_t *ksi, bool ext)
 {
 	struct thread *td;
 	int error;
@@ -477,7 +477,7 @@ aio_sendsig(struct proc *p, struct sigevent *sigev, ksiginfo_t *ksi)
 	if (!KSI_ONQ(ksi)) {
 		ksiginfo_set_sigev(ksi, sigev);
 		ksi->ksi_code = SI_ASYNCIO;
-		ksi->ksi_flags |= KSI_EXT | KSI_INS;
+		ksi->ksi_flags |= ext ? (KSI_EXT | KSI_INS) : 0;
 		tdsendsignal(p, td, ksi->ksi_signo, ksi);
 	}
 	PROC_UNLOCK(p);
@@ -896,7 +896,7 @@ aio_bio_done_notify(struct proc *userp, struct kaiocb *job)
 
 	if (job->uaiocb.aio_sigevent.sigev_notify == SIGEV_SIGNAL ||
 	    job->uaiocb.aio_sigevent.sigev_notify == SIGEV_THREAD_ID)
-		aio_sendsig(userp, &job->uaiocb.aio_sigevent, &job->ksi);
+		aio_sendsig(userp, &job->uaiocb.aio_sigevent, &job->ksi, true);
 
 	KNOTE_LOCKED(&job->klist, 1);
 
@@ -905,11 +905,12 @@ aio_bio_done_notify(struct proc *userp, struct kaiocb *job)
 			lj->lioj_flags |= LIOJ_KEVENT_POSTED;
 			KNOTE_LOCKED(&lj->klist, 1);
 		}
-		if ((lj->lioj_flags & (LIOJ_SIGNAL|LIOJ_SIGNAL_POSTED))
-		    == LIOJ_SIGNAL
-		    && (lj->lioj_signal.sigev_notify == SIGEV_SIGNAL ||
-		        lj->lioj_signal.sigev_notify == SIGEV_THREAD_ID)) {
-			aio_sendsig(userp, &lj->lioj_signal, &lj->lioj_ksi);
+		if ((lj->lioj_flags & (LIOJ_SIGNAL | LIOJ_SIGNAL_POSTED))
+		    == LIOJ_SIGNAL &&
+		    (lj->lioj_signal.sigev_notify == SIGEV_SIGNAL ||
+		    lj->lioj_signal.sigev_notify == SIGEV_THREAD_ID)) {
+			aio_sendsig(userp, &lj->lioj_signal, &lj->lioj_ksi,
+			    true);
 			lj->lioj_flags |= LIOJ_SIGNAL_POSTED;
 		}
 	}
@@ -1252,14 +1253,16 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 	ki = p->p_aioinfo;
 	poff = (vm_offset_t)cb->aio_buf & PAGE_MASK;
 	if ((dev->si_flags & SI_UNMAPPED) && unmapped_buf_allowed) {
-		if (cb->aio_nbytes > MAXPHYS) {
+		if (cb->aio_nbytes > maxphys) {
 			error = -1;
 			goto unref;
 		}
 
 		pbuf = NULL;
+		job->pages = malloc(sizeof(vm_page_t) * (atop(round_page(
+		    cb->aio_nbytes)) + 1), M_TEMP, M_WAITOK | M_ZERO);
 	} else {
-		if (cb->aio_nbytes > MAXPHYS - poff) {
+		if (cb->aio_nbytes > maxphys) {
 			error = -1;
 			goto unref;
 		}
@@ -1273,6 +1276,7 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 		AIO_LOCK(ki);
 		ki->kaio_buffer_count++;
 		AIO_UNLOCK(ki);
+		job->pages = pbuf->b_pages;
 	}
 	job->bp = bp = g_alloc_bio();
 
@@ -1289,7 +1293,7 @@ aio_qbio(struct proc *p, struct kaiocb *job)
 		prot |= VM_PROT_WRITE;	/* Less backwards than it looks */
 	job->npages = vm_fault_quick_hold_pages(&curproc->p_vmspace->vm_map,
 	    (vm_offset_t)cb->aio_buf, bp->bio_length, prot, job->pages,
-	    nitems(job->pages));
+	    atop(maxphys) + 1);
 	if (job->npages < 0) {
 		error = EFAULT;
 		goto doerror;
@@ -1320,6 +1324,8 @@ doerror:
 		AIO_UNLOCK(ki);
 		uma_zfree(pbuf_zone, pbuf);
 		job->pbuf = NULL;
+	} else {
+		free(job->pages, M_TEMP);
 	}
 	g_destroy_bio(bp);
 	job->bp = NULL;
@@ -2229,12 +2235,12 @@ kern_lio_listio(struct thread *td, int mode, struct aiocb * const *uacb_list,
 				lj->lioj_flags |= LIOJ_KEVENT_POSTED;
 				KNOTE_LOCKED(&lj->klist, 1);
 			}
-			if ((lj->lioj_flags & (LIOJ_SIGNAL|LIOJ_SIGNAL_POSTED))
-			    == LIOJ_SIGNAL
-			    && (lj->lioj_signal.sigev_notify == SIGEV_SIGNAL ||
+			if ((lj->lioj_flags & (LIOJ_SIGNAL |
+			    LIOJ_SIGNAL_POSTED)) == LIOJ_SIGNAL &&
+			    (lj->lioj_signal.sigev_notify == SIGEV_SIGNAL ||
 			    lj->lioj_signal.sigev_notify == SIGEV_THREAD_ID)) {
-				aio_sendsig(p, &lj->lioj_signal,
-					    &lj->lioj_ksi);
+				aio_sendsig(p, &lj->lioj_signal, &lj->lioj_ksi,
+				    lj->lioj_count != 1);
 				lj->lioj_flags |= LIOJ_SIGNAL_POSTED;
 			}
 		}
@@ -2334,25 +2340,26 @@ static void
 aio_biowakeup(struct bio *bp)
 {
 	struct kaiocb *job = (struct kaiocb *)bp->bio_caller1;
-	struct proc *userp;
 	struct kaioinfo *ki;
 	size_t nbytes;
 	int error, nblks;
 
 	/* Release mapping into kernel space. */
-	userp = job->userproc;
-	ki = userp->p_aioinfo;
-	if (job->pbuf) {
+	if (job->pbuf != NULL) {
 		pmap_qremove((vm_offset_t)job->pbuf->b_data, job->npages);
+		vm_page_unhold_pages(job->pages, job->npages);
 		uma_zfree(pbuf_zone, job->pbuf);
 		job->pbuf = NULL;
 		atomic_subtract_int(&num_buf_aio, 1);
+		ki = job->userproc->p_aioinfo;
 		AIO_LOCK(ki);
 		ki->kaio_buffer_count--;
 		AIO_UNLOCK(ki);
-	} else
+	} else {
+		vm_page_unhold_pages(job->pages, job->npages);
+		free(job->pages, M_TEMP);
 		atomic_subtract_int(&num_unmapped_aio, 1);
-	vm_page_unhold_pages(job->pages, job->npages);
+	}
 
 	bp = job->bp;
 	job->bp = NULL;

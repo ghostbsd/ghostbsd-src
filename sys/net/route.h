@@ -223,14 +223,12 @@ VNET_DECLARE(u_int, fib_hash_outbound);
 
 /* Nexthop request flags */
 #define	NHR_NONE		0x00	/* empty flags field */
-#define	NHR_IFAIF		0x01	/* Return ifa_ifp interface */
-#define	NHR_REF			0x02	/* For future use */
-
-/* uRPF */
-#define	NHR_NODEFAULT		0x04	/* do not consider default route */
+#define	NHR_REF			0x01	/* reference nexhop */
+#define	NHR_NODEFAULT		0x02	/* uRPF: do not consider default route */
 
 /* Control plane route request flags */
 #define	NHR_COPY		0x100	/* Copy rte data */
+#define	NHR_UNLOCKED		0x200	/* Do not lock table */
 
 /*
  * Routing statistics.
@@ -342,7 +340,7 @@ struct rt_msghdr {
 
 struct rtentry;
 struct nhop_object;
-typedef int rt_filter_f_t(const struct rtentry *, const struct nhop_object *,
+typedef int rib_filter_f_t(const struct rtentry *, const struct nhop_object *,
     void *);
 
 struct rt_addrinfo {
@@ -351,7 +349,7 @@ struct rt_addrinfo {
 	struct	sockaddr *rti_info[RTAX_MAX];	/* Sockaddr data */
 	struct	ifaddr *rti_ifa;		/* value of rt_ifa addr */
 	struct	ifnet *rti_ifp;			/* route interface */
-	rt_filter_f_t	*rti_filter;		/* filter function */
+	rib_filter_f_t	*rti_filter;		/* filter function */
 	void	*rti_filterdata;		/* filter paramenters */
 	u_long	rti_mflags;			/* metrics RTV_ flags */
 	u_long	rti_spare;			/* Will be used for fib */

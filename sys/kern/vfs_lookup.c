@@ -464,6 +464,44 @@ namei_setup(struct nameidata *ndp, struct vnode **dpp, struct pwd **pwdp)
 	return (0);
 }
 
+static int
+namei_getpath(struct nameidata *ndp)
+{
+	struct componentname *cnp;
+	int error;
+
+	cnp = &ndp->ni_cnd;
+
+	/*
+	 * Get a buffer for the name to be translated, and copy the
+	 * name into the buffer.
+	 */
+	cnp->cn_pnbuf = uma_zalloc(namei_zone, M_WAITOK);
+	if (ndp->ni_segflg == UIO_SYSSPACE) {
+		error = copystr(ndp->ni_dirp, cnp->cn_pnbuf, MAXPATHLEN,
+		    &ndp->ni_pathlen);
+	} else {
+		error = copyinstr(ndp->ni_dirp, cnp->cn_pnbuf, MAXPATHLEN,
+		    &ndp->ni_pathlen);
+	}
+
+	if (__predict_false(error != 0)) {
+		namei_cleanup_cnp(cnp);
+		return (error);
+	}
+
+	/*
+	 * Don't allow empty pathnames.
+	 */
+	if (__predict_false(*cnp->cn_pnbuf == '\0')) {
+		namei_cleanup_cnp(cnp);
+		return (ENOENT);
+	}
+
+	cnp->cn_nameptr = cnp->cn_pnbuf;
+	return (0);
+}
+
 /*
  * Convert a pathname into a pointer to a locked vnode.
  *
@@ -531,29 +569,9 @@ namei(struct nameidata *ndp)
 	ndp->ni_lcf = 0;
 	ndp->ni_vp = NULL;
 
-	/*
-	 * Get a buffer for the name to be translated, and copy the
-	 * name into the buffer.
-	 */
-	cnp->cn_pnbuf = uma_zalloc(namei_zone, M_WAITOK);
-	if (ndp->ni_segflg == UIO_SYSSPACE)
-		error = copystr(ndp->ni_dirp, cnp->cn_pnbuf, MAXPATHLEN,
-		    &ndp->ni_pathlen);
-	else
-		error = copyinstr(ndp->ni_dirp, cnp->cn_pnbuf, MAXPATHLEN,
-		    &ndp->ni_pathlen);
-
+	error = namei_getpath(ndp);
 	if (__predict_false(error != 0)) {
-		namei_cleanup_cnp(cnp);
 		return (error);
-	}
-
-	/*
-	 * Don't allow empty pathnames.
-	 */
-	if (__predict_false(*cnp->cn_pnbuf == '\0')) {
-		namei_cleanup_cnp(cnp);
-		return (ENOENT);
 	}
 
 #ifdef KTRACE
@@ -563,8 +581,6 @@ namei(struct nameidata *ndp)
 		ktrnamei(cnp->cn_pnbuf);
 	}
 #endif
-
-	cnp->cn_nameptr = cnp->cn_pnbuf;
 
 	/*
 	 * First try looking up the target without locking any vnodes.
@@ -1305,7 +1321,6 @@ int
 relookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 {
 	struct vnode *dp = NULL;		/* the directory we are searching */
-	int wantparent;			/* 1 => wantparent or lockparent flag */
 	int rdonly;			/* lookup read-only flag bit */
 	int error = 0;
 
@@ -1314,8 +1329,8 @@ relookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 	/*
 	 * Setup: break out flag bits into variables.
 	 */
-	wantparent = cnp->cn_flags & (LOCKPARENT|WANTPARENT);
-	KASSERT(wantparent, ("relookup: parent not wanted."));
+	KASSERT((cnp->cn_flags & (LOCKPARENT | WANTPARENT)) != 0,
+	    ("relookup: parent not wanted"));
 	rdonly = cnp->cn_flags & RDONLY;
 	cnp->cn_flags &= ~ISSYMLINK;
 	dp = dvp;
@@ -1406,13 +1421,8 @@ relookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 	/*
 	 * Set the parent lock/ref state to the requested state.
 	 */
-	if ((cnp->cn_flags & LOCKPARENT) == 0 && dvp != dp) {
-		if (wantparent)
-			VOP_UNLOCK(dvp);
-		else
-			vput(dvp);
-	} else if (!wantparent)
-		vrele(dvp);
+	if ((cnp->cn_flags & LOCKPARENT) == 0 && dvp != dp)
+		VOP_UNLOCK(dvp);
 	/*
 	 * Check for symbolic link
 	 */

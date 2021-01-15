@@ -121,6 +121,7 @@ SUBDIR=	\
 	filemon \
 	firewire \
 	firmware \
+	${_ftwd} \
 	fusefs \
 	${_fxp} \
 	gem \
@@ -129,7 +130,6 @@ SUBDIR=	\
 	${_glxsb} \
 	gpio \
 	hifn \
-	hme \
 	${_hpt27xx} \
 	${_hptiop} \
 	${_hptmv} \
@@ -161,6 +161,7 @@ SUBDIR=	\
 	if_tuntap \
 	if_vlan \
 	if_vxlan \
+	if_wg \
 	iflib \
 	${_iir} \
 	imgact_binmisc \
@@ -316,6 +317,7 @@ SUBDIR=	\
 	re \
 	rl \
 	${_rockchip} \
+	rtsx \
 	rtwn \
 	rtwn_pci \
 	rtwn_usb \
@@ -515,6 +517,7 @@ _mthca=		mthca
 _mlx4ib=	mlx4ib
 _mlx5ib=	mlx5ib
 .endif
+_ossl=		ossl
 _vmware=	vmware
 .endif
 
@@ -617,6 +620,7 @@ _cpufreq=	cpufreq
 _dpms=		dpms
 _em=		em
 _et=		et
+_ftwd=		ftwd
 _exca=		exca
 _if_ndis=	if_ndis
 _io=		io
@@ -630,7 +634,6 @@ _nctgpio=	nctgpio
 _ndis=		ndis
 _ntb=		ntb
 _ocs_fc=	ocs_fc
-_ossl=		ossl
 _pccard=	pccard
 _qat=		qat
 _qatfw=		qatfw

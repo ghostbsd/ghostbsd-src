@@ -28,7 +28,7 @@
 .\"	@(#)mount_nfs.8	8.3 (Berkeley) 3/29/95
 .\" $FreeBSD$
 .\"
-.Dd December 14, 2019
+.Dd November 30, 2020
 .Dt MOUNT_NFS 8
 .Os
 .Sh NAME
@@ -217,9 +217,18 @@ Make a minor version 1 or 2 of the NFS Version 4 protocol mount use a single
 OpenOwner for all Opens.
 This may be useful for a server with a very low limit on OpenOwners, such as
 AmazonEFS.
-It ca only be used with an NFSv4.1 or NFSv4.2 mount.
+This option cannot be used for an NFS Version 4, minor version 0 mount.
+As such, this option requires the
+.Cm minorversion
+option be specified with a value of 1 for AmazonEFS, because AmazonEFS does
+not support minor version 2 at this time.
 It may not work correctly when Delegations are being issued by a server,
 but note that the AmazonEFS server does not issued delegations at this time.
+This option is only meaningful when used with the
+.Cm nfsv4
+and
+.Cm minorversion
+options.
 .It Cm pnfs
 Enable support for parallel NFS (pNFS) for minor version 1 or 2 of the
 NFS Version 4 protocol.
@@ -403,6 +412,12 @@ interval.)
 .It Cm timeo Ns = Ns Aq Ar value
 Alias for
 .Cm timeout .
+.It Cm tls
+This option specifies that the connection to the server must use TLS
+per RFC NNNN.
+TLS is only supported for TCP connections and the
+.Xr rpc.tlsclntd 8
+daemon must be running for an NFS over TCP connection to use TLS.
 .It Cm udp
 Use UDP transport.
 .It Cm vers Ns = Ns Aq Ar vers_number
@@ -537,6 +552,7 @@ Same as
 .Xr mount 8 ,
 .Xr nfsd 8 ,
 .Xr nfsiod 8 ,
+.Xr rpc.tlsclntd 8 ,
 .Xr showmount 8
 .Sh HISTORY
 A version of the

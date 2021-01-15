@@ -691,6 +691,19 @@ nhop_free(struct nhop_object *nh)
 }
 
 void
+nhop_ref_any(struct nhop_object *nh)
+{
+#ifdef ROUTE_MPATH
+	if (!NH_IS_NHGRP(nh))
+		nhop_ref_object(nh);
+	else
+		nhgrp_ref_object((struct nhgrp_object *)nh);
+#else
+	nhop_ref_object(nh);
+#endif
+}
+
+void
 nhop_free_any(struct nhop_object *nh)
 {
 
@@ -850,6 +863,21 @@ dump_nhop_entry(struct rib_head *rh, struct nhop_object *nh, struct sysctl_req *
 		error = SYSCTL_OUT(w, src_sa, src_sa->sa_len);
 
 	return (error);
+}
+
+uint32_t
+nhops_get_count(struct rib_head *rh)
+{
+	struct nh_control *ctl;
+	uint32_t count;
+
+	ctl = rh->nh_control;
+
+	NHOPS_RLOCK(ctl);
+	count = ctl->nh_head.items_count;
+	NHOPS_RUNLOCK(ctl);
+
+	return (count);
 }
 
 int

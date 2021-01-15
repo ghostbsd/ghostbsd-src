@@ -67,6 +67,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#include <sys/timers.h>
+#include <sys/umtx.h>
 #include <sys/vnode.h>
 #include <sys/wait.h>
 #ifdef KTRACE
@@ -1047,8 +1049,11 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	imgp->sysent = sv;
 
 	sigfastblock_clear(td);
+	umtx_exec(p);
+	itimers_exec(p);
+	if (sv->sv_onexec != NULL)
+		sv->sv_onexec(p, imgp);
 
-	/* May be called with Giant held */
 	EVENTHANDLER_DIRECT_INVOKE(process_exec, p, imgp);
 
 	/*
@@ -1529,6 +1534,17 @@ exec_args_get_begin_envv(struct image_args *args)
 	return (args->endp);
 }
 
+void
+exec_stackgap(struct image_params *imgp, uintptr_t *dp)
+{
+	if (imgp->sysent->sv_stackgap == NULL ||
+	    (imgp->proc->p_fctl0 & (NT_FREEBSD_FCTL_ASLR_DISABLE |
+	    NT_FREEBSD_FCTL_ASG_DISABLE)) != 0 ||
+	    (imgp->map_flags & MAP_ASLR) == 0)
+		return;
+	imgp->sysent->sv_stackgap(imgp, dp);
+}
+
 /*
  * Copy strings out to the new process address space, constructing new arg
  * and env vector tables. Return a pointer to the base so that it can be used
@@ -1619,8 +1635,7 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	destp = rounddown2(destp, sizeof(void *));
 	ustringp = destp;
 
-	if (imgp->sysent->sv_stackgap != NULL)
-		imgp->sysent->sv_stackgap(imgp, &destp);
+	exec_stackgap(imgp, &destp);
 
 	if (imgp->auxargs) {
 		/*

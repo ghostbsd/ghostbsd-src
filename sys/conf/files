@@ -734,6 +734,10 @@ crypto/chacha20/chacha.c	standard
 crypto/chacha20/chacha-sw.c	optional crypto | ipsec | ipsec_support
 crypto/des/des_ecb.c		optional netsmb
 crypto/des/des_setkey.c		optional netsmb
+crypto/openssl/ossl.c		optional ossl
+crypto/openssl/ossl_sha1.c	optional ossl
+crypto/openssl/ossl_sha256.c	optional ossl
+crypto/openssl/ossl_sha512.c	optional ossl
 crypto/rc4/rc4.c		optional netgraph_mppc_encryption
 crypto/rijndael/rijndael-alg-fst.c optional crypto | ekcd | geom_bde | \
 	ipsec | ipsec_support | !random_loadable | wlan_ccmp
@@ -1812,8 +1816,6 @@ dev/gpio/gpiobus_if.m		optional gpio
 dev/gpio/gpiopps.c		optional gpiopps fdt
 dev/gpio/ofw_gpiobus.c		optional fdt gpio
 dev/hifn/hifn7751.c		optional hifn
-dev/hme/if_hme.c		optional hme
-dev/hme/if_hme_pci.c		optional hme pci
 dev/hptiop/hptiop.c		optional hptiop scbus
 dev/hwpmc/hwpmc_logging.c	optional hwpmc
 dev/hwpmc/hwpmc_mod.c		optional hwpmc
@@ -1850,6 +1852,7 @@ dev/iicbus/iicoc_fdt.c		optional iicoc ext_resources fdt
 dev/iicbus/iicoc_pci.c		optional iicoc pci
 dev/iicbus/isl12xx.c		optional isl12xx
 dev/iicbus/lm75.c		optional lm75
+dev/iicbus/mux/pca9547.c	optional pca9547 iicmux fdt
 dev/iicbus/mux/iicmux.c		optional iicmux
 dev/iicbus/mux/iicmux_if.m	optional iicmux
 dev/iicbus/mux/iic_gpiomux.c	optional iic_gpiomux fdt
@@ -2834,6 +2837,8 @@ dev/re/if_re.c			optional re
 dev/rl/if_rl.c			optional rl pci
 dev/rndtest/rndtest.c		optional rndtest
 #
+dev/rtsx/rtsx.c			optional rtsx pci
+#
 dev/rtwn/if_rtwn.c		optional rtwn
 dev/rtwn/if_rtwn_beacon.c	optional rtwn
 dev/rtwn/if_rtwn_calib.c	optional rtwn
@@ -3472,6 +3477,7 @@ dev/vt/colors/vt_termcolors.c	optional vt
 dev/vt/font/vt_font_default.c	optional vt
 dev/vt/font/vt_mouse_cursor.c	optional vt
 dev/vt/hw/efifb/efifb.c		optional vt_efifb
+dev/vt/hw/vbefb/vbefb.c		optional vt_vbefb
 dev/vt/hw/fb/vt_fb.c		optional vt
 dev/vt/hw/vga/vt_vga.c		optional vt vt_vga
 dev/vt/logo/logo_freebsd.c	optional vt splash
@@ -3777,6 +3783,7 @@ kern/ksched.c			optional _kposix_priority_scheduling
 kern/kern_acct.c		standard
 kern/kern_alq.c			optional alq
 kern/kern_clock.c		standard
+kern/kern_clocksource.c		standard
 kern/kern_condvar.c		standard
 kern/kern_conf.c		standard
 kern/kern_cons.c		standard
@@ -4290,6 +4297,7 @@ netgraph/ng_ipfw.c		optional netgraph_ipfw inet ipfirewall
 netgraph/ng_ksocket.c		optional netgraph_ksocket
 netgraph/ng_l2tp.c		optional netgraph_l2tp
 netgraph/ng_lmi.c		optional netgraph_lmi
+netgraph/ng_macfilter.c		optional netgraph_macfilter
 netgraph/ng_mppc.c		optional netgraph_mppc_compression | \
 					 netgraph_mppc_encryption
 netgraph/ng_nat.c		optional netgraph_nat inet libalias

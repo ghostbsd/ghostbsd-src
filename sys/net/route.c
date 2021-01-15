@@ -65,10 +65,6 @@
 #include <net/route/nhop.h>
 #include <net/vnet.h>
 
-#ifdef RADIX_MPATH
-#include <net/radix_mpath.h>
-#endif
-
 #include <netinet/in.h>
 #include <netinet/ip_mroute.h>
 
@@ -458,81 +454,6 @@ rib_free_info(struct rt_addrinfo *info)
 }
 
 /*
- * Iterates over all existing fibs in system calling
- *  @setwa_f function prior to traversing each fib.
- *  Calls @wa_f function for each element in current fib.
- * If af is not AF_UNSPEC, iterates over fibs in particular
- * address family.
- */
-void
-rt_foreach_fib_walk(int af, rt_setwarg_t *setwa_f, rt_walktree_f_t *wa_f,
-    void *arg)
-{
-	struct rib_head *rnh;
-	uint32_t fibnum;
-	int i;
-
-	for (fibnum = 0; fibnum < rt_numfibs; fibnum++) {
-		/* Do we want some specific family? */
-		if (af != AF_UNSPEC) {
-			rnh = rt_tables_get_rnh(fibnum, af);
-			if (rnh == NULL)
-				continue;
-			if (setwa_f != NULL)
-				setwa_f(rnh, fibnum, af, arg);
-
-			RIB_WLOCK(rnh);
-			rnh->rnh_walktree(&rnh->head, (walktree_f_t *)wa_f,arg);
-			RIB_WUNLOCK(rnh);
-			continue;
-		}
-
-		for (i = 1; i <= AF_MAX; i++) {
-			rnh = rt_tables_get_rnh(fibnum, i);
-			if (rnh == NULL)
-				continue;
-			if (setwa_f != NULL)
-				setwa_f(rnh, fibnum, i, arg);
-
-			RIB_WLOCK(rnh);
-			rnh->rnh_walktree(&rnh->head, (walktree_f_t *)wa_f,arg);
-			RIB_WUNLOCK(rnh);
-		}
-	}
-}
-
-/*
- * Iterates over all existing fibs in system and deletes each element
- *  for which @filter_f function returns non-zero value.
- * If @family is not AF_UNSPEC, iterates over fibs in particular
- * address family.
- */
-void
-rt_foreach_fib_walk_del(int family, rt_filter_f_t *filter_f, void *arg)
-{
-	u_int fibnum;
-	int i, start, end;
-
-	for (fibnum = 0; fibnum < rt_numfibs; fibnum++) {
-		/* Do we want some specific family? */
-		if (family != AF_UNSPEC) {
-			start = family;
-			end = family;
-		} else {
-			start = 1;
-			end = AF_MAX;
-		}
-
-		for (i = start; i <= end; i++) {
-			if (rt_tables_get_rnh(fibnum, i) == NULL)
-				continue;
-
-			rib_walk_del(fibnum, i, filter_f, arg, 0);
-		}
-	}
-}
-
-/*
  * Delete Routes for a Network Interface
  *
  * Called for each routing entry via the rnh->rnh_walktree() call above
@@ -577,14 +498,14 @@ rt_flushifroutes_af(struct ifnet *ifp, int af)
 	KASSERT((af >= 1 && af <= AF_MAX), ("%s: af %d not >= 1 and <= %d",
 	    __func__, af, AF_MAX));
 
-	rt_foreach_fib_walk_del(af, rt_ifdelroute, ifp);
+	rib_foreach_table_walk_del(af, rt_ifdelroute, ifp);
 }
 
 void
 rt_flushifroutes(struct ifnet *ifp)
 {
 
-	rt_foreach_fib_walk_del(AF_UNSPEC, rt_ifdelroute, ifp);
+	rib_foreach_table_walk_del(AF_UNSPEC, rt_ifdelroute, ifp);
 }
 
 /*
@@ -749,87 +670,6 @@ rt_print(char *buf, int buflen, struct rtentry *rt)
 	}
 
 	return (i);
-}
-#endif
-
-#ifdef RADIX_MPATH
-/*
- * Deletes key for single-path routes, unlinks rtentry with
- * gateway specified in @info from multi-path routes.
- *
- * Returnes unlinked entry. In case of failure, returns NULL
- * and sets @perror to ESRCH.
- */
-struct radix_node *
-rt_mpath_unlink(struct rib_head *rnh, struct rt_addrinfo *info,
-    struct rtentry *rto, int *perror)
-{
-	/*
-	 * if we got multipath routes, we require users to specify
-	 * a matching RTAX_GATEWAY.
-	 */
-	struct rtentry *rt; // *rto = NULL;
-	struct radix_node *rn;
-	struct sockaddr *gw;
-
-	gw = info->rti_info[RTAX_GATEWAY];
-	rt = rt_mpath_matchgate(rto, gw);
-	if (rt == NULL) {
-		*perror = ESRCH;
-		return (NULL);
-	}
-
-	/*
-	 * this is the first entry in the chain
-	 */
-	if (rto == rt) {
-		rn = rn_mpath_next((struct radix_node *)rt);
-		/*
-		 * there is another entry, now it's active
-		 */
-		if (rn) {
-			rto = RNTORT(rn);
-			rto->rte_flags |= RTF_UP;
-		} else if (rt->rte_flags & RTF_GATEWAY) {
-			/*
-			 * For gateway routes, we need to 
-			 * make sure that we we are deleting
-			 * the correct gateway. 
-			 * rt_mpath_matchgate() does not 
-			 * check the case when there is only
-			 * one route in the chain.  
-			 */
-			if (gw &&
-			    (rt->rt_nhop->gw_sa.sa_len != gw->sa_len ||
-				memcmp(&rt->rt_nhop->gw_sa, gw, gw->sa_len))) {
-				*perror = ESRCH;
-				return (NULL);
-			}
-		}
-
-		/*
-		 * use the normal delete code to remove
-		 * the first entry
-		 */
-		rn = rnh->rnh_deladdr(info->rti_info[RTAX_DST],
-					info->rti_info[RTAX_NETMASK],
-					&rnh->head);
-		if (rn != NULL) {
-			*perror = 0;
-		} else {
-			*perror = ESRCH;
-		}
-		return (rn);
-	}
-		
-	/*
-	 * if the entry is 2nd and on up
-	 */
-	if (rt_mpath_deldup(rto, rt) == 0)
-		panic ("rtrequest1: rt_mpath_deldup");
-	*perror = 0;
-	rn = (struct radix_node *)rt;
-	return (rn);
 }
 #endif
 

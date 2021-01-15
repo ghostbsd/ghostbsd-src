@@ -388,7 +388,6 @@ dev/xen/pci/xen_acpi_pci.c	optional	xenhvm
 dev/xen/pci/xen_pci.c		optional	xenhvm
 isa/syscons_isa.c		optional	sc
 isa/vga_isa.c			optional	vga
-kern/kern_clocksource.c		standard
 kern/imgact_aout.c		optional compat_aout
 kern/link_elf_obj.c		standard
 #
@@ -406,7 +405,7 @@ compat/linsysfs/linsysfs.c	optional	linsysfs
 #
 # Linux/i386 binary support
 #
-amd64/linux32/linux32_dummy.c	optional	compat_linux32
+amd64/linux32/linux32_dummy_machdep.c	optional	compat_linux32
 amd64/linux32/linux32_machdep.c	optional	compat_linux32
 amd64/linux32/linux32_support.s	optional	compat_linux32		\
 	dependency 	"linux32_assym.h"

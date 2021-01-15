@@ -60,8 +60,7 @@ MLINKS+= grep.1 egrep.1 \
 	grep.1 rgrep.1
 .endif
 
-.if ${MK_GNU_GREP_COMPAT} != "no"
-CFLAGS+=	-DWITH_GNU_COMPAT
+.if !defined(BOOTSTRAPPING)
 LIBADD+=	regex
 .endif
 

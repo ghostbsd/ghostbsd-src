@@ -61,8 +61,8 @@ union semun;
 struct sockaddr;
 struct stat;
 struct thr_param;
+struct timex;
 struct uio;
-struct umtx_copyops;
 struct vm_map;
 struct vmspace;
 
@@ -80,8 +80,6 @@ struct mmap_req {
 
 int	kern___getcwd(struct thread *td, char *buf, enum uio_seg bufseg,
 	    size_t buflen, size_t path_max);
-int	kern__umtx_op(struct thread *td, void *obj, int op, unsigned long val,
-	    void *uaddr1, void *uaddr2, const struct umtx_copyops *ops);
 int	kern_accept(struct thread *td, int s, struct sockaddr **name,
 	    socklen_t *namelen, struct file **fp);
 int	kern_accept4(struct thread *td, int s, struct sockaddr **name,
@@ -218,6 +216,7 @@ int	kern_munlock(struct thread *td, uintptr_t addr, size_t size);
 int	kern_munmap(struct thread *td, uintptr_t addr, size_t size);
 int     kern_nanosleep(struct thread *td, struct timespec *rqt,
 	    struct timespec *rmt);
+int	kern_ntp_adjtime(struct thread *td, struct timex *ntv, int *retvalp);
 int	kern_ogetdirentries(struct thread *td, struct ogetdirentries_args *uap,
 	    long *ploff);
 int	kern_openat(struct thread *td, int fd, const char *path,

@@ -480,6 +480,18 @@ p_ere_exp(struct parse *p, struct branchc *bc)
 		if (p->gnuext) {
 			handled = 1;
 			switch (wc) {
+			case '`':
+				EMIT(OBOS, 0);
+				break;
+			case '\'':
+				EMIT(OEOS, 0);
+				break;
+			case 'B':
+				EMIT(ONWBND, 0);
+				break;
+			case 'b':
+				EMIT(OWBND, 0);
+				break;
 			case 'W':
 			case 'w':
 			case 'S':
@@ -679,15 +691,9 @@ static bool
 p_branch_empty(struct parse *p, struct branchc *bc)
 {
 
-#if defined(LIBREGEX) && defined(NOTYET)
-	if (bc->outer)
-		p->g->iflags |= EMPTBR;
-	return (true);
-#else
 	(void)bc;
 	SETERROR(REG_EMPTY);
 	return (false);
-#endif
 }
 
 /*
@@ -833,6 +839,18 @@ p_simp_re(struct parse *p, struct branchc *bc)
 		if (p->gnuext) {
 			handled = true;
 			switch (c) {
+			case BACKSL|'`':
+				EMIT(OBOS, 0);
+				break;
+			case BACKSL|'\'':
+				EMIT(OEOS, 0);
+				break;
+			case BACKSL|'B':
+				EMIT(ONWBND, 0);
+				break;
+			case BACKSL|'b':
+				EMIT(OWBND, 0);
+				break;
 			case BACKSL|'W':
 			case BACKSL|'w':
 			case BACKSL|'S':
@@ -1878,6 +1896,10 @@ findmust(struct parse *p, struct re_guts *g)
 		case OEOW:
 		case OBOL:
 		case OEOL:
+		case OBOS:
+		case OEOS:
+		case OWBND:
+		case ONWBND:
 		case O_QUEST:
 		case O_CH:
 		case OEND:
@@ -2029,6 +2051,8 @@ altoffset(sop *scan, int offset)
 			try++;
 		case OBOW:
 		case OEOW:
+		case OWBND:
+		case ONWBND:
 		case OLPAREN:
 		case ORPAREN:
 		case OOR2:
