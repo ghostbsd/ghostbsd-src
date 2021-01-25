@@ -1462,6 +1462,7 @@ OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.profile-armhf.a
 OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.profile-i386.a
 OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.profile-powerpc.a
 OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.profile-powerpc64.a
+OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.profile-powerpc64le.a
 OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.profile-x86_64.a
 OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.safestack-aarch64.a
 OLD_FILES+=usr/lib/clang/11.0.1/lib/freebsd/libclang_rt.safestack-i386.a
@@ -4107,13 +4108,6 @@ OLD_DIRS+=usr/include/c++/v1/tr1
 OLD_DIRS+=usr/include/c++/v1/experimental
 OLD_DIRS+=usr/include/c++/v1/ext
 OLD_DIRS+=usr/include/c++/v1
-.endif
-
-.if ${MK_LIBTHR} == no
-OLD_LIBS+=lib/libthr.so.3
-OLD_FILES+=usr/lib/libthr.a
-OLD_FILES+=usr/lib/libthr_p.a
-OLD_FILES+=usr/share/man/man3/libthr.3.gz
 .endif
 
 .if ${MK_LLD} == no

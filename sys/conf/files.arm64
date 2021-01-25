@@ -34,7 +34,7 @@ arm/allwinner/aw_dwc3.c		optional	aw_dwc3 fdt
 arm/allwinner/aw_gpio.c		optional	gpio aw_gpio fdt
 arm/allwinner/aw_mmc.c		optional	mmc aw_mmc fdt | mmccam aw_mmc fdt
 arm/allwinner/aw_nmi.c		optional	aw_nmi fdt \
-	compile-with "${NORMAL_C} -I$S/gnu/dts/include"
+	compile-with "${NORMAL_C} -I$S/contrib/device-tree/include"
 arm/allwinner/aw_pwm.c		optional	aw_pwm fdt
 arm/allwinner/aw_rsb.c		optional	aw_rsb fdt
 arm/allwinner/aw_rtc.c		optional	aw_rtc fdt
@@ -279,6 +279,16 @@ armv8_crypto_wrap.o		optional	armv8crypto		\
 	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ ${WERROR} ${NO_WCAST_QUAL} ${PROF} -march=armv8-a+crypto ${.IMPSRC}" \
 	no-implicit-rule						\
 	clean		"armv8_crypto_wrap.o"
+aesv8-armx.o		optional	armv8crypto			\
+	dependency	"$S/crypto/openssl/aarch64/aesv8-armx.S"	\
+	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ -I$S/crypto/openssl/crypto ${WERROR} ${NO_WCAST_QUAL} ${PROF} -march=armv8-a+crypto ${.IMPSRC}" \
+	no-implicit-rule						\
+	clean		"aesv8-armx.o"
+ghashv8-armx.o		optional	armv8crypto			\
+	dependency	"$S/crypto/openssl/aarch64/ghashv8-armx.S"	\
+	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ -I$S/crypto/openssl/crypto ${WERROR} ${NO_WCAST_QUAL} ${PROF} -march=armv8-a+crypto ${.IMPSRC}" \
+	no-implicit-rule						\
+	clean		"ghashv8-armx.o"
 crypto/des/des_enc.c		optional	netsmb
 crypto/openssl/ossl_aarch64.c	optional	ossl
 crypto/openssl/aarch64/sha1-armv8.S	optional ossl		\
@@ -344,7 +354,7 @@ dev/ice/ice_switch.c		optional	ice pci \
 	compile-with "${NORMAL_C} -I$S/dev/ice"
 ice_ddp.c			optional ice_ddp	\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk ice_ddp.fw:ice_ddp:0x01031000 -mice_ddp -c${.TARGET}"	\
-	no-implicit-rule before-depend local		\
+	no-ctfconvert no-implicit-rule before-depend local	\
 	clean		"ice_ddp.c"
 ice_ddp.fwo			optional ice_ddp	\
 	dependency	"ice_ddp.fw"			\
@@ -480,7 +490,7 @@ dev/ffec/if_ffec.c			optional ffec
 tegra210_xusb_fw.c	optional	tegra210_xusb_fw		\
 	dependency	"$S/conf/files.arm64"				\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk tegra210_xusb.fw:tegra210_xusb_fw -mtegra210_xusb_fw -c${.TARGET}" \
-	no-implicit-rule before-depend local				\
+	no-ctfconvert no-implicit-rule before-depend local		\
 	clean		"tegra210_xusb_fw.c"
 
 tegra210_xusb.fwo	optional	tegra210_xusb_fw		\

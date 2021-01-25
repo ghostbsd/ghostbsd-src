@@ -137,9 +137,9 @@ TARGET_ABI=	gnueabi
 .endif
 .endif
 MACHINE_ABI?=	unknown
-MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${MACHINE_ABI}-freebsd13.0
+MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${MACHINE_ABI}-freebsd14.0
 TARGET_ABI?=	unknown
-TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${TARGET_ABI}-freebsd13.0
+TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${TARGET_ABI}-freebsd14.0
 KNOWN_ARCHES?=	aarch64/arm64 \
 		amd64 \
 		armv6/arm \
@@ -557,21 +557,21 @@ VERSION=	FreeBSD ${_REVISION}-${_BRANCH:C/-p[0-9]+$//} ${TARGET_ARCH} ${SRCRELDA
 .endif
 
 .if !defined(PKG_VERSION)
-.if ${_BRANCH:MSTABLE*} || ${_BRANCH:MCURRENT*}
-TIMENOW=	%Y%m%d%H%M%S
-EXTRA_REVISION=	.s${TIMENOW:gmtime}
+_STRTIMENOW=	%Y%m%d%H%M%S
+_TIMENOW=	${_STRTIMENOW:gmtime}
+.if ${_BRANCH:MCURRENT*} || ${_BRANCH:MSTABLE*} || ${_BRANCH:MPRERELEASE*}
+_REVISION:=	${_REVISION:R}
+EXTRA_REVISION=	.snap${_TIMENOW}
 .elif ${_BRANCH:MALPHA*}
-EXTRA_REVISION= _${_BRANCH:C/-ALPHA/.a/}
+EXTRA_REVISION=	.a${_BRANCH:C/ALPHA([0-9]+).*/\1/}.${_TIMENOW}
 .elif ${_BRANCH:MBETA*}
-EXTRA_REVISION= _${_BRANCH:C/-BETA/.b/}
+EXTRA_REVISION=	.b${_BRANCH:C/BETA([0-9]+).*/\1/}.${_TIMENOW}
 .elif ${_BRANCH:MRC*}
-EXTRA_REVISION= _${_BRANCH:C/-RC/.r/}
-.elif ${_BRANCH:MPRERELEASE*}
-EXTRA_REVISION= _${_BRANCH:C/-PRERELEASE/.p/}
+EXTRA_REVISION=	.rc${_BRANCH:C/RC([0-9]+).*/\1/}.${_TIMENOW}
 .elif ${_BRANCH:M*-p*}
-EXTRA_REVISION=	_${_BRANCH:C/.*-p([0-9]+$)/\1/}
+EXTRA_REVISION=	p${_BRANCH:C/.*-p([0-9]+$)/\1/}
 .endif
-PKG_VERSION:=	${_REVISION}${EXTRA_REVISION}
+PKG_VERSION:=	${_REVISION}${EXTRA_REVISION:C/[[:space:]]//g}
 .endif
 .endif	# !defined(PKG_VERSION)
 
@@ -1711,7 +1711,15 @@ buildkernel: .MAKE .PHONY
 	  echo "ncpu: $$(${_ncpu_cmd})${.MAKE.JOBS:S/^/, make -j/}"
 	@echo "--------------------------------------------------------------"
 
+.if !make(packages) && !make(update-packages)
 NO_INSTALLEXTRAKERNELS?=	yes
+.else
+# packages/update-packages installs kernels to a staging directory then builds
+# packages from the result to be installed, typically to other systems.  It is
+# less surprising for these targets to honor KERNCONF if multiple kernels are
+# specified.
+NO_INSTALLEXTRAKERNELS?=	no
+.endif
 
 #
 # installkernel, etc.
@@ -1866,17 +1874,26 @@ _pkgbootstrap: .PHONY
 PKG_ABI!=${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI
 .endif
 
-.if !defined(PKG_VERSION_FROM)
+.if !defined(PKG_VERSION_FROM) && make(real-update-packages)
 .if defined(PKG_ABI)
+.if exists(${REPODIR}/${PKG_ABI})
 PKG_VERSION_FROM!=/usr/bin/readlink ${REPODIR}/${PKG_ABI}/latest
+PKG_VERSION_FROM_DIR=	${REPODIR}/${PKG_ABI}/${PKG_VERSION_FROM}
+.else
+PKG_VERSION_FROM=
+PKG_VERSION_FROM_DIR=
 .endif
 .endif
+.endif
+
+PKGMAKEARGS+=	PKG_VERSION=${PKG_VERSION} \
+		NO_INSTALLEXTRAKERNELS=${NO_INSTALLEXTRAKERNELS}
 
 packages: .PHONY
-	${_+_}${MAKE} -C ${.CURDIR} PKG_VERSION=${PKG_VERSION} real-packages
+	${_+_}${MAKE} -C ${.CURDIR} ${PKGMAKEARGS} real-packages
 
 update-packages: .PHONY
-	${_+_}${MAKE} -C ${.CURDIR} PKG_VERSION=${PKG_VERSION} real-update-packages
+	${_+_}${MAKE} -C ${.CURDIR} ${PKGMAKEARGS} real-update-packages
 
 package-pkg: .PHONY
 	rm -rf /tmp/ports.${TARGET} || :
@@ -1889,8 +1906,11 @@ real-packages:	stage-packages create-packages sign-packages .PHONY
 
 real-update-packages: stage-packages .PHONY
 	${_+_}${MAKE} -C ${.CURDIR} PKG_VERSION=${PKG_VERSION} create-packages
+.if empty(PKG_VERSION_FROM_DIR)
+	@echo "==> Bootstrapping repository, not checking for new packages"
+.else
 	@echo "==> Checking for new packages (comparing ${PKG_VERSION} to ${PKG_VERSION_FROM})"
-	@for pkg in ${REPODIR}/${PKG_ABI}/${PKG_VERSION_FROM}/${PKG_NAME_PREFIX}-*; do \
+	@for pkg in ${PKG_VERSION_FROM_DIR}/${PKG_NAME_PREFIX}-*; do \
 	  pkgname=$$(pkg query -F $${pkg} '%n' | sed 's/${PKG_NAME_PREFIX}-\(.*\)/\1/') ; \
 	  newpkgname=${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION}.${PKG_FORMAT} ; \
 	  oldsum=$$(pkg query -F $${pkg} '%X') ; \
@@ -1906,6 +1926,7 @@ real-update-packages: stage-packages .PHONY
 	    echo "==> New package $${newpkgname}" ; \
 	  fi ; \
 	done
+.endif
 	${_+_}@cd ${.CURDIR}; \
 		${MAKE} -f Makefile.inc1 PKG_VERSION=${PKG_VERSION} sign-packages
 
@@ -2877,7 +2898,7 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 		lib/libzstd \
 		${_lib_casper} \
 		lib/ncurses/ncurses \
-		lib/libopie lib/libpam/libpam ${_lib_libthr} \
+		lib/libopie lib/libpam/libpam lib/libthr \
 		${_lib_libradius} lib/libsbuf lib/libtacplus \
 		lib/libgeom \
 		${_cddl_lib_libumem} ${_cddl_lib_libnvpair} \
@@ -2910,10 +2931,6 @@ _prebuild_libs+= lib/libc++
 
 lib/libgeom__L: lib/libexpat__L lib/libsbuf__L
 lib/libkvm__L: lib/libelf__L
-
-.if ${MK_LIBTHR} != "no"
-_lib_libthr=	lib/libthr
-.endif
 
 .if ${MK_RADIUS_SUPPORT} != "no"
 _lib_libradius=	lib/libradius

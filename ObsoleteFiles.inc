@@ -36,6 +36,11 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20210116: if_wl_wavelan.h removed
+.if ${TARGET_ARCH} == "i386"
+OLD_FILES+=usr/include/machine/if_wl_wavelan.h
+.endif
+
 # 20210108: retire cmx, ng_bt3c, wi drivers
 OLD_FILES+=usr/include/dev/wi/if_wireg.h
 OLD_FILES+=usr/include/dev/wi/if_wavelan_ieee.h
@@ -265,6 +270,7 @@ OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.profile-armhf.a
 OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.profile-i386.a
 OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.profile-powerpc.a
 OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.profile-powerpc64.a
+OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.profile-powerpc64le.a
 OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.profile-x86_64.a
 OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.safestack-aarch64.a
 OLD_FILES+=usr/lib/clang/11.0.0/lib/freebsd/libclang_rt.safestack-i386.a
