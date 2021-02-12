@@ -309,7 +309,7 @@ device		ath_rate_sample		# SampleRate tx rate control for ath
 device		ipw			# Intel 2100 wireless NICs.
 device		iwi			# Intel 2200BG/2225BG/2915ABG wireless NICs.
 device		iwn			# Intel 4965/1000/5000/6000 wireless NICs.
-device		malo			# Marvell Libertas wireless NICs.
+device		malo		# Marvell Libertas wireless NICs.
 device		mwl			# Marvell 88W8363 802.11n wireless NICs.
 device		ral			# Ralink Technology RT2500 wireless NICs.
 device		wpi			# Intel 3945ABG wireless NICs.
@@ -323,8 +323,8 @@ device		rdrand_rng		# Intel Bull Mountain RNG
 device		ether			# Ethernet support
 device		vlan			# 802.1Q VLAN support
 device		tuntap			# Packet tunnel.
-device		md			# Memory "disks"
-device		gif			# IPv6 and IPv4 tunneling
+device		md				# Memory "disks"
+device		gif				# IPv6 and IPv4 tunneling
 device		firmware		# firmware assist module
 
 # The `bpf' device enables the Berkeley Packet Filter.
@@ -334,6 +334,8 @@ device		bpf			# Berkeley packet filter
 
 # USB support
 options 	USB_DEBUG		# enable debug msgs
+device		dwcotg			# DWC OTG controller
+device		musb			# Mentor Graphics USB OTG controller
 device		uhci			# UHCI PCI->USB interface
 device		ohci			# OHCI PCI->USB interface
 device		ehci			# EHCI PCI->USB interface (USB 2.0)
@@ -365,7 +367,7 @@ device		virtio_pci		# VirtIO PCI device
 device		vtnet			# VirtIO Ethernet device
 device		virtio_blk		# VirtIO Block device
 device		virtio_scsi		# VirtIO SCSI device
-device		virtio_balloon		# VirtIO Memory Balloon device
+device		virtio_balloon	# VirtIO Memory Balloon device
 
 # HyperV drivers and enhancement support
 device		hyperv			# HyperV drivers
