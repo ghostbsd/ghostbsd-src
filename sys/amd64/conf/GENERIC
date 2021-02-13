@@ -316,7 +316,7 @@ device		iwmfw		# Load iwm3160fw iwm3168fw iwm7260fw iwm7265fw iwm8000Cfw iwm8265
 device		malo		# Marvell Libertas wireless NICs.
 device		mwl			# Marvell 88W8363 802.11n wireless NICs.
 device		ral			# Ralink Technology RT2500 wireless NICs.
-evice		rtwn		# Realtek IEEE 802.11 wireless network driver
+device		rtwn		# Realtek IEEE 802.11 wireless network driver
 device		rtwnfw		# Firmware	Module for Realtek Wireless driver
 device		rtwn_pci	# Realtek PCI device glue
 device		wpi			# Intel 3945ABG wireless NICs.
