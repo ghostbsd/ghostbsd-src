@@ -392,6 +392,16 @@ fbsd_brand = {
 " | |   | | |    |    ||     |      |      |",
 " |_|   |_|  \\___|\\___||____/|_____/|_____/ "
 }
+
+ghostbsd_brand = {
+	"   ____ _               _    ____   _____ _____  ",
+	"  / ___| |             | |_ |  _ \\ / ____|  __ \\ ",
+	" | |   | |__   ___  ___| __|| |_) | (___ | |  | |",
+	" | |  _| '_ \\ / _ \\/ __| |  |  _ < \\___ \\| |  | |",
+	" | |_| | | | | (_) \\__ \\ |_ | |_) |____) | |__| |",
+	"  \\____|_| |_|\\___/|___/\\__||____/|_____/|_____/ "
+	}
+
 none = {""}
 
 menu_name_handlers = {
@@ -429,6 +439,10 @@ branddefs = {
 	["fbsd"] = {
 		graphic = fbsd_brand,
 		image = "/boot/images/freebsd-brand-rev.png",
+	},
+	["ghostbsd"] = {
+		graphic = ghostbsd_brand,
+		image = "/boot/images/ghostbsd-brand.png",
 	},
 	["none"] = {
 		graphic = none,
