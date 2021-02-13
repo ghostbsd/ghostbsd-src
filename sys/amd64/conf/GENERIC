@@ -279,10 +279,17 @@ device		sge			# Silicon Integrated Systems SiS190/191
 device		sis			# Silicon Integrated Systems SiS 900/SiS 7016
 device		sk			# SysKonnect SK-984x & SK-982x gigabit Ethernet
 device		ste			# Sundance ST201 (D-Link DFE-550TX)
-device		stge			# Sundance/Tamarack TC9021 gigabit Ethernet
+device		stge		# Sundance/Tamarack TC9021 gigabit Ethernet
 device		vge			# VIA VT612x gigabit Ethernet
 device		vr			# VIA Rhine, Rhine II
 device		xl			# 3Com 3c90x (``Boomerang'', ``Cyclone'')
+
+# USB Ethernet NICs
+device		axe			# ASIX Electronics AX88x7x/760 USB Ethernet driver
+device		axge		# ASIX Electronics AX88178A/AX88179 USB Gigabit Ethernet driver
+device		cdce		# USB Communication Device Class Ethernet (CDC ECM/NCM) driver
+device		rue			# RealTek RTL8150 USB	to Fast	Ethernet controller driver
+device		ure			# RealTek RTL8152/RTL8153 USB	to Ethernet controller driver
 
 # Wireless NIC cards
 device		wlan			# 802.11 support
@@ -290,7 +297,7 @@ options 	IEEE80211_DEBUG		# enable debug msgs
 options 	IEEE80211_SUPPORT_MESH	# enable 802.11s draft support
 device		wlan_wep		# 802.11 WEP support
 device		wlan_ccmp		# 802.11 CCMP support
-device		wlan_tkip		# 802.11 TKIP support
+device		wlan_tkip		# 802.11 TKIP suppor
 device		wlan_amrr		# AMRR transmit rate control algorithm
 device		an			# Aironet 4500/4800 802.11 wireless NICs.
 device		ath			# Atheros NICs
@@ -299,19 +306,28 @@ device		ath_hal			# pci/cardbus chip support
 options 	AH_AR5416_INTERRUPT_MITIGATION # AR5416 interrupt mitigation
 options 	ATH_ENABLE_11N		# Enable 802.11n support for AR5416 and later
 device		ath_rate_sample		# SampleRate tx rate control for ath
-#device		bwi			# Broadcom BCM430x/BCM431x wireless NICs.
-#device		bwn			# Broadcom BCM43xx wireless NICs.
+device		bwi			# Broadcom BCM430x/BCM431x wireless NICs.
+device		bwn			# Broadcom BCM43xx wireless NICs.
 device		ipw			# Intel 2100 wireless NICs.
 device		iwi			# Intel 2200BG/2225BG/2915ABG wireless NICs.
 device		iwn			# Intel 4965/1000/5000/6000 wireless NICs.
+device		iwm			# Intel IEEE 802.11ac	wireless network driver
+device		iwmfw		# Load iwm3160fw iwm3168fw iwm7260fw iwm7265fw iwm8000Cfw iwm8265fw
 device		malo		# Marvell Libertas wireless NICs.
 device		mwl			# Marvell 88W8363 802.11n wireless NICs.
 device		ral			# Ralink Technology RT2500 wireless NICs.
+evice		rtwn		# Realtek IEEE 802.11 wireless network driver
+device		rtwnfw		# Firmware	Module for Realtek Wireless driver
+device		rtwn_pci	# Realtek PCI device glue
+device		wpi			# Intel 3945ABG wireless NICs.
+
+# USB Wireless NICs
 device		rsu			# Realtek RTL8188SU/RTL8192SU	USB IEEE 802.11b/g/n wireless NICs.
+device		rtwn_usb	# Realtek USB device glue
 device		rum			# Ralink Technology USB IEEE 802.11a/b/g wireless network device
 device		run			# Ralink Technology USB IEEE 802.11a/g/n wireless network device
 device		runfw		# Firmware Module for Ralink Technology USB IEEE 802.11a/b/g wireless network device
-device		wpi			# Intel 3945ABG wireless NICs.
+device		upgt		# Conexant/Intersil PrismGT SoftMAC USB IEEE 802.11b/g wireless NICS
 
 # Pseudo devices.
 device		crypto			# core crypto support
