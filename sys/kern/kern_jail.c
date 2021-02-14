@@ -1105,6 +1105,14 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 					    "jail \"%s\" not found", name);
 					goto done_deref;
 				}
+				if (!(flags & JAIL_DYING) &&
+				    !prison_isalive(ppr)) {
+					mtx_unlock(&ppr->pr_mtx);
+					error = ENOENT;
+					vfs_opterror(opts,
+					    "jail \"%s\" is dying", name);
+					goto done_deref;
+				}
 				mtx_unlock(&ppr->pr_mtx);
 				*namelc = '.';
 			}
@@ -1200,8 +1208,18 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			goto done_deref;
 		}
 		prison_hold(ppr);
-		refcount_acquire(&ppr->pr_uref);
-		mtx_unlock(&ppr->pr_mtx);
+		if (refcount_acquire(&ppr->pr_uref))
+			mtx_unlock(&ppr->pr_mtx);
+		else {
+			/* This brings the parent back to life. */
+			mtx_unlock(&ppr->pr_mtx);
+			error = osd_jail_call(ppr, PR_METHOD_CREATE, opts);
+			if (error) {
+				pr = ppr;
+				drflags |= PD_DEREF | PD_DEUREF;
+				goto done_deref;
+			}
+                }
 
 		if (jid == 0 && (jid = get_next_prid(&inspr)) == 0) {
 			error = EAGAIN;
@@ -1741,8 +1759,8 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			prison_hold(pr);
 			refcount_acquire(&pr->pr_uref);
 		} else {
-			refcount_release(&pr->pr_uref);
 			refcount_release(&pr->pr_ref);
+			drflags |= PD_DEUREF;
 		}
 	}
 	pr->pr_flags = (pr->pr_flags & ~ch_flags) | pr_flags;
@@ -2705,7 +2723,6 @@ prison_proc_hold(struct prison *pr)
 void
 prison_proc_free(struct prison *pr)
 {
-	int lasturef;
 
 	/*
 	 * Locking is only required when releasing the last reference.
@@ -2714,11 +2731,7 @@ prison_proc_free(struct prison *pr)
 	 */
 	KASSERT(refcount_load(&pr->pr_uref) > 0,
 	    ("Trying to kill a process in a dead prison (jid=%d)", pr->pr_id));
-	if (refcount_release_if_not_last(&pr->pr_uref))
-		return;
-	mtx_lock(&pr->pr_mtx);
-	lasturef = refcount_release(&pr->pr_uref);
-	if (lasturef) {
+	if (!refcount_release_if_not_last(&pr->pr_uref)) {
 		/*
 		 * Don't remove the last user reference in this context,
 		 * which is expected to be a process that is not only locked,
@@ -2726,11 +2739,8 @@ prison_proc_free(struct prison *pr)
 		 * prison_free() won't re-submit the task.
 		 */
 		refcount_acquire(&pr->pr_ref);
-		mtx_unlock(&pr->pr_mtx);
 		taskqueue_enqueue(taskqueue_thread, &pr->pr_task);
-		return;
 	}
-	mtx_unlock(&pr->pr_mtx);
 }
 
 /*

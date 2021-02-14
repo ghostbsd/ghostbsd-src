@@ -510,7 +510,6 @@ cc_post_recovery(struct tcpcb *tp, struct tcphdr *th)
 	}
 	/* XXXLAS: EXIT_RECOVERY ? */
 	tp->t_bytes_acked = 0;
-	tp->sackhint.recover_fs = 0;
 }
 
 /*
@@ -3948,15 +3947,21 @@ tcp_prr_partialack(struct tcpcb *tp, struct tcphdr *th)
 	/*
 	 * Proportional Rate Reduction
 	 */
-	if (pipe > tp->snd_ssthresh)
-		snd_cnt = (tp->sackhint.prr_delivered * tp->snd_ssthresh / tp->sackhint.recover_fs) -
-		    tp->sackhint.sack_bytes_rexmit;
-	else {
+	if (pipe > tp->snd_ssthresh) {
+		if (tp->sackhint.recover_fs == 0)
+			tp->sackhint.recover_fs =
+			    max(1, tp->snd_nxt - tp->snd_una);
+		snd_cnt = (tp->sackhint.prr_delivered * tp->snd_ssthresh /
+		    tp->sackhint.recover_fs) - tp->sackhint.sack_bytes_rexmit;
+	} else {
 		if (V_tcp_do_prr_conservative)
-			limit = tp->sackhint.prr_delivered - tp->sackhint.sack_bytes_rexmit;
+			limit = tp->sackhint.prr_delivered -
+			    tp->sackhint.sack_bytes_rexmit;
 		else
-			if ((tp->sackhint.prr_delivered - tp->sackhint.sack_bytes_rexmit) > del_data)
-				limit = tp->sackhint.prr_delivered - tp->sackhint.sack_bytes_rexmit + maxseg;
+			if ((tp->sackhint.prr_delivered -
+			    tp->sackhint.sack_bytes_rexmit) > del_data)
+				limit = tp->sackhint.prr_delivered -
+				    tp->sackhint.sack_bytes_rexmit + maxseg;
 			else
 				limit = del_data + maxseg;
 		snd_cnt = min((tp->snd_ssthresh - pipe), limit);

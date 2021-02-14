@@ -99,15 +99,6 @@ options 	RCTL			# Resource limits
 # Debugging support.  Always need this:
 options 	KDB			# Enable kernel debugger support.
 options 	KDB_TRACE		# Print a stack trace for a panic.
-# For full debugger support use (turn off in stable branch):
-options 	DDB			#Support DDB
-#options 	DEADLKRES		#Enable the deadlock resolver
-options 	INVARIANTS		#Enable calls of extra sanity checking
-options 	INVARIANT_SUPPORT	#Extra sanity checks of internal structures, required by INVARIANTS
-options 	WITNESS			#Enable checks to detect deadlocks and cycles
-options 	WITNESS_SKIPSPIN	#Don't run witness on spinlocks for speed
-options 	MALLOC_DEBUG_MAXZONES=8	# Separate malloc(9) zones
-options 	VERBOSE_SYSINIT=0	# Support debug.verbose_sysinit, off by default
 
 # Kernel dump features.
 options 	EKCD			# Support for encrypted kernel dumps
@@ -144,6 +135,7 @@ device		ahc		# AHA2940 and onboard AIC7xxx devices
 options 	AHC_ALLOW_MEMIO	# Attempt to use memory mapped I/O
 device		isp		# Qlogic family
 device		ispfw		# Firmware module for Qlogic host adapters
+device		mrsas		# LSI/Avago MegaRAID SAS/SATA, 6Gb/s and 12Gb/s
 device		mpt		# LSI-Logic MPT-Fusion
 device		mps		# LSI-Logic MPT-Fusion 2
 device		sym		# NCR/Symbios/LSI Logic 53C8XX/53C1010/53C1510D
