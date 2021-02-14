@@ -4008,7 +4008,7 @@ cache_fplookup_partial_setup(struct cache_fpl *fpl)
 	 *
 	 * Ultimately this does not affect correctness, any lookup errors
 	 * are userspace racing with itself. It is guaranteed that any
-	 * path which ultimatley gets found could also have been found
+	 * path which ultimately gets found could also have been found
 	 * by regular lookup going all the way in absence of concurrent
 	 * modifications.
 	 */
@@ -4159,7 +4159,7 @@ cache_fplookup_final_modifying(struct cache_fpl *fpl)
 	 * reasoning.
 	 *
 	 * XXX At least UFS requires its lookup routine to be called for
-	 * the last path component, which leads to some level of complicaton
+	 * the last path component, which leads to some level of complication
 	 * and inefficiency:
 	 * - the target routine always locks the target vnode, but our caller
 	 *   may not need it locked
@@ -4283,7 +4283,7 @@ cache_fplookup_modifying(struct cache_fpl *fpl)
 	if (!cache_fpl_islastcn(ndp)) {
 		return (cache_fpl_partial(fpl));
 	}
-	return  (cache_fplookup_final_modifying(fpl));
+	return (cache_fplookup_final_modifying(fpl));
 }
 
 static int __noinline
@@ -4578,16 +4578,15 @@ cache_fplookup_dot(struct cache_fpl *fpl)
 	 */
 	fpl->tvp = fpl->dvp;
 	fpl->tvp_seqc = fpl->dvp_seqc;
-	if (cache_fplookup_is_mp(fpl)) {
-		error = cache_fplookup_cross_mount(fpl);
-		if (__predict_false(error != 0)) {
-			return (error);
-		}
-	}
 
 	counter_u64_add(dothits, 1);
 	SDT_PROBE3(vfs, namecache, lookup, hit, fpl->dvp, ".", fpl->dvp);
-	return (0);
+
+	error = 0;
+	if (cache_fplookup_is_mp(fpl)) {
+		error = cache_fplookup_cross_mount(fpl);
+	}
+	return (error);
 }
 
 static int __noinline
@@ -4748,16 +4747,14 @@ cache_fplookup_next(struct cache_fpl *fpl)
 		return (cache_fpl_partial(fpl));
 	}
 
-	if (cache_fplookup_is_mp(fpl)) {
-		error = cache_fplookup_cross_mount(fpl);
-		if (__predict_false(error != 0)) {
-			return (error);
-		}
-	}
-
 	counter_u64_add(numposhits, 1);
 	SDT_PROBE3(vfs, namecache, lookup, hit, dvp, ncp->nc_name, tvp);
-	return (0);
+
+	error = 0;
+	if (cache_fplookup_is_mp(fpl)) {
+		error = cache_fplookup_cross_mount(fpl);
+	}
+	return (error);
 }
 
 static bool
@@ -4965,10 +4962,8 @@ cache_fpl_pathlen_sub(struct cache_fpl *fpl, size_t n)
 static int
 cache_fplookup_preparse(struct cache_fpl *fpl)
 {
-	struct nameidata *ndp;
 	struct componentname *cnp;
 
-	ndp = fpl->ndp;
 	cnp = fpl->cnp;
 
 	if (__predict_false(cnp->cn_nameptr[0] == '\0')) {
@@ -5049,7 +5044,7 @@ cache_fplookup_parse(struct cache_fpl *fpl)
 #ifdef INVARIANTS
 	/*
 	 * Code below is only here to assure compatibility with regular lookup.
-	 * It covers handling of trailing slashles and names like "/", both of
+	 * It covers handling of trailing slashes and names like "/", both of
 	 * which of can be taken care of upfront which lockless lookup does
 	 * in cache_fplookup_preparse. Regular lookup performs these for each
 	 * path component.
