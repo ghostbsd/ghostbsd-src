@@ -359,6 +359,7 @@ device		xhci			# XHCI PCI->USB interface (USB 3.0)
 device		usb				# USB Bus (required)
 device		ukbd			# Keyboard
 device		umass			# Disks/Mass storage - Requires scbus and da
+device		ums				# USB mouse supports
 device		uhid			# USB generic HID support
 
 # Sound support
