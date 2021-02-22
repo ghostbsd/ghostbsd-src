@@ -6,6 +6,7 @@ firewall_coscripts="natd ${firewall_coscripts}"
 SYSCTL="/sbin/sysctl"
 
 . /etc/network.subr
+. /etc/rc.subr
 
 depend() {
 	before net
