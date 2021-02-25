@@ -32,6 +32,12 @@ rcvar="${name}_enable"
 
 one_nomatch="$devd_args"
 
+depend() {
+	need kldxref
+	before network
+	keyword -nojail
+}
+
 start()
 {
 	local x m list
