@@ -53,17 +53,19 @@ start() {
 
 	# Import all pools described by the cache file, and then mount
 	# all filesystem based on their properties.
-	if [ -f $ZPOOL_CACHE ]; then
-		# as per fedora script, import can fail if all pools are already imported
-		# The check for $rv makes no sense...but someday, it will work right.
-		$ZPOOL import -c $ZPOOL_CACHE -aN 2>/dev/null || true
+        local cachefile
+
+        for cachefile in /etc/zfs/zpool.cache /boot/zfs/zpool.cache; do
+                if [ -r $cachefile ]; then
+                        zpool import -c $cachefile -a -N && break
+                fi
+        done
 		rv=$?
 		if [ $rv -ne 0 ]; then
 			eerror "Failed to import not-yet imported pools."
 			eend $rv
 			return $rv
 		fi
-	fi
 
 	$ZFS mount -a
 	rv=$?
