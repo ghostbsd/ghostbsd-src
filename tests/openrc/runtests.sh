@@ -41,6 +41,7 @@ export_pool()
 detach_disk_image()
 {
   # Unmount disk image
+  umount -f /tmp/ghostbsd-openrc-ci >/dev/null 2>/dev/null || true
   mdconfig -d -u 99 >/dev/null 2>/dev/null || true
 }
 
@@ -115,10 +116,26 @@ create_pool()
 {
   # Create partitions in disk image
   gpart create -s gpt /dev/md99
-  gpart add -s 800K -t efi /dev/md99
+  gpart add -s 1000K -t efi /dev/md99
   gpart add -a 1m -t freebsd-zfs -l rootfs /dev/md99
 
   # Image bootloader
+  newfs_msdos md99p1
+  if [ ! -d "/tmp/ghostbsd-openrc-ci" ] ; then
+    mkdir /tmp/ghostbsd-openrc-ci
+  fi
+  mount -t msdosfs /dev/md99p1 /tmp/ghostbsd-openrc-ci
+  mkdir -p /tmp/ghostbsd-openrc-ci/efi/boot/
+  cp /boot/loader.efi /tmp/ghostbsd-openrc-ci/efi/boot/BOOTx64.efi
+  mkdir -p /tmp/ghostbsd-openrc-ci/boot
+  # Do not indent the lines below cat we need to preserve formatting for loader.rc
+  cat > /tmp/ghostbsd-openrc-ci/boot/loader.rc << EOF
+unload
+set currdev=zfs:tank/ROOT/initial:
+load boot/kernel/kernel
+load boot/kernel/zfs.ko
+autoboot
+EOF
 
   # Create pool
 }
