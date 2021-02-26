@@ -26,6 +26,7 @@ check_requirements()
 poweroff_vm()
 {
   # Check for previously running ghostbsd-openrc-ci vm and power off
+  yes | vm poweroff ghostbsd-openrc-ci
 }
 
 stop_console_session()
@@ -205,6 +206,7 @@ attach_disk_image
 create_pool
 install_os_packages
 install_repo_changes
+detach_disk_image
 boot_vm
 start_console_session
 shutdown_vm
