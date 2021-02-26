@@ -31,6 +31,7 @@ poweroff_vm()
 stop_console_session()
 {
   # Stop any previous ghostbsd-openrc-ci vm console sessions
+  ps -auwx | grep cu | grep ghostbsd | awk '{print $2}' | xargs kill -9
 }
 
 detach_disk_image()
@@ -152,8 +153,11 @@ install_os_packages()
   pkg-static -r /tmp/ghostbsd-openrc-ci-pool install -y -g ${PACKAGES}
 }
 
-install_repo_overlay()
+install_repo_changes()
 {
+  # Copy special loader.conf to enable zfs but disable boot mute
+  cp ${CWD}/loader.conf /tmp/ghostbsd-openrc-ci-pool/boot/
+
   # Copy libexec/rc/etc.init.d/ contents to /etc/init.d/ in disk image
 }
 
@@ -200,7 +204,7 @@ create_vm
 attach_disk_image
 create_pool
 install_os_packages
-install_repo_overlay
+install_repo_changes
 boot_vm
 start_console_session
 shutdown_vm
