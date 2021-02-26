@@ -32,7 +32,7 @@ poweroff_vm()
 stop_console_session()
 {
   # Stop any previous ghostbsd-openrc-ci vm console sessions
-  ps -auwx | grep cu | grep ghostbsd | awk '{print $2}' | xargs kill -9
+  ps -auwx | grep cu | grep ghostbsd | awk '{print $2}' | xargs kill -9 >/dev/null 2>/dev/null || true
 }
 
 detach_disk_image()
@@ -165,6 +165,7 @@ install_repo_changes()
 boot_vm()
 {
   # start the vm
+  vm start ghostbsd-openrc-ci
 }
 
 start_console_session()
