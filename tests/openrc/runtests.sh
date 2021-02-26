@@ -38,14 +38,16 @@ export_pool()
   # Export pool
 }
 
-unmount_disk_image()
+detach_disk_image()
 {
   # Unmount disk image
+  mdconfig -d -u 99 >/dev/null 2>/dev/null || true
 }
 
-cleanup()
+cleanup_vm()
 {
   # Cleanup any previous ghostbsd-openrc-ci vm data
+  yes | vm destroy ghostbsd-openrc-ci >/dev/null 2>/dev/null || true
 }
 
 create_vm()
@@ -91,11 +93,22 @@ create_vm()
   fi
 
   # Create ghostbsd-openrc-ci vm
+  vm create -t ghostbsd-openrc-ci ghostbsd-openrc-ci
 }
 
-mount_disk_image()
+attach_disk_image()
 {
   # Mount ghostbsd-openrc-ci disk image
+  # Check to see if zfs is used for vm_dir parameter in /etc/rc.conf
+  echo "${VM_DIR}" | grep -q zfs
+  if [ $? -ne 1 ]; then
+    # Get and use the filesystem path for the zfs dataset for mounting the vm disk
+    VM_DIR_ZFS=$(echo "${VM_DIR}" | grep -o '/.*')
+    mdconfig -f "${VM_DIR_ZFS}/ghostbsd-openrc-ci/disk0.img" -u 99
+  else
+    # Use the filesystem path specified by vm_dir in /etc/rc.conf for mounting the vm disk
+    mdconfig -f "${VM_DIR}/ghostbsd-openrc-ci/disk0.img" -u 99 
+  fi
 }
 
 create_pool()
@@ -160,9 +173,10 @@ check_requirements
 poweroff_vm
 stop_console_session
 export_pool
-unmount_disk_image
+detach_disk_image
+cleanup_vm
 create_vm
-mount_disk_image
+attach_disk_image
 create_pool
 import_pool
 install_os_packages
@@ -174,5 +188,5 @@ stop_console_session
 import_pool
 get_logs
 export_pool
-unmount_disk_image
+detach_disk_image
 check_logs
