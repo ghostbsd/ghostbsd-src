@@ -26,7 +26,7 @@ check_requirements()
 poweroff_vm()
 {
   # Check for previously running ghostbsd-openrc-ci vm and power off
-  yes | vm poweroff ghostbsd-openrc-ci
+  yes | vm poweroff ghostbsd-openrc-ci  >/dev/null 2>/dev/null || true
 }
 
 stop_console_session()
