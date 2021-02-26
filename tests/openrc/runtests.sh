@@ -119,7 +119,7 @@ create_pool()
   gpart add -s 1000K -t efi /dev/md99
   gpart add -a 1m -t freebsd-zfs -l rootfs /dev/md99
 
-  # Image bootloader
+  # Prepare the EFI partition
   newfs_msdos md99p1
   if [ ! -d "/tmp/ghostbsd-openrc-ci" ] ; then
     mkdir /tmp/ghostbsd-openrc-ci
