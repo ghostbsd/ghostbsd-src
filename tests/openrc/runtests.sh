@@ -114,6 +114,9 @@ attach_disk_image()
 create_pool()
 {
   # Create partitions in disk image
+  gpart create -s gpt /dev/md99
+  gpart add -s 800K -t efi /dev/md99
+  gpart add -a 1m -t freebsd-zfs -l rootfs /dev/md99
 
   # Image bootloader
 
