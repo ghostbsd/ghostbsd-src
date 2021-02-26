@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Set global variables
+CWD=$(realpath | sed 's|/scripts||g')
+
 check_requirements()
 {
   # Check that we are running as root or with sudo
@@ -48,12 +51,44 @@ cleanup()
 create_vm()
 {
   # Get the location of vm_dir from rc.conf
+  VM_DIR=$(sysrc -q -n vm_dir)
+  if [ "$VM_DIR" = "" ]; then
+    # Fail if vm_dir is not set in /etc/rc.conf
+    echo "vm_dir is not set in /etc/rc.conf"
+    exit 1
+  else
+    # Print out the value of vm_dir in /etc/rc.conf 
+    echo "vm_dir is set to ${VM_DIR} in /etc/rc.conf"
+  fi
 
-  # Always copy the ghostbsd-core-ci template to vm_dir
+  # Always copy the ghostbsd-openrc-ci template to the local directory specified vm_dir
+  # Check to see if zfs is used for vm_dir parameter in /etc/rc.conf
+  echo "${VM_DIR}" | grep -q zfs
+  if [ $? -ne 1 ]; then
+    # Get and use the filesystem path for the zfs dataset for copying the template
+    VM_DIR_ZFS=$(echo "${VM_DIR}" | grep -o '/.*')
+    cp ${CWD}/ghostbsd-openrc-ci.conf ${VM_DIR_ZFS}/.templates/
+    echo "Copied ghostbsd-openrc-ci.conf template to ${VM_DIR_ZFS}/.templates/"
+  else
+    # Use the filesystem path specified by vm_dir in /etc/rc.conf
+    cp ${CWD}/ghostbsd-openrc-ci.conf ${VM_DIR}
+    echo "Copied ghostbsd-openrc-ci.conf template to ${VM_DIR}/.templates/"
+  fi
 
   # Check vm-bhyve to determine which switch is default
-
-  # Enable the default switch in ghostbsd-core-ci template in vm_dir location
+  # Check to see if zfs is used for vm_dir parameter in /etc/rc.conf
+  echo "${VM_DIR}" | grep -q zfs
+  if [ $? -ne 1 ]; then
+    # Get and use the filesystem path for the zfs dataset for copying the template
+    # Enable the default switch in ghostbsd-core-ci template in vm_dir location
+    SWITCH=$(vm switch list | awk 'FNR==2{print $0}' | awk '{print $1}')
+    sed -i '' -e 's/changeme/"'"${SWITCH}"'"/' ${VM_DIR_ZFS}/.templates/ghostbsd-openrc-ci.conf
+  else
+    # Use the filesystem path specified by vm_dir in /etc/rc.conf
+    # Enable the default switch in ghostbsd-core-ci template in vm_dir location
+    SWITCH=$(vm switch list | awk 'FNR==2{print $0}' | awk '{print $1}')
+    sed -i '' -e 's/changeme/"'"${SWITCH}"'"/' ${VM_DIR}/.templates/ghostbsd-openrc-ci.conf
+  fi
 
   # Create ghostbsd-openrc-ci vm
 }
@@ -126,6 +161,7 @@ poweroff_vm
 stop_console_session
 export_pool
 unmount_disk_image
+create_vm
 mount_disk_image
 create_pool
 import_pool
