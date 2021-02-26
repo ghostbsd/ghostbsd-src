@@ -81,12 +81,12 @@ create_vm()
     # Get and use the filesystem path for the zfs dataset for copying the template
     # Enable the default switch in ghostbsd-core-ci template in vm_dir location
     SWITCH=$(vm switch list | awk 'FNR==2{print $0}' | awk '{print $1}')
-    sed -i '' -e 's/changeme/"'"${SWITCH}"'"/' ${VM_DIR_ZFS}/.templates/ghostbsd-openrc-ci.conf
+    sed -i '' -e 's/changeme/'${SWITCH}'/' ${VM_DIR_ZFS}/.templates/ghostbsd-openrc-ci.conf
   else
     # Use the filesystem path specified by vm_dir in /etc/rc.conf
     # Enable the default switch in ghostbsd-core-ci template in vm_dir location
     SWITCH=$(vm switch list | awk 'FNR==2{print $0}' | awk '{print $1}')
-    sed -i '' -e 's/changeme/"'"${SWITCH}"'"/' ${VM_DIR}/.templates/ghostbsd-openrc-ci.conf
+    sed -i '' -e 's/changeme/'${SWITCH}'/' ${VM_DIR}/.templates/ghostbsd-openrc-ci.conf
   fi
 
   # Create ghostbsd-openrc-ci vm
