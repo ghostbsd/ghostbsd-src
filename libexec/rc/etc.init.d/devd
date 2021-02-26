@@ -7,7 +7,7 @@ name="devd"
 description="Device State Change Daemon"
 
 depend() {
-	need network ldconfig
+	after network ldconfig
 	keyword -nojail -shutdown
 }
 
