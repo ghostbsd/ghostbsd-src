@@ -148,6 +148,8 @@ EOF
 install_os_packages()
 {
   # Install 13-stable packages in disk image
+  PACKAGES="os-generic-kernel os-generic-userland"
+  pkg-static -r /tmp/ghostbsd-openrc-ci-pool install -y -g ${PACKAGES}
 }
 
 install_repo_overlay()
@@ -203,7 +205,6 @@ boot_vm
 start_console_session
 shutdown_vm
 stop_console_session
-import_pool
 get_logs
 detach_disk_image
 check_logs
