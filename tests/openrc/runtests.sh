@@ -110,12 +110,12 @@ attach_disk_image()
 
 create_pool()
 {
-  # Create partitions in disk image
+  # Create partitions in disk image using vm disk image
   gpart create -s gpt /dev/md99
   gpart add -s 1000K -t efi /dev/md99
   gpart add -a 1m -t freebsd-zfs -l rootfs /dev/md99
 
-  # Prepare the EFI partition
+  # Prepare the EFI partition using vm disk image
   newfs_msdos md99p1
   if [ ! -d "/tmp/ghostbsd-openrc-ci-efi" ] ; then
     mkdir /tmp/ghostbsd-openrc-ci-efi
@@ -133,7 +133,7 @@ load boot/kernel/zfs.ko
 autoboot
 EOF
 
-  # Create ghostbsd-openrc-ci pool
+  # Create ghostbsd-openrc-ci pool using vm disk image
   if [ ! -d "/tmp/ghostbsd-openrc-ci-pool" ] ; then
     mkdir -p /tmo/ghostbsd-openrc-ci-pool
   fi
