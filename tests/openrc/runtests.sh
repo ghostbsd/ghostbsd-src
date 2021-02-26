@@ -11,16 +11,10 @@ check_requirements()
     exit 1
   fi
 
-  # Check for required packages
+  # Todo check for required packages
   PACKAGES="vm-bhyve expect"
 
-  # Check for 13.0-STABLE kernel
-
-  # Check for GhostBSD repo
-
-  # Check for vm-bhyve
-
-  # Check to make sure vm-bhyve modules are loaded and vm service is started
+  # Todo Check to make sure vm-bhyve modules are loaded and vm service is started
 }
 
 poweroff_vm()
@@ -33,6 +27,7 @@ stop_console_session()
 {
   # Stop any previous ghostbsd-openrc-ci vm console sessions
   ps -auwx | grep cu | grep ghostbsd | awk '{print $2}' | xargs kill -9 >/dev/null 2>/dev/null || true
+  # Todo also add cleanup for expect process
 }
 
 detach_disk_image()
@@ -159,7 +154,11 @@ install_repo_changes()
   # Copy special loader.conf to enable zfs but disable boot mute
   cp ${CWD}/loader.conf /tmp/ghostbsd-openrc-ci-pool/boot/
 
+  # Copy special rc.conf to setup network
+  cp ${CWD}/rc.conf /tmp/ghostbsd-openrc-ci-pool/etc/
+
   # Copy libexec/rc/etc.init.d/ contents to /etc/init.d/ in disk image
+  cp -R ${CWD}/../../libexec/rc/etc.init.d/ /tmp/ghostbsd-openrc-ci-pool/etc/init.d/
 }
 
 boot_vm()
@@ -171,29 +170,7 @@ boot_vm()
 start_console_session()
 {
   # Begin console session
-
-  # Login as root
-
-  # Run command to print deptree to log
-}
-
-shutdown_vm()
-{
-  # Cleanly shutdown the vm to get shutdown logs properly
-}
-
-get_logs()
-{
-  # Grab /var/log/rc.log
-
-  # Grab deptree log
-}
-
-check_logs()
-{
-  # Check for any errors in /var/rc.log and return 0 or 1
-
-  # Present messaging on how to start vm and console in if any problems were encountered
+  expect ${CWD}/runtests.exp /dev/nmdm-ghostbsd-openrc-ci.1B /tmp/ghostbsd-openrc-ci.output ghostbsd-openrc-ci
 }
 
 # Run our functions
@@ -210,8 +187,3 @@ install_repo_changes
 detach_disk_image
 boot_vm
 start_console_session
-shutdown_vm
-stop_console_session
-get_logs
-detach_disk_image
-check_logs
