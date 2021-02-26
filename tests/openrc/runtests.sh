@@ -33,15 +33,11 @@ stop_console_session()
   # Stop any previous ghostbsd-openrc-ci vm console sessions
 }
 
-export_pool()
-{
-  # Export pool
-}
-
 detach_disk_image()
 {
   # Unmount disk image
-  umount -f /tmp/ghostbsd-openrc-ci >/dev/null 2>/dev/null || true
+  umount -f /tmp/ghostbsd-openrc-ci-efi >/dev/null 2>/dev/null || true
+  zpool export -F ghostbsd-openrc-ci >/dev/null 2>/dev/null || true
   mdconfig -d -u 99 >/dev/null 2>/dev/null || true
 }
 
@@ -121,28 +117,32 @@ create_pool()
 
   # Prepare the EFI partition
   newfs_msdos md99p1
-  if [ ! -d "/tmp/ghostbsd-openrc-ci" ] ; then
-    mkdir /tmp/ghostbsd-openrc-ci
+  if [ ! -d "/tmp/ghostbsd-openrc-ci-efi" ] ; then
+    mkdir /tmp/ghostbsd-openrc-ci-efi
   fi
-  mount -t msdosfs /dev/md99p1 /tmp/ghostbsd-openrc-ci
-  mkdir -p /tmp/ghostbsd-openrc-ci/efi/boot/
-  cp /boot/loader.efi /tmp/ghostbsd-openrc-ci/efi/boot/BOOTx64.efi
-  mkdir -p /tmp/ghostbsd-openrc-ci/boot
+  mount -t msdosfs /dev/md99p1 /tmp/ghostbsd-openrc-ci-efi
+  mkdir -p /tmp/ghostbsd-openrc-ci-efi/efi/boot/
+  cp /boot/loader.efi /tmp/ghostbsd-openrc-ci-efi/efi/boot/BOOTx64.efi
+  mkdir -p /tmp/ghostbsd-openrc-ci-efi/boot
   # Do not indent the lines below cat we need to preserve formatting for loader.rc
-  cat > /tmp/ghostbsd-openrc-ci/boot/loader.rc << EOF
+  cat > /tmp/ghostbsd-openrc-ci-efi/boot/loader.rc << EOF
 unload
-set currdev=zfs:tank/ROOT/initial:
+set currdev=zfs:ghostbsd-openrc-ci/ROOT/initial:
 load boot/kernel/kernel
 load boot/kernel/zfs.ko
 autoboot
 EOF
 
-  # Create pool
-}
-
-import_pool()
-{
-  # Import pool for ghostbsd-openrc-ci
+  # Create ghostbsd-openrc-ci pool
+  if [ ! -d "/tmp/ghostbsd-openrc-ci-pool" ] ; then
+    mkdir -p /tmo/ghostbsd-openrc-ci-pool
+  fi
+  zpool create -f -m none -o altroot=/tmp/ghostbsd-openrc-ci-pool ghostbsd-openrc-ci md99p2
+  zfs create ghostbsd-openrc-ci/ROOT
+  zfs create ghostbsd-openrc-ci/ROOT/initial
+  zfs set mountpoint=/ ghostbsd-openrc-ci/ROOT/initial
+  zpool set bootfs=ghostbsd-openrc-ci/ROOT/initial ghostbsd-openrc-ci
+  zfs mount -a
 }
 
 install_os_packages()
@@ -192,13 +192,11 @@ check_logs()
 check_requirements
 poweroff_vm
 stop_console_session
-export_pool
 detach_disk_image
 cleanup_vm
 create_vm
 attach_disk_image
 create_pool
-import_pool
 install_os_packages
 install_repo_overlay
 boot_vm
@@ -207,6 +205,5 @@ shutdown_vm
 stop_console_session
 import_pool
 get_logs
-export_pool
 detach_disk_image
 check_logs
