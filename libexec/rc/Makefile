@@ -15,7 +15,7 @@ CONFETC+=	rc.firewall
 CONFETC+=	rc.sendmail
 .endif
 CONFETCMODE=	644
-CONFETCEXEC=	netstart pccard_ether rc.devd rc.devmatch rc.resume rc.suspend
+CONFETCEXEC=	netstart pccard_ether rc.devd rc.resume rc.suspend
 CONFETCEXECDIR=	/etc
 CONFETCEXECMODE=	755
 CONFETCEXECPACKAGE=	rc
