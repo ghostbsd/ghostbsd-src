@@ -21,6 +21,10 @@ poweroff_vm()
 {
   # Check for previously running ghostbsd-openrc-ci vm and power off
   yes | vm poweroff ghostbsd-openrc-ci  >/dev/null 2>/dev/null || true
+  while : ; do
+    [ ! -e "/dev/vmm/ghostbsd-openrc-ci" ] && break
+    sleep 1
+  done
 }
 
 stop_console_session()
