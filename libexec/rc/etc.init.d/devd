@@ -7,8 +7,9 @@ name="devd"
 description="Device State Change Daemon"
 
 depend() {
-	after network ldconfig
-	keyword -nojail -shutdown
+        need localmount
+	after bootmisc network
+	keyword -jail -prefix -stop
 }
 
 start() {
