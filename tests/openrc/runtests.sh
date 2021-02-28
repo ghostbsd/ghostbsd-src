@@ -21,6 +21,10 @@ poweroff_vm()
 {
   # Check for previously running ghostbsd-openrc-ci vm and power off
   yes | vm poweroff ghostbsd-openrc-ci  >/dev/null 2>/dev/null || true
+  while : ; do
+    [ ! -e "/dev/vmm/ghostbsd-openrc-ci" ] && break
+    sleep 1
+  done
 }
 
 stop_console_session()
@@ -157,8 +161,11 @@ install_repo_changes()
   # Copy special rc.conf to setup network
   cp ${CWD}/rc.conf /tmp/ghostbsd-openrc-ci-pool/etc/
 
-  # Copy libexec/rc/etc.init.d/ contents to /etc/init.d/ in disk image
+  # Copy ../../libexec/rc/etc.init.d/ contents to /etc/init.d/ in disk image
   cp -R ${CWD}/../../libexec/rc/etc.init.d/ /tmp/ghostbsd-openrc-ci-pool/etc/init.d/
+
+  # Copy ../../sbin/devd/devmatch-openrc.conf to /etc/devd-openrc/ in disk image
+  cp ${CWD}/../../sbin/devd/devmatch-openrc.conf /tmp/ghostbsd-openrc-ci-pool/etc/devd-openrc/
 }
 
 boot_vm()

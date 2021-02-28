@@ -1,24 +1,11 @@
 #!/sbin/openrc-run
 
-BIN=/sbin/devd
-pid="/var/run/devd.pid"
-args="$devd_args -f /etc/devd-openrc.conf -d -q"
+command=/sbin/devd
+command_args="$devd_args -f /etc/devd-openrc.conf"
 name="devd"
 description="Device State Change Daemon"
 
 depend() {
 	after network ldconfig
 	keyword -nojail -shutdown
-}
-
-start() {
-	ebegin "Starting $name"
-	start-stop-daemon --start --exec ${BIN} -b -m -p ${pid} -- ${args} >/var/log/devd.log 2>/var/log/devd.log
-	eend $?
-}
-
-stop() {
-	ebegin "Stopping $name"
-	start-stop-daemon --stop --exec ${BIN} -p ${pid}
-	eend $?
 }
