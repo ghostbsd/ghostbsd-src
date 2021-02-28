@@ -165,7 +165,8 @@ install_repo_changes()
   cp -R ${CWD}/../../libexec/rc/etc.init.d/ /tmp/ghostbsd-openrc-ci-pool/etc/init.d/
 
   # Copy files from  ../../libexec/rc/ to /etc/ in disk image
-  cp ${CWD}/../../libexec/rc/rc.* /tmp/ghostbsd-openrc-ci-pool/etc/
+  cp ${CWD}/../../libexec/rc/rc.devd /tmp/ghostbsd-openrc-ci-pool/etc/
+  cp ${CWD}/../../libexec/rc/rc.devmatch /tmp/ghostbsd-openrc-ci-pool/etc/
   cp ${CWD}/../../libexec/rc/openrc* /tmp/ghostbsd-openrc-ci-pool/etc/  
 
   # Copy files from ../../sbin/devd/ to /etc/devd-openrc/ in disk image
