@@ -7,8 +7,9 @@ assignees: ''
 
 ---
 
-**For question please ask on the Forums or Telegram croup**
- 
+**For question please ask on the [Forums](https://forums.ghostbsd.org/) or Telegram[Telegram group](https://t.me/ghostbsd) **
+ Note: That all issues with a question will be close without reply.
+
 **Describe the bug**
 A clear and concise description of what the bug is.
 

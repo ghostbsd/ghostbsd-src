@@ -7,7 +7,8 @@ assignees: ''
 
 ---
 
-**For question please ask on the Forums or Telegram croup**
+**For question please ask on the [Forums](https://forums.ghostbsd.org/) or Telegram[Telegram group](https://t.me/ghostbsd) **
+ Note: That all issues with a question will be close without reply.
 
 **Is your feature request related to a problem? Please describe.**
 A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
