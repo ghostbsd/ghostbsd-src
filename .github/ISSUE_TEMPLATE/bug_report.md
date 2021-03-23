@@ -7,7 +7,7 @@ assignees: ''
 
 ---
 
-**For question please ask on the [Forums](https://forums.ghostbsd.org/) or Telegram[Telegram group](https://t.me/ghostbsd) **
+**For question please ask on the Forums or Telegram group**
  Note: That all issues with a question will be close without reply.
 
 **Describe the bug**
