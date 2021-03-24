@@ -182,13 +182,9 @@ nameicap_tracker_add(struct nameidata *ndp, struct vnode *dp)
 	if ((ndp->ni_lcf & NI_LCF_CAP_DOTDOT) == 0 || dp->v_type != VDIR)
 		return;
 	cnp = &ndp->ni_cnd;
-	if ((cnp->cn_flags & BENEATH) != 0 &&
-	    (ndp->ni_lcf & NI_LCF_BENEATH_LATCHED) == 0) {
-		MPASS((ndp->ni_lcf & NI_LCF_LATCH) != 0);
-		if (dp != ndp->ni_beneath_latch)
-			return;
-		ndp->ni_lcf |= NI_LCF_BENEATH_LATCHED;
-	}
+	nt = TAILQ_LAST(&ndp->ni_cap_tracker, nameicap_tracker_head);
+	if (nt != NULL && nt->dp == dp)
+		return;
 	nt = malloc(sizeof(*nt), M_NAMEITRACKER, M_WAITOK);
 	vhold(dp);
 	nt->dp = dp;
@@ -196,21 +192,24 @@ nameicap_tracker_add(struct nameidata *ndp, struct vnode *dp)
 }
 
 static void
-nameicap_cleanup(struct nameidata *ndp, bool clean_latch)
+nameicap_cleanup_from(struct nameidata *ndp, struct nameicap_tracker *first)
 {
 	struct nameicap_tracker *nt, *nt1;
 
-	KASSERT(TAILQ_EMPTY(&ndp->ni_cap_tracker) ||
-	    (ndp->ni_lcf & NI_LCF_CAP_DOTDOT) != 0, ("not strictrelative"));
-	TAILQ_FOREACH_SAFE(nt, &ndp->ni_cap_tracker, nm_link, nt1) {
+	nt = first;
+	TAILQ_FOREACH_FROM_SAFE(nt, &ndp->ni_cap_tracker, nm_link, nt1) {
 		TAILQ_REMOVE(&ndp->ni_cap_tracker, nt, nm_link);
 		vdrop(nt->dp);
 		free(nt, M_NAMEITRACKER);
 	}
-	if (clean_latch && (ndp->ni_lcf & NI_LCF_LATCH) != 0) {
-		ndp->ni_lcf &= ~NI_LCF_LATCH;
-		vrele(ndp->ni_beneath_latch);
-	}
+}
+
+static void
+nameicap_cleanup(struct nameidata *ndp)
+{
+	KASSERT(TAILQ_EMPTY(&ndp->ni_cap_tracker) ||
+	    (ndp->ni_lcf & NI_LCF_CAP_DOTDOT) != 0, ("not strictrelative"));
+	nameicap_cleanup_from(ndp, NULL);
 }
 
 /*
@@ -230,23 +229,23 @@ nameicap_check_dotdot(struct nameidata *ndp, struct vnode *dp)
 	struct nameicap_tracker *nt;
 	struct mount *mp;
 
-	if ((ndp->ni_lcf & NI_LCF_CAP_DOTDOT) == 0 || dp == NULL ||
-	    dp->v_type != VDIR)
+	if (dp == NULL || dp->v_type != VDIR || (ndp->ni_lcf &
+	    NI_LCF_STRICTRELATIVE) == 0)
 		return (0);
+	if ((ndp->ni_lcf & NI_LCF_CAP_DOTDOT) == 0)
+		return (ENOTCAPABLE);
 	mp = dp->v_mount;
 	if (lookup_cap_dotdot_nonlocal == 0 && mp != NULL &&
 	    (mp->mnt_flag & MNT_LOCAL) == 0)
 		return (ENOTCAPABLE);
 	TAILQ_FOREACH_REVERSE(nt, &ndp->ni_cap_tracker, nameicap_tracker_head,
 	    nm_link) {
-		if ((ndp->ni_lcf & NI_LCF_LATCH) != 0 &&
-		    ndp->ni_beneath_latch == nt->dp) {
-			ndp->ni_lcf &= ~NI_LCF_BENEATH_LATCHED;
-			nameicap_cleanup(ndp, false);
+		if (dp == nt->dp) {
+			nt = TAILQ_NEXT(nt, nm_link);
+			if (nt != NULL)
+				nameicap_cleanup_from(ndp, nt);
 			return (0);
 		}
-		if (dp == nt->dp)
-			return (0);
 	}
 	return (ENOTCAPABLE);
 }
@@ -275,11 +274,6 @@ namei_handle_root(struct nameidata *ndp, struct vnode **dpp)
 #endif
 		return (ENOTCAPABLE);
 	}
-	if ((cnp->cn_flags & BENEATH) != 0) {
-		ndp->ni_lcf |= NI_LCF_BENEATH_ABS;
-		ndp->ni_lcf &= ~NI_LCF_BENEATH_LATCHED;
-		nameicap_cleanup(ndp, false);
-	}
 	while (*(cnp->cn_nameptr) == '/') {
 		cnp->cn_nameptr++;
 		ndp->ni_pathlen--;
@@ -297,7 +291,6 @@ namei_setup(struct nameidata *ndp, struct vnode **dpp, struct pwd **pwdp)
 	struct thread *td;
 	struct pwd *pwd;
 	cap_rights_t rights;
-	struct filecaps dirfd_caps;
 	int error;
 	bool startdir_used;
 
@@ -410,27 +403,9 @@ namei_setup(struct nameidata *ndp, struct vnode **dpp, struct pwd **pwdp)
 		if (error == 0 && (*dpp)->v_type != VDIR)
 			error = ENOTDIR;
 	}
-	if (error == 0 && (cnp->cn_flags & BENEATH) != 0) {
-		if (ndp->ni_dirfd == AT_FDCWD) {
-			ndp->ni_beneath_latch = pwd->pwd_cdir;
-			vrefact(ndp->ni_beneath_latch);
-		} else {
-			rights = *ndp->ni_rightsneeded;
-			cap_rights_set_one(&rights, CAP_LOOKUP);
-			error = fgetvp_rights(td, ndp->ni_dirfd, &rights,
-			    &dirfd_caps, &ndp->ni_beneath_latch);
-			if (error == 0 && (*dpp)->v_type != VDIR) {
-				vrele(ndp->ni_beneath_latch);
-				error = ENOTDIR;
-			}
-		}
-		if (error == 0)
-			ndp->ni_lcf |= NI_LCF_LATCH;
-	}
 	if (error == 0 && (cnp->cn_flags & RBENEATH) != 0) {
-		if (cnp->cn_pnbuf[0] == '/' ||
-		    (ndp->ni_lcf & NI_LCF_BENEATH_ABS) != 0) {
-			error = EINVAL;
+		if (cnp->cn_pnbuf[0] == '/') {
+			error = ENOTCAPABLE;
 		} else if ((ndp->ni_lcf & NI_LCF_STRICTRELATIVE) == 0) {
 			ndp->ni_lcf |= NI_LCF_STRICTRELATIVE |
 			    NI_LCF_CAP_DOTDOT;
@@ -452,12 +427,8 @@ namei_setup(struct nameidata *ndp, struct vnode **dpp, struct pwd **pwdp)
 		pwd_drop(pwd);
 		return (error);
 	}
-	MPASS((ndp->ni_lcf & (NI_LCF_BENEATH_ABS | NI_LCF_LATCH)) !=
-	    NI_LCF_BENEATH_ABS);
-	if (((ndp->ni_lcf & NI_LCF_STRICTRELATIVE) != 0 &&
-	    lookup_cap_dotdot != 0) ||
-	    ((ndp->ni_lcf & NI_LCF_STRICTRELATIVE) == 0 &&
-	    (cnp->cn_flags & BENEATH) != 0))
+	if ((ndp->ni_lcf & NI_LCF_STRICTRELATIVE) != 0 &&
+	    lookup_cap_dotdot != 0)
 		ndp->ni_lcf |= NI_LCF_CAP_DOTDOT;
 	SDT_PROBE4(vfs, namei, lookup, entry, *dpp, cnp->cn_pnbuf,
 	    cnp->cn_flags, false);
@@ -636,16 +607,8 @@ namei(struct nameidata *ndp)
 	for (;;) {
 		ndp->ni_startdir = dp;
 		error = lookup(ndp);
-		if (error != 0) {
-			/*
-			 * Override an error to not allow user to use
-			 * BENEATH as an oracle.
-			 */
-			if ((ndp->ni_lcf & (NI_LCF_LATCH |
-			    NI_LCF_BENEATH_LATCHED)) == NI_LCF_LATCH)
-				error = ENOTCAPABLE;
+		if (error != 0)
 			goto out;
-		}
 
 		/*
 		 * If not a symbolic link, we're done.
@@ -657,12 +620,7 @@ namei(struct nameidata *ndp)
 				namei_cleanup_cnp(cnp);
 			} else
 				cnp->cn_flags |= HASBUF;
-			if ((ndp->ni_lcf & (NI_LCF_LATCH |
-			    NI_LCF_BENEATH_LATCHED)) == NI_LCF_LATCH) {
-				NDFREE(ndp, 0);
-				error = ENOTCAPABLE;
-			}
-			nameicap_cleanup(ndp, true);
+			nameicap_cleanup(ndp);
 			pwd_drop(pwd);
 			if (error == 0)
 				NDVALIDATE(ndp);
@@ -739,7 +697,7 @@ out:
 	MPASS(error != 0);
 	SDT_PROBE4(vfs, namei, lookup, return, error, NULL, false, ndp);
 	namei_cleanup_cnp(cnp);
-	nameicap_cleanup(ndp, true);
+	nameicap_cleanup(ndp);
 	pwd_drop(pwd);
 	return (error);
 }
@@ -1314,7 +1272,8 @@ success:
 		}
 	}
 	if (ndp->ni_vp != NULL) {
-		nameicap_tracker_add(ndp, ndp->ni_vp);
+		if ((cnp->cn_flags & ISDOTDOT) == 0)
+			nameicap_tracker_add(ndp, ndp->ni_vp);
 		if ((cnp->cn_flags & (FAILIFEXISTS | ISSYMLINK)) == FAILIFEXISTS)
 			goto bad_eexist;
 	}

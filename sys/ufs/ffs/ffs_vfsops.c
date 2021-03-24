@@ -1954,13 +1954,16 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 	daddr_t dbn;
 	int error;
 
-	MPASS((ffs_flags & FFSV_REPLACE) == 0 || (flags & LK_EXCLUSIVE) != 0);
+	MPASS((ffs_flags & (FFSV_REPLACE | FFSV_REPLACE_DOOMED)) == 0 ||
+	    (flags & LK_EXCLUSIVE) != 0);
 
 	error = vfs_hash_get(mp, ino, flags, curthread, vpp, NULL, NULL);
 	if (error != 0)
 		return (error);
 	if (*vpp != NULL) {
-		if ((ffs_flags & FFSV_REPLACE) == 0)
+		if ((ffs_flags & FFSV_REPLACE) == 0 ||
+		    ((ffs_flags & FFSV_REPLACE_DOOMED) == 0 ||
+		    !VN_IS_DOOMED(*vpp)))
 			return (0);
 		vgone(*vpp);
 		vput(*vpp);
@@ -2150,35 +2153,68 @@ ffs_fhtovp(mp, fhp, flags, vpp)
 	struct vnode **vpp;
 {
 	struct ufid *ufhp;
+
+	ufhp = (struct ufid *)fhp;
+	return (ffs_inotovp(mp, ufhp->ufid_ino, ufhp->ufid_gen, flags,
+	    vpp, 0));
+}
+
+int
+ffs_inotovp(mp, ino, gen, lflags, vpp, ffs_flags)
+	struct mount *mp;
+	ino_t ino;
+	u_int64_t gen;
+	int lflags;
+	struct vnode **vpp;
+	int ffs_flags;
+{
 	struct ufsmount *ump;
+	struct vnode *nvp;
+	struct inode *ip;
 	struct fs *fs;
 	struct cg *cgp;
 	struct buf *bp;
-	ino_t ino;
 	u_int cg;
 	int error;
 
-	ufhp = (struct ufid *)fhp;
-	ino = ufhp->ufid_ino;
 	ump = VFSTOUFS(mp);
 	fs = ump->um_fs;
+	*vpp = NULL;
+
 	if (ino < UFS_ROOTINO || ino >= fs->fs_ncg * fs->fs_ipg)
 		return (ESTALE);
+
 	/*
 	 * Need to check if inode is initialized because UFS2 does lazy
 	 * initialization and nfs_fhtovp can offer arbitrary inode numbers.
 	 */
-	if (fs->fs_magic != FS_UFS2_MAGIC)
-		return (ufs_fhtovp(mp, ufhp, flags, vpp));
-	cg = ino_to_cg(fs, ino);
-	if ((error = ffs_getcg(fs, ump->um_devvp, cg, 0, &bp, &cgp)) != 0)
-		return (error);
-	if (ino >= cg * fs->fs_ipg + cgp->cg_initediblk) {
+	if (fs->fs_magic == FS_UFS2_MAGIC) {
+		cg = ino_to_cg(fs, ino);
+		error = ffs_getcg(fs, ump->um_devvp, cg, 0, &bp, &cgp);
+		if (error != 0)
+			return (error);
+		if (ino >= cg * fs->fs_ipg + cgp->cg_initediblk) {
+			brelse(bp);
+			return (ESTALE);
+		}
 		brelse(bp);
+	}
+
+	error = ffs_vgetf(mp, ino, lflags, &nvp, ffs_flags);
+	if (error != 0)
+		return (error);
+
+	ip = VTOI(nvp);
+	if (ip->i_mode == 0 || ip->i_gen != gen || ip->i_effnlink <= 0) {
+		if (ip->i_mode == 0)
+			vgone(nvp);
+		vput(nvp);
 		return (ESTALE);
 	}
-	brelse(bp);
-	return (ufs_fhtovp(mp, ufhp, flags, vpp));
+
+	vnode_create_vobject(nvp, DIP(ip, i_size), curthread);
+	*vpp = nvp;
+	return (0);
 }
 
 /*
@@ -2393,10 +2429,10 @@ ffs_backgroundwritedone(struct buf *bp)
 #endif
 	/*
 	 * This buffer is marked B_NOCACHE so when it is released
-	 * by biodone it will be tossed.
+	 * by biodone it will be tossed.  Clear B_IOSTARTED in case of error.
 	 */
 	bp->b_flags |= B_NOCACHE;
-	bp->b_flags &= ~B_CACHE;
+	bp->b_flags &= ~(B_CACHE | B_IOSTARTED);
 	pbrelvp(bp);
 
 	/*

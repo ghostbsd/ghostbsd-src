@@ -1216,9 +1216,9 @@ SYSCTL_INT(_debug, OID_AUTO, max_vnlru_free, CTLFLAG_RW, &max_vnlru_free,
  * Attempt to reduce the free list by the requested amount.
  */
 static int
-vnlru_free_locked(int count, struct vfsops *mnt_op)
+vnlru_free_impl(int count, struct vfsops *mnt_op, struct vnode *mvp)
 {
-	struct vnode *vp, *mvp;
+	struct vnode *vp;
 	struct mount *mp;
 	int ocount;
 
@@ -1226,7 +1226,6 @@ vnlru_free_locked(int count, struct vfsops *mnt_op)
 	if (count > max_vnlru_free)
 		count = max_vnlru_free;
 	ocount = count;
-	mvp = vnode_list_free_marker;
 	vp = mvp;
 	for (;;) {
 		if (count == 0) {
@@ -1268,13 +1267,72 @@ vnlru_free_locked(int count, struct vfsops *mnt_op)
 	return (ocount - count);
 }
 
+static int
+vnlru_free_locked(int count)
+{
+
+	mtx_assert(&vnode_list_mtx, MA_OWNED);
+	return (vnlru_free_impl(count, NULL, vnode_list_free_marker));
+}
+
+void
+vnlru_free_vfsops(int count, struct vfsops *mnt_op, struct vnode *mvp)
+{
+
+	MPASS(mnt_op != NULL);
+	MPASS(mvp != NULL);
+	VNPASS(mvp->v_type == VMARKER, mvp);
+	mtx_lock(&vnode_list_mtx);
+	vnlru_free_impl(count, mnt_op, mvp);
+	mtx_unlock(&vnode_list_mtx);
+}
+
+/*
+ * Temporary binary compat, don't use. Call vnlru_free_vfsops instead.
+ */
 void
 vnlru_free(int count, struct vfsops *mnt_op)
 {
+	struct vnode *mvp;
 
+	if (count == 0)
+		return;
 	mtx_lock(&vnode_list_mtx);
-	vnlru_free_locked(count, mnt_op);
+	mvp = vnode_list_free_marker;
+	if (vnlru_free_impl(count, mnt_op, mvp) == 0) {
+		/*
+		 * It is possible the marker was moved over eligible vnodes by
+		 * callers which filtered by different ops. If so, start from
+		 * scratch.
+		 */
+		if (vnlru_read_freevnodes() > 0) {
+			TAILQ_REMOVE(&vnode_list, mvp, v_vnodelist);
+			TAILQ_INSERT_HEAD(&vnode_list, mvp, v_vnodelist);
+		}
+		vnlru_free_impl(count, mnt_op, mvp);
+	}
 	mtx_unlock(&vnode_list_mtx);
+}
+
+struct vnode *
+vnlru_alloc_marker(void)
+{
+	struct vnode *mvp;
+
+	mvp = vn_alloc_marker(NULL);
+	mtx_lock(&vnode_list_mtx);
+	TAILQ_INSERT_BEFORE(vnode_list_free_marker, mvp, v_vnodelist);
+	mtx_unlock(&vnode_list_mtx);
+	return (mvp);
+}
+
+void
+vnlru_free_marker(struct vnode *mvp)
+{
+	mtx_lock(&vnode_list_mtx);
+	TAILQ_REMOVE(&vnode_list, mvp, v_vnodelist);
+	mtx_unlock(&vnode_list_mtx);
+	vn_free_marker(mvp);
 }
 
 static void
@@ -1423,7 +1481,7 @@ vnlru_proc(void)
 		 * try to reduce it by discarding from the free list.
 		 */
 		if (rnumvnodes > desiredvnodes) {
-			vnlru_free_locked(rnumvnodes - desiredvnodes, NULL);
+			vnlru_free_locked(rnumvnodes - desiredvnodes);
 			rnumvnodes = atomic_load_long(&numvnodes);
 		}
 		/*
@@ -1615,7 +1673,7 @@ vn_alloc_hard(struct mount *mp)
 	 * should be chosen so that we never wait or even reclaim from
 	 * the free list to below its target minimum.
 	 */
-	if (vnlru_free_locked(1, NULL) > 0)
+	if (vnlru_free_locked(1) > 0)
 		goto alloc;
 	if (mp == NULL || (mp->mnt_kern_flag & MNTK_SUSPEND) == 0) {
 		/*
@@ -1625,7 +1683,7 @@ vn_alloc_hard(struct mount *mp)
 		msleep(&vnlruproc_sig, &vnode_list_mtx, PVFS, "vlruwk", hz);
 		if (atomic_load_long(&numvnodes) + 1 > desiredvnodes &&
 		    vnlru_read_freevnodes() > 1)
-			vnlru_free_locked(1, NULL);
+			vnlru_free_locked(1);
 	}
 alloc:
 	rnumvnodes = atomic_fetchadd_long(&numvnodes, 1) + 1;
@@ -3159,9 +3217,21 @@ vput_final(struct vnode *vp, enum vput_op func)
 		break;
 	}
 	if (error == 0) {
-		vinactive(vp);
-		if (want_unlock)
-			VOP_UNLOCK(vp);
+		if (func == VUNREF) {
+			VNASSERT((vp->v_vflag & VV_UNREF) == 0, vp,
+			    ("recursive vunref"));
+			vp->v_vflag |= VV_UNREF;
+		}
+		for (;;) {
+			error = vinactive(vp);
+			if (want_unlock)
+				VOP_UNLOCK(vp);
+			if (error != ERELOOKUP || !want_unlock)
+				break;
+			VOP_LOCK(vp, LK_EXCLUSIVE);
+		}
+		if (func == VUNREF)
+			vp->v_vflag &= ~VV_UNREF;
 		vdropl(vp);
 	} else {
 		vdefer_inactive(vp);
@@ -3546,10 +3616,11 @@ vdropl(struct vnode *vp)
  * Call VOP_INACTIVE on the vnode and manage the DOINGINACT and OWEINACT
  * flags.  DOINGINACT prevents us from recursing in calls to vinactive.
  */
-static void
+static int
 vinactivef(struct vnode *vp)
 {
 	struct vm_object *obj;
+	int error;
 
 	ASSERT_VOP_ELOCKED(vp, "vinactive");
 	ASSERT_VI_LOCKED(vp, "vinactive");
@@ -3575,14 +3646,15 @@ vinactivef(struct vnode *vp)
 		vm_object_page_clean(obj, 0, 0, 0);
 		VM_OBJECT_WUNLOCK(obj);
 	}
-	VOP_INACTIVE(vp);
+	error = VOP_INACTIVE(vp);
 	VI_LOCK(vp);
 	VNASSERT(vp->v_iflag & VI_DOINGINACT, vp,
 	    ("vinactive: lost VI_DOINGINACT"));
 	vp->v_iflag &= ~VI_DOINGINACT;
+	return (error);
 }
 
-void
+int
 vinactive(struct vnode *vp)
 {
 
@@ -3591,14 +3663,14 @@ vinactive(struct vnode *vp)
 	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
 
 	if ((vp->v_iflag & VI_OWEINACT) == 0)
-		return;
+		return (0);
 	if (vp->v_iflag & VI_DOINGINACT)
-		return;
+		return (0);
 	if (vp->v_usecount > 0) {
 		vp->v_iflag &= ~VI_OWEINACT;
-		return;
+		return (0);
 	}
-	vinactivef(vp);
+	return (vinactivef(vp));
 }
 
 /*
@@ -3911,10 +3983,15 @@ vgonel(struct vnode *vp)
 	 */
 	if (active)
 		VOP_CLOSE(vp, FNONBLOCK, NOCRED, td);
-	if ((oweinact || active) && !doinginact) {
-		VI_LOCK(vp);
-		vinactivef(vp);
-		VI_UNLOCK(vp);
+	if (!doinginact) {
+		do {
+			if (oweinact || active) {
+				VI_LOCK(vp);
+				vinactivef(vp);
+				oweinact = (vp->v_iflag & VI_OWEINACT) != 0;
+				VI_UNLOCK(vp);
+			}
+		} while (oweinact);
 	}
 	if (vp->v_type == VSOCK)
 		vfs_unp_reclaim(vp);
@@ -4097,8 +4174,10 @@ vn_printf(struct vnode *vp, const char *fmt, ...)
 		strlcat(buf, "|VI_OWEINACT", sizeof(buf));
 	if (vp->v_iflag & VI_DEFINACT)
 		strlcat(buf, "|VI_DEFINACT", sizeof(buf));
+	if (vp->v_iflag & VI_FOPENING)
+		strlcat(buf, "|VI_FOPENING", sizeof(buf));
 	flags = vp->v_iflag & ~(VI_TEXT_REF | VI_MOUNT | VI_DOINGINACT |
-	    VI_OWEINACT | VI_DEFINACT);
+	    VI_OWEINACT | VI_DEFINACT | VI_FOPENING);
 	if (flags != 0) {
 		snprintf(buf2, sizeof(buf2), "|VI(0x%lx)", flags);
 		strlcat(buf, buf2, sizeof(buf));

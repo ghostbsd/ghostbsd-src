@@ -594,14 +594,12 @@ create_rtentry(struct rib_head *rnh, struct rt_addrinfo *info,
 	}
 
 	error = nhop_create_from_info(rnh, info, &nh);
-	if (error != 0) {
-		ifa_free(info->rti_ifa);
+	ifa_free(info->rti_ifa);
+	if (error != 0)
 		return (error);
-	}
 
 	rt = uma_zalloc(V_rtzone, M_NOWAIT | M_ZERO);
 	if (rt == NULL) {
-		ifa_free(info->rti_ifa);
 		nhop_free(nh);
 		return (ENOBUFS);
 	}
@@ -1341,6 +1339,42 @@ rib_walk_del(u_int fibnum, int family, rib_filter_f_t *filter_f, void *arg, bool
 	}
 
 	NET_EPOCH_EXIT(et);
+}
+
+static int
+rt_delete_unconditional(struct radix_node *rn, void *arg)
+{
+	struct rtentry *rt = RNTORT(rn);
+	struct rib_head *rnh = (struct rib_head *)arg;
+
+	rn = rnh->rnh_deladdr(rt_key(rt), rt_mask(rt), &rnh->head);
+	if (RNTORT(rn) == rt)
+		rtfree(rt);
+
+	return (0);
+}
+
+/*
+ * Removes all routes from the routing table without executing notifications.
+ * rtentres will be removed after the end of a current epoch.
+ */
+static void
+rib_flush_routes(struct rib_head *rnh)
+{
+	RIB_WLOCK(rnh);
+	rnh->rnh_walktree(&rnh->head, rt_delete_unconditional, rnh);
+	RIB_WUNLOCK(rnh);
+}
+
+void
+rib_flush_routes_family(int family)
+{
+	struct rib_head *rnh;
+
+	for (uint32_t fibnum = 0; fibnum < rt_numfibs; fibnum++) {
+		if ((rnh = rt_tables_get_rnh(fibnum, family)) != NULL)
+			rib_flush_routes(rnh);
+	}
 }
 
 static void

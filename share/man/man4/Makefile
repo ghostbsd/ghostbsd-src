@@ -393,6 +393,7 @@ MAN=	aac.4 \
 	ng_uni.4 \
 	ng_vjc.4 \
 	ng_vlan.4 \
+	ng_vlan_rotate.4 \
 	nmdm.4 \
 	${_ntb.4} \
 	${_ntb_hw_amd.4} \
@@ -583,7 +584,6 @@ MAN=	aac.4 \
 	vtnet.4 \
 	watchdog.4 \
 	${_wbwd.4} \
-	wg.4 \
 	witness.4 \
 	wlan.4 \
 	wlan_acl.4 \

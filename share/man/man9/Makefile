@@ -425,6 +425,7 @@ MAN=	accept_filter.9 \
 	VOP_PATHCONF.9 \
 	VOP_PRINT.9 \
 	VOP_RDWR.9 \
+	VOP_READ_PGCACHE.9 \
 	VOP_READDIR.9 \
 	VOP_READLINK.9 \
 	VOP_REALLOCBLKS.9 \
@@ -1389,6 +1390,7 @@ MLINKS+=make_dev.9 destroy_dev.9 \
 MLINKS+=malloc.9 free.9 \
 	malloc.9 malloc_domainset.9 \
 	malloc.9 mallocarray.9 \
+	malloc.9 mallocarray_domainset.9 \
 	malloc.9 MALLOC_DECLARE.9 \
 	malloc.9 MALLOC_DEFINE.9 \
 	malloc.9 realloc.9 \

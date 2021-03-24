@@ -85,9 +85,9 @@ zvol_write(void *arg)
 	zv_request_t *zvr = arg;
 	struct bio *bio = zvr->bio;
 	int error = 0;
-	uio_t uio;
+	zfs_uio_t uio;
 
-	uio_bvec_init(&uio, bio);
+	zfs_uio_bvec_init(&uio, bio);
 
 	zvol_state_t *zv = zvr->zv;
 	ASSERT3P(zv, !=, NULL);
@@ -247,9 +247,9 @@ zvol_read(void *arg)
 	zv_request_t *zvr = arg;
 	struct bio *bio = zvr->bio;
 	int error = 0;
-	uio_t uio;
+	zfs_uio_t uio;
 
-	uio_bvec_init(&uio, bio);
+	zfs_uio_bvec_init(&uio, bio);
 
 	zvol_state_t *zv = zvr->zv;
 	ASSERT3P(zv, !=, NULL);
@@ -307,7 +307,11 @@ zvol_request(struct request_queue *q, struct bio *bio)
 #endif
 {
 #ifdef HAVE_SUBMIT_BIO_IN_BLOCK_DEVICE_OPERATIONS
+#if defined(HAVE_BIO_BDEV_DISK)
+	struct request_queue *q = bio->bi_bdev->bd_disk->queue;
+#else
 	struct request_queue *q = bio->bi_disk->queue;
+#endif
 #endif
 	zvol_state_t *zv = q->queuedata;
 	fstrans_cookie_t cookie = spl_fstrans_mark();

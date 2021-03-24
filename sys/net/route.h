@@ -197,7 +197,7 @@ VNET_DECLARE(u_int, fib_hash_outbound);
 					/* 0x8000000 and up unassigned */
 #define	RTF_STICKY	 0x10000000	/* always route dst->src */
 
-#define	RTF_RNH_LOCKED	 0x40000000	/* radix node head is locked */
+/*			0x40000000	   unused, was RTF_RNH_LOCKED */
 
 #define	RTF_GWFLAG_COMPAT 0x80000000	/* a compatibility bit for interacting
 					   with existing routing apps */
@@ -429,7 +429,6 @@ struct sockaddr *rtsock_fix_netmask(const struct sockaddr *dst,
 
 void	rt_updatemtu(struct ifnet *);
 
-void	rt_flushifroutes_af(struct ifnet *, int);
 void	rt_flushifroutes(struct ifnet *ifp);
 
 /* XXX MRT NEW VERSIONS THAT USE FIBs
@@ -442,6 +441,7 @@ int	rib_lookup_info(uint32_t, const struct sockaddr *, uint32_t, uint32_t,
 void	rib_free_info(struct rt_addrinfo *info);
 
 /* New API */
+void rib_flush_routes_family(int family);
 struct nhop_object *rib_lookup(uint32_t fibnum, const struct sockaddr *dst,
 	    uint32_t flags, uint32_t flowid);
 #endif

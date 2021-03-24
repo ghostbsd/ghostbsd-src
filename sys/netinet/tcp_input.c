@@ -510,6 +510,7 @@ cc_post_recovery(struct tcpcb *tp, struct tcphdr *th)
 	}
 	/* XXXLAS: EXIT_RECOVERY ? */
 	tp->t_bytes_acked = 0;
+	tp->sackhint.prr_out = 0;
 }
 
 /*
@@ -592,16 +593,13 @@ tcp6_input(struct mbuf **mp, int *offp, int proto)
 	 * better place to put this in?
 	 */
 	ip6 = mtod(m, struct ip6_hdr *);
-	ia6 = in6ifa_ifwithaddr(&ip6->ip6_dst, 0 /* XXX */);
+	ia6 = in6ifa_ifwithaddr(&ip6->ip6_dst, 0 /* XXX */, false);
 	if (ia6 && (ia6->ia6_flags & IN6_IFF_ANYCAST)) {
-		ifa_free(&ia6->ia_ifa);
 		icmp6_error(m, ICMP6_DST_UNREACH, ICMP6_DST_UNREACH_ADDR,
 			    (caddr_t)&ip6->ip6_dst - (caddr_t)ip6);
 		*mp = NULL;
 		return (IPPROTO_DONE);
 	}
-	if (ia6)
-		ifa_free(&ia6->ia_ifa);
 
 	*mp = m;
 	return (tcp_input(mp, offp, proto));
@@ -1249,10 +1247,9 @@ tfo_socket_result:
 		if (isipv6 && !V_ip6_use_deprecated) {
 			struct in6_ifaddr *ia6;
 
-			ia6 = in6ifa_ifwithaddr(&ip6->ip6_dst, 0 /* XXX */);
+			ia6 = in6ifa_ifwithaddr(&ip6->ip6_dst, 0 /* XXX */, false);
 			if (ia6 != NULL &&
 			    (ia6->ia6_flags & IN6_IFF_DEPRECATED)) {
-				ifa_free(&ia6->ia_ifa);
 				if ((s = tcp_log_addrs(&inc, th, NULL, NULL)))
 				    log(LOG_DEBUG, "%s; %s: Listen socket: "
 					"Connection attempt to deprecated "
@@ -1261,8 +1258,6 @@ tfo_socket_result:
 				rstreason = BANDLIM_RST_OPENPORT;
 				goto dropwithreset;
 			}
-			if (ia6)
-				ifa_free(&ia6->ia_ifa);
 		}
 #endif /* INET6 */
 		/*
@@ -1507,6 +1502,7 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	struct mbuf *mfree;
 	struct tcpopt to;
 	int tfo_syn;
+	u_int maxseg;
 
 #ifdef TCPDEBUG
 	/*
@@ -1649,7 +1645,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			TCPSTAT_INC(tcps_ecn_shs);
 		}
 		if ((to.to_flags & TOF_SCALE) &&
-		    (tp->t_flags & TF_REQ_SCALE)) {
+		    (tp->t_flags & TF_REQ_SCALE) &&
+		    !(tp->t_flags & TF_NOOPT)) {
 			tp->t_flags |= TF_RCVD_SCALE;
 			tp->snd_scale = to.to_wscale;
 		} else
@@ -1660,7 +1657,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		 */
 		tp->snd_wnd = th->th_win;
 		if ((to.to_flags & TOF_TS) &&
-		    (tp->t_flags & TF_REQ_TSTMP)) {
+		    (tp->t_flags & TF_REQ_TSTMP) &&
+		    !(tp->t_flags & TF_NOOPT)) {
 			tp->t_flags |= TF_RCVD_TSTMP;
 			tp->ts_recent = to.to_tsval;
 			tp->ts_recent_age = tcp_ts_getticks();
@@ -1669,10 +1667,12 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (to.to_flags & TOF_MSS)
 			tcp_mss(tp, to.to_mss);
 		if ((tp->t_flags & TF_SACK_PERMIT) &&
-		    (to.to_flags & TOF_SACKPERM) == 0)
+		    (!(to.to_flags & TOF_SACKPERM) ||
+		    (tp->t_flags & TF_NOOPT)))
 			tp->t_flags &= ~TF_SACK_PERMIT;
 		if (IS_FASTOPEN(tp->t_flags)) {
-			if (to.to_flags & TOF_FASTOPEN) {
+			if ((to.to_flags & TOF_FASTOPEN) &&
+			    !(tp->t_flags & TF_NOOPT)) {
 				uint16_t mss;
 
 				if (to.to_flags & TOF_MSS)
@@ -2508,8 +2508,6 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 #endif
 
 		if (SEQ_LEQ(th->th_ack, tp->snd_una)) {
-			u_int maxseg;
-
 			maxseg = tcp_maxseg(tp);
 			if (tlen == 0 &&
 			    (tiwin == tp->snd_wnd ||
@@ -2577,8 +2575,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 					if (V_tcp_do_prr &&
 					    IN_FASTRECOVERY(tp->t_flags) &&
 					    (tp->t_flags & TF_SACK_PERMIT)) {
-						long snd_cnt = 0, limit = 0;
-						long del_data = 0, pipe = 0;
+						int snd_cnt = 0, limit = 0;
+						int del_data = 0, pipe = 0;
 						/*
 						 * In a duplicate ACK del_data is only the
 						 * diff_in_sack. If no SACK is used del_data
@@ -2586,45 +2584,38 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 						 * estimate to be in the network.
 						 */
 						del_data = tp->sackhint.delivered_data;
-						pipe = (tp->snd_nxt - tp->snd_fack) +
-							tp->sackhint.sack_bytes_rexmit;
+						if (V_tcp_do_rfc6675_pipe)
+							pipe = tcp_compute_pipe(tp);
+						else
+							pipe = (tp->snd_nxt - tp->snd_fack) +
+								tp->sackhint.sack_bytes_rexmit;
 						tp->sackhint.prr_delivered += del_data;
-						if (pipe > tp->snd_ssthresh) {
+						if (pipe >= tp->snd_ssthresh) {
 							if (tp->sackhint.recover_fs == 0)
 								tp->sackhint.recover_fs =
-								    max(1, tp->snd_nxt - tp->snd_una);
-							snd_cnt = (tp->sackhint.prr_delivered *
-							    tp->snd_ssthresh /
-							    tp->sackhint.recover_fs) +
-							    1 - tp->sackhint.sack_bytes_rexmit;
+								    imax(1, tp->snd_nxt - tp->snd_una);
+							snd_cnt = howmany((long)tp->sackhint.prr_delivered *
+							    tp->snd_ssthresh, tp->sackhint.recover_fs) -
+							    tp->sackhint.prr_out;
 						} else {
 							if (V_tcp_do_prr_conservative)
 								limit = tp->sackhint.prr_delivered -
-									tp->sackhint.sack_bytes_rexmit;
+									tp->sackhint.prr_out;
 							else
-								if ((tp->sackhint.prr_delivered -
-								    tp->sackhint.sack_bytes_rexmit) >
-								    del_data)
-									limit = tp->sackhint.prr_delivered -
-									    tp->sackhint.sack_bytes_rexmit +
-									    maxseg;
-								else
-									limit = del_data + maxseg;
-							if ((tp->snd_ssthresh - pipe) < limit)
-								snd_cnt = tp->snd_ssthresh - pipe;
-							else
-								snd_cnt = limit;
+								limit = imax(tp->sackhint.prr_delivered -
+									    tp->sackhint.prr_out,
+									    del_data) + maxseg;
+							snd_cnt = imin(tp->snd_ssthresh - pipe, limit);
 						}
-						snd_cnt = max((snd_cnt / maxseg), 0);
+						snd_cnt = imax(snd_cnt, 0) / maxseg;
 						/*
 						 * Send snd_cnt new data into the network in
 						 * response to this ACK. If there is a going
 						 * to be a SACK retransmission, adjust snd_cwnd
 						 * accordingly.
 						 */
-						tp->snd_cwnd = tp->snd_nxt - tp->snd_recover +
-						    tp->sackhint.sack_bytes_rexmit +
-						    (snd_cnt * maxseg);
+						tp->snd_cwnd = imax(maxseg, tp->snd_nxt - tp->snd_recover +
+						    tp->sackhint.sack_bytes_rexmit + (snd_cnt * maxseg));
 					} else if ((tp->t_flags & TF_SACK_PERMIT) &&
 					    IN_FASTRECOVERY(tp->t_flags)) {
 						int awnd;
@@ -2650,7 +2641,21 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 						tp->snd_cwnd += maxseg;
 					(void) tp->t_fb->tfb_tcp_output(tp);
 					goto drop;
-				} else if (tp->t_dupacks == tcprexmtthresh) {
+				} else if (tp->t_dupacks == tcprexmtthresh ||
+					    (tp->t_flags & TF_SACK_PERMIT &&
+					     V_tcp_do_rfc6675_pipe &&
+					     tp->sackhint.sacked_bytes >
+					     (tcprexmtthresh - 1) * maxseg)) {
+enter_recovery:
+					/*
+					 * Above is the RFC6675 trigger condition of
+					 * more than (dupthresh-1)*maxseg sacked data.
+					 * If the count of holes in the
+					 * scoreboard is >= dupthresh, we could
+					 * also enter loss recovery, but don't
+					 * have that value readily available.
+					 */
+					tp->t_dupacks = tcprexmtthresh;
 					tcp_seq onxt = tp->snd_nxt;
 
 					/*
@@ -2684,8 +2689,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 						 * snd_ssthresh is already updated by
 						 * cc_cong_signal.
 						 */
-						tp->sackhint.prr_delivered = 0;
-						tp->sackhint.sack_bytes_rexmit = 0;
+						tp->sackhint.prr_delivered =
+						    tp->sackhint.sacked_bytes;
 						tp->sackhint.recover_fs = max(1,
 						    tp->snd_nxt - tp->snd_una);
 					}
@@ -2695,6 +2700,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 						tp->snd_recover = tp->snd_nxt;
 						tp->snd_cwnd = maxseg;
 						(void) tp->t_fb->tfb_tcp_output(tp);
+						if (SEQ_GT(th->th_ack, tp->snd_una))
+							goto resume_partialack;
 						goto drop;
 					}
 					tp->snd_nxt = th->th_ack;
@@ -2781,10 +2788,19 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			 */
 			if ((tp->t_flags & TF_SACK_PERMIT) &&
 			    (to.to_flags & TOF_SACK) &&
-			    sack_changed)
+			    sack_changed) {
 				tp->t_dupacks++;
+				/* limit overhead by setting maxseg last */
+				if (!IN_FASTRECOVERY(tp->t_flags) &&
+				    (tp->sackhint.sacked_bytes >
+				    ((tcprexmtthresh - 1) *
+				    (maxseg = tcp_maxseg(tp))))) {
+					goto enter_recovery;
+				}
+			}
 		}
 
+resume_partialack:
 		KASSERT(SEQ_GT(th->th_ack, tp->snd_una),
 		    ("%s: th_ack <= snd_una", __func__));
 
@@ -2795,7 +2811,7 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (IN_FASTRECOVERY(tp->t_flags)) {
 			if (SEQ_LT(th->th_ack, tp->snd_recover)) {
 				if (tp->t_flags & TF_SACK_PERMIT)
-					if (V_tcp_do_prr)
+					if (V_tcp_do_prr && to.to_flags & TOF_SACK)
 						tcp_prr_partialack(tp, th);
 					else
 						tcp_sack_partialack(tp, th);
@@ -3927,7 +3943,7 @@ tcp_mssopt(struct in_conninfo *inc)
 void
 tcp_prr_partialack(struct tcpcb *tp, struct tcphdr *th)
 {
-	long snd_cnt = 0, limit = 0, del_data = 0, pipe = 0;
+	int snd_cnt = 0, limit = 0, del_data = 0, pipe = 0;
 	int maxseg = tcp_maxseg(tp);
 
 	INP_WLOCK_ASSERT(tp->t_inpcb);
@@ -3939,41 +3955,40 @@ tcp_prr_partialack(struct tcpcb *tp, struct tcphdr *th)
 	 * (del_data) and an estimate of how many bytes are in the
 	 * network.
 	 */
-	if (SEQ_GEQ(th->th_ack, tp->snd_una))
-		del_data = BYTES_THIS_ACK(tp, th);
-	del_data += tp->sackhint.delivered_data;
-	pipe = (tp->snd_nxt - tp->snd_fack) + tp->sackhint.sack_bytes_rexmit;
+	del_data = tp->sackhint.delivered_data;
+	if (V_tcp_do_rfc6675_pipe)
+		pipe = tcp_compute_pipe(tp);
+	else
+		pipe = (tp->snd_nxt - tp->snd_fack) + tp->sackhint.sack_bytes_rexmit;
 	tp->sackhint.prr_delivered += del_data;
 	/*
 	 * Proportional Rate Reduction
 	 */
-	if (pipe > tp->snd_ssthresh) {
+	if (pipe >= tp->snd_ssthresh) {
 		if (tp->sackhint.recover_fs == 0)
 			tp->sackhint.recover_fs =
-			    max(1, tp->snd_nxt - tp->snd_una);
-		snd_cnt = (tp->sackhint.prr_delivered * tp->snd_ssthresh /
-		    tp->sackhint.recover_fs) - tp->sackhint.sack_bytes_rexmit;
+			    imax(1, tp->snd_nxt - tp->snd_una);
+		snd_cnt = howmany((long)tp->sackhint.prr_delivered *
+			    tp->snd_ssthresh, tp->sackhint.recover_fs) -
+			    tp->sackhint.prr_out;
 	} else {
 		if (V_tcp_do_prr_conservative)
 			limit = tp->sackhint.prr_delivered -
-			    tp->sackhint.sack_bytes_rexmit;
+			    tp->sackhint.prr_out;
 		else
-			if ((tp->sackhint.prr_delivered -
-			    tp->sackhint.sack_bytes_rexmit) > del_data)
-				limit = tp->sackhint.prr_delivered -
-				    tp->sackhint.sack_bytes_rexmit + maxseg;
-			else
-				limit = del_data + maxseg;
-		snd_cnt = min((tp->snd_ssthresh - pipe), limit);
+			limit = imax(tp->sackhint.prr_delivered -
+				    tp->sackhint.prr_out, del_data) +
+				    maxseg;
+		snd_cnt = imin((tp->snd_ssthresh - pipe), limit);
 	}
-	snd_cnt = max((snd_cnt / maxseg), 0);
+	snd_cnt = imax(snd_cnt, 0) / maxseg;
 	/*
 	 * Send snd_cnt new data into the network in response to this ack.
 	 * If there is going to be a SACK retransmission, adjust snd_cwnd
 	 * accordingly.
 	 */
-	tp->snd_cwnd = tp->snd_nxt - tp->snd_recover +
-		tp->sackhint.sack_bytes_rexmit + (snd_cnt * maxseg);
+	tp->snd_cwnd = imax(maxseg, tp->snd_nxt - tp->snd_recover +
+		tp->sackhint.sack_bytes_rexmit + (snd_cnt * maxseg));
 	tp->t_flags |= TF_ACKNOW;
 	(void) tcp_output(tp);
 }

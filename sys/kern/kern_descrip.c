@@ -1422,6 +1422,10 @@ int
 sys_close_range(struct thread *td, struct close_range_args *uap)
 {
 
+	AUDIT_ARG_FD(uap->lowfd);
+	AUDIT_ARG_CMD(uap->highfd);
+	AUDIT_ARG_FFLAGS(uap->flags);
+
 	/* No flags currently defined */
 	if (uap->flags != 0)
 		return (EINVAL);
@@ -3214,7 +3218,7 @@ fget_only_user(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 	haverights = cap_rights_fde_inline(fde);
 	error = cap_check_inline(haverights, needrightsp);
 	if (__predict_false(error != 0))
-		return (EBADF);
+		return (error);
 	*fpp = fp;
 	return (0);
 }
@@ -3795,9 +3799,8 @@ pwd_drop(struct pwd *pwd)
 }
 
 /*
-* Common routine for kern_chroot() and jail_attach().  The caller is
-* responsible for invoking priv_check() and mac_vnode_check_chroot() to
-* authorize this operation.
+* The caller is responsible for invoking priv_check() and
+* mac_vnode_check_chroot() to authorize this operation.
 */
 int
 pwd_chroot(struct thread *td, struct vnode *vp)
@@ -3857,6 +3860,46 @@ pwd_chdir(struct thread *td, struct vnode *vp)
 	pwd_set(pdp, newpwd);
 	PWDDESC_XUNLOCK(pdp);
 	pwd_drop(oldpwd);
+}
+
+/*
+ * jail_attach(2) changes both root and working directories.
+ */
+int
+pwd_chroot_chdir(struct thread *td, struct vnode *vp)
+{
+	struct pwddesc *pdp;
+	struct filedesc *fdp;
+	struct pwd *newpwd, *oldpwd;
+	int error;
+
+	fdp = td->td_proc->p_fd;
+	pdp = td->td_proc->p_pd;
+	newpwd = pwd_alloc();
+	FILEDESC_SLOCK(fdp);
+	PWDDESC_XLOCK(pdp);
+	oldpwd = PWDDESC_XLOCKED_LOAD_PWD(pdp);
+	error = chroot_refuse_vdir_fds(fdp);
+	FILEDESC_SUNLOCK(fdp);
+	if (error != 0) {
+		PWDDESC_XUNLOCK(pdp);
+		pwd_drop(newpwd);
+		return (error);
+	}
+
+	vrefact(vp);
+	newpwd->pwd_rdir = vp;
+	vrefact(vp);
+	newpwd->pwd_cdir = vp;
+	if (oldpwd->pwd_jdir == NULL) {
+		vrefact(vp);
+		newpwd->pwd_jdir = vp;
+	}
+	pwd_fill(oldpwd, newpwd);
+	pwd_set(pdp, newpwd);
+	PWDDESC_XUNLOCK(pdp);
+	pwd_drop(oldpwd);
+	return (0);
 }
 
 void

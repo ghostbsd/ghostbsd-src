@@ -107,8 +107,8 @@ static void	realtimer_clocktime(clockid_t, struct timespec *);
 static void	realtimer_expire(void *);
 
 static int	register_posix_clock(int, const struct kclock *);
-void		itimer_fire(struct itimer *it);
-int		itimespecfix(struct timespec *ts);
+static void	itimer_fire(struct itimer *it);
+static int	itimespecfix(struct timespec *ts);
 
 #define CLOCK_CALL(clock, call, arglist)		\
 	((*posix_clocks[clock].call) arglist)
@@ -1518,8 +1518,8 @@ realtimer_gettime(struct itimer *it, struct itimerspec *ovalue)
 }
 
 static int
-realtimer_settime(struct itimer *it, int flags,
-	struct itimerspec *value, struct itimerspec *ovalue)
+realtimer_settime(struct itimer *it, int flags, struct itimerspec *value,
+    struct itimerspec *ovalue)
 {
 	struct timespec cts, ts;
 	struct timeval tv;
@@ -1548,7 +1548,7 @@ realtimer_settime(struct itimer *it, int flags,
 		if ((flags & TIMER_ABSTIME) == 0) {
 			/* Convert to absolute time. */
 			timespecadd(&it->it_time.it_value, &cts,
-				&it->it_time.it_value);
+			    &it->it_time.it_value);
 		} else {
 			timespecsub(&ts, &cts, &ts);
 			/*
@@ -1557,8 +1557,8 @@ realtimer_settime(struct itimer *it, int flags,
 			 */
 		}
 		TIMESPEC_TO_TIMEVAL(&tv, &ts);
-		callout_reset(&it->it_callout, tvtohz(&tv),
-			realtimer_expire, it);
+		callout_reset(&it->it_callout, tvtohz(&tv), realtimer_expire,
+		    it);
 	} else {
 		callout_stop(&it->it_callout);
 	}
@@ -1592,7 +1592,7 @@ itimer_accept(struct proc *p, int timerid, ksiginfo_t *ksi)
 	return (EINVAL);
 }
 
-int
+static int
 itimespecfix(struct timespec *ts)
 {
 
@@ -1603,6 +1603,13 @@ itimespecfix(struct timespec *ts)
 	return (0);
 }
 
+#define	timespectons(tsp)			\
+	((uint64_t)(tsp)->tv_sec * 1000000000 + (tsp)->tv_nsec)
+#define	timespecfromns(ns) (struct timespec){	\
+	.tv_sec = (ns) / 1000000000,		\
+	.tv_nsec = (ns) % 1000000000		\
+}
+
 /* Timeout callback for realtime timer */
 static void
 realtimer_expire(void *arg)
@@ -1610,6 +1617,7 @@ realtimer_expire(void *arg)
 	struct timespec cts, ts;
 	struct timeval tv;
 	struct itimer *it;
+	uint64_t interval, now, overruns, value;
 
 	it = (struct itimer *)arg;
 
@@ -1618,16 +1626,29 @@ realtimer_expire(void *arg)
 	if (timespeccmp(&cts, &it->it_time.it_value, >=)) {
 		if (timespecisset(&it->it_time.it_interval)) {
 			timespecadd(&it->it_time.it_value,
-				    &it->it_time.it_interval,
-				    &it->it_time.it_value);
-			while (timespeccmp(&cts, &it->it_time.it_value, >=)) {
-				if (it->it_overrun < INT_MAX)
-					it->it_overrun++;
-				else
+			    &it->it_time.it_interval,
+			    &it->it_time.it_value);
+
+			interval = timespectons(&it->it_time.it_interval);
+			value = timespectons(&it->it_time.it_value);
+			now = timespectons(&cts);
+
+			if (now >= value) {
+				/*
+				 * We missed at least one period.
+				 */
+				overruns = howmany(now - value + 1, interval);
+				if (it->it_overrun + overruns >=
+				    it->it_overrun &&
+				    it->it_overrun + overruns <= INT_MAX) {
+					it->it_overrun += (int)overruns;
+				} else {
+					it->it_overrun = INT_MAX;
 					it->it_ksi.ksi_errno = ERANGE;
-				timespecadd(&it->it_time.it_value,
-					    &it->it_time.it_interval,
-					    &it->it_time.it_value);
+				}
+				value =
+				    now + interval - (now - value) % interval;
+				it->it_time.it_value = timespecfromns(value);
 			}
 		} else {
 			/* single shot timer ? */
@@ -1637,7 +1658,7 @@ realtimer_expire(void *arg)
 			timespecsub(&it->it_time.it_value, &cts, &ts);
 			TIMESPEC_TO_TIMEVAL(&tv, &ts);
 			callout_reset(&it->it_callout, tvtohz(&tv),
-				 realtimer_expire, it);
+			    realtimer_expire, it);
 		}
 		itimer_enter(it);
 		ITIMER_UNLOCK(it);
@@ -1649,11 +1670,11 @@ realtimer_expire(void *arg)
 		timespecsub(&ts, &cts, &ts);
 		TIMESPEC_TO_TIMEVAL(&tv, &ts);
 		callout_reset(&it->it_callout, tvtohz(&tv), realtimer_expire,
- 			it);
+		    it);
 	}
 }
 
-void
+static void
 itimer_fire(struct itimer *it)
 {
 	struct proc *p = it->it_proc;

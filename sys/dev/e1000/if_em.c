@@ -554,8 +554,6 @@ static struct if_shared_ctx em_sctx_init = {
 	.isc_ntxd_default = {EM_DEFAULT_TXD},
 };
 
-if_shared_ctx_t em_sctx = &em_sctx_init;
-
 static struct if_shared_ctx igb_sctx_init = {
 	.isc_magic = IFLIB_MAGIC,
 	.isc_q_align = PAGE_SIZE,
@@ -582,8 +580,6 @@ static struct if_shared_ctx igb_sctx_init = {
 	.isc_nrxd_default = {EM_DEFAULT_RXD},
 	.isc_ntxd_default = {EM_DEFAULT_TXD},
 };
-
-if_shared_ctx_t igb_sctx = &igb_sctx_init;
 
 /*****************************************************************
  *
@@ -707,13 +703,13 @@ static int em_get_regs(SYSCTL_HANDLER_ARGS)
 static void *
 em_register(device_t dev)
 {
-	return (em_sctx);
+	return (&em_sctx_init);
 }
 
 static void *
 igb_register(device_t dev)
 {
-	return (igb_sctx);
+	return (&igb_sctx_init);
 }
 
 static int
@@ -1102,10 +1098,11 @@ em_if_attach_post(if_ctx_t ctx)
 	struct adapter *adapter = iflib_get_softc(ctx);
 	struct e1000_hw *hw = &adapter->hw;
 	int error = 0;
-	
+
 	/* Setup OS specific network interface */
 	error = em_setup_interface(ctx);
 	if (error != 0) {
+		device_printf(adapter->dev, "Interface setup failed: %d\n", error);
 		goto err_late;
 	}
 
@@ -1123,14 +1120,10 @@ em_if_attach_post(if_ctx_t ctx)
 
 	INIT_DEBUGOUT("em_if_attach_post: end");
 
-	return (error);
+	return (0);
 
 err_late:
-	em_release_hw_control(adapter);
-	em_free_pci_resources(ctx);
-	em_if_queues_free(ctx);
-	free(adapter->mta, M_DEVBUF);
-
+	/* upon attach_post() error, iflib calls _if_detach() to free resources. */
 	return (error);
 }
 
@@ -1155,6 +1148,8 @@ em_if_detach(if_ctx_t ctx)
 	em_release_manageability(adapter);
 	em_release_hw_control(adapter);
 	em_free_pci_resources(ctx);
+	free(adapter->mta, M_DEVBUF);
+	adapter->mta = NULL;
 
 	return (0);
 }
@@ -2981,12 +2976,6 @@ em_if_queues_free(if_ctx_t ctx)
 	if (rx_que != NULL) {
 		free(adapter->rx_queues, M_DEVBUF);
 		adapter->rx_queues = NULL;
-	}
-
-	em_release_hw_control(adapter);
-
-	if (adapter->mta != NULL) {
-		free(adapter->mta, M_DEVBUF);
 	}
 }
 

@@ -92,6 +92,7 @@ static int vop_stdfdatasync(struct vop_fdatasync_args *ap);
 static int vop_stdgetpages_async(struct vop_getpages_async_args *ap);
 static int vop_stdread_pgcache(struct vop_read_pgcache_args *ap);
 static int vop_stdstat(struct vop_stat_args *ap);
+static int vop_stdvput_pair(struct vop_vput_pair_args *ap);
 
 /*
  * This vnode table stores what we want to do if the filesystem doesn't
@@ -151,6 +152,7 @@ struct vop_vector default_vnodeops = {
 	.vop_unset_text =	vop_stdunset_text,
 	.vop_add_writecount =	vop_stdadd_writecount,
 	.vop_copy_file_range =	vop_stdcopy_file_range,
+	.vop_vput_pair =	vop_stdvput_pair,
 };
 VFS_VOP_VECTOR_REGISTER(default_vnodeops);
 
@@ -421,10 +423,25 @@ int
 vop_stdadvlock(struct vop_advlock_args *ap)
 {
 	struct vnode *vp;
+	struct mount *mp;
 	struct vattr vattr;
 	int error;
 
 	vp = ap->a_vp;
+
+	/*
+	 * Provide atomicity of open(O_CREAT | O_EXCL | O_EXLOCK) for
+	 * local filesystems.  See vn_open_cred() for reciprocal part.
+	 */
+	mp = vp->v_mount;
+	if (mp != NULL && (mp->mnt_flag & MNT_LOCAL) != 0 &&
+	    ap->a_op == F_SETLK && (ap->a_flags & F_FIRSTOPEN) == 0) {
+		VI_LOCK(vp);
+		while ((vp->v_iflag & VI_FOPENING) != 0)
+			msleep(vp, VI_MTX(vp), PLOCK, "lockfo", 0);
+		VI_UNLOCK(vp);
+	}
+
 	if (ap->a_fl->l_whence == SEEK_END) {
 		/*
 		 * The NFSv4 server must avoid doing a vn_lock() here, since it
@@ -1591,4 +1608,17 @@ static int
 vop_stdread_pgcache(struct vop_read_pgcache_args *ap __unused)
 {
 	return (EJUSTRETURN);
+}
+
+static int
+vop_stdvput_pair(struct vop_vput_pair_args *ap)
+{
+	struct vnode *dvp, *vp, **vpp;
+
+	dvp = ap->a_dvp;
+	vpp = ap->a_vpp;
+	vput(dvp);
+	if (vpp != NULL && ap->a_unlock_vp && (vp = *vpp) != NULL)
+		vput(vp);
+	return (0);
 }

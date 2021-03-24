@@ -57,6 +57,10 @@ __FBSDID("$FreeBSD$");
 #include <compat/linux/linux_util.h>
 #include <compat/linux/linux_vdso.h>
 
+#ifdef VFP
+#include <machine/vfp.h>
+#endif
+
 MODULE_VERSION(linux64elf, 1);
 
 const char *linux_kplatform;
@@ -360,6 +364,10 @@ linux_exec_setregs(struct thread *td, struct image_params *imgp,
         regs->tf_lr = 0xffffffffffffffff;
 #endif
         regs->tf_elr = imgp->entry_addr;
+
+#ifdef VFP
+	vfp_reset_state(td, td->td_pcb);
+#endif
 }
 
 int
@@ -461,7 +469,8 @@ linux_vdso_deinstall(const void *param)
 {
 
 	LIN_SDT_PROBE0(sysvec, linux_vdso_deinstall, todo);
-	__elfN(linux_shared_page_fini)(linux_shared_page_obj);
+	__elfN(linux_shared_page_fini)(linux_shared_page_obj,
+	    linux_shared_page_mapping);
 }
 SYSUNINIT(elf_linux_vdso_uninit, SI_SUB_EXEC, SI_ORDER_FIRST,
     linux_vdso_deinstall, NULL);

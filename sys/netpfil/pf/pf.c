@@ -388,6 +388,7 @@ SYSCTL_ULONG(_net_pf, OID_AUTO, request_maxcount, CTLFLAG_RWTUN,
     &pf_ioctl_maxcount, 0, "Maximum number of tables, addresses, ... in a single ioctl() call");
 
 VNET_DEFINE(void *, pf_swi_cookie);
+VNET_DEFINE(struct intr_event *, pf_swi_ie);
 
 VNET_DEFINE(uint32_t, pf_hashseed);
 #define	V_pf_hashseed	VNET(pf_hashseed)
@@ -707,10 +708,8 @@ pf_free_src_node(struct pf_ksrc_node *sn)
 {
 
 	for (int i = 0; i < 2; i++) {
-		if (sn->bytes[i])
-			counter_u64_free(sn->bytes[i]);
-		if (sn->packets[i])
-			counter_u64_free(sn->packets[i]);
+		counter_u64_free(sn->bytes[i]);
+		counter_u64_free(sn->packets[i]);
 	}
 	uma_zfree(V_pf_sources_z, sn);
 }
@@ -1739,10 +1738,8 @@ pf_free_state(struct pf_state *cur)
 	    cur->timeout));
 
 	for (int i = 0; i < 2; i++) {
-		if (cur->bytes[i] != NULL)
-			counter_u64_free(cur->bytes[i]);
-		if (cur->packets[i] != NULL)
-			counter_u64_free(cur->packets[i]);
+		counter_u64_free(cur->bytes[i]);
+		counter_u64_free(cur->packets[i]);
 	}
 
 	pf_normalize_tcp_cleanup(cur);
@@ -5488,10 +5485,29 @@ pf_route(struct mbuf **m, struct pf_krule *r, int dir, struct ifnet *oifp,
 	}
 
 	if (r->rt == PF_DUPTO) {
-		if ((m0 = m_dup(*m, M_NOWAIT)) == NULL) {
-			if (s)
+		if ((pd->pf_mtag->flags & PF_DUPLICATED)) {
+			if (s == NULL) {
+				ifp = r->rpool.cur->kif ?
+				    r->rpool.cur->kif->pfik_ifp : NULL;
+			} else {
+				ifp = s->rt_kif ? s->rt_kif->pfik_ifp : NULL;
 				PF_STATE_UNLOCK(s);
-			return;
+			}
+			if (ifp == oifp) {
+				/* When the 2nd interface is not skipped */
+				return;
+			} else {
+				m0 = *m;
+				*m = NULL;
+				goto bad;
+			}
+		} else {
+			pd->pf_mtag->flags |= PF_DUPLICATED;
+			if (((m0 = m_dup(*m, M_NOWAIT)) == NULL)) {
+				if (s)
+					PF_STATE_UNLOCK(s);
+				return;
+			}
 		}
 	} else {
 		if ((r->rt == PF_REPLYTO) == (r->direction == dir)) {
@@ -5649,10 +5665,29 @@ pf_route6(struct mbuf **m, struct pf_krule *r, int dir, struct ifnet *oifp,
 	}
 
 	if (r->rt == PF_DUPTO) {
-		if ((m0 = m_dup(*m, M_NOWAIT)) == NULL) {
-			if (s)
+		if ((pd->pf_mtag->flags & PF_DUPLICATED)) {
+			if (s == NULL) {
+				ifp = r->rpool.cur->kif ?
+				    r->rpool.cur->kif->pfik_ifp : NULL;
+			} else {
+				ifp = s->rt_kif ? s->rt_kif->pfik_ifp : NULL;
 				PF_STATE_UNLOCK(s);
-			return;
+			}
+			if (ifp == oifp) {
+				/* When the 2nd interface is not skipped */
+				return;
+			} else {
+				m0 = *m;
+				*m = NULL;
+				goto bad;
+			}
+		} else {
+			pd->pf_mtag->flags |= PF_DUPLICATED;
+			if (((m0 = m_dup(*m, M_NOWAIT)) == NULL)) {
+				if (s)
+					PF_STATE_UNLOCK(s);
+				return;
+			}
 		}
 	} else {
 		if ((r->rt == PF_REPLYTO) == (r->direction == dir)) {
@@ -6346,7 +6381,7 @@ pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb 
 	pd.sidx = (dir == PF_IN) ? 0 : 1;
 	pd.didx = (dir == PF_IN) ? 1 : 0;
 	pd.af = AF_INET6;
-	pd.tos = 0;
+	pd.tos = (ntohl(h->ip6_flow) >> 20) & 0xfc;
 	pd.tot_len = ntohs(h->ip6_plen) + sizeof(struct ip6_hdr);
 
 	off = ((caddr_t)h - m->m_data) + sizeof(struct ip6_hdr);

@@ -1,5 +1,60 @@
 # News
 
+## 3.3.4
+
+This is a production release that fixes a small bug.
+
+The bug was that output was not flushed before a `read()` call, so prompts
+without a newline on the end were not flushed before the `read()` call.
+
+This is such a tiny bug that users only need to upgrade if they are affected.
+
+## 3.3.3
+
+This is a production release with one tweak and fixes for manuals.
+
+The tweak is that `length(0)` returns `1` instead of `0`. In `3.3.1`, I changed
+it so `length(0.x)`, where `x` could be any number of digits, returned the
+`scale`, but `length(0)` still returned `0` because I believe that `0` has `0`
+significant digits.
+
+After request of FreeBSD and considering the arguments of a mathematician,
+compatibility with other `bc`'s, and the expectations of users, I decided to
+make the change.
+
+The fixes for manuals fixed a bug where `--` was rendered as `-`.
+
+## 3.3.2
+
+This is a production release that fixes a divide-by-zero bug in `root()` in the
+[extended math library][16]. All previous versions with `root()` have the bug.
+
+## 3.3.1
+
+This is a production release that fixes a bug.
+
+The bug was in the reporting of number length when the value was 0.
+
+## 3.3.0
+
+This is a production release that changes one behavior and fixes documentation
+bugs.
+
+The changed behavior is the treatment of `-e` and `-f` when given through
+`BC_ENV_ARGS` or `DC_ENV_ARGS`. Now `bc` and `dc` do not exit when those options
+(or their equivalents) are given through those environment variables. However,
+`bc` and `dc` still exit when they or their equivalents are given on the
+command-line.
+
+## 3.2.7
+
+This is a production release that removes a small non-portable shell operation
+in `configure.sh`. This problem was only noticed on OpenBSD, not FreeBSD or
+Linux.
+
+Non-OpenBSD users do ***NOT*** need to upgrade, although NetBSD users may also
+need to upgrade.
+
 ## 3.2.6
 
 This is a production release that fixes the build on FreeBSD.

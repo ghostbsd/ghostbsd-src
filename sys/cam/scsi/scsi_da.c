@@ -2849,7 +2849,7 @@ daregister(struct cam_periph *periph, void *arg)
 	TASK_INIT(&softc->sysctl_task, 0, dasysctlinit, periph);
 
 	/*
-	 * Take an exclusive section lock qon the periph while dastart is called
+	 * Take an exclusive section lock on the periph while dastart is called
 	 * to finish the probe.  The lock will be dropped in dadone at the end
 	 * of probe. This locks out daopen and daclose from racing with the
 	 * probe.
@@ -2914,7 +2914,8 @@ daregister(struct cam_periph *periph, void *arg)
 	softc->disk->d_open = daopen;
 	softc->disk->d_close = daclose;
 	softc->disk->d_strategy = dastrategy;
-	softc->disk->d_dump = dadump;
+	if (cam_sim_pollable(periph->sim))
+		softc->disk->d_dump = dadump;
 	softc->disk->d_getattr = dagetattr;
 	softc->disk->d_gone = dadiskgonecb;
 	softc->disk->d_name = "da";
@@ -3649,14 +3650,14 @@ out:
 	}
 	case DA_STATE_PROBE_BDC:
 	{
-		struct scsi_vpd_block_characteristics *bdc;
+		struct scsi_vpd_block_device_characteristics *bdc;
 
 		if (!scsi_vpd_supported_page(periph, SVPD_BDC)) {
 			softc->state = DA_STATE_PROBE_ATA;
 			goto skipstate;
 		}
 
-		bdc = (struct scsi_vpd_block_characteristics *)
+		bdc = (struct scsi_vpd_block_device_characteristics *)
 			malloc(sizeof(*bdc), M_SCSIDA, M_NOWAIT|M_ZERO);
 
 		if (bdc == NULL) {
@@ -5207,8 +5208,7 @@ dadone_probebdc(struct cam_periph *periph, union ccb *done_ccb)
 		    medium_rotation_rate)) {
 			softc->disk->d_rotation_rate =
 				scsi_2btoul(bdc->medium_rotation_rate);
-			if (softc->disk->d_rotation_rate ==
-			    SVPD_BDC_RATE_NON_ROTATING) {
+			if (softc->disk->d_rotation_rate == SVPD_NON_ROTATING) {
 				cam_iosched_set_sort_queue(
 				    softc->cam_iosched, 0);
 				softc->flags &= ~DA_FLAG_ROTATING;
