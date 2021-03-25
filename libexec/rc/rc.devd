@@ -31,7 +31,6 @@ base=${1%%.*}
 if [ "${base}" = "network" ]; then
 	# We only create links for pyhsical interfaces
 	[ -n "$(getmedia ${1#*.})" ] || exit 1
-	base="network.lo0"
 fi
 if [ -e /etc/init.d/"${base}" -a "${base}" != "$1" ] ; then
 	if [ ! -e "/etc/init.d/${1}" ] || [ "$2" = "start" ] ; then
