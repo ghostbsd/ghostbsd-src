@@ -489,36 +489,35 @@ set_regs32(struct thread *td, struct reg32 *regs)
 	return (0);
 }
 
+/* XXX fill/set dbregs/fpregs are stubbed on 32-bit arm. */
 int
 fill_fpregs32(struct thread *td, struct fpreg32 *regs)
 {
 
-	printf("ARM64TODO: fill_fpregs32");
-	return (EDOOFUS);
+	memset(regs, 0, sizeof(*regs));
+	return (0);
 }
 
 int
 set_fpregs32(struct thread *td, struct fpreg32 *regs)
 {
 
-	printf("ARM64TODO: set_fpregs32");
-	return (EDOOFUS);
+	return (0);
 }
 
 int
 fill_dbregs32(struct thread *td, struct dbreg32 *regs)
 {
 
-	printf("ARM64TODO: fill_dbregs32");
-	return (EDOOFUS);
+	memset(regs, 0, sizeof(*regs));
+	return (0);
 }
 
 int
 set_dbregs32(struct thread *td, struct dbreg32 *regs)
 {
 
-	printf("ARM64TODO: set_dbregs32");
-	return (EDOOFUS);
+	return (0);
 }
 #endif
 
@@ -560,6 +559,11 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	tf->tf_sp = STACKALIGN(stack);
 	tf->tf_lr = imgp->entry_addr;
 	tf->tf_elr = imgp->entry_addr;
+
+	td->td_pcb->pcb_tpidr_el0 = 0;
+	td->td_pcb->pcb_tpidrro_el0 = 0;
+	WRITE_SPECIALREG(tpidrro_el0, 0);
+	WRITE_SPECIALREG(tpidr_el0, 0);
 
 #ifdef VFP
 	vfp_reset_state(td, pcb);

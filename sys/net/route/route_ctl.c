@@ -130,13 +130,24 @@ vnet_rtzone_destroy()
 static void
 destroy_rtentry(struct rtentry *rt)
 {
+#ifdef VIMAGE
+	struct nhop_object *nh = rt->rt_nhop;
 
 	/*
 	 * At this moment rnh, nh_control may be already freed.
 	 * nhop interface may have been migrated to a different vnet.
 	 * Use vnet stored in the nexthop to delete the entry.
 	 */
-	CURVNET_SET(nhop_get_vnet(rt->rt_nhop));
+#ifdef ROUTE_MPATH
+	if (NH_IS_NHGRP(nh)) {
+		struct weightened_nhop *wn;
+		uint32_t num_nhops;
+		wn = nhgrp_get_nhops((struct nhgrp_object *)nh, &num_nhops);
+		nh = wn[0].nh;
+	}
+#endif
+	CURVNET_SET(nhop_get_vnet(nh));
+#endif
 
 	/* Unreference nexthop */
 	nhop_free_any(rt->rt_nhop);
@@ -1243,7 +1254,6 @@ rt_checkdelroute(struct radix_node *rn, void *arg)
 	struct rt_delinfo *di;
 	struct rt_addrinfo *info;
 	struct rtentry *rt;
-	int error;
 
 	di = (struct rt_delinfo *)arg;
 	rt = (struct rtentry *)rn;
@@ -1252,7 +1262,8 @@ rt_checkdelroute(struct radix_node *rn, void *arg)
 	info->rti_info[RTAX_DST] = rt_key(rt);
 	info->rti_info[RTAX_NETMASK] = rt_mask(rt);
 
-	error = rt_unlinkrte(di->rnh, info, &di->rc);
+	if (rt_unlinkrte(di->rnh, info, &di->rc) != 0)
+		return (0);
 
 	/*
 	 * Add deleted rtentries to the list to GC them
@@ -1261,10 +1272,18 @@ rt_checkdelroute(struct radix_node *rn, void *arg)
 	 * XXX: Delayed notifications not implemented
 	 *  for nexthop updates.
 	 */
-	if ((error == 0) && (di->rc.rc_cmd == RTM_DELETE)) {
+	if (di->rc.rc_cmd == RTM_DELETE) {
 		/* Add to the list and return */
 		rt->rt_chain = di->head;
 		di->head = rt;
+#ifdef ROUTE_MPATH
+	} else {
+		/*
+		 * RTM_CHANGE to a diferent nexthop or nexthop group.
+		 * Free old multipath group.
+		 */
+		nhop_free_any(di->rc.rc_nh_old);
+#endif
 	}
 
 	return (0);

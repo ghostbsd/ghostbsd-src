@@ -118,7 +118,7 @@ linux_execve(struct thread *td, struct linux_execve_args *args)
 }
 
 int
-linux_set_upcall_kse(struct thread *td, register_t stack)
+linux_set_upcall(struct thread *td, register_t stack)
 {
 
 	if (stack)
@@ -251,7 +251,7 @@ linux_arch_prctl(struct thread *td, struct linux_arch_prctl_args *args)
 	switch (args->code) {
 	case LINUX_ARCH_SET_GS:
 		if (args->addr < VM_MAXUSER_ADDRESS) {
-			set_pcb_flags(pcb, PCB_FULL_IRET);
+			update_pcb_bases(pcb);
 			pcb->pcb_gsbase = args->addr;
 			td->td_frame->tf_gs = _ugssel;
 			error = 0;
@@ -260,7 +260,7 @@ linux_arch_prctl(struct thread *td, struct linux_arch_prctl_args *args)
 		break;
 	case LINUX_ARCH_SET_FS:
 		if (args->addr < VM_MAXUSER_ADDRESS) {
-			set_pcb_flags(pcb, PCB_FULL_IRET);
+			update_pcb_bases(pcb);
 			pcb->pcb_fsbase = args->addr;
 			td->td_frame->tf_fs = _ufssel;
 			error = 0;
@@ -290,6 +290,7 @@ linux_set_cloned_tls(struct thread *td, void *desc)
 		return (EPERM);
 
 	pcb = td->td_pcb;
+	update_pcb_bases(pcb);
 	pcb->pcb_fsbase = (register_t)desc;
 	td->td_frame->tf_fs = _ufssel;
 
