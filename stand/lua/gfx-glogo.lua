@@ -45,7 +45,7 @@ return {
 		    "  (ga*                 "
 		},
 		requires_color = false,
-		shift = {x = 5, y = 4},
+		shift = {x = 5, y = 3},
 		image = "/boot/images/ghostbsd-logo.png",
 		image_rl = 15
 	}
