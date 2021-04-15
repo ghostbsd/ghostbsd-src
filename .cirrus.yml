@@ -1,9 +1,9 @@
 # $FreeBSD$
 
 freebsd_instance:
-  # image: freebsd-12-1-stable-amd64
+  # image: freebsd-13-0-stable-amd64
   # We need a newer image to install llvm11
-  image_family: freebsd-12-1-snap
+  image_family: freebsd-13-0
   cpu: 8
   memory: 24G
 
