@@ -1,23 +1,42 @@
 #!/sbin/openrc-run
-# Copyright 1999-2011 Gentoo Foundation
-# Released under the 2-clause BSD license.
-# $Header: /var/cvsroot/gentoo-x86/sys-fs/zfs/files/zfs,v 0.9 2011/04/30 10:13:43 devsk Exp $
 
 depend()
 {
-	after zfs
+	after zpool
 	keyword -jail -prefix
 }
 
-PATH="${PATH}:/usr/local/bin:/usr/local/sbin"
+. /etc/rc.subr
+
+PATH="${PATH}:/usr/local/sbin:/usr/local/bin"
 export PATH
 
-ZFS="zfs"
+checksystem() {
+	if [ ! -c /dev/zfs ]; then
+		if [ ! -x /boot/kernel/zfs.ko -a ! -x /boot/modules/zfs.ko ]; then
+			eerror "$ZFS_MODULE not found. Is the kernel built with ZFS support"
+			return 1
+		fi
+	fi
+		which -s ${ZPOOL}
+		if [ $? -ne 0 ]; then
+			eerror "$ZPOOL binary not found."
+			return 1
+		fi
+		which -s ${ZFS}
+		if [ $? -ne 0 ]; then
+			eerror "$ZFS binary not found."
+			return 1
+		fi
+	return 0
+}
 
 start() {
-	ebegin "Starting ZFS swap"
+	ebegin "Starting swap on ZVOLs"
+	checksystem || return 1
+
 	# Enable swap on ZVOLs with property org.freebsd:swap=on.
-	${ZFS} list -H -o org.freebsd:swap,name -t volume | \
+	zfs list -H -o org.freebsd:swap,name -t volume | \
 	while read state name; do
 		case "${state}" in
 		[oO][nN])
@@ -29,9 +48,9 @@ start() {
 }
 
 stop()
-{	
-	ebegin "Stopping ZFS swap"
-	${ZFS} list -H -o org.freebsd:swap,name -t volume | \
+{
+	ebegin "Stopping swap on ZVOLs"
+	zfs list -H -o org.freebsd:swap,name -t volume | \
         while read state name; do
                 case "${state}" in
                 [oO][nN])

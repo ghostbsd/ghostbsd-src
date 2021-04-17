@@ -1,104 +1,17 @@
 #!/sbin/openrc-run
-# Copyright 1999-2011 Gentoo Foundation
-# Released under the 2-clause BSD license.
-# $Header: /var/cvsroot/gentoo-x86/sys-fs/zfs/files/zfs,v 0.9 2011/04/30 10:13:43 devsk Exp $
+
+name="zfs"
+desc="Dummy service for zfs services"
 
 depend()
 {
+	need zfsbe zfsd zfsmount zpool zvol
 	before bootmisc logger network
-	keyword -jail -prefix -stop
+	after clock root sysctl
+	keyword -prefix
 }
 
-PATH="${PATH}:/usr/local/sbin:/usr/local/bin"
-export PATH
-
-ZFS="zfs"
-ZPOOL="zpool"
-ZPOOL_CACHE="/boot/zfs/zpool.cache"
-ZFS_MODULE=zfs
-
-checksystem() {
-	if [ ! -c /dev/zfs ]; then
-		if [ ! -x /boot/kernel/zfs.ko -a ! -x /boot/modules/zfs.ko ]; then
-			eerror "$ZFS_MODULE not found. Is the kernel built with ZFS support"
-			return 1
-		fi
-	fi
-		which -s ${ZPOOL}
-		if [ $? -ne 0 ]; then
-			eerror "$ZPOOL binary not found."
-			return 1
-		fi
-		which -s ${ZFS}
-		if [ $? -ne 0 ]; then
-			eerror "$ZFS binary not found."
-			return 1
-		fi
-	return 0
-}
-
-start() {
-	ebegin "Starting ZFS"
-	checksystem || return 1
-
-	if [ ! -c /dev/zfs ]; then
-		kldload -nq $ZFS_MODULE
-		rv=$?
-		if [ $rv -ne 0 ]; then
-			eerror "Failed to load the $ZFS_MODULE module, check 'dmesg|tail'."
-			eend $rv
-			return $rv
-		fi
-	fi
-
-	# Import all pools described by the cache file, and then mount
-	# all filesystem based on their properties.
-        local cachefile
-
-        for cachefile in /etc/zfs/zpool.cache /boot/zfs/zpool.cache; do
-                if [ -r $cachefile ]; then
-                        zpool import -c $cachefile -a -N && break
-                fi
-        done
-		rv=$?
-		if [ $rv -ne 0 ]; then
-			eerror "Failed to import not-yet imported pools."
-			eend $rv
-			return $rv
-		fi
-
-	$ZFS mount -a
-	rv=$?
-	if [ $rv -ne 0 ]; then
-		eerror "Failed to mount ZFS filesystems."
-		eend $rv
-		return $rv
-	fi
-
-	$ZFS share -a
-	rv=$?
-	if [ $rv -ne 0 ]; then
-		eerror "Failed to export ZFS filesystems."
-		eend $rv
-		return $rv
-	fi
-
-	eend 0
-	return 0
-}
-
-stop()
-{	
-	ebegin "Unsharing ZFS filesystems"
-	timeout -s SIGKILL -k 6 5 $ZFS unshare -a
-
-	# Don't fail if we couldn't umount everything.  /usr might be in use.
-	eend 0
-	return 0
-}
-
-status()
+start()
 {
-	# show pool status and list
-	$ZPOOL status && echo && $ZPOOL list
+	return 0
 }

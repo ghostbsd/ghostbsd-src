@@ -5,5 +5,5 @@ command="/usr/sbin/${name}"
 
 depend() {
 	after devd zfs
-	keyword -shutdown
+	keyword -jail -shutdown
 }
