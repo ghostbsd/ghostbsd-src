@@ -27,7 +27,7 @@ FILES+=          abi accounting adjkerntz amd apm apmd archdep auditd auditdistd
 		sshd statd staticroute swap syscons sysctl syslogd timed tmp tmpfiles.setup ubthidhci urandom \
 		var watchdogd wpa_supplicant \
 		ypbind ypldap yppasswdd ypserv ypset ypupdated ypxfrd \
-		zfs zfsd zvol
+		zfs zfsbe zfsd zfsmount zpool zvol
 
 LINKS=		/libexec/rc/sh/functions.sh /etc/init.d/functions.sh
 
