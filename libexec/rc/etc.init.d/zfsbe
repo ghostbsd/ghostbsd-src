@@ -10,24 +10,18 @@ depend()
 PATH="${PATH}:/usr/local/sbin:/usr/local/bin"
 export PATH
 
-
 checksystem() {
 	if [ ! -c /dev/zfs ]; then
 		if [ ! -x /boot/kernel/zfs.ko -a ! -x /boot/modules/zfs.ko ]; then
-			eerror "$ZFS_MODULE not found. Is the kernel built with ZFS support"
+			eerror "zfs module not found. Is the kernel built with ZFS support"
 			return 1
 		fi
 	fi
-		which -s ${ZPOOL}
-		if [ $? -ne 0 ]; then
-			eerror "$ZPOOL binary not found."
-			return 1
-		fi
-		which -s ${ZFS}
-		if [ $? -ne 0 ]; then
-			eerror "$ZFS binary not found."
-			return 1
-		fi
+	which -s zfs
+	if [ $? -ne 0 ]; then
+		eerror "zfs binary not found."
+		return 1
+	fi
 	return 0
 }
 
