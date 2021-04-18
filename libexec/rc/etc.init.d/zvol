@@ -11,11 +11,6 @@ depend()
 PATH="${PATH}:/usr/local/sbin:/usr/local/bin"
 export PATH
 
-ZFS="zfs"
-ZPOOL="zpool"
-ZPOOL_CACHE="/boot/zfs/zpool.cache"
-ZFS_MODULE=zfs
-
 checksystem() {
 	if [ ! -c /dev/zfs ]; then
 		if [ ! -x /boot/kernel/zfs.ko -a ! -x /boot/modules/zfs.ko ]; then

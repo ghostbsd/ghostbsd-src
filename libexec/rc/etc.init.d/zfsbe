@@ -69,10 +69,11 @@ activate_bootonce()
 	fi
 }
 
-be_start()
+start()
 {
 	ebegin "Starting ZFS Boot Environment"
 	checksystem || return
+
 	if [ `$SYSCTL_N security.jail.jailed` -eq 1 ]; then
 		:
 	else
