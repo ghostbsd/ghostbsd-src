@@ -18,20 +18,8 @@ export IN_BACKGROUND IN_HOTPLUG
 devd_args="${3-0}"
 export devd_args
 
-getmedia() {
-	ifconfig "$1" | while read line; do
-		case "${line}" in
-			media:" "*) echo "${line}"; return;;
-		esac
-	done
-}
-
 # Try and create an init script for network interfaces
 base=${1%%.*}
-if [ "${base}" = "network" ]; then
-	# We only create links for pyhsical interfaces
-	[ -n "$(getmedia ${1#*.})" ] || exit 1
-fi
 if [ -e /etc/init.d/"${base}" -a "${base}" != "$1" ] ; then
 	if [ ! -e "/etc/init.d/${1}" ] || [ "$2" = "start" ] ; then
 		ln -f /etc/init.d/"${base}" /etc/init.d/"$1"
