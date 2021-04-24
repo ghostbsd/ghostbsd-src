@@ -4,6 +4,6 @@ name="zfsd"
 command="/usr/sbin/${name}"
 
 depend() {
-	after devd zfsmout
+	after devd zfsmount
 	keyword -jail -shutdown
 }
