@@ -5,8 +5,7 @@ desc="Set the date and time via NTP"
 
 depend()
 {
-	use net logger
-	need dhcpcd
+	want net devd logger
 	keyword -stop -jail
 }
 
