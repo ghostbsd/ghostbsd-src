@@ -5,7 +5,7 @@ desc="Dummy service for zfs services"
 
 depend()
 {
-	need zfsbe zfsd zfsmount zpool zvol
+	need zpool zfsbe zfsmount zfsd zvol
 	before bootmisc logger network
 	after clock root sysctl
 	keyword -prefix
