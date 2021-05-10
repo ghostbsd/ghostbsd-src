@@ -1,13 +1,15 @@
 ---
 name: Feature request
 about: Suggest an idea for this project
-title: "[Feature]"
+title: "[Feature] <- please keep the tag "
 labels: enhancement
 assignees: ''
 
 ---
 
-**For question please ask on the Forums or Telegram group**
+Please follow this template for your feature request.
+
+**For question, please ask on the Forums or Telegram group**
  Note: That all issues with a question will be close without reply.
 
 **Is your feature request related to a problem? Please describe.**

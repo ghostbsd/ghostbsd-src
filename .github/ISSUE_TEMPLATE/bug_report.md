@@ -1,13 +1,15 @@
 ---
 name: Bug report
 about: Create a report to help us improve
-title: "[BUG]"
+title: "[BUG] <-  please keep the tag"
 labels: bug
 assignees: ''
 
 ---
 
-**For question please ask on the Forums or Telegram group**
+Please follow this template for your bug report.
+
+**For question, please ask on the Forums or Telegram group**
  Note: That all issues with a question will be close without reply.
 
 **Describe the bug**
@@ -18,7 +20,7 @@ Steps to reproduce the behavior:
 1. Go to '...'
 2. Click on '....'
 3. Scroll down to '....'
-4. See error
+4. See an error
 
 **Expected behavior**
 A clear and concise description of what you expected to happen.
