@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
  * HID spec: http://www.usb.org/developers/devclass_docs/HID1_11.pdf
  */
 
+#include "opt_hid.h"
 #include "opt_kbd.h"
 #include "opt_hkbd.h"
 #include "opt_evdev.h"
@@ -916,7 +917,7 @@ hkbd_attach(device_t dev)
 	/* interrupt handler will be called with hkbd mutex taken */
 	hidbus_set_lock(dev, &sc->sc_mtx);
 	/* interrupt handler can be called during panic */
-	hidbus_set_flags(dev, hidbus_get_flags(dev) & HIDBUS_FLAG_CAN_POLL);
+	hidbus_set_flags(dev, hidbus_get_flags(dev) | HIDBUS_FLAG_CAN_POLL);
 
 	/* setup default keyboard maps */
 

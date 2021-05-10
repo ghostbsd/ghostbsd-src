@@ -582,6 +582,34 @@ freebsd4_sigreturn(struct thread *td, struct freebsd4_sigreturn_args *uap)
 #endif
 
 /*
+ * Reset the hardware debug registers if they were in use.
+ * They won't have any meaning for the newly exec'd process.
+ */
+void
+x86_clear_dbregs(struct pcb *pcb)
+{
+	if ((pcb->pcb_flags & PCB_DBREGS) == 0)
+		return;
+
+	pcb->pcb_dr0 = 0;
+	pcb->pcb_dr1 = 0;
+	pcb->pcb_dr2 = 0;
+	pcb->pcb_dr3 = 0;
+	pcb->pcb_dr6 = 0;
+	pcb->pcb_dr7 = 0;
+
+	if (pcb == curpcb) {
+		/*
+		 * Clear the debug registers on the running CPU,
+		 * otherwise they will end up affecting the next
+		 * process we switch to.
+		 */
+		reset_dbregs();
+	}
+	clear_pcb_flags(pcb, PCB_DBREGS);
+}
+
+/*
  * Reset registers to default values on exec.
  */
 void
@@ -617,27 +645,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	regs->tf_gs = _ugssel;
 	regs->tf_flags = TF_HASSEGS;
 
-	/*
-	 * Reset the hardware debug registers if they were in use.
-	 * They won't have any meaning for the newly exec'd process.
-	 */
-	if (pcb->pcb_flags & PCB_DBREGS) {
-		pcb->pcb_dr0 = 0;
-		pcb->pcb_dr1 = 0;
-		pcb->pcb_dr2 = 0;
-		pcb->pcb_dr3 = 0;
-		pcb->pcb_dr6 = 0;
-		pcb->pcb_dr7 = 0;
-		if (pcb == curpcb) {
-			/*
-			 * Clear the debug registers on the running
-			 * CPU, otherwise they will end up affecting
-			 * the next process we switch to.
-			 */
-			reset_dbregs();
-		}
-		clear_pcb_flags(pcb, PCB_DBREGS);
-	}
+	x86_clear_dbregs(pcb);
 
 	/*
 	 * Drop the FP state if we hold it, so that the process gets a
@@ -958,28 +966,6 @@ ssdtosyssd(ssd, sd)
 	sd->sd_p     = ssd->ssd_p;
 	sd->sd_gran  = ssd->ssd_gran;
 }
-
-#if !defined(DEV_ATPIC) && defined(DEV_ISA)
-#include <isa/isavar.h>
-#include <isa/isareg.h>
-/*
- * Return a bitmap of the current interrupt requests.  This is 8259-specific
- * and is only suitable for use at probe time.
- * This is only here to pacify sio.  It is NOT FATAL if this doesn't work.
- * It shouldn't be here.  There should probably be an APIC centric
- * implementation in the apic driver code, if at all.
- */
-intrmask_t
-isa_irq_pending(void)
-{
-	u_char irr1;
-	u_char irr2;
-
-	irr1 = inb(IO_ICU1);
-	irr2 = inb(IO_ICU2);
-	return ((irr2 << 8) | irr1);
-}
-#endif
 
 u_int basemem;
 

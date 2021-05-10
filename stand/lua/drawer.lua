@@ -285,8 +285,11 @@ local function drawbox()
 	if menu_header_x == nil then
 		menu_header_x = x + (w // 2) - (#menu_header // 2)
 	end
-	screen.setcursor(menu_header_x, y)
-	printc(menu_header)
+	screen.setcursor(menu_header_x - 1, y)
+	if menu_header ~= "" then
+		printc(" " .. menu_header .. " ")
+	end
+
 end
 
 local function drawbrand()

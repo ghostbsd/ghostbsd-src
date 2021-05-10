@@ -180,6 +180,20 @@ static pci_vendor_info_t em_vendor_info_array[] =
 	PVID(0x8086, E1000_DEV_ID_PCH_CMP_I219_V11, "Intel(R) PRO/1000 Network Connection"),
 	PVID(0x8086, E1000_DEV_ID_PCH_CMP_I219_LM12, "Intel(R) PRO/1000 Network Connection"),
 	PVID(0x8086, E1000_DEV_ID_PCH_CMP_I219_V12, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_TGP_I219_LM13, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_TGP_I219_V13, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_TGP_I219_LM14, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_TGP_I219_V14, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_TGP_I219_LM15, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_TGP_I219_V15, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_ADL_I219_LM16, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_ADL_I219_V16, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_ADL_I219_LM17, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_ADL_I219_V17, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_MTP_I219_LM18, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_MTP_I219_V18, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_MTP_I219_LM19, "Intel(R) PRO/1000 Network Connection"),
+	PVID(0x8086, E1000_DEV_ID_PCH_MTP_I219_V19, "Intel(R) PRO/1000 Network Connection"),
 	/* required last entry */
 	PVID_END
 };
@@ -640,7 +654,7 @@ static int em_get_regs(SYSCTL_HANDLER_ARGS)
 	sbuf_printf(sb, "General Registers\n");
 	sbuf_printf(sb, "\tCTRL\t %08x\n", regs_buff[0]);
 	sbuf_printf(sb, "\tSTATUS\t %08x\n", regs_buff[1]);
-	sbuf_printf(sb, "\tCTRL_EXIT\t %08x\n\n", regs_buff[2]);
+	sbuf_printf(sb, "\tCTRL_EXT\t %08x\n\n", regs_buff[2]);
 
 	sbuf_printf(sb, "Interrupt Registers\n");
 	sbuf_printf(sb, "\tICR\t %08x\n\n", regs_buff[3]);
@@ -1061,9 +1075,17 @@ em_if_attach_pre(if_ctx_t ctx)
 	}
 
 	if (!em_is_valid_ether_addr(hw->mac.addr)) {
-		device_printf(dev, "Invalid MAC address\n");
-		error = EIO;
-		goto err_late;
+		if (adapter->vf_ifp) {
+			u8 addr[ETHER_ADDR_LEN];
+			arc4rand(&addr, sizeof(addr), 0);
+			addr[0] &= 0xFE;
+			addr[0] |= 0x02;
+			bcopy(addr, hw->mac.addr, sizeof(addr));
+		} else {
+			device_printf(dev, "Invalid MAC address\n");
+			error = EIO;
+			goto err_late;
+		}
 	}
 
 	/* Disable ULP support */
@@ -1211,6 +1233,9 @@ em_if_mtu_set(if_ctx_t ctx, uint32_t mtu)
 	case e1000_pch_lpt:
 	case e1000_pch_spt:
 	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+	case e1000_pch_adp:
+	case e1000_pch_mtp:
 	case e1000_82574:
 	case e1000_82583:
 	case e1000_80003es2lan:
@@ -1924,6 +1949,13 @@ em_identify_hardware(if_ctx_t ctx)
 		device_printf(dev, "Setup init failure\n");
 		return;
 	}
+
+	/* Are we a VF device? */
+	if ((adapter->hw.mac.type == e1000_vfadapt) ||
+	    (adapter->hw.mac.type == e1000_vfadapt_i350))
+		adapter->vf_ifp = 1;
+	else
+		adapter->vf_ifp = 0;
 }
 
 static int
@@ -2499,6 +2531,9 @@ em_reset(if_ctx_t ctx)
 	case e1000_pch_lpt:
 	case e1000_pch_spt:
 	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+	case e1000_pch_adp:
+	case e1000_pch_mtp:
 		pba = E1000_PBA_26K;
 		break;
 	case e1000_82575:
@@ -2608,6 +2643,9 @@ em_reset(if_ctx_t ctx)
 	case e1000_pch_lpt:
 	case e1000_pch_spt:
 	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+	case e1000_pch_adp:
+	case e1000_pch_mtp:
 		hw->fc.high_water = 0x5C20;
 		hw->fc.low_water = 0x5048;
 		hw->fc.pause_time = 0x0650;

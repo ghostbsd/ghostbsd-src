@@ -1,9 +1,15 @@
 # $FreeBSD$
 
 freebsd_instance:
+<<<<<<< HEAD
   # image: freebsd-13-0-stable-amd64
   # We need a newer image to install llvm11
   image_family: freebsd-13-0
+=======
+  # Image list available via
+  # gcloud compute images list --project freebsd-org-cloud-dev --no-standard-images
+  image: freebsd-13-0-release-amd64
+>>>>>>> freebsd/stable/13
   cpu: 8
   memory: 24G
 
