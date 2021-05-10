@@ -610,9 +610,11 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 						    uh);
 					if (udp_append(last, ip, n, iphlen,
 						udp_in)) {
-						goto inp_lost;
+						INP_RUNLOCK(inp);
+						goto badunlocked;
 					}
 				}
+				/* Release PCB lock taken on previous pass. */
 				INP_RUNLOCK(last);
 			}
 			last = inp;
@@ -635,9 +637,11 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 			 * to send an ICMP Port Unreachable for a broadcast
 			 * or multicast datgram.)
 			 */
-			UDPSTAT_INC(udps_noportbcast);
-			if (inp)
-				INP_RUNLOCK(inp);
+			UDPSTAT_INC(udps_noport);
+			if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)))
+				UDPSTAT_INC(udps_noportmcast);
+			else
+				UDPSTAT_INC(udps_noportbcast);
 			goto badunlocked;
 		}
 		if (proto == IPPROTO_UDPLITE)
@@ -646,7 +650,6 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 			UDP_PROBE(receive, NULL, last, ip, last, uh);
 		if (udp_append(last, ip, m, iphlen, udp_in) == 0)
 			INP_RUNLOCK(last);
-	inp_lost:
 		return (IPPROTO_DONE);
 	}
 
@@ -1623,6 +1626,12 @@ udp_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_bind: inp == NULL"));
+
+	if (nam->sa_family != AF_INET)
+		return (EAFNOSUPPORT);
+	if (nam->sa_len != sizeof(struct sockaddr_in))
+		return (EINVAL);
+
 	INP_WLOCK(inp);
 	INP_HASH_WLOCK(pcbinfo);
 	error = in_pcbbind(inp, nam, td->td_ucred);
@@ -1663,12 +1672,18 @@ udp_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_connect: inp == NULL"));
+
+	sin = (struct sockaddr_in *)nam;
+	if (sin->sin_family != AF_INET)
+		return (EAFNOSUPPORT);
+	if (sin->sin_len != sizeof(*sin))
+		return (EINVAL);
+
 	INP_WLOCK(inp);
 	if (inp->inp_faddr.s_addr != INADDR_ANY) {
 		INP_WUNLOCK(inp);
 		return (EISCONN);
 	}
-	sin = (struct sockaddr_in *)nam;
 	error = prison_remote_ip4(td->td_ucred, &sin->sin_addr);
 	if (error != 0) {
 		INP_WUNLOCK(inp);
@@ -1738,9 +1753,23 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
     struct mbuf *control, struct thread *td)
 {
 	struct inpcb *inp;
+	int error;
 
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_send: inp == NULL"));
+
+	if (addr != NULL) {
+		error = 0;
+		if (addr->sa_family != AF_INET)
+			error = EAFNOSUPPORT;
+		else if (addr->sa_len != sizeof(struct sockaddr_in))
+			error = EINVAL;
+		if (__predict_false(error != 0)) {
+			m_freem(control);
+			m_freem(m);
+			return (error);
+		}
+	}
 	return (udp_output(inp, m, addr, control, td, flags));
 }
 #endif /* INET */

@@ -33,7 +33,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/types.h>
-#include <sys/sbuf.h>
 #include <sys/wait.h>
 
 #include <archive.h>
@@ -82,6 +81,12 @@ struct fingerprint {
 	char *name;
 	char hash[BUFSIZ];
 	STAILQ_ENTRY(fingerprint) next;
+};
+
+static const char *bootstrap_names []  = {
+	"pkg.pkg",
+	"pkg.txz",
+	NULL
 };
 
 STAILQ_HEAD(fingerprint_list, fingerprint);
@@ -434,9 +439,7 @@ sha256_fd(int fd, char out[SHA256_DIGEST_LENGTH * 2 + 1])
 	int ret;
 	SHA256_CTX sha256;
 
-	my_fd = -1;
 	fp = NULL;
-	r = 0;
 	ret = 1;
 
 	out[0] = '\0';
@@ -591,7 +594,9 @@ static struct pubkey *
 read_pubkey(int fd)
 {
 	struct pubkey *pk;
-	struct sbuf *sig;
+	char *sigb;
+	size_t sigsz;
+	FILE *sig;
 	char buf[4096];
 	int r;
 
@@ -600,18 +605,22 @@ read_pubkey(int fd)
 		return (NULL);
 	}
 
-	sig = sbuf_new_auto();
+	sigsz = 0;
+	sigb = NULL;
+	sig = open_memstream(&sigb, &sigsz);
+	if (sig == NULL)
+		err(EXIT_FAILURE, "open_memstream()");
 
 	while ((r = read(fd, buf, sizeof(buf))) >0) {
-		sbuf_bcat(sig, buf, r);
+		fwrite(buf, 1, r, sig);
 	}
 
-	sbuf_finish(sig);
+	fclose(sig);
 	pk = calloc(1, sizeof(struct pubkey));
-	pk->siglen = sbuf_len(sig);
+	pk->siglen = sigsz;
 	pk->sig = calloc(1, pk->siglen);
-	memcpy(pk->sig, sbuf_data(sig), pk->siglen);
-	sbuf_delete(sig);
+	memcpy(pk->sig, sigb, pk->siglen);
+	free(sigb);
 
 	return (pk);
 }
@@ -620,17 +629,17 @@ static struct sig_cert *
 parse_cert(int fd) {
 	int my_fd;
 	struct sig_cert *sc;
-	FILE *fp;
-	struct sbuf *buf, *sig, *cert;
+	FILE *fp, *sigfp, *certfp, *tmpfp;
 	char *line;
-	size_t linecap;
+	char *sig, *cert;
+	size_t linecap, sigsz, certsz;
 	ssize_t linelen;
 
-	buf = NULL;
-	my_fd = -1;
 	sc = NULL;
 	line = NULL;
 	linecap = 0;
+	sig = cert = NULL;
+	sigfp = certfp = tmpfp = NULL;
 
 	if (lseek(fd, 0, 0) == -1) {
 		warn("lseek");
@@ -649,41 +658,38 @@ parse_cert(int fd) {
 		return (NULL);
 	}
 
-	sig = sbuf_new_auto();
-	cert = sbuf_new_auto();
+	sigsz = certsz = 0;
+	sigfp = open_memstream(&sig, &sigsz);
+	if (sigfp == NULL)
+		err(EXIT_FAILURE, "open_memstream()");
+	certfp = open_memstream(&cert, &certsz);
+	if (certfp == NULL)
+		err(EXIT_FAILURE, "open_memstream()");
 
 	while ((linelen = getline(&line, &linecap, fp)) > 0) {
 		if (strcmp(line, "SIGNATURE\n") == 0) {
-			buf = sig;
+			tmpfp = sigfp;
 			continue;
 		} else if (strcmp(line, "CERT\n") == 0) {
-			buf = cert;
+			tmpfp = certfp;
 			continue;
 		} else if (strcmp(line, "END\n") == 0) {
 			break;
 		}
-		if (buf != NULL)
-			sbuf_bcat(buf, line, linelen);
+		if (tmpfp != NULL)
+			fwrite(line, 1, linelen, tmpfp);
 	}
 
 	fclose(fp);
-
-	/* Trim out unrelated trailing newline */
-	sbuf_setpos(sig, sbuf_len(sig) - 1);
-
-	sbuf_finish(sig);
-	sbuf_finish(cert);
+	fclose(sigfp);
+	fclose(certfp);
 
 	sc = calloc(1, sizeof(struct sig_cert));
-	sc->siglen = sbuf_len(sig);
-	sc->sig = calloc(1, sc->siglen);
-	memcpy(sc->sig, sbuf_data(sig), sc->siglen);
+	sc->siglen = sigsz -1; /* Trim out unrelated trailing newline */
+	sc->sig = sig;
 
-	sc->certlen = sbuf_len(cert);
-	sc->cert = strdup(sbuf_data(cert));
-
-	sbuf_delete(sig);
-	sbuf_delete(cert);
+	sc->certlen = certsz;
+	sc->cert = cert;
 
 	return (sc);
 }
@@ -839,6 +845,7 @@ bootstrap_pkg(bool force, const char *fetchOpts)
 	const char *packagesite;
 	const char *signature_type;
 	char pkgstatic[MAXPATHLEN];
+	const char *bootstrap_name;
 
 	fd_sig = -1;
 	ret = -1;
@@ -861,22 +868,29 @@ bootstrap_pkg(bool force, const char *fetchOpts)
 	if (strncmp(URL_SCHEME_PREFIX, packagesite,
 	    strlen(URL_SCHEME_PREFIX)) == 0)
 		packagesite += strlen(URL_SCHEME_PREFIX);
-	snprintf(url, MAXPATHLEN, "%s/Latest/pkg.txz", packagesite);
+	for (int j = 0; bootstrap_names[j] != NULL; j++) {
+		bootstrap_name = bootstrap_names[j];
 
-	snprintf(tmppkg, MAXPATHLEN, "%s/pkg.txz.XXXXXX",
-	    getenv("TMPDIR") ? getenv("TMPDIR") : _PATH_TMP);
-
-	if ((fd_pkg = fetch_to_fd(url, tmppkg, fetchOpts)) == -1)
+		snprintf(url, MAXPATHLEN, "%s/Latest/%s", packagesite, bootstrap_name);
+		snprintf(tmppkg, MAXPATHLEN, "%s/%s.XXXXXX",
+		    getenv("TMPDIR") ? getenv("TMPDIR") : _PATH_TMP,
+		    bootstrap_name);
+		if ((fd_pkg = fetch_to_fd(url, tmppkg, fetchOpts)) != -1)
+			break;
+		bootstrap_name = NULL;
+	}
+	if (bootstrap_name == NULL)
 		goto fetchfail;
 
 	if (signature_type != NULL &&
 	    strcasecmp(signature_type, "NONE") != 0) {
 		if (strcasecmp(signature_type, "FINGERPRINTS") == 0) {
 
-			snprintf(tmpsig, MAXPATHLEN, "%s/pkg.txz.sig.XXXXXX",
-			    getenv("TMPDIR") ? getenv("TMPDIR") : _PATH_TMP);
-			snprintf(url, MAXPATHLEN, "%s/Latest/pkg.txz.sig",
-			    packagesite);
+			snprintf(tmpsig, MAXPATHLEN, "%s/%s.sig.XXXXXX",
+			    getenv("TMPDIR") ? getenv("TMPDIR") : _PATH_TMP,
+			    bootstrap_name);
+			snprintf(url, MAXPATHLEN, "%s/Latest/%s.sig",
+			    packagesite, bootstrap_name);
 
 			if ((fd_sig = fetch_to_fd(url, tmpsig, fetchOpts)) == -1) {
 				fprintf(stderr, "Signature for pkg not "
@@ -889,10 +903,11 @@ bootstrap_pkg(bool force, const char *fetchOpts)
 		} else if (strcasecmp(signature_type, "PUBKEY") == 0) {
 
 			snprintf(tmpsig, MAXPATHLEN,
-			    "%s/pkg.txz.pubkeysig.XXXXXX",
-			    getenv("TMPDIR") ? getenv("TMPDIR") : _PATH_TMP);
-			snprintf(url, MAXPATHLEN, "%s/Latest/pkg.txz.pubkeysig",
-			    packagesite);
+			    "%s/%s.pubkeysig.XXXXXX",
+			    getenv("TMPDIR") ? getenv("TMPDIR") : _PATH_TMP,
+			    bootstrap_name);
+			snprintf(url, MAXPATHLEN, "%s/Latest/%s.pubkeysig",
+			    packagesite, bootstrap_name);
 
 			if ((fd_sig = fetch_to_fd(url, tmpsig, fetchOpts)) == -1) {
 				fprintf(stderr, "Signature for pkg not "
@@ -1045,7 +1060,7 @@ int
 main(int argc, char *argv[])
 {
 	char pkgpath[MAXPATHLEN];
-	const char *pkgarg;
+	const char *pkgarg, *repo_name;
 	bool activation_test, add_pkg, bootstrap_only, force, yes;
 	signed char ch;
 	const char *fetchOpts;
@@ -1058,6 +1073,7 @@ main(int argc, char *argv[])
 	fetchOpts = "";
 	force = false;
 	pkgarg = NULL;
+	repo_name = NULL;
 	yes = false;
 
 	struct option longopts[] = {
@@ -1070,7 +1086,7 @@ main(int argc, char *argv[])
 
 	snprintf(pkgpath, MAXPATHLEN, "%s/sbin/pkg", getlocalbase());
 
-	while ((ch = getopt_long(argc, argv, "-:fyN46", longopts, NULL)) != -1) {
+	while ((ch = getopt_long(argc, argv, "-:fr::yN46", longopts, NULL)) != -1) {
 		switch (ch) {
 		case 'f':
 			force = true;
@@ -1086,6 +1102,46 @@ main(int argc, char *argv[])
 			break;
 		case '6':
 			fetchOpts = "6";
+			break;
+		case 'r':
+			/*
+			 * The repository can only be specified for an explicit
+			 * bootstrap request at this time, so that we don't
+			 * confuse the user if they're trying to use a verb that
+			 * has some other conflicting meaning but we need to
+			 * bootstrap.
+			 *
+			 * For that reason, we specify that -r has an optional
+			 * argument above and process the next index ourselves.
+			 * This is mostly significant because getopt(3) will
+			 * otherwise eat the next argument, which could be
+			 * something we need to try and make sense of.
+			 *
+			 * At worst this gets us false positives that we ignore
+			 * in other contexts, and we have to do a little fudging
+			 * in order to support separating -r from the reponame
+			 * with a space since it's not actually optional in
+			 * the bootstrap/add sense.
+			 */
+			if (add_pkg || bootstrap_only) {
+				if (optarg != NULL) {
+					repo_name = optarg;
+				} else if (optind < argc) {
+					repo_name = argv[optind];
+				}
+
+				if (repo_name == NULL || *repo_name == '\0') {
+					fprintf(stderr,
+					    "Must specify a repository with -r!\n");
+					exit(EXIT_FAILURE);
+				}
+
+				if (optarg == NULL) {
+					/* Advance past repo name. */
+					optreset = 1;
+					optind++;
+				}
+			}
 			break;
 		case 1:
 			// Non-option arguments, first one is the command
@@ -1126,7 +1182,7 @@ main(int argc, char *argv[])
 		if (activation_test)
 			errx(EXIT_FAILURE, "pkg is not installed");
 
-		config_init();
+		config_init(repo_name);
 
 		if (add_pkg) {
 			if (pkgarg == NULL) {

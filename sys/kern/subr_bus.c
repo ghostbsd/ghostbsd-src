@@ -95,12 +95,12 @@ struct driverlink {
  */
 typedef TAILQ_HEAD(devclass_list, devclass) devclass_list_t;
 typedef TAILQ_HEAD(driver_list, driverlink) driver_list_t;
-typedef TAILQ_HEAD(device_list, device) device_list_t;
+typedef TAILQ_HEAD(device_list, _device) device_list_t;
 
 struct devclass {
 	TAILQ_ENTRY(devclass) link;
 	devclass_t	parent;		/* parent in devclass hierarchy */
-	driver_list_t	drivers;     /* bus devclasses store drivers for bus */
+	driver_list_t	drivers;	/* bus devclasses store drivers for bus */
 	char		*name;
 	device_t	*devices;	/* array of devices indexed by unit */
 	int		maxunit;	/* size of devices array */
@@ -112,9 +112,12 @@ struct devclass {
 };
 
 /**
- * @brief Implementation of device.
+ * @brief Implementation of _device.
+ *
+ * The structure is named "_device" instead of "device" to avoid type confusion
+ * caused by other subsystems defining a (struct device).
  */
-struct device {
+struct _device {
 	/*
 	 * A device is a kernel object. The first field must be the
 	 * current ops table for the object.
@@ -124,8 +127,8 @@ struct device {
 	/*
 	 * Device hierarchy.
 	 */
-	TAILQ_ENTRY(device)	link;	/**< list of devices in parent */
-	TAILQ_ENTRY(device)	devlink; /**< global device list membership */
+	TAILQ_ENTRY(_device)	link;	/**< list of devices in parent */
+	TAILQ_ENTRY(_device)	devlink; /**< global device list membership */
 	device_t	parent;		/**< parent of this device  */
 	device_list_t	children;	/**< list of child devices */
 
@@ -853,7 +856,7 @@ devctl_safe_quote_sb(struct sbuf *sb, const char *src)
 
 /* End of /dev/devctl code */
 
-static TAILQ_HEAD(,device)	bus_data_devices;
+static struct device_list bus_data_devices;
 static int bus_data_generation = 1;
 
 static kobj_method_t null_methods[] = {
@@ -2436,6 +2439,47 @@ device_printf(device_t dev, const char * fmt, ...)
 }
 
 /**
+ * @brief Print the name of the device followed by a colon, a space
+ * and the result of calling log() with the value of @p fmt and
+ * the following arguments.
+ *
+ * @returns the number of characters printed
+ */
+int
+device_log(device_t dev, int pri, const char * fmt, ...)
+{
+	char buf[128];
+	struct sbuf sb;
+	const char *name;
+	va_list ap;
+	size_t retval;
+
+	retval = 0;
+
+	sbuf_new(&sb, buf, sizeof(buf), SBUF_FIXEDLEN);
+
+	name = device_get_name(dev);
+
+	if (name == NULL)
+		sbuf_cat(&sb, "unknown: ");
+	else
+		sbuf_printf(&sb, "%s%d: ", name, device_get_unit(dev));
+
+	va_start(ap, fmt);
+	sbuf_vprintf(&sb, fmt, ap);
+	va_end(ap);
+
+	sbuf_finish(&sb);
+
+	log(pri, "%.*s", (int) sbuf_len(&sb), sbuf_data(&sb));
+	retval = sbuf_len(&sb);
+
+	sbuf_delete(&sb);
+
+	return (retval);
+}
+
+/**
  * @internal
  */
 static void
@@ -3114,7 +3158,7 @@ resource_init_map_request_impl(struct resource_map_request *args, size_t sz)
 {
 	bzero(args, sz);
 	args->size = sz;
-	args->memattr = VM_MEMATTR_UNCACHEABLE;
+	args->memattr = VM_MEMATTR_DEVICE;
 }
 
 /**

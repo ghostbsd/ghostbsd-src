@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd November 17, 2015
+.Dd May 7, 2021
 .Dt MPSUTIL 8
 .Os
 .Sh NAME
@@ -45,7 +45,7 @@
 .Cm show all
 .Nm
 .Op Fl u Ar unit
-.Cm show cfgpages page
+.Cm show cfgpage page
 .Op Ar num
 .Op Ar addr
 .Nm
@@ -60,6 +60,10 @@
 .Nm
 .Op Fl u Ar unit
 .Cm show iocfacts
+.Nm
+.Op Fl u Ar unit
+.Cm set ncq
+.Op Ar enable Ns | Ns Ar disable
 .Nm
 .Op Fl u Ar unit
 .Cm flash save
@@ -129,11 +133,13 @@ Displays all enclosures.
 .It Cm show iocfacts
 Displays IOC Facts messages.
 .It Cm show cfgpage page Oo Ar num Oc Op Ar addr
-Show IOC Facts Message
+Dump raw config page in hex.
 .El
 .Pp
 Controller management commands include:
 .Bl -tag -width indent
+.It Cm set ncq Oo Ar enable Ns | Ns Ar disable Oc
+Enables or disables NCQ in the NVRAM of the card.
 .It Cm flash save Oo Ar firmware Ns | Ns Ar bios Oc Op Ar file
 Save the
 .Ar firmware
@@ -163,3 +169,6 @@ The
 .Nm
 utility first appeared in
 .Fx 11.0 .
+.Sh TODO
+Flash operations (save/update) are not supported on big-endian architectures.
+.Pp

@@ -215,8 +215,6 @@ struct pfsync_softc {
 	struct ip_moptions	sc_imo;
 	struct in_addr		sc_sync_peer;
 	uint32_t		sc_flags;
-#define	PFSYNCF_OK		0x00000001
-#define	PFSYNCF_DEFER		0x00000002
 	uint8_t			sc_maxupdates;
 	struct ip		sc_template;
 	struct mtx		sc_mtx;
@@ -254,6 +252,8 @@ VNET_DEFINE_STATIC(struct pfsync_softc	*, pfsyncif) = NULL;
 #define	V_pfsyncif		VNET(pfsyncif)
 VNET_DEFINE_STATIC(void *, pfsync_swi_cookie) = NULL;
 #define	V_pfsync_swi_cookie	VNET(pfsync_swi_cookie)
+VNET_DEFINE_STATIC(struct intr_event *, pfsync_swi_ie);
+#define	V_pfsync_swi_ie		VNET(pfsync_swi_ie)
 VNET_DEFINE_STATIC(struct pfsyncstats, pfsyncstats);
 #define	V_pfsyncstats		VNET(pfsyncstats)
 VNET_DEFINE_STATIC(int, pfsync_carp_adj) = CARP_MAXSKEW;
@@ -624,10 +624,8 @@ cleanup:
 cleanup_state:	/* pf_state_insert() frees the state keys. */
 	if (st) {
 		for (int i = 0; i < 2; i++) {
-			if (st->packets[i] != NULL)
-				counter_u64_free(st->packets[i]);
-			if (st->bytes[i] != NULL)
-				counter_u64_free(st->bytes[i]);
+			counter_u64_free(st->packets[i]);
+			counter_u64_free(st->bytes[i]);
 		}
 		if (st->dst.scrub)
 			uma_zfree(V_pf_state_scrub_z, st->dst.scrub);
@@ -1375,8 +1373,7 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		}
 		pfsyncr.pfsyncr_syncpeer = sc->sc_sync_peer;
 		pfsyncr.pfsyncr_maxupdates = sc->sc_maxupdates;
-		pfsyncr.pfsyncr_defer = (PFSYNCF_DEFER ==
-		    (sc->sc_flags & PFSYNCF_DEFER));
+		pfsyncr.pfsyncr_defer = sc->sc_flags;
 		PFSYNC_UNLOCK(sc);
 		return (copyout(&pfsyncr, ifr_data_get_ptr(ifr),
 		    sizeof(pfsyncr)));
@@ -1960,7 +1957,7 @@ pfsync_request_update(u_int32_t creatorid, u_int64_t id)
 		nlen += sizeof(struct pfsync_subheader);
 
 	if (b->b_len + nlen > sc->sc_ifp->if_mtu) {
-		pfsync_sendout(1, 0);
+		pfsync_sendout(0, 0);
 
 		nlen = sizeof(struct pfsync_subheader) +
 		    sizeof(struct pfsync_upd_req);
@@ -1968,6 +1965,8 @@ pfsync_request_update(u_int32_t creatorid, u_int64_t id)
 
 	TAILQ_INSERT_TAIL(&b->b_upd_req_list, item, ur_entry);
 	b->b_len += nlen;
+
+	pfsync_push(b);
 }
 
 static bool
@@ -2474,7 +2473,7 @@ vnet_pfsync_init(const void *unused __unused)
 
 	V_pfsync_cloner = if_clone_simple(pfsyncname,
 	    pfsync_clone_create, pfsync_clone_destroy, 1);
-	error = swi_add(NULL, pfsyncname, pfsyncintr, V_pfsyncif,
+	error = swi_add(&V_pfsync_swi_ie, pfsyncname, pfsyncintr, V_pfsyncif,
 	    SWI_NET, INTR_MPSAFE, &V_pfsync_swi_cookie);
 	if (error) {
 		if_clone_detach(V_pfsync_cloner);
@@ -2489,11 +2488,15 @@ VNET_SYSINIT(vnet_pfsync_init, SI_SUB_PROTO_FIREWALL, SI_ORDER_ANY,
 static void
 vnet_pfsync_uninit(const void *unused __unused)
 {
+	int ret;
 
 	pfsync_pointers_uninit();
 
 	if_clone_detach(V_pfsync_cloner);
-	swi_remove(V_pfsync_swi_cookie);
+	ret = swi_remove(V_pfsync_swi_cookie);
+	MPASS(ret == 0);
+	ret = intr_event_destroy(V_pfsync_swi_ie);
+	MPASS(ret == 0);
 }
 
 VNET_SYSUNINIT(vnet_pfsync_uninit, SI_SUB_PROTO_FIREWALL, SI_ORDER_FOURTH,

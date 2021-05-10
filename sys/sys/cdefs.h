@@ -84,7 +84,6 @@
 #define	__GNUCLIKE_ASM 2
 #endif
 #define	__GNUCLIKE___TYPEOF 1
-#define	__GNUCLIKE___OFFSETOF 1
 #define	__GNUCLIKE___SECTION 1
 
 #define	__GNUCLIKE_CTOR_SECTION_HANDLING 1
@@ -563,8 +562,8 @@
 #endif	/* __STDC__ */
 #endif	/* __GNUC__ */
 
-#define	__GLOBL1(sym)	__asm__(".globl " #sym)
-#define	__GLOBL(sym)	__GLOBL1(sym)
+#define	__GLOBL(sym)	__asm__(".globl " __XSTRING(sym))
+#define	__WEAK(sym)	__asm__(".weak " __XSTRING(sym))
 
 #if defined(__GNUC__)
 #define	__IDSTRING(name,string)	__asm__(".ident\t\"" string "\"")
@@ -718,6 +717,17 @@
 #define	__POSIX_VISIBLE		198808
 #define	__ISO_C_VISIBLE		0
 #endif /* _POSIX_C_SOURCE */
+/*
+ * Both glibc and OpenBSD enable c11 features when _ISOC11_SOURCE is defined, or
+ * when compiling with -stdc=c11. A strict reading of the standard would suggest
+ * doing it only for the former. However, a strict reading also requires C99
+ * mode only, so building with C11 is already undefined. Follow glibc's and
+ * OpenBSD's lead for this non-standard configuration for maximum compatibility.
+ */
+#if _ISOC11_SOURCE || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L)
+#undef __ISO_C_VISIBLE
+#define __ISO_C_VISIBLE		2011
+#endif
 #else
 /*-
  * Deal with _ANSI_SOURCE:
@@ -767,11 +777,6 @@
 #define	__EXT1_VISIBLE		0
 #endif
 #endif /* __STDC_WANT_LIB_EXT1__ */
-
-#if defined(__mips) || defined(__riscv) || \
-    (defined(__powerpc64__) && (!defined(_CALL_ELF) || _CALL_ELF == 1))
-#define	__NO_TLS 1
-#endif
 
 /*
  * Old versions of GCC use non-standard ARM arch symbols; acle-compat.h
@@ -868,12 +873,18 @@
 #define	__no_lock_analysis	__lock_annotate(no_thread_safety_analysis)
 
 /*
- * Function or variable should not be sanitized, i.e. by AddressSanitizer.
+ * Function or variable should not be sanitized, e.g., by AddressSanitizer.
  * GCC has the nosanitize attribute, but as a function attribute only, and
  * warns on use as a variable attribute.
  */
 #if __has_attribute(no_sanitize) && defined(__clang__)
+#ifdef _KERNEL
+#define __nosanitizeaddress	__attribute__((no_sanitize("kernel-address")))
+#define __nosanitizememory	__attribute__((no_sanitize("kernel-memory")))
+#else
 #define __nosanitizeaddress	__attribute__((no_sanitize("address")))
+#define __nosanitizememory	__attribute__((no_sanitize("memory")))
+#endif
 #define __nosanitizethread	__attribute__((no_sanitize("thread")))
 #else
 #define __nosanitizeaddress
@@ -883,5 +894,24 @@
 /* Guard variables and structure members by lock. */
 #define	__guarded_by(x)		__lock_annotate(guarded_by(x))
 #define	__pt_guarded_by(x)	__lock_annotate(pt_guarded_by(x))
+
+/* Alignment builtins for better type checking and improved code generation. */
+/* Provide fallback versions for other compilers (GCC/Clang < 10): */
+#if !__has_builtin(__builtin_is_aligned)
+#define __builtin_is_aligned(x, align)	\
+	(((__uintptr_t)x & ((align) - 1)) == 0)
+#endif
+#if !__has_builtin(__builtin_align_up)
+#define __builtin_align_up(x, align)	\
+	((__typeof__(x))(((__uintptr_t)(x)+((align)-1))&(~((align)-1))))
+#endif
+#if !__has_builtin(__builtin_align_down)
+#define __builtin_align_down(x, align)	\
+	((__typeof__(x))((x)&(~((align)-1))))
+#endif
+
+#define __align_up(x, y) __builtin_align_up(x, y)
+#define __align_down(x, y) __builtin_align_down(x, y)
+#define __is_aligned(x, y) __builtin_is_aligned(x, y)
 
 #endif /* !_SYS_CDEFS_H_ */

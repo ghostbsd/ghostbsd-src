@@ -37,6 +37,7 @@
 #include "opt_inet.h"
 
 #include <sys/param.h>
+#include <sys/capsicum.h>
 #include <sys/conf.h>
 #include <sys/eventhandler.h>
 #include <sys/malloc.h>
@@ -148,6 +149,24 @@ CTASSERT(sizeof(struct ifreq) == sizeof(struct ifreq32));
 CTASSERT(__offsetof(struct ifreq, ifr_ifru) ==
     __offsetof(struct ifreq32, ifr_ifru));
 
+struct ifconf32 {
+	int32_t	ifc_len;
+	union {
+		uint32_t	ifcu_buf;
+		uint32_t	ifcu_req;
+	} ifc_ifcu;
+};
+#define	SIOCGIFCONF32	_IOWR('i', 36, struct ifconf32)
+
+struct ifdrv32 {
+	char		ifd_name[IFNAMSIZ];
+	uint32_t	ifd_cmd;
+	uint32_t	ifd_len;
+	uint32_t	ifd_data;
+};
+#define SIOCSDRVSPEC32	_IOC_NEWTYPE(SIOCSDRVSPEC, struct ifdrv32)
+#define SIOCGDRVSPEC32	_IOC_NEWTYPE(SIOCGDRVSPEC, struct ifdrv32)
+
 struct ifgroupreq32 {
 	char	ifgr_name[IFNAMSIZ];
 	u_int	ifgr_len;
@@ -156,6 +175,10 @@ struct ifgroupreq32 {
 		uint32_t	ifgru_groups;
 	} ifgr_ifgru;
 };
+#define	SIOCAIFGROUP32	_IOC_NEWTYPE(SIOCAIFGROUP, struct ifgroupreq32)
+#define	SIOCGIFGROUP32	_IOC_NEWTYPE(SIOCGIFGROUP, struct ifgroupreq32)
+#define	SIOCDIFGROUP32	_IOC_NEWTYPE(SIOCDIFGROUP, struct ifgroupreq32)
+#define	SIOCGIFGMEMB32	_IOC_NEWTYPE(SIOCGIFGMEMB, struct ifgroupreq32)
 
 struct ifmediareq32 {
 	char		ifm_name[IFNAMSIZ];
@@ -168,28 +191,12 @@ struct ifmediareq32 {
 };
 #define	SIOCGIFMEDIA32	_IOC_NEWTYPE(SIOCGIFMEDIA, struct ifmediareq32)
 #define	SIOCGIFXMEDIA32	_IOC_NEWTYPE(SIOCGIFXMEDIA, struct ifmediareq32)
-
-#define	_CASE_IOC_IFGROUPREQ_32(cmd)				\
-    _IOC_NEWTYPE((cmd), struct ifgroupreq32): case
-#else /* !COMPAT_FREEBSD32 */
-#define _CASE_IOC_IFGROUPREQ_32(cmd)
-#endif /* !COMPAT_FREEBSD32 */
-
-#define CASE_IOC_IFGROUPREQ(cmd)	\
-    _CASE_IOC_IFGROUPREQ_32(cmd)	\
-    (cmd)
+#endif /* COMPAT_FREEBSD32 */
 
 union ifreq_union {
 	struct ifreq	ifr;
 #ifdef COMPAT_FREEBSD32
 	struct ifreq32	ifr32;
-#endif
-};
-
-union ifgroupreq_union {
-	struct ifgroupreq ifgr;
-#ifdef COMPAT_FREEBSD32
-	struct ifgroupreq32 ifgr32;
 #endif
 };
 
@@ -315,7 +322,8 @@ struct sx ifnet_sxlock;
 SX_SYSINIT_FLAGS(ifnet_sx, &ifnet_sxlock, "ifnet_sx", SX_RECURSE);
 
 struct sx ifnet_detach_sxlock;
-SX_SYSINIT(ifnet_detach, &ifnet_detach_sxlock, "ifnet_detach_sx");
+SX_SYSINIT_FLAGS(ifnet_detach, &ifnet_detach_sxlock, "ifnet_detach_sx",
+    SX_RECURSE);
 
 /*
  * The allocation of network interfaces is a rather non-atomic affair; we
@@ -358,7 +366,8 @@ ifnet_byindex_ref(u_short idx)
 	ifp = ifnet_byindex(idx);
 	if (ifp == NULL || (ifp->if_flags & IFF_DYING))
 		return (NULL);
-	if_ref(ifp);
+	if (!if_try_ref(ifp))
+		return (NULL);
 	return (ifp);
 }
 
@@ -546,9 +555,7 @@ vnet_if_return(const void *unused __unused)
 	IFNET_WUNLOCK();
 
 	for (int j = 0; j < i; j++) {
-		sx_xlock(&ifnet_detach_sxlock);
 		if_vmove(pending[j], pending[j]->if_home_vnet);
-		sx_xunlock(&ifnet_detach_sxlock);
 	}
 
 	free(pending, M_IFNET);
@@ -739,9 +746,18 @@ if_free(struct ifnet *ifp)
 void
 if_ref(struct ifnet *ifp)
 {
+	u_int old;
 
 	/* We don't assert the ifnet list lock here, but arguably should. */
-	refcount_acquire(&ifp->if_refcount);
+	old = refcount_acquire(&ifp->if_refcount);
+	KASSERT(old > 0, ("%s: ifp %p has 0 refs", __func__, ifp));
+}
+
+bool
+if_try_ref(struct ifnet *ifp)
+{
+	NET_EPOCH_ASSERT();
+	return (refcount_acquire_if_not_zero(&ifp->if_refcount));
 }
 
 void
@@ -1124,9 +1140,9 @@ if_detach(struct ifnet *ifp)
 	CURVNET_SET_QUIET(ifp->if_vnet);
 	found = if_unlink_ifnet(ifp, false);
 	if (found) {
-		sx_slock(&ifnet_detach_sxlock);
+		sx_xlock(&ifnet_detach_sxlock);
 		if_detach_internal(ifp, 0, NULL);
-		sx_sunlock(&ifnet_detach_sxlock);
+		sx_xunlock(&ifnet_detach_sxlock);
 	}
 	CURVNET_RESTORE();
 }
@@ -1644,33 +1660,6 @@ if_delgroups(struct ifnet *ifp)
 	IFNET_WUNLOCK();
 }
 
-static char *
-ifgr_group_get(void *ifgrp)
-{
-	union ifgroupreq_union *ifgrup;
-
-	ifgrup = ifgrp;
-#ifdef COMPAT_FREEBSD32
-	if (SV_CURPROC_FLAG(SV_ILP32))
-		return (&ifgrup->ifgr32.ifgr_ifgru.ifgru_group[0]);
-#endif
-	return (&ifgrup->ifgr.ifgr_ifgru.ifgru_group[0]);
-}
-
-static struct ifg_req *
-ifgr_groups_get(void *ifgrp)
-{
-	union ifgroupreq_union *ifgrup;
-
-	ifgrup = ifgrp;
-#ifdef COMPAT_FREEBSD32
-	if (SV_CURPROC_FLAG(SV_ILP32))
-		return ((struct ifg_req *)(uintptr_t)
-		    ifgrup->ifgr32.ifgr_ifgru.ifgru_groups);
-#endif
-	return (ifgrup->ifgr.ifgr_ifgru.ifgru_groups);
-}
-
 /*
  * Stores all groups from an interface in memory pointed to by ifgr.
  */
@@ -1690,7 +1679,7 @@ if_getgroup(struct ifgroupreq *ifgr, struct ifnet *ifp)
 	}
 
 	len = ifgr->ifgr_len;
-	ifgp = ifgr_groups_get(ifgr);
+	ifgp = ifgr->ifgr_groups;
 	/* XXX: wire */
 	CK_STAILQ_FOREACH(ifgl, &ifp->if_groups, ifgl_next) {
 		if (len < sizeof(ifgrq))
@@ -1735,7 +1724,7 @@ if_getgroupmembers(struct ifgroupreq *ifgr)
 	}
 
 	len = ifgr->ifgr_len;
-	ifgp = ifgr_groups_get(ifgr);
+	ifgp = ifgr->ifgr_groups;
 	CK_STAILQ_FOREACH(ifgm, &ifg->ifg_members, ifgm_next) {
 		if (len < sizeof(ifgrq)) {
 			IFNET_RUNLOCK();
@@ -1858,8 +1847,18 @@ fail:
 void
 ifa_ref(struct ifaddr *ifa)
 {
+	u_int old;
 
-	refcount_acquire(&ifa->ifa_refcnt);
+	old = refcount_acquire(&ifa->ifa_refcnt);
+	KASSERT(old > 0, ("%s: ifa %p has 0 refs", __func__, ifa));
+}
+
+int
+ifa_try_ref(struct ifaddr *ifa)
+{
+
+	NET_EPOCH_ASSERT();
+	return (refcount_acquire_if_not_zero(&ifa->ifa_refcnt));
 }
 
 static void
@@ -2852,16 +2851,17 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		error = if_gethwaddr(ifp, ifr);
 		break;
 
-	case CASE_IOC_IFGROUPREQ(SIOCAIFGROUP):
+	case SIOCAIFGROUP:
 		error = priv_check(td, PRIV_NET_ADDIFGROUP);
 		if (error)
 			return (error);
-		if ((error = if_addgroup(ifp,
-		    ifgr_group_get((struct ifgroupreq *)data))))
+		error = if_addgroup(ifp,
+		    ((struct ifgroupreq *)data)->ifgr_group);
+		if (error != 0)
 			return (error);
 		break;
 
-	case CASE_IOC_IFGROUPREQ(SIOCGIFGROUP):
+	case SIOCGIFGROUP:
 	{
 		struct epoch_tracker et;
 
@@ -2871,12 +2871,13 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		break;
 	}
 
-	case CASE_IOC_IFGROUPREQ(SIOCDIFGROUP):
+	case SIOCDIFGROUP:
 		error = priv_check(td, PRIV_NET_DELIFGROUP);
 		if (error)
 			return (error);
-		if ((error = if_delgroup(ifp,
-		    ifgr_group_get((struct ifgroupreq *)data))))
+		error = if_delgroup(ifp,
+		    ((struct ifgroupreq *)data)->ifgr_group);
+		if (error != 0)
 			return (error);
 		break;
 
@@ -2887,48 +2888,6 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 	return (error);
 }
 
-#ifdef COMPAT_FREEBSD32
-struct ifconf32 {
-	int32_t	ifc_len;
-	union {
-		uint32_t	ifcu_buf;
-		uint32_t	ifcu_req;
-	} ifc_ifcu;
-};
-#define	SIOCGIFCONF32	_IOWR('i', 36, struct ifconf32)
-#endif
-
-#ifdef COMPAT_FREEBSD32
-static void
-ifmr_init(struct ifmediareq *ifmr, caddr_t data)
-{
-	struct ifmediareq32 *ifmr32;
-
-	ifmr32 = (struct ifmediareq32 *)data;
-	memcpy(ifmr->ifm_name, ifmr32->ifm_name,
-	    sizeof(ifmr->ifm_name));
-	ifmr->ifm_current = ifmr32->ifm_current;
-	ifmr->ifm_mask = ifmr32->ifm_mask;
-	ifmr->ifm_status = ifmr32->ifm_status;
-	ifmr->ifm_active = ifmr32->ifm_active;
-	ifmr->ifm_count = ifmr32->ifm_count;
-	ifmr->ifm_ulist = (int *)(uintptr_t)ifmr32->ifm_ulist;
-}
-
-static void
-ifmr_update(const struct ifmediareq *ifmr, caddr_t data)
-{
-	struct ifmediareq32 *ifmr32;
-
-	ifmr32 = (struct ifmediareq32 *)data;
-	ifmr32->ifm_current = ifmr->ifm_current;
-	ifmr32->ifm_mask = ifmr->ifm_mask;
-	ifmr32->ifm_status = ifmr->ifm_status;
-	ifmr32->ifm_active = ifmr->ifm_active;
-	ifmr32->ifm_count = ifmr->ifm_count;
-}
-#endif
-
 /*
  * Interface ioctls.
  */
@@ -2936,9 +2895,18 @@ int
 ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 {
 #ifdef COMPAT_FREEBSD32
-	caddr_t saved_data = NULL;
-	struct ifmediareq ifmr;
-	struct ifmediareq *ifmrp = NULL;
+	union {
+		struct ifconf ifc;
+		struct ifdrv ifd;
+		struct ifgroupreq ifgr;
+		struct ifmediareq ifmr;
+	} thunk;
+	caddr_t saved_data;
+	u_long saved_cmd;
+	struct ifconf32 *ifc32;
+	struct ifdrv32 *ifd32;
+	struct ifgroupreq32 *ifgr32;
+	struct ifmediareq32 *ifmr32;
 #endif
 	struct ifnet *ifp;
 	struct ifreq *ifr;
@@ -2958,40 +2926,72 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 	}
 #endif
 
+#ifdef COMPAT_FREEBSD32
+	saved_cmd = cmd;
+	saved_data = data;
+	switch (cmd) {
+	case SIOCGIFCONF32:
+		ifc32 = (struct ifconf32 *)data;
+		thunk.ifc.ifc_len = ifc32->ifc_len;
+		thunk.ifc.ifc_buf = PTRIN(ifc32->ifc_buf);
+		data = (caddr_t)&thunk.ifc;
+		cmd = SIOCGIFCONF;
+		break;
+	case SIOCGDRVSPEC32:
+	case SIOCSDRVSPEC32:
+		ifd32 = (struct ifdrv32 *)data;
+		memcpy(thunk.ifd.ifd_name, ifd32->ifd_name,
+		    sizeof(thunk.ifd.ifd_name));
+		thunk.ifd.ifd_cmd = ifd32->ifd_cmd;
+		thunk.ifd.ifd_len = ifd32->ifd_len;
+		thunk.ifd.ifd_data = PTRIN(ifd32->ifd_data);
+		data = (caddr_t)&thunk.ifd;
+		cmd = _IOC_NEWTYPE(cmd, struct ifdrv);
+		break;
+	case SIOCAIFGROUP32:
+	case SIOCGIFGROUP32:
+	case SIOCDIFGROUP32:
+	case SIOCGIFGMEMB32:
+		ifgr32 = (struct ifgroupreq32 *)data;
+		memcpy(thunk.ifgr.ifgr_name, ifgr32->ifgr_name,
+		    sizeof(thunk.ifgr.ifgr_name));
+		thunk.ifgr.ifgr_len = ifgr32->ifgr_len;
+		switch (cmd) {
+		case SIOCAIFGROUP32:
+		case SIOCDIFGROUP32:
+			memcpy(thunk.ifgr.ifgr_group, ifgr32->ifgr_group,
+			    sizeof(thunk.ifgr.ifgr_group));
+			break;
+		case SIOCGIFGROUP32:
+		case SIOCGIFGMEMB32:
+			thunk.ifgr.ifgr_groups = PTRIN(ifgr32->ifgr_groups);
+			break;
+		}
+		data = (caddr_t)&thunk.ifgr;
+		cmd = _IOC_NEWTYPE(cmd, struct ifgroupreq);
+		break;
+	case SIOCGIFMEDIA32:
+	case SIOCGIFXMEDIA32:
+		ifmr32 = (struct ifmediareq32 *)data;
+		memcpy(thunk.ifmr.ifm_name, ifmr32->ifm_name,
+		    sizeof(thunk.ifmr.ifm_name));
+		thunk.ifmr.ifm_current = ifmr32->ifm_current;
+		thunk.ifmr.ifm_mask = ifmr32->ifm_mask;
+		thunk.ifmr.ifm_status = ifmr32->ifm_status;
+		thunk.ifmr.ifm_active = ifmr32->ifm_active;
+		thunk.ifmr.ifm_count = ifmr32->ifm_count;
+		thunk.ifmr.ifm_ulist = PTRIN(ifmr32->ifm_ulist);
+		data = (caddr_t)&thunk.ifmr;
+		cmd = _IOC_NEWTYPE(cmd, struct ifmediareq);
+		break;
+	}
+#endif
+
 	switch (cmd) {
 	case SIOCGIFCONF:
 		error = ifconf(cmd, data);
 		goto out_noref;
-
-#ifdef COMPAT_FREEBSD32
-	case SIOCGIFCONF32:
-		{
-			struct ifconf32 *ifc32;
-			struct ifconf ifc;
-
-			ifc32 = (struct ifconf32 *)data;
-			ifc.ifc_len = ifc32->ifc_len;
-			ifc.ifc_buf = PTRIN(ifc32->ifc_buf);
-
-			error = ifconf(SIOCGIFCONF, (void *)&ifc);
-			if (error == 0)
-				ifc32->ifc_len = ifc.ifc_len;
-			goto out_noref;
-		}
-#endif
 	}
-
-#ifdef COMPAT_FREEBSD32
-	switch (cmd) {
-	case SIOCGIFMEDIA32:
-	case SIOCGIFXMEDIA32:
-		ifmrp = &ifmr;
-		ifmr_init(ifmrp, data);
-		cmd = _IOC_NEWTYPE(cmd, struct ifmediareq);
-		saved_data = data;
-		data = (caddr_t)ifmrp;
-	}
-#endif
 
 	ifr = (struct ifreq *)data;
 	switch (cmd) {
@@ -3015,9 +3015,9 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 		error = priv_check(td, PRIV_NET_IFDESTROY);
 
 		if (error == 0) {
-			sx_slock(&ifnet_detach_sxlock);
+			sx_xlock(&ifnet_detach_sxlock);
 			error = if_clone_destroy(ifr->ifr_name);
-			sx_sunlock(&ifnet_detach_sxlock);
+			sx_xunlock(&ifnet_detach_sxlock);
 		}
 		goto out_noref;
 
@@ -3025,7 +3025,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 		error = if_clone_list((struct if_clonereq *)data);
 		goto out_noref;
 
-	case CASE_IOC_IFGROUPREQ(SIOCGIFGMEMB):
+	case SIOCGIFGMEMB:
 		error = if_getgroupmembers((struct ifgroupreq *)data);
 		goto out_noref;
 
@@ -3082,16 +3082,39 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 out_ref:
 	if_rele(ifp);
 out_noref:
+	CURVNET_RESTORE();
 #ifdef COMPAT_FREEBSD32
-	if (ifmrp != NULL) {
-		KASSERT((cmd == SIOCGIFMEDIA || cmd == SIOCGIFXMEDIA),
-		    ("ifmrp non-NULL, but cmd is not an ifmedia req 0x%lx",
-		     cmd));
-		data = saved_data;
-		ifmr_update(ifmrp, data);
+	if (error != 0)
+		return (error);
+	switch (saved_cmd) {
+	case SIOCGIFCONF32:
+		ifc32->ifc_len = thunk.ifc.ifc_len;
+		break;
+	case SIOCGDRVSPEC32:
+		/*
+		 * SIOCGDRVSPEC is IOWR, but nothing actually touches
+		 * the struct so just assert that ifd_len (the only
+		 * field it might make sense to update) hasn't
+		 * changed.
+		 */
+		KASSERT(thunk.ifd.ifd_len == ifd32->ifd_len,
+		    ("ifd_len was updated %u -> %zu", ifd32->ifd_len,
+			thunk.ifd.ifd_len));
+		break;
+	case SIOCGIFGROUP32:
+	case SIOCGIFGMEMB32:
+		ifgr32->ifgr_len = thunk.ifgr.ifgr_len;
+		break;
+	case SIOCGIFMEDIA32:
+	case SIOCGIFXMEDIA32:
+		ifmr32->ifm_current = thunk.ifmr.ifm_current;
+		ifmr32->ifm_mask = thunk.ifmr.ifm_mask;
+		ifmr32->ifm_status = thunk.ifmr.ifm_status;
+		ifmr32->ifm_active = thunk.ifmr.ifm_active;
+		ifmr32->ifm_count = thunk.ifmr.ifm_count;
+		break;
 	}
 #endif
-	CURVNET_RESTORE();
 	return (error);
 }
 
@@ -3949,15 +3972,35 @@ if_initname(struct ifnet *ifp, const char *name, int unit)
 		strlcpy(ifp->if_xname, name, IFNAMSIZ);
 }
 
+static int
+if_vlog(struct ifnet *ifp, int pri, const char *fmt, va_list ap)
+{
+	char if_fmt[256];
+
+	snprintf(if_fmt, sizeof(if_fmt), "%s: %s", ifp->if_xname, fmt);
+	vlog(pri, if_fmt, ap);
+	return (0);
+}
+
+
 int
 if_printf(struct ifnet *ifp, const char *fmt, ...)
 {
-	char if_fmt[256];
 	va_list ap;
 
-	snprintf(if_fmt, sizeof(if_fmt), "%s: %s", ifp->if_xname, fmt);
 	va_start(ap, fmt);
-	vlog(LOG_INFO, if_fmt, ap);
+	if_vlog(ifp, LOG_INFO, fmt, ap);
+	va_end(ap);
+	return (0);
+}
+
+int
+if_log(struct ifnet *ifp, int pri, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	if_vlog(ifp, pri, fmt, ap);
 	va_end(ap);
 	return (0);
 }
@@ -4036,6 +4079,14 @@ if_deregister_com_alloc(u_char type)
 	    ("if_deregister_com_alloc: %d not registered", type));
 	KASSERT(if_com_free[type] != NULL,
 	    ("if_deregister_com_alloc: %d free not registered", type));
+
+	/*
+	 * Ensure all pending EPOCH(9) callbacks have been executed. This
+	 * fixes issues about late invocation of if_destroy(), which leads
+	 * to memory leak from if_com_alloc[type] allocated if_l2com.
+	 */
+	epoch_drain_callbacks(net_epoch_preempt);
+
 	if_com_alloc[type] = NULL;
 	if_com_free[type] = NULL;
 }

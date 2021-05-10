@@ -141,7 +141,7 @@ sctp6_input_with_port(struct mbuf **i_pak, int *offp, uint16_t port)
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
 		goto out;
 	}
-	ecn_bits = ((ntohl(ip6->ip6_flow) >> 20) & 0x000000ff);
+	ecn_bits = IPV6_TRAFFIC_CLASS(ip6);
 	if (m->m_pkthdr.csum_flags & CSUM_SCTP_VALID) {
 		SCTP_STAT_INCR(sctps_recvhwcrc);
 		compute_crc = 0;
@@ -708,6 +708,27 @@ sctp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 		}
 		SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EDESTADDRREQ);
 		return (EDESTADDRREQ);
+	}
+	switch (addr->sa_family) {
+#ifdef INET
+	case AF_INET:
+		if (addr->sa_len != sizeof(struct sockaddr_in)) {
+			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EINVAL);
+			return (EINVAL);
+		}
+		break;
+#endif
+#ifdef INET6
+	case AF_INET6:
+		if (addr->sa_len != sizeof(struct sockaddr_in6)) {
+			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EINVAL);
+			return (EINVAL);
+		}
+		break;
+#endif
+	default:
+		SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP6_USRREQ, EINVAL);
+		return (EINVAL);
 	}
 #ifdef INET
 	sin6 = (struct sockaddr_in6 *)addr;

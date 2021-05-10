@@ -88,7 +88,7 @@ typedef struct {
 /*
  * Miscellaneous
  */
-#define LINUX_AT_COUNT		19	/* Count of used aux entry types. */
+#define LINUX_AT_COUNT		20	/* Count of used aux entry types. */
 
 struct l___sysctl_args
 {
@@ -431,6 +431,7 @@ struct l_pollfd {
 #define LINUX_ARCH_SET_FS		0x1002
 #define LINUX_ARCH_GET_FS		0x1003
 #define LINUX_ARCH_GET_GS		0x1004
+#define LINUX_ARCH_CET_STATUS		0x3001
 
 #define	linux_copyout_rusage(r, u)	copyout(r, u, sizeof(*r))
 

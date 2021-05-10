@@ -478,8 +478,10 @@ rip6_output(struct mbuf *m, struct socket *so, ...)
 	/*
 	 * Source address selection.
 	 */
+	NET_EPOCH_ENTER(et);
 	error = in6_selectsrc_socket(dstsock, optp, inp, so->so_cred,
 	    scope_ambiguous, &in6a, &hlim);
+	NET_EPOCH_EXIT(et);
 
 	if (error)
 		goto bad;
@@ -758,6 +760,8 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("rip6_bind: inp == NULL"));
 
+	if (nam->sa_family != AF_INET6)
+		return (EAFNOSUPPORT);
 	if (nam->sa_len != sizeof(*addr))
 		return (EINVAL);
 	if ((error = prison_check_ip6(td->td_ucred, &addr->sin6_addr)) != 0)
@@ -795,6 +799,7 @@ rip6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	struct inpcb *inp;
 	struct sockaddr_in6 *addr = (struct sockaddr_in6 *)nam;
 	struct in6_addr in6a;
+	struct epoch_tracker et;
 	int error = 0, scope_ambiguous = 0;
 
 	inp = sotoinpcb(so);
@@ -823,8 +828,10 @@ rip6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	INP_INFO_WLOCK(&V_ripcbinfo);
 	INP_WLOCK(inp);
 	/* Source address selection. XXX: need pcblookup? */
+	NET_EPOCH_ENTER(et);
 	error = in6_selectsrc_socket(addr, inp->in6p_outputopts,
 	    inp, so->so_cred, scope_ambiguous, &in6a, NULL);
+	NET_EPOCH_EXIT(et);
 	if (error) {
 		INP_WUNLOCK(inp);
 		INP_INFO_WUNLOCK(&V_ripcbinfo);
@@ -885,6 +892,10 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		if (nam == NULL) {
 			m_freem(m);
 			return (ENOTCONN);
+		}
+		if (nam->sa_family != AF_INET6) {
+			m_freem(m);
+			return (EAFNOSUPPORT);
 		}
 		if (nam->sa_len != sizeof(struct sockaddr_in6)) {
 			m_freem(m);

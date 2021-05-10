@@ -394,10 +394,13 @@
 #define	NFSPROC_RMEXTATTR	63
 #define	NFSPROC_LISTEXTATTR	64
 
+/* BindConnectionToSession, done by the krpc for a new connection. */
+#define	NFSPROC_BINDCONNTOSESS	65
+
 /*
  * Must be defined as one higher than the last NFSv4.2 Proc# above.
  */
-#define	NFSV42_NPROCS		65
+#define	NFSV42_NPROCS		66
 
 #endif	/* NFS_V3NPROCS */
 
@@ -1224,6 +1227,7 @@ struct nfsv3_sattr {
  	NFSATTRBM_RAWDEV |						\
  	NFSATTRBM_SPACEUSED |						\
  	NFSATTRBM_TIMEACCESS |						\
+	NFSATTRBM_TIMECREATE |						\
  	NFSATTRBM_TIMEMETADATA |					\
  	NFSATTRBM_TIMEMODIFY)
 
@@ -1255,6 +1259,7 @@ struct nfsv3_sattr {
  	NFSATTRBM_RAWDEV |						\
  	NFSATTRBM_SPACEUSED |						\
  	NFSATTRBM_TIMEACCESS |						\
+	NFSATTRBM_TIMECREATE |						\
  	NFSATTRBM_TIMEMETADATA |					\
  	NFSATTRBM_TIMEMODIFY)
 

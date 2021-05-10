@@ -50,6 +50,7 @@ kld_start()
 	done
 
 	[ -n "$kld_list" ] || return
+	[ -z "$(kenv -q kld_disable 2>/dev/null)" ] || return
 
 	local _kld
 

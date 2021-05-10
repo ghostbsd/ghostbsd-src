@@ -356,24 +356,18 @@ tmpfs_alloc_node(struct mount *mp, struct tmpfs_mount *tmp, enum vtype type,
 		 * pointer to also get the above content in a stable manner.
 		 * Worst case tn_link_smr flag may be set to true despite being stale,
 		 * while the target buffer is already cleared out.
-		 *
-		 * TODO: Since there is no load consume primitive provided
-		 * right now, the load is performed with an acquire fence.
 		 */
-		atomic_store_ptr((uintptr_t *)&nnode->tn_link_target,
-		    (uintptr_t)symlink);
+		atomic_store_ptr(&nnode->tn_link_target, symlink);
 		atomic_store_char((char *)&nnode->tn_link_smr, symlink_smr);
 		atomic_thread_fence_rel();
 		break;
 
 	case VREG:
 		obj = nnode->tn_reg.tn_aobj =
-		    vm_pager_allocate(OBJT_SWAP, NULL, 0, VM_PROT_DEFAULT, 0,
+		    vm_pager_allocate(OBJT_SWAP_TMPFS, NULL, 0,
+			VM_PROT_DEFAULT, 0,
 			NULL /* XXXKIB - tmpfs needs swap reservation */);
-		VM_OBJECT_WLOCK(obj);
 		/* OBJ_TMPFS is set together with the setting of vp->v_object */
-		vm_object_set_flag(obj, OBJ_TMPFS_NODE);
-		VM_OBJECT_WUNLOCK(obj);
 		nnode->tn_reg.tn_tmp = tmp;
 		break;
 
@@ -453,8 +447,7 @@ tmpfs_free_node_locked(struct tmpfs_mount *tmp, struct tmpfs_node *node,
 
 	case VLNK:
 		symlink = node->tn_link_target;
-		atomic_store_ptr((uintptr_t *)&node->tn_link_target,
-		    (uintptr_t)NULL);
+		atomic_store_ptr(&node->tn_link_target, NULL);
 		if (atomic_load_char(&node->tn_link_smr)) {
 			cache_symlink_free(symlink, node->tn_size + 1);
 		} else {
@@ -1595,8 +1588,9 @@ tmpfs_check_mtime(struct vnode *vp)
 	if (vp->v_type != VREG)
 		return;
 	obj = vp->v_object;
-	KASSERT((obj->flags & (OBJ_TMPFS_NODE | OBJ_TMPFS)) ==
-	    (OBJ_TMPFS_NODE | OBJ_TMPFS), ("non-tmpfs obj"));
+	KASSERT(obj->type == OBJT_SWAP_TMPFS &&
+	    (obj->flags & (OBJ_SWAP | OBJ_TMPFS)) ==
+	    (OBJ_SWAP | OBJ_TMPFS), ("non-tmpfs obj"));
 	/* unlocked read */
 	if (obj->generation != obj->cleangeneration) {
 		VM_OBJECT_WLOCK(obj);

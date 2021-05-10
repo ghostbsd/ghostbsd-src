@@ -11,9 +11,7 @@ CONFS=	DAEMON \
 	LOGIN \
 	NETWORKING \
 	SERVERS \
-	addswap \
 	adjkerntz \
-	archdep \
 	bgfsck \
 	${_blacklistd} \
 	bridge \
@@ -271,6 +269,10 @@ _opensm=	opensm
 
 .if ${MK_OPENSSL} != "no"
 CONFS+=		keyserv
+.if ${MK_OPENSSL_KTLS} != "no"
+CONFS+=		tlsclntd \
+		tlsservd
+.endif
 .endif
 
 .if ${MK_OPENSSH} != "no"

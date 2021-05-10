@@ -89,6 +89,9 @@ if [ -n "$RESTART" ]; then
 	skip="-s nostart"
 	if [ `/sbin/sysctl -n security.jail.jailed` -eq 1 ]; then
 		skip="$skip -s nojail"
+		if [ `/sbin/sysctl -n security.jail.vnet` -ne 1 ]; then
+			skip="$skip -s nojailvnet"
+		fi
 	fi
 	[ -n "$local_startup" ] && find_local_scripts_new
 	files=`rcorder ${skip} ${local_rc} 2>/dev/null`
@@ -119,6 +122,9 @@ if [ -n "$ENABLED" -o -n "$RCORDER" ]; then
 	skip="-s nostart"
 	if [ `/sbin/sysctl -n security.jail.jailed` -eq 1 ]; then
 		skip="$skip -s nojail"
+		if [ `/sbin/sysctl -n security.jail.vnet` -ne 1 ]; then
+			skip="$skip -s nojailvnet"
+		fi
 	fi
 	[ -n "$local_startup" ] && find_local_scripts_new
 	files=`rcorder ${skip} /etc/rc.d/* ${local_rc} 2>/dev/null`
@@ -171,7 +177,7 @@ cd /
 for dir in /etc/rc.d $local_startup; do
 	if [ -x "$dir/$script" ]; then
 		[ -n "$VERBOSE" ] && echo "$script is located in $dir"
-		exec env -i -L 0/daemon HOME=/ PATH=/sbin:/bin:/usr/sbin:/usr/bin "$dir/$script" "$@"
+		exec env -i -L -/daemon HOME=/ PATH=/sbin:/bin:/usr/sbin:/usr/bin "$dir/$script" "$@"
 	fi
 done
 

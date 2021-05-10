@@ -40,6 +40,7 @@
 #include <sys/counter.h>
 #include <sys/cpuset.h>
 #include <sys/malloc.h>
+#include <sys/nv.h>
 #include <sys/refcount.h>
 #include <sys/sysctl.h>
 #include <sys/lock.h>
@@ -308,6 +309,7 @@ struct pf_kpool {
 	struct pf_kpooladdr	*cur;
 	struct pf_poolhashkey	 key;
 	struct pf_addr		 counter;
+	struct pf_mape_portset	 mape;
 	int			 tblidx;
 	u_int16_t		 proxy_port[2];
 	u_int8_t		 opts;
@@ -322,7 +324,7 @@ struct pf_krule {
 	struct pf_rule_addr	 src;
 	struct pf_rule_addr	 dst;
 	union pf_krule_ptr	 skip[PF_SKIP_COUNT];
-	char			 label[PF_RULE_LABEL_SIZE];
+	char			 label[PF_RULE_MAX_LABEL_COUNT][PF_RULE_LABEL_SIZE];
 	char			 ifname[IFNAMSIZ];
 	char			 qname[PF_QNAME_SIZE];
 	char			 pqname[PF_QNAME_SIZE];
@@ -356,7 +358,6 @@ struct pf_krule {
 	}			 max_src_conn_rate;
 	u_int32_t		 qid;
 	u_int32_t		 pqid;
-	u_int32_t		 rt_listid;
 	u_int32_t		 nr;
 	u_int32_t		 prob;
 	uid_t			 cuid;
@@ -377,6 +378,7 @@ struct pf_krule {
 	struct pf_rule_gid	 gid;
 
 	u_int32_t		 rule_flag;
+	uint32_t		 rule_ref;
 	u_int8_t		 action;
 	u_int8_t		 direction;
 	u_int8_t		 log;
@@ -893,6 +895,7 @@ struct pfi_kkif {
 #define	PFI_IFLAG_REFS		0x0001	/* has state references */
 #define PFI_IFLAG_SKIP		0x0100	/* skip filtering on interface */
 
+#ifdef _KERNEL
 struct pf_pdesc {
 	struct {
 		int	 done;
@@ -932,6 +935,7 @@ struct pf_pdesc {
 	u_int8_t	 sidx;		/* key index for source */
 	u_int8_t	 didx;		/* key index for destination */
 };
+#endif
 
 /* flags for RDR options */
 #define PF_DPORT_RANGE	0x01		/* Dest port uses range */
@@ -992,6 +996,7 @@ struct pf_kstatus {
 	uint32_t	hostid;
 	char		ifname[IFNAMSIZ];
 	uint8_t		pf_chksum[PF_MD5_DIGEST_LENGTH];
+	bool		keep_counters;
 };
 
 struct pf_divert {
@@ -1068,6 +1073,21 @@ struct pfioc_src_node_kill {
 	struct pf_rule_addr psnk_dst;
 	u_int		    psnk_killed;
 };
+
+#ifdef _KERNEL
+struct pf_kstate_kill {
+	struct pf_state_cmp	psk_pfcmp;
+	sa_family_t		psk_af;
+	int			psk_proto;
+	struct pf_rule_addr	psk_src;
+	struct pf_rule_addr	psk_dst;
+	struct pf_rule_addr	psk_rt_addr;
+	char			psk_ifname[IFNAMSIZ];
+	char			psk_label[PF_RULE_LABEL_SIZE];
+	u_int			psk_killed;
+	bool			psk_kill_match;
+};
+#endif
 
 struct pfioc_state_kill {
 	struct pf_state_cmp	psk_pfcmp;
@@ -1229,10 +1249,13 @@ struct pfioc_iface {
 #define DIOCSTART	_IO  ('D',  1)
 #define DIOCSTOP	_IO  ('D',  2)
 #define DIOCADDRULE	_IOWR('D',  4, struct pfioc_rule)
+#define DIOCADDRULENV	_IOWR('D',  4, struct pfioc_nv)
 #define DIOCGETRULES	_IOWR('D',  6, struct pfioc_rule)
 #define DIOCGETRULE	_IOWR('D',  7, struct pfioc_rule)
+#define DIOCGETRULENV	_IOWR('D',  7, struct pfioc_nv)
 /* XXX cut 8 - 17 */
 #define DIOCCLRSTATES	_IOWR('D', 18, struct pfioc_state_kill)
+#define DIOCCLRSTATESNV	_IOWR('D', 18, struct pfioc_nv)
 #define DIOCGETSTATE	_IOWR('D', 19, struct pfioc_state)
 #define DIOCSETSTATUSIF _IOWR('D', 20, struct pfioc_if)
 #define DIOCGETSTATUS	_IOWR('D', 21, struct pf_status)
@@ -1249,6 +1272,7 @@ struct pfioc_iface {
 #define DIOCGETLIMIT	_IOWR('D', 39, struct pfioc_limit)
 #define DIOCSETLIMIT	_IOWR('D', 40, struct pfioc_limit)
 #define DIOCKILLSTATES	_IOWR('D', 41, struct pfioc_state_kill)
+#define DIOCKILLSTATESNV	_IOWR('D', 41, struct pfioc_nv)
 #define DIOCSTARTALTQ	_IO  ('D', 42)
 #define DIOCSTOPALTQ	_IO  ('D', 43)
 #define DIOCADDALTQV0	_IOWR('D', 45, struct pfioc_altq_v0)
@@ -1298,6 +1322,8 @@ struct pfioc_iface {
 #define	DIOCSETIFFLAG	_IOWR('D', 89, struct pfioc_iface)
 #define	DIOCCLRIFFLAG	_IOWR('D', 90, struct pfioc_iface)
 #define	DIOCKILLSRCNODES	_IOWR('D', 91, struct pfioc_src_node_kill)
+#define	DIOCKEEPCOUNTERS	_IOWR('D', 92, struct pfioc_nv)
+
 struct pf_ifspeed_v0 {
 	char			ifname[IFNAMSIZ];
 	u_int32_t		baudrate;
@@ -1388,6 +1414,8 @@ VNET_DECLARE(struct pf_srchash *, pf_srchash);
 
 VNET_DECLARE(void *, pf_swi_cookie);
 #define V_pf_swi_cookie	VNET(pf_swi_cookie)
+VNET_DECLARE(struct intr_event *, pf_swi_ie);
+#define	V_pf_swi_ie	VNET(pf_swi_ie)
 
 VNET_DECLARE(uint64_t, pf_stateid[MAXCPU]);
 #define	V_pf_stateid	VNET(pf_stateid)
@@ -1632,6 +1660,8 @@ VNET_DECLARE(struct pf_kanchor,			 pf_main_anchor);
 void			 pf_init_kruleset(struct pf_kruleset *);
 int			 pf_kanchor_setup(struct pf_krule *,
 			    const struct pf_kruleset *, const char *);
+int			 pf_kanchor_nvcopyout(const struct pf_kruleset *,
+			    const struct pf_krule *, nvlist_t *);
 int			 pf_kanchor_copyout(const struct pf_kruleset *,
 			    const struct pf_krule *, struct pfioc_rule *);
 void			 pf_kanchor_remove(struct pf_krule *);
@@ -1639,6 +1669,8 @@ void			 pf_remove_if_empty_kruleset(struct pf_kruleset *);
 struct pf_kruleset	*pf_find_kruleset(const char *);
 struct pf_kruleset	*pf_find_or_create_kruleset(const char *);
 void			 pf_rs_initialize(void);
+
+void			 pf_krule_free(struct pf_krule *);
 #endif
 
 /* The fingerprint functions can be linked into userland programs (tcpdump) */

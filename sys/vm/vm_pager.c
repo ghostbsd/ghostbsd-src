@@ -100,6 +100,7 @@ static vm_object_t dead_pager_alloc(void *, vm_ooffset_t, vm_prot_t,
 static void dead_pager_putpages(vm_object_t, vm_page_t *, int, int, int *);
 static boolean_t dead_pager_haspage(vm_object_t, vm_pindex_t, int *, int *);
 static void dead_pager_dealloc(vm_object_t);
+static void dead_pager_getvp(vm_object_t, struct vnode **, bool *);
 
 static int
 dead_pager_getpages(vm_object_t obj, vm_page_t *ma, int count, int *rbehind,
@@ -144,29 +145,40 @@ dead_pager_dealloc(vm_object_t object)
 
 }
 
-static struct pagerops deadpagerops = {
+static void
+dead_pager_getvp(vm_object_t object, struct vnode **vpp, bool *vp_heldp)
+{
+	/*
+	 * For OBJT_DEAD objects, v_writecount was handled in
+	 * vnode_pager_dealloc().
+	 */
+}
+
+static const struct pagerops deadpagerops = {
 	.pgo_alloc = 	dead_pager_alloc,
 	.pgo_dealloc =	dead_pager_dealloc,
 	.pgo_getpages =	dead_pager_getpages,
 	.pgo_putpages =	dead_pager_putpages,
 	.pgo_haspage =	dead_pager_haspage,
+	.pgo_getvp =	dead_pager_getvp,
 };
 
-struct pagerops *pagertab[] = {
-	&defaultpagerops,	/* OBJT_DEFAULT */
-	&swappagerops,		/* OBJT_SWAP */
-	&vnodepagerops,		/* OBJT_VNODE */
-	&devicepagerops,	/* OBJT_DEVICE */
-	&physpagerops,		/* OBJT_PHYS */
-	&deadpagerops,		/* OBJT_DEAD */
-	&sgpagerops,		/* OBJT_SG */
-	&mgtdevicepagerops,	/* OBJT_MGTDEVICE */
+const struct pagerops *pagertab[] __read_mostly = {
+	[OBJT_DEFAULT] =	&defaultpagerops,
+	[OBJT_SWAP] =		&swappagerops,
+	[OBJT_VNODE] =		&vnodepagerops,
+	[OBJT_DEVICE] =		&devicepagerops,
+	[OBJT_PHYS] =		&physpagerops,
+	[OBJT_DEAD] =		&deadpagerops,
+	[OBJT_SG] = 		&sgpagerops,
+	[OBJT_MGTDEVICE] = 	&mgtdevicepagerops,
+	[OBJT_SWAP_TMPFS] =	&swaptmpfspagerops,
 };
 
 void
 vm_pager_init(void)
 {
-	struct pagerops **pgops;
+	const struct pagerops **pgops;
 
 	/*
 	 * Initialize known pagers
@@ -232,7 +244,7 @@ vm_pager_allocate(objtype_t type, void *handle, vm_ooffset_t size,
     vm_prot_t prot, vm_ooffset_t off, struct ucred *cred)
 {
 	vm_object_t ret;
-	struct pagerops *ops;
+	const struct pagerops *ops;
 
 	ops = pagertab[type];
 	if (ops)
@@ -496,4 +508,25 @@ pbrelbo(struct buf *bp)
 
 	bp->b_bufobj = NULL;
 	bp->b_flags &= ~B_PAGING;
+}
+
+void
+vm_object_set_writeable_dirty(vm_object_t object)
+{
+	pgo_set_writeable_dirty_t *method;
+
+	method = pagertab[object->type]->pgo_set_writeable_dirty;
+	if (method != NULL)
+		method(object);
+}
+
+bool
+vm_object_mightbedirty(vm_object_t object)
+{
+	pgo_mightbedirty_t *method;
+
+	method = pagertab[object->type]->pgo_mightbedirty;
+	if (method == NULL)
+		return (false);
+	return (method(object));
 }

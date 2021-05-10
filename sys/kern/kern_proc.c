@@ -2505,7 +2505,7 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen, int flags)
 	vm_map_entry_t entry, tmp_entry;
 	struct vattr va;
 	vm_map_t map;
-	vm_object_t obj, tobj, lobj;
+	vm_object_t lobj, nobj, obj, tobj;
 	char *fullpath, *freepath;
 	struct kinfo_vmentry *kve;
 	struct ucred *cred;
@@ -2514,7 +2514,7 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen, int flags)
 	vm_offset_t addr;
 	unsigned int last_timestamp;
 	int error;
-	bool super;
+	bool guard, super;
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
@@ -2538,6 +2538,9 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen, int flags)
 		bzero(kve, sizeof(*kve));
 		obj = entry->object.vm_object;
 		if (obj != NULL) {
+			if ((obj->flags & OBJ_ANON) != 0)
+				kve->kve_obj = (uintptr_t)obj;
+
 			for (tobj = obj; tobj != NULL;
 			    tobj = tobj->backing_object) {
 				VM_OBJECT_RLOCK(tobj);
@@ -2551,8 +2554,8 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen, int flags)
 			    &kve->kve_resident, &super);
 			if (super)
 				kve->kve_flags |= KVME_FLAG_SUPER;
-			for (tobj = obj; tobj != NULL;
-			    tobj = tobj->backing_object) {
+			for (tobj = obj; tobj != NULL; tobj = nobj) {
+				nobj = tobj->backing_object;
 				if (tobj != obj && tobj != lobj)
 					VM_OBJECT_RUNLOCK(tobj);
 			}
@@ -2583,6 +2586,8 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen, int flags)
 			kve->kve_flags |= KVME_FLAG_GROWS_DOWN;
 		if (entry->eflags & MAP_ENTRY_USER_WIRED)
 			kve->kve_flags |= KVME_FLAG_USER_WIRED;
+
+		guard = (entry->eflags & MAP_ENTRY_GUARD) != 0;
 
 		last_timestamp = map->timestamp;
 		vm_map_unlock_read(map);
@@ -2620,7 +2625,8 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen, int flags)
 				vput(vp);
 			}
 		} else {
-			kve->kve_type = KVME_TYPE_NONE;
+			kve->kve_type = guard ? KVME_TYPE_GUARD :
+			    KVME_TYPE_NONE;
 			kve->kve_ref_count = 0;
 			kve->kve_shadow_count = 0;
 		}
@@ -3186,7 +3192,7 @@ static SYSCTL_NODE(_kern_proc, (KERN_PROC_PID | KERN_PROC_INC_THREAD), pid_td,
 
 static SYSCTL_NODE(_kern_proc, (KERN_PROC_PROC | KERN_PROC_INC_THREAD), proc_td,
 	CTLFLAG_RD | CTLFLAG_MPSAFE, sysctl_kern_proc,
-	"Return process table, no threads");
+	"Return process table, including threads");
 
 #ifdef COMPAT_FREEBSD7
 static SYSCTL_NODE(_kern_proc, KERN_PROC_OVMMAP, ovmmap, CTLFLAG_RD |

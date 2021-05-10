@@ -125,9 +125,10 @@ static int free_nm_txq_hwq(struct vi_info *, struct sge_nm_txq *);
 
 int
 alloc_nm_rxq(struct vi_info *vi, struct sge_nm_rxq *nm_rxq, int intr_idx,
-    int idx, struct sysctl_oid *oid)
+    int idx)
 {
 	int rc;
+	struct sysctl_oid *oid;
 	struct sysctl_oid_list *children;
 	struct sysctl_ctx_list *ctx;
 	char name[16];
@@ -161,31 +162,27 @@ alloc_nm_rxq(struct vi_info *vi, struct sge_nm_rxq *nm_rxq, int intr_idx,
 	nm_rxq->iq_cntxt_id = INVALID_NM_RXQ_CNTXT_ID;
 
 	ctx = &vi->ctx;
-	children = SYSCTL_CHILDREN(oid);
+	children = SYSCTL_CHILDREN(vi->nm_rxq_oid);
 
 	snprintf(name, sizeof(name), "%d", idx);
 	oid = SYSCTL_ADD_NODE(ctx, children, OID_AUTO, name,
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "rx queue");
 	children = SYSCTL_CHILDREN(oid);
 
-	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "abs_id",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, &nm_rxq->iq_abs_id,
-	    0, sysctl_uint16, "I", "absolute id of the queue");
-	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "cntxt_id",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, &nm_rxq->iq_cntxt_id,
-	    0, sysctl_uint16, "I", "SGE context id of the queue");
-	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "cidx",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, &nm_rxq->iq_cidx, 0,
-	    sysctl_uint16, "I", "consumer index");
+	SYSCTL_ADD_U16(ctx, children, OID_AUTO, "abs_id", CTLFLAG_RD,
+	    &nm_rxq->iq_abs_id, 0, "absolute id of the queue");
+	SYSCTL_ADD_U16(ctx, children, OID_AUTO, "cntxt_id", CTLFLAG_RD,
+	    &nm_rxq->iq_cntxt_id, 0, "SGE context id of the queue");
+	SYSCTL_ADD_U16(ctx, children, OID_AUTO, "cidx", CTLFLAG_RD,
+	    &nm_rxq->iq_cidx, 0, "consumer index");
 
 	children = SYSCTL_CHILDREN(oid);
 	oid = SYSCTL_ADD_NODE(ctx, children, OID_AUTO, "fl",
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "freelist");
 	children = SYSCTL_CHILDREN(oid);
 
-	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "cntxt_id",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, &nm_rxq->fl_cntxt_id,
-	    0, sysctl_uint16, "I", "SGE context id of the freelist");
+	SYSCTL_ADD_U16(ctx, children, OID_AUTO, "cntxt_id", CTLFLAG_RD,
+	    &nm_rxq->fl_cntxt_id, 0, "SGE context id of the freelist");
 	SYSCTL_ADD_UINT(ctx, children, OID_AUTO, "cidx", CTLFLAG_RD,
 	    &nm_rxq->fl_cidx, 0, "consumer index");
 	SYSCTL_ADD_UINT(ctx, children, OID_AUTO, "pidx", CTLFLAG_RD,
@@ -215,8 +212,7 @@ free_nm_rxq(struct vi_info *vi, struct sge_nm_rxq *nm_rxq)
 }
 
 int
-alloc_nm_txq(struct vi_info *vi, struct sge_nm_txq *nm_txq, int iqidx, int idx,
-    struct sysctl_oid *oid)
+alloc_nm_txq(struct vi_info *vi, struct sge_nm_txq *nm_txq, int iqidx, int idx)
 {
 	int rc;
 	size_t len;
@@ -224,7 +220,8 @@ alloc_nm_txq(struct vi_info *vi, struct sge_nm_txq *nm_txq, int iqidx, int idx,
 	struct adapter *sc = pi->adapter;
 	struct netmap_adapter *na = NA(vi->ifp);
 	char name[16];
-	struct sysctl_oid_list *children = SYSCTL_CHILDREN(oid);
+	struct sysctl_oid *oid;
+	struct sysctl_oid_list *children = SYSCTL_CHILDREN(vi->nm_txq_oid);
 
 	len = na->num_tx_desc * EQ_ESIZE + sc->params.sge.spg_len;
 	rc = alloc_ring(sc, len, &nm_txq->desc_tag, &nm_txq->desc_map,
@@ -252,12 +249,10 @@ alloc_nm_txq(struct vi_info *vi, struct sge_nm_txq *nm_txq, int iqidx, int idx,
 
 	SYSCTL_ADD_UINT(&vi->ctx, children, OID_AUTO, "cntxt_id", CTLFLAG_RD,
 	    &nm_txq->cntxt_id, 0, "SGE context id of the queue");
-	SYSCTL_ADD_PROC(&vi->ctx, children, OID_AUTO, "cidx",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, &nm_txq->cidx, 0,
-	    sysctl_uint16, "I", "consumer index");
-	SYSCTL_ADD_PROC(&vi->ctx, children, OID_AUTO, "pidx",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, &nm_txq->pidx, 0,
-	    sysctl_uint16, "I", "producer index");
+	SYSCTL_ADD_U16(&vi->ctx, children, OID_AUTO, "cidx", CTLFLAG_RD,
+	    &nm_txq->cidx, 0, "consumer index");
+	SYSCTL_ADD_U16(&vi->ctx, children, OID_AUTO, "pidx", CTLFLAG_RD,
+	    &nm_txq->pidx, 0, "producer index");
 
 	return (rc);
 }

@@ -212,11 +212,17 @@ divert_packet(struct mbuf *m, bool incoming)
 
 	/* Delayed checksums are currently not compatible with divert. */
 	if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
+		m = mb_unmapped_to_ext(m);
+		if (m == NULL)
+			return;
 		in_delayed_cksum(m);
 		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
 	}
 #if defined(SCTP) || defined(SCTP_SUPPORT)
 	if (m->m_pkthdr.csum_flags & CSUM_SCTP) {
+		m = mb_unmapped_to_ext(m);
+		if (m == NULL)
+			return;
 		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
 		m->m_pkthdr.csum_flags &= ~CSUM_SCTP;
 	}
@@ -280,6 +286,10 @@ divert_packet(struct mbuf *m, bool incoming)
 		/* XXX why does only one socket match? */
 		if (inp->inp_lport == nport) {
 			INP_RLOCK(inp);
+			if (__predict_false(inp->inp_flags2 & INP_FREED)) {
+				INP_RUNLOCK(inp);
+				continue;
+			}
 			sa = inp->inp_socket;
 			SOCKBUF_LOCK(&sa->so_rcv);
 			if (sbappendaddr_locked(&sa->so_rcv,
@@ -317,6 +327,22 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 	struct ipfw_rule_ref *dt;
 	int error, family;
 
+	if (control) {
+		m_freem(control);		/* XXX */
+		control = NULL;
+	}
+
+	if (sin != NULL) {
+		if (sin->sin_family != AF_INET) {
+			m_freem(m);
+			return (EAFNOSUPPORT);
+		}
+		if (sin->sin_len != sizeof(*sin)) {
+			m_freem(m);
+			return (EINVAL);
+		}
+	}
+
 	/*
 	 * An mbuf may hasn't come from userland, but we pretend
 	 * that it has.
@@ -324,9 +350,6 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 	m->m_pkthdr.rcvif = NULL;
 	m->m_nextpkt = NULL;
 	M_SETFIB(m, so->so_fibnum);
-
-	if (control)
-		m_freem(control);		/* XXX */
 
 	mtag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL);
 	if (mtag == NULL) {
@@ -392,17 +415,13 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 	}
 	NET_EPOCH_EXIT(et);
 
-	if (error != 0)
-		m_freem(m);
-
 	return (error);
 }
 
 /*
  * Sends mbuf @m to the wire via ip[6]_output().
  *
- * Returns 0 on success, @m is consumed.
- * On failure, returns error code. It is caller responsibility to free @m.
+ * Returns 0 on success or an errno value on failure.  @m is always consumed.
  */
 static int
 div_output_outbound(int family, struct socket *so, struct mbuf *m)
@@ -425,6 +444,7 @@ div_output_outbound(int family, struct socket *so, struct mbuf *m)
 		    inp->inp_options != NULL) ||
 		    ((u_short)ntohs(ip->ip_len) > m->m_pkthdr.len)) {
 			INP_RUNLOCK(inp);
+			m_freem(m);
 			return (EINVAL);
 		}
 		break;
@@ -436,6 +456,7 @@ div_output_outbound(int family, struct socket *so, struct mbuf *m)
 		/* Don't allow packet length sizes that will crash */
 		if (((u_short)ntohs(ip6->ip6_plen) > m->m_pkthdr.len)) {
 			INP_RUNLOCK(inp);
+			m_freem(m);
 			return (EINVAL);
 		}
 		break;
@@ -475,6 +496,7 @@ div_output_outbound(int family, struct socket *so, struct mbuf *m)
 		options = m_dup(inp->inp_options, M_NOWAIT);
 		if (options == NULL) {
 			INP_RUNLOCK(inp);
+			m_freem(m);
 			return (ENOBUFS);
 		}
 	}
@@ -502,8 +524,7 @@ div_output_outbound(int family, struct socket *so, struct mbuf *m)
 /*
  * Schedules mbuf @m for local processing via IPv4/IPv6 netisr queue.
  *
- * Returns 0 on success, @m is consumed.
- * Returns error code on failure. It is caller responsibility to free @m.
+ * Returns 0 on success or an errno value on failure.  @m is always consumed.
  */
 static int
 div_output_inbound(int family, struct socket *so, struct mbuf *m,
@@ -523,8 +544,10 @@ div_output_inbound(int family, struct socket *so, struct mbuf *m,
 		bzero(sin->sin_zero, sizeof(sin->sin_zero));
 		sin->sin_port = 0;
 		ifa = ifa_ifwithaddr((struct sockaddr *) sin);
-		if (ifa == NULL)
+		if (ifa == NULL) {
+			m_freem(m);
 			return (EADDRNOTAVAIL);
+		}
 		m->m_pkthdr.rcvif = ifa->ifa_ifp;
 	}
 #ifdef MAC
@@ -550,6 +573,7 @@ div_output_inbound(int family, struct socket *so, struct mbuf *m,
 		break;
 #endif
 	default:
+		m_freem(m);
 		return (EINVAL);
 	}
 
@@ -618,6 +642,8 @@ div_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	 */
 	if (nam->sa_family != AF_INET)
 		return EAFNOSUPPORT;
+	if (nam->sa_len != sizeof(struct sockaddr_in))
+		return EINVAL;
 	((struct sockaddr_in *)nam)->sin_addr.s_addr = INADDR_ANY;
 	INP_INFO_WLOCK(&V_divcbinfo);
 	INP_WLOCK(inp);

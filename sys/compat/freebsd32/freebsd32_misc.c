@@ -502,8 +502,14 @@ freebsd32_mmap(struct thread *td, struct freebsd32_mmap_args *uap)
 		prot |= PROT_EXEC;
 #endif
 
-	return (kern_mmap(td, (uintptr_t)uap->addr, uap->len, prot,
-	    uap->flags, uap->fd, PAIR32TO64(off_t, uap->pos)));
+	return (kern_mmap(td, &(struct mmap_req){
+		.mr_hint = (uintptr_t)uap->addr,
+		.mr_len = uap->len,
+		.mr_prot = prot,
+		.mr_flags = uap->flags,
+		.mr_fd = uap->fd,
+		.mr_pos = PAIR32TO64(off_t, uap->pos),
+	    }));
 }
 
 #ifdef COMPAT_FREEBSD6
@@ -519,8 +525,14 @@ freebsd6_freebsd32_mmap(struct thread *td,
 		prot |= PROT_EXEC;
 #endif
 
-	return (kern_mmap(td, (uintptr_t)uap->addr, uap->len, prot,
-	    uap->flags, uap->fd, PAIR32TO64(off_t, uap->pos)));
+	return (kern_mmap(td, &(struct mmap_req){
+		.mr_hint = (uintptr_t)uap->addr,
+		.mr_len = uap->len,
+		.mr_prot = prot,
+		.mr_flags = uap->flags,
+		.mr_fd = uap->fd,
+		.mr_pos = PAIR32TO64(off_t, uap->pos),
+	    }));
 }
 #endif
 
@@ -920,6 +932,7 @@ freebsd32_ptrace(struct thread *td, struct freebsd32_ptrace_args *uap)
 		struct ptrace_io_desc piod;
 		struct ptrace_lwpinfo pl;
 		struct ptrace_vm_entry pve;
+		struct ptrace_coredump pc;
 		struct dbreg32 dbreg;
 		struct fpreg32 fpreg;
 		struct reg32 reg;
@@ -931,6 +944,7 @@ freebsd32_ptrace(struct thread *td, struct freebsd32_ptrace_args *uap)
 		struct ptrace_io_desc32 piod;
 		struct ptrace_lwpinfo32 pl;
 		struct ptrace_vm_entry32 pve;
+		struct ptrace_coredump32 pc;
 		uint32_t args[nitems(td->td_sa.args)];
 		struct ptrace_sc_ret32 psr;
 	} r32;
@@ -1008,6 +1022,16 @@ freebsd32_ptrace(struct thread *td, struct freebsd32_ptrace_args *uap)
 		CP(r32.pve, r.pve, pve_fileid);
 		CP(r32.pve, r.pve, pve_fsid);
 		PTRIN_CP(r32.pve, r.pve, pve_path);
+		break;
+	case PT_COREDUMP:
+		if (uap->data != sizeof(r32.pc))
+			error = EINVAL;
+		else
+			error = copyin(uap->addr, &r32.pc, uap->data);
+		CP(r32.pc, r.pc, pc_fd);
+		CP(r32.pc, r.pc, pc_flags);
+		r.pc.pc_limit = PAIR32TO64(off_t, r32.pc.pc_limit);
+		data = sizeof(r.pc);
 		break;
 	default:
 		addr = uap->addr;

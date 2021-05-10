@@ -377,6 +377,14 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 	    "do_el1_sync: curthread: %p, esr %lx, elr: %lx, frame: %p", td,
 	    esr, frame->tf_elr, frame);
 
+	/*
+	 * Enable debug exceptions if we aren't already handling one. They will
+	 * be masked again in the exception handler's epilogue.
+	 */
+	if (exception != EXCP_BRK && exception != EXCP_WATCHPT_EL1 &&
+	    exception != EXCP_SOFTSTP_EL1)
+		dbg_enable();
+
 	switch (exception) {
 	case EXCP_FP_SIMD:
 	case EXCP_TRAP_FP:
@@ -474,6 +482,7 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_UNKNOWN:
 	case EXCP_DATA_ABORT_L:
 	case EXCP_DATA_ABORT:
+	case EXCP_WATCHPT_EL0:
 		far = READ_SPECIALREG(far_el1);
 		break;
 	}
@@ -531,6 +540,11 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_BRKPT_EL0:
 	case EXCP_BRK:
 		call_trapsignal(td, SIGTRAP, TRAP_BRKPT, (void *)frame->tf_elr,
+		    exception);
+		userret(td, frame);
+		break;
+	case EXCP_WATCHPT_EL0:
+		call_trapsignal(td, SIGTRAP, TRAP_TRACE, (void *)far,
 		    exception);
 		userret(td, frame);
 		break;

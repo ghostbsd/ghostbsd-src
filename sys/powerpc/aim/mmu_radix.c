@@ -2813,8 +2813,7 @@ mmu_radix_enter(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %#x, %d)", pmap, va,
 	    m, prot, flags, psind);
 	KASSERT(va <= VM_MAX_KERNEL_ADDRESS, ("pmap_enter: toobig"));
-	KASSERT((m->oflags & VPO_UNMANAGED) != 0 || va < kmi.clean_sva ||
-	    va >= kmi.clean_eva,
+	KASSERT((m->oflags & VPO_UNMANAGED) != 0 || !VA_IS_CLEANMAP(va),
 	    ("pmap_enter: managed mapping within the clean submap"));
 	if ((m->oflags & VPO_UNMANAGED) == 0)
 		VM_PAGE_OBJECT_BUSY_ASSERT(m);
@@ -3185,6 +3184,7 @@ pmap_enter_l3e(pmap_t pmap, vm_offset_t va, pml3_entry_t newpde, u_int flags,
 			 * a reserved PT page could be freed.
 			 */
 			(void)pmap_remove_l3e(pmap, l3e, va, &free, lockp);
+			pmap_invalidate_l3e_page(pmap, va, oldl3e);
 		} else {
 			if (pmap_remove_ptes(pmap, va, va + L3_PAGE_SIZE, l3e,
 			    &free, lockp))
@@ -3243,6 +3243,7 @@ pmap_enter_l3e(pmap_t pmap, vm_offset_t va, pml3_entry_t newpde, u_int flags,
 	 * be any lingering 4KB page mappings in the TLB.)
 	 */
 	pte_store(l3e, newpde);
+	ptesync();
 
 	atomic_add_long(&pmap_l3e_mappings, 1);
 	CTR2(KTR_PMAP, "pmap_enter_pde: success for va %#lx"
@@ -3298,7 +3299,7 @@ mmu_radix_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	pt_entry_t *pte;
 	vm_paddr_t pa;
 
-	KASSERT(va < kmi.clean_sva || va >= kmi.clean_eva ||
+	KASSERT(!VA_IS_CLEANMAP(va) ||
 	    (m->oflags & VPO_UNMANAGED) != 0,
 	    ("mmu_radix_enter_quick_locked: managed mapping within the clean submap"));
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
@@ -4944,7 +4945,7 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	 * the read above and the store below.
 	 */
 	pde_store(l3e, mptepa);
-	ptesync();
+	pmap_invalidate_l3e_page(pmap, trunc_2mpage(va), oldpde);
 	/*
 	 * Demote the PV entry.
 	 */
@@ -5225,6 +5226,7 @@ mmu_radix_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 			 */
 			if (sva + L3_PAGE_SIZE == va_next && eva >= va_next) {
 				pmap_remove_l3e(pmap, l3e, sva, &free, &lock);
+				anyvalid = true;
 				continue;
 			} else if (!pmap_demote_l3e_locked(pmap, l3e, sva,
 			    &lock)) {

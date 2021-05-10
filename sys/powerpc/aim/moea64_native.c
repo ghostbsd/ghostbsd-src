@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND 4-Clause-BSD
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-4-Clause
  *
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -308,6 +308,8 @@ moea64_install_native()
 
 	/* Install the MOEA64 ops. */
 	moea64_ops = &moea64_native_funcs;
+
+	moea64_install();
 }
 
 static int64_t

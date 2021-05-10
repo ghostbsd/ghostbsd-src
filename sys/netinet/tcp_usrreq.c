@@ -204,8 +204,6 @@ tcp_usr_attach(struct socket *so, int proto, struct thread *td)
 	tp->t_state = TCPS_CLOSED;
 	INP_WUNLOCK(inp);
 	TCPSTATES_INC(TCPS_CLOSED);
-	if ((so->so_options & SO_LINGER) && so->so_linger == 0)
-		so->so_linger = TCP_LINGERTIME;
 out:
 	TCPDEBUG2(PRU_ATTACH);
 	TCP_PROBE2(debug__user, tp, PRU_ATTACH);
@@ -323,14 +321,16 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	struct sockaddr_in *sinp;
 
 	sinp = (struct sockaddr_in *)nam;
-	if (nam->sa_len != sizeof (*sinp))
+	if (nam->sa_family != AF_INET)
+		return (EAFNOSUPPORT);
+	if (nam->sa_len != sizeof(*sinp))
 		return (EINVAL);
+
 	/*
 	 * Must check for multicast addresses and disallow binding
 	 * to them.
 	 */
-	if (sinp->sin_family == AF_INET &&
-	    IN_MULTICAST(ntohl(sinp->sin_addr.s_addr)))
+	if (IN_MULTICAST(ntohl(sinp->sin_addr.s_addr)))
 		return (EAFNOSUPPORT);
 
 	TCPDEBUG0;
@@ -366,14 +366,16 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	u_char vflagsav;
 
 	sin6 = (struct sockaddr_in6 *)nam;
-	if (nam->sa_len != sizeof (*sin6))
+	if (nam->sa_family != AF_INET6)
+		return (EAFNOSUPPORT);
+	if (nam->sa_len != sizeof(*sin6))
 		return (EINVAL);
+
 	/*
 	 * Must check for multicast addresses and disallow binding
 	 * to them.
 	 */
-	if (sin6->sin6_family == AF_INET6 &&
-	    IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr))
+	if (IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr))
 		return (EAFNOSUPPORT);
 
 	TCPDEBUG0;
@@ -544,16 +546,17 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	struct sockaddr_in *sinp;
 
 	sinp = (struct sockaddr_in *)nam;
+	if (nam->sa_family != AF_INET)
+		return (EAFNOSUPPORT);
 	if (nam->sa_len != sizeof (*sinp))
 		return (EINVAL);
+
 	/*
 	 * Must disallow TCP ``connections'' to multicast addresses.
 	 */
-	if (sinp->sin_family == AF_INET
-	    && IN_MULTICAST(ntohl(sinp->sin_addr.s_addr)))
+	if (IN_MULTICAST(ntohl(sinp->sin_addr.s_addr)))
 		return (EAFNOSUPPORT);
-	if ((sinp->sin_family == AF_INET) &&
-	    (ntohl(sinp->sin_addr.s_addr) == INADDR_BROADCAST))
+	if (ntohl(sinp->sin_addr.s_addr) == INADDR_BROADCAST)
 		return (EACCES);
 	if ((error = prison_remote_ip4(td->td_ucred, &sinp->sin_addr)) != 0)
 		return (error);
@@ -608,13 +611,15 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	TCPDEBUG0;
 
 	sin6 = (struct sockaddr_in6 *)nam;
+	if (nam->sa_family != AF_INET6)
+		return (EAFNOSUPPORT);
 	if (nam->sa_len != sizeof (*sin6))
 		return (EINVAL);
+
 	/*
 	 * Must disallow TCP ``connections'' to multicast addresses.
 	 */
-	if (sin6->sin6_family == AF_INET6
-	    && IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr))
+	if (IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr))
 		return (EAFNOSUPPORT);
 
 	inp = sotoinpcb(so);
@@ -2051,6 +2056,31 @@ unlock_and_done:
 			}
 			goto unlock_and_done;
 
+		case TCP_REMOTE_UDP_ENCAPS_PORT:
+			INP_WUNLOCK(inp);
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+			    sizeof optval);
+			if (error)
+				return (error);
+			if ((optval < TCP_TUNNELING_PORT_MIN) ||
+			    (optval > TCP_TUNNELING_PORT_MAX)) {
+				/* Its got to be in range */
+				return (EINVAL);
+			}
+			if ((V_tcp_udp_tunneling_port == 0) && (optval != 0)) {
+				/* You have to have enabled a UDP tunneling port first */
+				return (EINVAL);
+			}
+			INP_WLOCK_RECHECK(inp);
+			if (tp->t_state != TCPS_CLOSED) {
+				/* You can't change after you are connected */
+				error = EINVAL;
+			} else {
+				/* Ok we are all good set the port */
+				tp->t_port = htons(optval);
+			}
+			goto unlock_and_done;
+
 		case TCP_MAXSEG:
 			INP_WUNLOCK(inp);
 			error = sooptcopyin(sopt, &optval, sizeof optval,
@@ -2387,6 +2417,11 @@ unlock_and_done:
 			break;
 		case TCP_MAXSEG:
 			optval = tp->t_maxseg;
+			INP_WUNLOCK(inp);
+			error = sooptcopyout(sopt, &optval, sizeof optval);
+			break;
+		case TCP_REMOTE_UDP_ENCAPS_PORT:
+			optval = ntohs(tp->t_port);
 			INP_WUNLOCK(inp);
 			error = sooptcopyout(sopt, &optval, sizeof optval);
 			break;

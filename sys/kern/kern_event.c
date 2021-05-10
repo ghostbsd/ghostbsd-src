@@ -161,6 +161,7 @@ static void	filt_procdetach(struct knote *kn);
 static int	filt_proc(struct knote *kn, long hint);
 static int	filt_fileattach(struct knote *kn);
 static void	filt_timerexpire(void *knx);
+static void	filt_timerexpire_l(struct knote *kn, bool proc_locked);
 static int	filt_timerattach(struct knote *kn);
 static void	filt_timerdetach(struct knote *kn);
 static void	filt_timerstart(struct knote *kn, sbintime_t to);
@@ -221,7 +222,7 @@ SYSCTL_UINT(_kern, OID_AUTO, kq_calloutmax, CTLFLAG_RW,
 		knote_enqueue((kn));					\
 	if (!(islock))							\
 		KQ_UNLOCK((kn)->kn_kq);					\
-} while(0)
+} while (0)
 #define KQ_LOCK(kq) do {						\
 	mtx_lock(&(kq)->kq_lock);					\
 } while (0)
@@ -311,7 +312,7 @@ kn_leave_flux(struct knote *kn)
 	knl->kl_assert_lock((knl)->kl_lockarg, LA_UNLOCKED);		\
 } while (0)
 #else /* !INVARIANTS */
-#define	KNL_ASSERT_LOCKED(knl) do {} while(0)
+#define	KNL_ASSERT_LOCKED(knl) do {} while (0)
 #define	KNL_ASSERT_UNLOCKED(knl) do {} while (0)
 #endif /* INVARIANTS */
 
@@ -676,28 +677,97 @@ timer2sbintime(int64_t data, int flags)
 
 struct kq_timer_cb_data {
 	struct callout c;
+	struct proc *p;
+	struct knote *kn;
+	int cpuid;
+	TAILQ_ENTRY(kq_timer_cb_data) link;
 	sbintime_t next;	/* next timer event fires at */
 	sbintime_t to;		/* precalculated timer period, 0 for abs */
 };
 
 static void
+kqtimer_sched_callout(struct kq_timer_cb_data *kc)
+{
+	callout_reset_sbt_on(&kc->c, kc->next, 0, filt_timerexpire, kc->kn,
+	    kc->cpuid, C_ABSOLUTE);
+}
+
+void
+kqtimer_proc_continue(struct proc *p)
+{
+	struct kq_timer_cb_data *kc, *kc1;
+	struct bintime bt;
+	sbintime_t now;
+
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	getboottimebin(&bt);
+	now = bttosbt(bt);
+
+	TAILQ_FOREACH_SAFE(kc, &p->p_kqtim_stop, link, kc1) {
+		TAILQ_REMOVE(&p->p_kqtim_stop, kc, link);
+		if (kc->next <= now)
+			filt_timerexpire_l(kc->kn, true);
+		else
+			kqtimer_sched_callout(kc);
+	}
+}
+
+static void
+filt_timerexpire_l(struct knote *kn, bool proc_locked)
+{
+	struct kq_timer_cb_data *kc;
+	struct proc *p;
+	uint64_t delta;
+	sbintime_t now;
+
+	kc = kn->kn_ptr.p_v;
+
+	if ((kn->kn_flags & EV_ONESHOT) != 0 || kc->to == 0) {
+		kn->kn_data++;
+		KNOTE_ACTIVATE(kn, 0);
+		return;
+	}
+
+	now = sbinuptime();
+	if (now >= kc->next) {
+		delta = (now - kc->next) / kc->to;
+		if (delta == 0)
+			delta = 1;
+		kn->kn_data += delta;
+		kc->next += (delta + 1) * kc->to;
+		if (now >= kc->next)	/* overflow */
+			kc->next = now + kc->to;
+		KNOTE_ACTIVATE(kn, 0);	/* XXX - handle locking */
+	}
+
+	/*
+	 * Initial check for stopped kc->p is racy.  It is fine to
+	 * miss the set of the stop flags, at worst we would schedule
+	 * one more callout.  On the other hand, it is not fine to not
+	 * schedule when we we missed clearing of the flags, we
+	 * recheck them under the lock and observe consistent state.
+	 */
+	p = kc->p;
+	if (P_SHOULDSTOP(p) || P_KILLED(p)) {
+		if (!proc_locked)
+			PROC_LOCK(p);
+		if (P_SHOULDSTOP(p) || P_KILLED(p)) {
+			TAILQ_INSERT_TAIL(&p->p_kqtim_stop, kc, link);
+			if (!proc_locked)
+				PROC_UNLOCK(p);
+			return;
+		}
+		if (!proc_locked)
+			PROC_UNLOCK(p);
+	}
+	kqtimer_sched_callout(kc);
+}
+
+static void
 filt_timerexpire(void *knx)
 {
-	struct knote *kn;
-	struct kq_timer_cb_data *kc;
-
-	kn = knx;
-	kn->kn_data++;
-	KNOTE_ACTIVATE(kn, 0);	/* XXX - handle locking */
-
-	if ((kn->kn_flags & EV_ONESHOT) != 0)
-		return;
-	kc = kn->kn_ptr.p_v;
-	if (kc->to == 0)
-		return;
-	kc->next += kc->to;
-	callout_reset_sbt_on(&kc->c, kc->next, 0, filt_timerexpire, kn,
-	    PCPU_GET(cpuid), C_ABSOLUTE);
+	filt_timerexpire_l(knx, false);
 }
 
 /*
@@ -753,6 +823,9 @@ filt_timerattach(struct knote *kn)
 		kn->kn_flags |= EV_CLEAR;	/* automatically set */
 	kn->kn_status &= ~KN_DETACHED;		/* knlist_add clears it */
 	kn->kn_ptr.p_v = kc = malloc(sizeof(*kc), M_KQUEUE, M_WAITOK);
+	kc->kn = kn;
+	kc->p = curproc;
+	kc->cpuid = PCPU_GET(cpuid);
 	callout_init(&kc->c, 1);
 	filt_timerstart(kn, to);
 
@@ -772,8 +845,7 @@ filt_timerstart(struct knote *kn, sbintime_t to)
 		kc->next = to + sbinuptime();
 		kc->to = to;
 	}
-	callout_reset_sbt_on(&kc->c, kc->next, 0, filt_timerexpire, kn,
-	    PCPU_GET(cpuid), C_ABSOLUTE);
+	kqtimer_sched_callout(kc);
 }
 
 static void

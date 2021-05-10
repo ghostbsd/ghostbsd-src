@@ -73,6 +73,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/blockcount.h>
 #include <sys/cpuset.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
@@ -239,7 +240,8 @@ _vm_object_allocate(objtype_t type, vm_pindex_t size, u_short flags,
 	LIST_INIT(&object->shadow_head);
 
 	object->type = type;
-	if (type == OBJT_SWAP)
+	object->flags = flags;
+	if ((flags & OBJ_SWAP) != 0)
 		pctrie_init(&object->un_pager.swp.swp_blks);
 
 	/*
@@ -250,7 +252,6 @@ _vm_object_allocate(objtype_t type, vm_pindex_t size, u_short flags,
 	atomic_thread_fence_rel();
 
 	object->pg_color = 0;
-	object->flags = flags;
 	object->size = size;
 	object->domain.dr_policy = NULL;
 	object->generation = 1;
@@ -336,6 +337,7 @@ vm_object_set_memattr(vm_object_t object, vm_memattr_t memattr)
 	case OBJT_PHYS:
 	case OBJT_SG:
 	case OBJT_SWAP:
+	case OBJT_SWAP_TMPFS:
 	case OBJT_VNODE:
 		if (!TAILQ_EMPTY(&object->memq))
 			return (KERN_FAILURE);
@@ -420,8 +422,11 @@ vm_object_allocate(objtype_t type, vm_pindex_t size)
 	case OBJT_DEAD:
 		panic("vm_object_allocate: can't create OBJT_DEAD");
 	case OBJT_DEFAULT:
-	case OBJT_SWAP:
 		flags = OBJ_COLORED;
+		break;
+	case OBJT_SWAP:
+	case OBJT_SWAP_TMPFS:
+		flags = OBJ_COLORED | OBJ_SWAP;
 		break;
 	case OBJT_DEVICE:
 	case OBJT_SG:
@@ -572,7 +577,7 @@ vm_object_deallocate_anon(vm_object_t backing_object)
 	KASSERT(object != NULL && backing_object->shadow_count == 1,
 	    ("vm_object_anon_deallocate: ref_count: %d, shadow_count: %d",
 	    backing_object->ref_count, backing_object->shadow_count));
-	KASSERT((object->flags & (OBJ_TMPFS_NODE | OBJ_ANON)) == OBJ_ANON,
+	KASSERT((object->flags & OBJ_ANON) != 0,
 	    ("invalid shadow object %p", object));
 
 	if (!VM_OBJECT_TRYWLOCK(object)) {
@@ -676,7 +681,7 @@ vm_object_deallocate(vm_object_t object)
 		umtx_shm_object_terminated(object);
 		temp = object->backing_object;
 		if (temp != NULL) {
-			KASSERT((object->flags & OBJ_TMPFS_NODE) == 0,
+			KASSERT(object->type != OBJT_SWAP_TMPFS,
 			    ("shadowed tmpfs v_object 2 %p", object));
 			vm_object_backing_remove(object);
 		}
@@ -957,7 +962,7 @@ vm_object_terminate(vm_object_t object)
 #endif
 
 	KASSERT(object->cred == NULL || object->type == OBJT_DEFAULT ||
-	    object->type == OBJT_SWAP,
+	    object->type == OBJT_SWAP || object->type == OBJT_SWAP_TMPFS,
 	    ("%s: non-swap obj %p has cred", __func__, object));
 
 	/*
@@ -1276,8 +1281,8 @@ vm_object_madvise_freespace(vm_object_t object, int advice, vm_pindex_t pindex,
     vm_size_t size)
 {
 
-	if (advice == MADV_FREE && object->type == OBJT_SWAP)
-		swap_pager_freespace(object, pindex, size);
+	if (advice == MADV_FREE)
+		vm_pager_freespace(object, pindex, size);
 }
 
 /*
@@ -1626,7 +1631,7 @@ retry:
 		else if (m_busy == NULL)
 			m_busy = m;
 	}
-	if (orig_object->type == OBJT_SWAP) {
+	if ((orig_object->flags & OBJ_SWAP) != 0) {
 		/*
 		 * swap_pager_copy() can sleep, in which case the orig_object's
 		 * and new_object's locks are released and reacquired. 
@@ -1797,9 +1802,7 @@ vm_object_collapse_scan(vm_object_t object)
 
 		if (p->pindex < backing_offset_index ||
 		    new_pindex >= object->size) {
-			if (backing_object->type == OBJT_SWAP)
-				swap_pager_freespace(backing_object, p->pindex,
-				    1);
+			vm_pager_freespace(backing_object, p->pindex, 1);
 
 			KASSERT(!pmap_page_is_mapped(p),
 			    ("freeing mapped page %p", p));
@@ -1848,9 +1851,7 @@ vm_object_collapse_scan(vm_object_t object)
 			 * page alone.  Destroy the original page from the
 			 * backing object.
 			 */
-			if (backing_object->type == OBJT_SWAP)
-				swap_pager_freespace(backing_object, p->pindex,
-				    1);
+			vm_pager_freespace(backing_object, p->pindex, 1);
 			KASSERT(!pmap_page_is_mapped(p),
 			    ("freeing mapped page %p", p));
 			if (vm_page_remove(p))
@@ -1874,9 +1875,8 @@ vm_object_collapse_scan(vm_object_t object)
 		}
 
 		/* Use the old pindex to free the right page. */
-		if (backing_object->type == OBJT_SWAP)
-			swap_pager_freespace(backing_object,
-			    new_pindex + backing_offset_index, 1);
+		vm_pager_freespace(backing_object, new_pindex +
+		    backing_offset_index, 1);
 
 #if VM_NRESERVLEVEL > 0
 		/*
@@ -1959,7 +1959,7 @@ vm_object_collapse(vm_object_t object)
 			/*
 			 * Move the pager from backing_object to object.
 			 */
-			if (backing_object->type == OBJT_SWAP) {
+			if ((backing_object->flags & OBJ_SWAP) != 0) {
 				/*
 				 * swap_pager_copy() can sleep, in which case
 				 * the backing_object's and object's locks are
@@ -2137,11 +2137,8 @@ wired:
 	}
 	vm_object_pip_wakeup(object);
 
-	if (object->type == OBJT_SWAP) {
-		if (end == 0)
-			end = object->size;
-		swap_pager_freespace(object, start, end - start);
-	}
+	vm_pager_freespace(object, start, (end == 0 ? object->size : end) -
+	    start);
 }
 
 /*
@@ -2331,14 +2328,15 @@ vm_object_coalesce(vm_object_t prev_object, vm_ooffset_t prev_offset,
 }
 
 void
-vm_object_set_writeable_dirty(vm_object_t object)
+vm_object_set_writeable_dirty_(vm_object_t object)
 {
-
-	/* Only set for vnodes & tmpfs */
-	if (object->type != OBJT_VNODE &&
-	    (object->flags & OBJ_TMPFS_NODE) == 0)
-		return;
 	atomic_add_int(&object->generation, 1);
+}
+
+bool
+vm_object_mightbedirty_(vm_object_t object)
+{
+	return (object->generation != object->cleangeneration);
 }
 
 /*
@@ -2435,16 +2433,7 @@ vm_object_vnode(vm_object_t object)
 	struct vnode *vp;
 
 	VM_OBJECT_ASSERT_LOCKED(object);
-	if (object->type == OBJT_VNODE) {
-		vp = object->handle;
-		KASSERT(vp != NULL, ("%s: OBJT_VNODE has no vnode", __func__));
-	} else if (object->type == OBJT_SWAP &&
-	    (object->flags & OBJ_TMPFS) != 0) {
-		vp = object->un_pager.swp.swp_tmpfs;
-		KASSERT(vp != NULL, ("%s: OBJT_TMPFS has no vnode", __func__));
-	} else {
-		vp = NULL;
-	}
+	vm_pager_getvp(object, &vp, NULL);
 	return (vp);
 }
 
@@ -2497,9 +2486,9 @@ vm_object_kvme_type(vm_object_t object, struct vnode **vpp)
 	case OBJT_VNODE:
 		return (KVME_TYPE_VNODE);
 	case OBJT_SWAP:
-		if ((object->flags & OBJ_TMPFS_NODE) != 0)
-			return (KVME_TYPE_VNODE);
 		return (KVME_TYPE_SWAP);
+	case OBJT_SWAP_TMPFS:
+		return (KVME_TYPE_VNODE);
 	case OBJT_DEVICE:
 		return (KVME_TYPE_DEVICE);
 	case OBJT_PHYS:
@@ -2524,6 +2513,7 @@ sysctl_vm_object_list(SYSCTL_HANDLER_ARGS)
 	struct vattr va;
 	vm_object_t obj;
 	vm_page_t m;
+	u_long sp;
 	int count, error;
 
 	if (req->oldptr == NULL) {
@@ -2590,8 +2580,17 @@ sysctl_vm_object_list(SYSCTL_HANDLER_ARGS)
 		freepath = NULL;
 		fullpath = "";
 		kvo->kvo_type = vm_object_kvme_type(obj, &vp);
-		if (vp != NULL)
+		if (vp != NULL) {
 			vref(vp);
+		} else if ((obj->flags & OBJ_ANON) != 0) {
+			MPASS(kvo->kvo_type == KVME_TYPE_DEFAULT ||
+			    kvo->kvo_type == KVME_TYPE_SWAP);
+			kvo->kvo_me = (uintptr_t)obj;
+			/* tmpfs objs are reported as vnodes */
+			kvo->kvo_backing_obj = (uintptr_t)obj->backing_object;
+			sp = swap_pager_swapped_pages(obj);
+			kvo->kvo_swapped = sp > UINT32_MAX ? UINT32_MAX : sp;
+		}
 		VM_OBJECT_RUNLOCK(obj);
 		if (vp != NULL) {
 			vn_fullpath(vp, &fullpath, &freepath);

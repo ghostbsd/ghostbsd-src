@@ -794,8 +794,8 @@ S_efi_map(size_t l2, void *p)
 			type = types[map->md_type];
 		if (type == NULL)
 			type = "<INVALID>";
-		printf("\n%23s %012jx %12p %08jx ", type,
-		    (uintmax_t)map->md_phys, map->md_virt,
+		printf("\n%23s %012jx %012jx %08jx ", type,
+		    (uintmax_t)map->md_phys, (uintmax_t)map->md_virt,
 		    (uintmax_t)map->md_pages);
 		if (map->md_attr & EFI_MD_ATTR_UC)
 			printf("UC ");
@@ -1030,7 +1030,8 @@ show_var(int *oid, int nlen, bool honor_skip)
 	}
 
 	/* keep track of encountered skip nodes, ignoring descendants */
-	if (skip_len == 0 && (kind & CTLFLAG_SKIP) != 0) {
+	if ((skip_len == 0 || skip_len >= nlen * (int)sizeof(int)) &&
+	    (kind & CTLFLAG_SKIP) != 0) {
 		/* Save this oid so we can skip descendants. */
 		skip_len = nlen * sizeof(int);
 		memcpy(skip_oid, oid, skip_len);

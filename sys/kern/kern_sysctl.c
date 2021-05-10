@@ -679,7 +679,7 @@ sysctl_ctx_entry_find(struct sysctl_ctx_list *clist, struct sysctl_oid *oidp)
 	if (clist == NULL || oidp == NULL)
 		return(NULL);
 	TAILQ_FOREACH(e, clist, link) {
-		if(e->entry == oidp)
+		if (e->entry == oidp)
 			return(e);
 	}
 	return (e);
@@ -1784,6 +1784,15 @@ sysctl_handle_string(SYSCTL_HANDLER_ARGS)
 	} else if (req->newlen - req->newidx == 0) {
 		sx_xlock(&sysctlstringlock);
 		((char *)arg1)[0] = '\0';
+		sx_xunlock(&sysctlstringlock);
+	} else if (req->newfunc == sysctl_new_kernel) {
+		arg2 = req->newlen - req->newidx;
+		sx_xlock(&sysctlstringlock);
+		error = SYSCTL_IN(req, arg1, arg2);
+		if (error == 0) {
+			((char *)arg1)[arg2] = '\0';
+			req->newidx += arg2;
+		}
 		sx_xunlock(&sysctlstringlock);
 	} else {
 		arg2 = req->newlen - req->newidx;

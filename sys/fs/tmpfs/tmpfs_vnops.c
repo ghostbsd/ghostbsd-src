@@ -91,13 +91,9 @@ tmpfs_lookup1(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 	struct tmpfs_mount *tm;
 	int error;
 
+	/* Caller assumes responsibility for ensuring access (VEXEC). */
 	dnode = VP_TO_TMPFS_DIR(dvp);
 	*vpp = NULLVP;
-
-	/* Check accessibility of requested node as a first step. */
-	error = vn_dir_check_exec(dvp, cnp);
-	if (error != 0)
-		goto out;
 
 	/* We cannot be requesting the parent directory of the root node. */
 	MPASS(IMPLIES(dnode->tn_type == VDIR &&
@@ -241,8 +237,17 @@ tmpfs_cached_lookup(struct vop_cachedlookup_args *v)
 static int
 tmpfs_lookup(struct vop_lookup_args *v)
 {
+	struct vnode *dvp = v->a_dvp;
+	struct vnode **vpp = v->a_vpp;
+	struct componentname *cnp = v->a_cnp;
+	int error;
 
-	return (tmpfs_lookup1(v->a_dvp, v->a_vpp, v->a_cnp));
+	/* Check accessibility of requested node as a first step. */
+	error = vn_dir_check_exec(dvp, cnp);
+	if (error != 0)
+		return (error);
+
+	return (tmpfs_lookup1(dvp, vpp, cnp));
 }
 
 static int
@@ -618,8 +623,9 @@ tmpfs_read_pgcache(struct vop_read_pgcache_args *v)
 	if (object == NULL)
 		goto out_smr;
 
-	MPASS((object->flags & (OBJ_ANON | OBJ_DEAD | OBJ_TMPFS_NODE)) ==
-	    OBJ_TMPFS_NODE);
+	MPASS(object->type == OBJT_SWAP_TMPFS);
+	MPASS((object->flags & (OBJ_ANON | OBJ_DEAD | OBJ_SWAP)) ==
+	    OBJ_SWAP);
 	if (!VN_IS_DOOMED(vp)) {
 		/* size cannot become shorter due to rangelock. */
 		size = node->tn_size;
@@ -1466,7 +1472,6 @@ tmpfs_fplookup_symlink(struct vop_fplookup_symlink_args *v)
 
 	vp = v->a_vp;
 	node = VP_TO_TMPFS_NODE_SMR(vp);
-	atomic_thread_fence_acq();
 	if (__predict_false(node == NULL))
 		return (EAGAIN);
 	if (!atomic_load_char(&node->tn_link_smr))
@@ -1603,6 +1608,10 @@ tmpfs_pathconf(struct vop_pathconf_args *v)
 	switch (name) {
 	case _PC_LINK_MAX:
 		*retval = TMPFS_LINK_MAX;
+		break;
+
+	case _PC_SYMLINK_MAX:
+		*retval = MAXPATHLEN;
 		break;
 
 	case _PC_NAME_MAX:
