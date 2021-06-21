@@ -21,6 +21,8 @@ startchildren_cmd="pccard_ether_startchildren"
 stopchildren_cmd="pccard_ether_stopchildren"
 extra_commands="startchildren stopchildren"
 
+rc_system=`kenv rc_system`
+
 setup_routes()
 {
 	# Add default route into $static_routes
@@ -123,14 +125,22 @@ pccard_ether_startchildren()
 		if ifexists $child; then
 			continue
 		fi
-		/etc/rc.d/netif quietstart $child
+		if [ "${rc_system}" == "openrc" ] ; then
+			sh /etc/rc.devd network.$child start
+		else
+			/etc/rc.d/netif quietstart $child
+		fi
 	done
 }
 
 pccard_ether_stopchildren()
 {
 	for child in `get_if_var $ifn wlans_IF`; do
-		/etc/rc.d/netif quietstop $child
+		if [ "${rc_system}" == "openrc" ] ; then
+			sh /etc/rc.devd network.$child stop
+		else
+			/etc/rc.d/netif quietstop $child
+		fi
 	done
 }
 
