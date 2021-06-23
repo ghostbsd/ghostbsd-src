@@ -66,6 +66,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sched.h>
 #include <sys/sx.h>
 #include <sys/syscallsubr.h>
+#include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/ptrace.h>
 #include <sys/acct.h>		/* for acct_process() function prototype */
@@ -98,6 +99,16 @@ dtrace_execexit_func_t	dtrace_fasttrap_exit;
 
 SDT_PROVIDER_DECLARE(proc);
 SDT_PROBE_DEFINE1(proc, , , exit, "int");
+
+static int kern_kill_on_dbg_exit = 1;
+SYSCTL_INT(_kern, OID_AUTO, kill_on_debugger_exit, CTLFLAG_RWTUN,
+    &kern_kill_on_dbg_exit, 0,
+    "Kill ptraced processes when debugger exits");
+
+static bool kern_wait_dequeue_sigchld = 1;
+SYSCTL_BOOL(_kern, OID_AUTO, wait_dequeue_sigchld, CTLFLAG_RWTUN,
+    &kern_wait_dequeue_sigchld, 0,
+    "Dequeue SIGCHLD on wait(2) for live process");
 
 struct proc *
 proc_realparent(struct proc *child)
@@ -504,8 +515,9 @@ exit1(struct thread *td, int rval, int signo)
 			}
 		} else {
 			/*
-			 * Traced processes are killed since their existence
-			 * means someone is screwing up.
+			 * Traced processes are killed by default
+			 * since their existence means someone is
+			 * screwing up.
 			 */
 			t = proc_realparent(q);
 			if (t == p) {
@@ -522,14 +534,23 @@ exit1(struct thread *td, int rval, int signo)
 			 * orphan link for q now while q is locked.
 			 */
 			proc_clear_orphan(q);
-			q->p_flag &= ~(P_TRACED | P_STOPPED_TRACE);
+			q->p_flag &= ~P_TRACED;
 			q->p_flag2 &= ~P2_PTRACE_FSTP;
 			q->p_ptevents = 0;
+			p->p_xthread = NULL;
 			FOREACH_THREAD_IN_PROC(q, tdt) {
 				tdt->td_dbgflags &= ~(TDB_SUSPEND | TDB_XSIG |
 				    TDB_FSTP);
+				tdt->td_xsig = 0;
 			}
-			kern_psignal(q, SIGKILL);
+			if (kern_kill_on_dbg_exit) {
+				q->p_flag &= ~P_STOPPED_TRACE;
+				kern_psignal(q, SIGKILL);
+			} else if ((q->p_flag & (P_STOPPED_TRACE |
+			    P_STOPPED_SIG)) != 0) {
+				sigqueue_delete_proc(q, SIGTRAP);
+				ptrace_unsuspend(q);
+			}
 		}
 		PROC_UNLOCK(q);
 		if (ksi != NULL)
@@ -1191,9 +1212,12 @@ report_alive_proc(struct thread *td, struct proc *p, siginfo_t *siginfo,
 			p->p_flag &= ~P_CONTINUED;
 		else
 			p->p_flag |= P_WAITED;
-		PROC_LOCK(td->td_proc);
-		sigqueue_take(p->p_ksi);
-		PROC_UNLOCK(td->td_proc);
+		if (kern_wait_dequeue_sigchld &&
+		    (td->td_proc->p_sysent->sv_flags & SV_SIG_WAITNDQ) == 0) {
+			PROC_LOCK(td->td_proc);
+			sigqueue_take(p->p_ksi);
+			PROC_UNLOCK(td->td_proc);
+		}
 	}
 	sx_xunlock(&proctree_lock);
 	if (siginfo != NULL) {

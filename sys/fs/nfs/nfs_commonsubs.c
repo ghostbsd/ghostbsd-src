@@ -1248,6 +1248,8 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			nap->na_rdev = (NFSDEV_T)0;
 			nap->na_mtime.tv_sec = 0;
 			nap->na_mtime.tv_nsec = 0;
+			nap->na_btime.tv_sec = -1;
+			nap->na_btime.tv_nsec = 0;
 			nap->na_gen = 0;
 			nap->na_flags = 0;
 			nap->na_blocksize = NFS_FABLKSIZE;
@@ -4811,7 +4813,7 @@ nfsv4_sequencelookup(struct nfsmount *nmp, struct nfsclsession *sep,
  * Free a session slot.
  */
 void
-nfsv4_freeslot(struct nfsclsession *sep, int slot)
+nfsv4_freeslot(struct nfsclsession *sep, int slot, bool resetseq)
 {
 	uint64_t bitval;
 
@@ -4819,6 +4821,8 @@ nfsv4_freeslot(struct nfsclsession *sep, int slot)
 	if (slot > 0)
 		bitval <<= slot;
 	mtx_lock(&sep->nfsess_mtx);
+	if (resetseq)
+		sep->nfsess_slotseq[slot]--;
 	if ((bitval & sep->nfsess_slots) == 0)
 		printf("freeing free slot!!\n");
 	sep->nfsess_slots &= ~bitval;

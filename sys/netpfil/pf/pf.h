@@ -317,6 +317,12 @@ struct pf_poolhashkey {
 #define key32	pfk.key32
 };
 
+struct pf_mape_portset {
+	u_int8_t		offset;
+	u_int8_t		psidlen;
+	u_int16_t		psid;
+};
+
 struct pf_pool {
 	struct pf_palist	 list;
 	struct pf_pooladdr	*cur;
@@ -444,6 +450,7 @@ struct pf_rule {
 #define PF_SKIP_COUNT		8
 	union pf_rule_ptr	 skip[PF_SKIP_COUNT];
 #define PF_RULE_LABEL_SIZE	 64
+#define PF_RULE_MAX_LABEL_COUNT	 5
 	char			 label[PF_RULE_LABEL_SIZE];
 	char			 ifname[IFNAMSIZ];
 	char			 qname[PF_QNAME_SIZE];

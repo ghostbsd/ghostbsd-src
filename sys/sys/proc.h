@@ -325,7 +325,7 @@ struct thread {
 	u_char		td_pri_class;	/* (t) Scheduling class. */
 	u_char		td_user_pri;	/* (t) User pri from estcpu and nice. */
 	u_char		td_base_user_pri; /* (t) Base user pri */
-	u_char		td_pre_epoch_prio; /* (k) User pri on entry to epoch */
+	u_char		td_unused_0;	/* no longer used field */
 	uintptr_t	td_rb_list;	/* (k) Robust list head. */
 	uintptr_t	td_rbp_list;	/* (k) Robust priv list head. */
 	uintptr_t	td_rb_inact;	/* (k) Current in-action mutex loc. */
@@ -376,6 +376,8 @@ struct thread {
 	int		td_oncpu;	/* (t) Which cpu we are on. */
 	void		*td_lkpi_task;	/* LinuxKPI task struct pointer */
 	int		td_pmcpend;
+	void		*td_coredump;	/* (c) coredump request. */
+	off_t		td_ktr_io_lim;	/* (k) limit for ktrace file size */
 #ifdef EPOCH_TRACE
 	SLIST_HEAD(, epoch_tracker) td_epochs;
 #endif
@@ -484,6 +486,8 @@ do {									\
 #define	TDB_VFORK	0x00000800 /* vfork indicator for ptrace() */
 #define	TDB_FSTP	0x00001000 /* The thread is PT_ATTACH leader */
 #define	TDB_STEP	0x00002000 /* (x86) PSL_T set for PT_STEP */
+#define	TDB_SSWITCH	0x00004000 /* Suspended in ptracestop */
+#define	TDB_COREDUMPRQ	0x00008000 /* Coredump request */
 
 /*
  * "Private" flags kept in td_pflags:
@@ -524,6 +528,8 @@ do {									\
 
 #define	TDP2_SBPAGES	0x00000001 /* Owns sbusy on some pages */
 #define	TDP2_COMPAT32RB	0x00000002 /* compat32 ABI for robust lists */
+#define	TDP2_ACCT	0x00000004 /* Doing accounting */
+#define	TDP2_SIGWAIT	0x00000008 /* Ignore ignored signals */
 
 /*
  * Reasons that the current thread can not be run yet.
@@ -646,8 +652,8 @@ struct proc {
 	int		p_profthreads;	/* (c) Num threads in addupc_task. */
 	volatile int	p_exitthreads;	/* (j) Number of threads exiting */
 	int		p_traceflag;	/* (o) Kernel trace points. */
-	struct vnode	*p_tracevp;	/* (c + o) Trace to vnode. */
-	struct ucred	*p_tracecred;	/* (o) Credentials to trace with. */
+	struct ktr_io_params	*p_ktrioparms;	/* (c + o) Params for ktrace. */
+	void		*p_pad0;
 	struct vnode	*p_textvp;	/* (b) Vnode of executable. */
 	u_int		p_lock;		/* (c) Proclock (prevent swap) count. */
 	struct sigiolst	p_sigiolst;	/* (c) List of sigio sources. */
@@ -817,6 +823,7 @@ struct proc {
 #define	P2_STKGAP_DISABLE_EXEC	0x00001000	/* Stack gap disabled
 						   after exec */
 #define	P2_ITSTOPPED		0x00002000
+#define	P2_PTRACEREQ		0x00004000	/* Active ptrace req */
 
 /* Flags protected by proctree_lock, kept in p_treeflags. */
 #define	P_TREE_ORPHANED		0x00000001	/* Reparented, on orphan list */
@@ -897,6 +904,7 @@ extern pid_t pid_max;
 #define	PROC_TRYLOCK(p)	mtx_trylock(&(p)->p_mtx)
 #define	PROC_UNLOCK(p)	mtx_unlock(&(p)->p_mtx)
 #define	PROC_LOCKED(p)	mtx_owned(&(p)->p_mtx)
+#define	PROC_WAIT_UNLOCKED(p)	mtx_wait_unlocked(&(p)->p_mtx)
 #define	PROC_LOCK_ASSERT(p, type)	mtx_assert(&(p)->p_mtx, (type))
 
 /* Lock and unlock a process group. */
@@ -1172,6 +1180,7 @@ int	thread_create(struct thread *td, struct rtprio *rtp,
 void	thread_exit(void) __dead2;
 void	thread_free(struct thread *td);
 void	thread_link(struct thread *td, struct proc *p);
+void	thread_reap_barrier(void);
 int	thread_single(struct proc *p, int how);
 void	thread_single_end(struct proc *p, int how);
 void	thread_stash(struct thread *td);
@@ -1179,6 +1188,7 @@ void	thread_stopped(struct proc *p);
 void	childproc_stopped(struct proc *child, int reason);
 void	childproc_continued(struct proc *child);
 void	childproc_exited(struct proc *child);
+void	thread_run_flash(struct thread *td);
 int	thread_suspend_check(int how);
 bool	thread_suspend_check_needed(void);
 void	thread_suspend_switch(struct thread *, struct proc *p);

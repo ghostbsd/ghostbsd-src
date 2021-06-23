@@ -163,6 +163,12 @@ SYSCTL_BOOL(_kern, OID_AUTO, sigfastblock_fetch_always, CTLFLAG_RWTUN,
     "Fetch sigfastblock word on each syscall entry for proper "
     "blocking semantic");
 
+static bool	kern_sig_discard_ign = true;
+SYSCTL_BOOL(_kern, OID_AUTO, sig_discard_ign, CTLFLAG_RWTUN,
+    &kern_sig_discard_ign, 0,
+    "Discard ignored signals on delivery, otherwise queue them to "
+    "the target queue");
+
 SYSINIT(signal, SI_SUB_P1003_1B, SI_ORDER_FIRST+3, sigqueue_start, NULL);
 
 /*
@@ -1167,10 +1173,15 @@ sys_sigwait(struct thread *td, struct sigwait_args *uap)
 
 	error = kern_sigtimedwait(td, set, &ksi, NULL);
 	if (error) {
+		/*
+		 * sigwait() function shall not return EINTR, but
+		 * the syscall does.  Non-ancient libc provides the
+		 * wrapper which hides EINTR.  Otherwise, EINTR return
+		 * is used by libthr to handle required cancellation
+		 * point in the sigwait().
+		 */
 		if (error == EINTR && td->td_proc->p_osrel < P_OSREL_SIGWAIT)
-			error = ERESTART;
-		if (error == ERESTART)
-			return (error);
+			return (ERESTART);
 		td->td_retval[0] = error;
 		return (0);
 	}
@@ -1285,6 +1296,9 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 	PROC_LOCK(p);
 	saved_mask = td->td_sigmask;
 	SIGSETNAND(td->td_sigmask, waitset);
+	if ((p->p_sysent->sv_flags & SV_SIG_DISCIGN) != 0 ||
+	    !kern_sig_discard_ign)
+		td->td_pflags2 |= TDP2_SIGWAIT;
 	for (;;) {
 		mtx_lock(&ps->ps_mtx);
 		sig = cursig(td);
@@ -1329,15 +1343,13 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 
 		error = msleep(ps, &p->p_mtx, PPAUSE|PCATCH, "sigwait", timo);
 
-		if (timeout != NULL) {
-			if (error == ERESTART) {
-				/* Timeout can not be restarted. */
-				error = EINTR;
-			} else if (error == EAGAIN) {
-				/* We will calculate timeout by ourself. */
-				error = 0;
-			}
-		}
+		/* The syscalls can not be restarted. */
+		if (error == ERESTART)
+			error = EINTR;
+
+		/* We will calculate timeout by ourself. */
+		if (timeout != NULL && error == EAGAIN)
+			error = 0;
 
 		/*
 		 * If PTRACE_SCE or PTRACE_SCX were set after
@@ -1349,6 +1361,7 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 		if (error == 0 && (p->p_ptevents & PTRACE_SYSCALL) != 0)
 			traced = true;
 	}
+	td->td_pflags2 &= ~TDP2_SIGWAIT;
 
 	new_block = saved_mask;
 	SIGSETNAND(new_block, td->td_sigmask);
@@ -2197,22 +2210,25 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 	SDT_PROBE3(proc, , , signal__send, td, p, sig);
 
 	/*
-	 * If the signal is being ignored,
-	 * then we forget about it immediately.
-	 * (Note: we don't set SIGCONT in ps_sigignore,
-	 * and if it is set to SIG_IGN,
-	 * action will be SIG_DFL here.)
+	 * If the signal is being ignored, then we forget about it
+	 * immediately, except when the target process executes
+	 * sigwait().  (Note: we don't set SIGCONT in ps_sigignore,
+	 * and if it is set to SIG_IGN, action will be SIG_DFL here.)
 	 */
 	mtx_lock(&ps->ps_mtx);
 	if (SIGISMEMBER(ps->ps_sigignore, sig)) {
-		SDT_PROBE3(proc, , , signal__discard, td, p, sig);
+		if (kern_sig_discard_ign &&
+		    (p->p_sysent->sv_flags & SV_SIG_DISCIGN) == 0) {
+			SDT_PROBE3(proc, , , signal__discard, td, p, sig);
 
-		mtx_unlock(&ps->ps_mtx);
-		if (ksi && (ksi->ksi_flags & KSI_INS))
-			ksiginfo_tryfree(ksi);
-		return (ret);
-	}
-	if (SIGISMEMBER(td->td_sigmask, sig))
+			mtx_unlock(&ps->ps_mtx);
+			if (ksi && (ksi->ksi_flags & KSI_INS))
+				ksiginfo_tryfree(ksi);
+			return (ret);
+		} else {
+			action = SIG_CATCH;
+		}
+	} else if (SIGISMEMBER(td->td_sigmask, sig))
 		action = SIG_HOLD;
 	else if (SIGISMEMBER(ps->ps_sigcatch, sig))
 		action = SIG_CATCH;
@@ -2521,6 +2537,42 @@ out:
 	thread_unlock(td);
 }
 
+static void
+ptrace_coredump(struct thread *td)
+{
+	struct proc *p;
+	struct thr_coredump_req *tcq;
+	void *rl_cookie;
+
+	MPASS(td == curthread);
+	p = td->td_proc;
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	if ((td->td_dbgflags & TDB_COREDUMPRQ) == 0)
+		return;
+	KASSERT((p->p_flag & P_STOPPED_TRACE) != 0, ("not stopped"));
+
+	tcq = td->td_coredump;
+	KASSERT(tcq != NULL, ("td_coredump is NULL"));
+
+	if (p->p_sysent->sv_coredump == NULL) {
+		tcq->tc_error = ENOSYS;
+		goto wake;
+	}
+
+	PROC_UNLOCK(p);
+	rl_cookie = vn_rangelock_wlock(tcq->tc_vp, 0, OFF_MAX);
+
+	tcq->tc_error = p->p_sysent->sv_coredump(td, tcq->tc_vp,
+	    tcq->tc_limit, tcq->tc_flags);
+
+	vn_rangelock_unlock(tcq->tc_vp, rl_cookie);
+	PROC_LOCK(p);
+wake:
+	td->td_dbgflags &= ~TDB_COREDUMPRQ;
+	td->td_coredump = NULL;
+	wakeup(p);
+}
+
 static int
 sig_suspend_threads(struct thread *td, struct proc *p, int sending)
 {
@@ -2648,7 +2700,15 @@ ptracestop(struct thread *td, int sig, ksiginfo_t *si)
 				td->td_dbgflags &= ~TDB_STOPATFORK;
 			}
 stopme:
+			td->td_dbgflags |= TDB_SSWITCH;
 			thread_suspend_switch(td, p);
+			td->td_dbgflags &= ~TDB_SSWITCH;
+			if ((td->td_dbgflags & TDB_COREDUMPRQ) != 0) {
+				PROC_SUNLOCK(p);
+				ptrace_coredump(td);
+				PROC_SLOCK(p);
+				goto stopme;
+			}
 			if (p->p_xthread == td)
 				p->p_xthread = NULL;
 			if (!(p->p_flag & P_TRACED))
@@ -2903,11 +2963,13 @@ issignal(struct thread *td)
 		}
 
 		/*
-		 * We should see pending but ignored signals
-		 * only if P_TRACED was on when they were posted.
+		 * We should allow pending but ignored signals below
+		 * only if there is sigwait() active, or P_TRACED was
+		 * on when they were posted.
 		 */
 		if (SIGISMEMBER(ps->ps_sigignore, sig) &&
-		    (p->p_flag & P_TRACED) == 0) {
+		    (p->p_flag & P_TRACED) == 0 &&
+		    (td->td_pflags2 & TDP2_SIGWAIT) == 0) {
 			sigqueue_delete(&td->td_sigqueue, sig);
 			sigqueue_delete(&p->p_sigqueue, sig);
 			continue;
@@ -3019,10 +3081,11 @@ issignal(struct thread *td)
 				PROC_SUNLOCK(p);
 				mtx_lock(&ps->ps_mtx);
 				goto next;
-			} else if (prop & SIGPROP_IGNORE) {
+			} else if ((prop & SIGPROP_IGNORE) != 0 &&
+			    (td->td_pflags2 & TDP2_SIGWAIT) == 0) {
 				/*
-				 * Except for SIGCONT, shouldn't get here.
-				 * Default action is to ignore; drop it.
+				 * Default action is to ignore; drop it if
+				 * not in kern_sigtimedwait().
 				 */
 				break;		/* == ignore */
 			} else
@@ -3030,15 +3093,10 @@ issignal(struct thread *td)
 			/*NOTREACHED*/
 
 		case (intptr_t)SIG_IGN:
-			/*
-			 * Masking above should prevent us ever trying
-			 * to take action on an ignored signal other
-			 * than SIGCONT, unless process is traced.
-			 */
-			if ((prop & SIGPROP_CONT) == 0 &&
-			    (p->p_flag & P_TRACED) == 0)
-				printf("issignal\n");
-			break;		/* == ignore */
+			if ((td->td_pflags2 & TDP2_SIGWAIT) == 0)
+				break;		/* == ignore */
+			else
+				return (sig);
 
 		default:
 			/*

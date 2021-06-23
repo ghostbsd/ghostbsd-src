@@ -541,7 +541,8 @@ threadinit(void)
 
 	TASK_INIT(&thread_reap_task, 0, thread_reap_task_cb, NULL);
 	callout_init(&thread_reap_callout, 1);
-	callout_reset(&thread_reap_callout, 5 * hz, thread_reap_callout_cb, NULL);
+	callout_reset(&thread_reap_callout, 5 * hz,
+	    thread_reap_callout_cb, NULL);
 }
 
 /*
@@ -704,7 +705,37 @@ thread_reap_callout_cb(void *arg __unused)
 
 	if (wantreap)
 		taskqueue_enqueue(taskqueue_thread, &thread_reap_task);
-	callout_reset(&thread_reap_callout, 5 * hz, thread_reap_callout_cb, NULL);
+	callout_reset(&thread_reap_callout, 5 * hz,
+	    thread_reap_callout_cb, NULL);
+}
+
+/*
+ * Calling this function guarantees that any thread that exited before
+ * the call is reaped when the function returns.  By 'exited' we mean
+ * a thread removed from the process linkage with thread_unlink().
+ * Practically this means that caller must lock/unlock corresponding
+ * process lock before the call, to synchronize with thread_exit().
+ */
+void
+thread_reap_barrier(void)
+{
+	struct task *t;
+
+	/*
+	 * First do context switches to each CPU to ensure that all
+	 * PCPU pc_deadthreads are moved to zombie list.
+	 */
+	quiesce_all_cpus("", PDROP);
+
+	/*
+	 * Second, fire the task in the same thread as normal
+	 * thread_reap() is done, to serialize reaping.
+	 */
+	t = malloc(sizeof(*t), M_TEMP, M_WAITOK);
+	TASK_INIT(t, 0, thread_reap_task_cb, t);
+	taskqueue_enqueue(taskqueue_thread, t);
+	taskqueue_drain(taskqueue_thread, t);
+	free(t, M_TEMP);
 }
 
 /*
@@ -1512,6 +1543,31 @@ thread_unsuspend_one(struct thread *td, struct proc *p, bool boundary)
 		}
 	}
 	return (setrunnable(td, 0));
+}
+
+void
+thread_run_flash(struct thread *td)
+{
+	struct proc *p;
+
+	p = td->td_proc;
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	if (TD_ON_SLEEPQ(td))
+		sleepq_remove_nested(td);
+	else
+		thread_lock(td);
+
+	THREAD_LOCK_ASSERT(td, MA_OWNED);
+	KASSERT(TD_IS_SUSPENDED(td), ("Thread not suspended"));
+
+	TD_CLR_SUSPENDED(td);
+	PROC_SLOCK(p);
+	MPASS(p->p_suspcount > 0);
+	p->p_suspcount--;
+	PROC_SUNLOCK(p);
+	if (setrunnable(td, 0))
+		kick_proc0();
 }
 
 /*

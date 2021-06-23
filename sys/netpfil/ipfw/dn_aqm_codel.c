@@ -202,7 +202,7 @@ codel_extract_head(struct dn_queue *q, aqm_time_t *pkt_ts)
 	update_stats(q, -m->m_pkthdr.len, 0);
 
 	if (q->ni.length == 0) /* queue is now idle */
-			q->q_time = dn_cfg.curr_time;
+			q->q_time = V_dn_cfg.curr_time;
 
 	/* extract packet TS*/
 	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, NULL);
@@ -256,10 +256,8 @@ aqm_codel_enqueue(struct dn_queue *q, struct mbuf *m)
 	if (mtag == NULL)
 		mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_TS,
 			sizeof(aqm_time_t), M_NOWAIT);
-	if (mtag == NULL) {
-		m_freem(m); 
+	if (mtag == NULL)
 		goto drop;
-	}
 
 	*(aqm_time_t *)(mtag + 1) = AQM_UNOW;
 	m_tag_prepend(m, mtag);

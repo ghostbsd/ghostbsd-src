@@ -1530,8 +1530,8 @@ pfl_scan_ruleset(const char *path)
 
 	for (nr = pr.nr, i = 0; i < nr; i++) {
 		pr.nr = i;
-		if (pfctl_add_rule(dev, &rule, pr.anchor, pr.anchor_call,
-		    pr.ticket, pr.pool_ticket)) {
+		if (pfctl_get_rule(dev, pr.nr, pr.ticket, pr.anchor,
+		    PF_PASS, &rule, pr.anchor_call)) {
 			syslog(LOG_ERR, "pfl_scan_ruleset: ioctl(DIOCGETRULE):"
 			    " %s", strerror(errno));
 			goto err;
@@ -1545,7 +1545,7 @@ pfl_scan_ruleset(const char *path)
 			strlcpy(e->name, path, sizeof(e->name));
 			if (path[0])
 				strlcat(e->name, "/", sizeof(e->name));
-			strlcat(e->name, rule.label, sizeof(e->name));
+			strlcat(e->name, rule.label[0], sizeof(e->name));
 
 			e->evals = rule.evaluations;
 			e->bytes[IN] = rule.bytes[IN];

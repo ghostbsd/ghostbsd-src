@@ -486,6 +486,9 @@ print_pool(struct pfctl_pool *pool, u_int16_t p1, u_int16_t p2,
 		printf(" sticky-address");
 	if (id == PF_NAT && p1 == 0 && p2 == 0)
 		printf(" static-port");
+	if (pool->mape.offset > 0)
+		printf(" map-e-portset %u/%u/%u",
+		    pool->mape.offset, pool->mape.psidlen, pool->mape.psid);
 }
 
 const char	* const pf_reasons[PFRES_MAX+1] = PFRES_NAMES;
@@ -1016,8 +1019,9 @@ print_rule(struct pfctl_rule *r, const char *anchor_call, int verbose, int numer
 
 		printf(" fragment reassemble");
 	}
-	if (r->label[0])
-		printf(" label \"%s\"", r->label);
+	i = 0;
+	while (r->label[i][0])
+		printf(" label \"%s\"", r->label[i++]);
 	if (r->qname[0] && r->pqname[0])
 		printf(" queue(%s, %s)", r->qname, r->pqname);
 	else if (r->qname[0])

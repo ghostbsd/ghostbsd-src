@@ -63,6 +63,7 @@ CTASSERT((VM_PROT_ALL & -(1 << 8)) == 0);
 #define	VM_DONTCOPY		(1 << 14)
 #define	VM_DONTEXPAND		(1 << 15)
 #define	VM_DONTDUMP		(1 << 16)
+#define	VM_SHARED		(1 << 17)
 
 #define	VMA_MAX_PREFAULT_RECORD	1
 
@@ -90,6 +91,9 @@ CTASSERT((VM_PROT_ALL & -(1 << 8)) == 0);
 #define	FAULT_FLAG_USER		(1 << 6)
 #define	FAULT_FLAG_REMOTE	(1 << 7)
 #define	FAULT_FLAG_INSTRUCTION	(1 << 8)
+
+#define fault_flag_allow_retry_first(flags) \
+	(((flags) & (FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_TRIED)) == FAULT_FLAG_ALLOW_RETRY)
 
 typedef int (*pte_fn_t)(linux_pte_t *, pgtable_t, unsigned long addr, void *data);
 
