@@ -2702,6 +2702,8 @@ xpt_action_default(union ccb *start_ccb)
 	case XPT_NVME_IO:
 	case XPT_NVME_ADMIN:
 	case XPT_MMC_IO:
+	case XPT_MMC_GET_TRAN_SETTINGS:
+	case XPT_MMC_SET_TRAN_SETTINGS:
 	case XPT_RESET_DEV:
 	case XPT_ENG_EXEC:
 	case XPT_SMP_IO:
@@ -3269,28 +3271,6 @@ xpt_pollwait(union ccb *start_ccb, uint32_t timeout)
 		 */
 		start_ccb->ccb_h.status = CAM_CMD_TIMEOUT;
 	}
-}
-
-void
-xpt_polled_action(union ccb *start_ccb)
-{
-	uint32_t	timeout;
-	struct cam_ed	*dev;
-
-	timeout = start_ccb->ccb_h.timeout * 10;
-	dev = start_ccb->ccb_h.path->device;
-
-	mtx_unlock(&dev->device_mtx);
-
-	timeout = xpt_poll_setup(start_ccb);
-	if (timeout > 0) {
-		xpt_action(start_ccb);
-		xpt_pollwait(start_ccb, timeout);
-	} else {
-		start_ccb->ccb_h.status = CAM_RESRC_UNAVAIL;
-	}
-
-	mtx_lock(&dev->device_mtx);
 }
 
 /*
@@ -4605,15 +4585,6 @@ xpt_release_simq(struct cam_sim *sim, int run_queue)
 	} else
 		devq->send_queue.qfrozen_cnt--;
 	if (devq->send_queue.qfrozen_cnt == 0) {
-		/*
-		 * If there is a timeout scheduled to release this
-		 * sim queue, remove it.  The queue frozen count is
-		 * already at 0.
-		 */
-		if ((sim->flags & CAM_SIM_REL_TIMEOUT_PENDING) != 0){
-			callout_stop(&sim->callout);
-			sim->flags &= ~CAM_SIM_REL_TIMEOUT_PENDING;
-		}
 		if (run_queue) {
 			/*
 			 * Now that we are unfrozen run the send queue.
@@ -4646,6 +4617,7 @@ xpt_done(union ccb *done_ccb)
 
 	/* Store the time the ccb was in the sim */
 	done_ccb->ccb_h.qos.periph_data = cam_iosched_delta_t(done_ccb->ccb_h.qos.periph_data);
+	done_ccb->ccb_h.status |= CAM_QOS_VALID;
 	hash = (u_int)(done_ccb->ccb_h.path_id + done_ccb->ccb_h.target_id +
 	    done_ccb->ccb_h.target_lun) % cam_num_doneqs;
 	queue = &cam_doneqs[hash];
@@ -4693,7 +4665,17 @@ xpt_alloc_ccb_nowait(void)
 void
 xpt_free_ccb(union ccb *free_ccb)
 {
-	free(free_ccb, M_CAMCCB);
+	struct cam_periph *periph;
+
+	if (free_ccb->ccb_h.alloc_flags & CAM_CCB_FROM_UMA) {
+		/*
+		 * Looks like a CCB allocated from a periph UMA zone.
+		 */
+		periph = free_ccb->ccb_h.path->periph;
+		uma_zfree(periph->ccb_zone, free_ccb);
+	} else {
+		free(free_ccb, M_CAMCCB);
+	}
 }
 
 /* Private XPT functions */
@@ -4707,10 +4689,18 @@ static union ccb *
 xpt_get_ccb_nowait(struct cam_periph *periph)
 {
 	union ccb *new_ccb;
+	int alloc_flags;
 
-	new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_ZERO|M_NOWAIT);
+	if (periph->ccb_zone != NULL) {
+		alloc_flags = CAM_CCB_FROM_UMA;
+		new_ccb = uma_zalloc(periph->ccb_zone, M_ZERO|M_NOWAIT);
+	} else {
+		alloc_flags = 0;
+		new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_ZERO|M_NOWAIT);
+	}
 	if (new_ccb == NULL)
 		return (NULL);
+	new_ccb->ccb_h.alloc_flags = alloc_flags;
 	periph->periph_allocated++;
 	cam_ccbq_take_opening(&periph->path->device->ccbq);
 	return (new_ccb);
@@ -4720,9 +4710,17 @@ static union ccb *
 xpt_get_ccb(struct cam_periph *periph)
 {
 	union ccb *new_ccb;
+	int alloc_flags;
 
 	cam_periph_unlock(periph);
-	new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_ZERO|M_WAITOK);
+	if (periph->ccb_zone != NULL) {
+		alloc_flags = CAM_CCB_FROM_UMA;
+		new_ccb = uma_zalloc(periph->ccb_zone, M_ZERO|M_WAITOK);
+	} else {
+		alloc_flags = 0;
+		new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_ZERO|M_WAITOK);
+	}
+	new_ccb->ccb_h.alloc_flags = alloc_flags;
 	cam_periph_lock(periph);
 	periph->periph_allocated++;
 	cam_ccbq_take_opening(&periph->path->device->ccbq);

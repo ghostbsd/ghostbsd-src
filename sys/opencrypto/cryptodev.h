@@ -354,7 +354,8 @@ enum crypto_buffer_type {
 	CRYPTO_BUF_UIO,
 	CRYPTO_BUF_MBUF,
 	CRYPTO_BUF_VMPAGE,
-	CRYPTO_BUF_LAST = CRYPTO_BUF_VMPAGE
+	CRYPTO_BUF_SINGLE_MBUF,
+	CRYPTO_BUF_LAST = CRYPTO_BUF_SINGLE_MBUF
 };
 
 /*
@@ -481,6 +482,13 @@ _crypto_use_mbuf(struct crypto_buffer *cb, struct mbuf *m)
 }
 
 static __inline void
+_crypto_use_single_mbuf(struct crypto_buffer *cb, struct mbuf *m)
+{
+	cb->cb_mbuf = m;
+	cb->cb_type = CRYPTO_BUF_SINGLE_MBUF;
+}
+
+static __inline void
 _crypto_use_vmpage(struct crypto_buffer *cb, vm_page_t *pages, int len,
     int offset)
 {
@@ -510,6 +518,12 @@ crypto_use_mbuf(struct cryptop *crp, struct mbuf *m)
 }
 
 static __inline void
+crypto_use_single_mbuf(struct cryptop *crp, struct mbuf *m)
+{
+	_crypto_use_single_mbuf(&crp->crp_buf, m);
+}
+
+static __inline void
 crypto_use_vmpage(struct cryptop *crp, vm_page_t *pages, int len, int offset)
 {
 	_crypto_use_vmpage(&crp->crp_buf, pages, len, offset);
@@ -531,6 +545,12 @@ static __inline void
 crypto_use_output_mbuf(struct cryptop *crp, struct mbuf *m)
 {
 	_crypto_use_mbuf(&crp->crp_obuf, m);
+}
+
+static __inline void
+crypto_use_output_single_mbuf(struct cryptop *crp, struct mbuf *m)
+{
+	_crypto_use_single_mbuf(&crp->crp_obuf, m);
 }
 
 static __inline void
@@ -641,8 +661,7 @@ size_t	crypto_buffer_len(struct crypto_buffer *cb);
 void	crypto_cursor_init(struct crypto_buffer_cursor *cc,
 	    const struct crypto_buffer *cb);
 void	crypto_cursor_advance(struct crypto_buffer_cursor *cc, size_t amount);
-void	*crypto_cursor_segbase(struct crypto_buffer_cursor *cc);
-size_t	crypto_cursor_seglen(struct crypto_buffer_cursor *cc);
+void	*crypto_cursor_segment(struct crypto_buffer_cursor *cc, size_t *len);
 void	crypto_cursor_copyback(struct crypto_buffer_cursor *cc, int size,
 	    const void *vsrc);
 void	crypto_cursor_copydata(struct crypto_buffer_cursor *cc, int size,

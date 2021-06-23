@@ -89,8 +89,6 @@ __FBSDID("$FreeBSD$");
 
 #include <fs/devfs/devfs.h>
 
-#include <ufs/ufs/quota.h>
-
 MALLOC_DEFINE(M_FADVISE, "fadvise", "posix_fadvise(2) information");
 
 static int kern_chflagsat(struct thread *td, int fd, const char *path,
@@ -195,6 +193,7 @@ sys_quotactl(struct thread *td, struct quotactl_args *uap)
 	struct mount *mp;
 	struct nameidata nd;
 	int error;
+	bool mp_busy;
 
 	AUDIT_ARG_CMD(uap->cmd);
 	AUDIT_ARG_UID(uap->uid);
@@ -213,21 +212,21 @@ sys_quotactl(struct thread *td, struct quotactl_args *uap)
 		vfs_rel(mp);
 		return (error);
 	}
-	error = VFS_QUOTACTL(mp, uap->cmd, uap->uid, uap->arg);
+	mp_busy = true;
+	error = VFS_QUOTACTL(mp, uap->cmd, uap->uid, uap->arg, &mp_busy);
 
 	/*
-	 * Since quota on operation typically needs to open quota
-	 * file, the Q_QUOTAON handler needs to unbusy the mount point
+	 * Since quota on/off operations typically need to open quota
+	 * files, the implementation may need to unbusy the mount point
 	 * before calling into namei.  Otherwise, unmount might be
-	 * started between two vfs_busy() invocations (first is our,
+	 * started between two vfs_busy() invocations (first is ours,
 	 * second is from mount point cross-walk code in lookup()),
 	 * causing deadlock.
 	 *
-	 * Require that Q_QUOTAON handles the vfs_busy() reference on
-	 * its own, always returning with ubusied mount point.
+	 * Avoid unbusying mp if the implementation indicates it has
+	 * already done so.
 	 */
-	if ((uap->cmd >> SUBCMDSHIFT) != Q_QUOTAON &&
-	    (uap->cmd >> SUBCMDSHIFT) != Q_QUOTAOFF)
+	if (mp_busy)
 		vfs_unbusy(mp);
 	vfs_rel(mp);
 	return (error);
@@ -1329,6 +1328,7 @@ kern_mknodat(struct thread *td, int fd, const char *path, enum uio_seg pathseg,
 	}
 	if (error != 0)
 		return (error);
+	NDPREINIT(&nd);
 restart:
 	bwillwrite();
 	NDINIT_ATRIGHTS(&nd, CREATE, LOCKPARENT | SAVENAME | AUDITVNODE1 |
@@ -1437,6 +1437,7 @@ kern_mkfifoat(struct thread *td, int fd, const char *path,
 	int error;
 
 	AUDIT_ARG_MODE(mode);
+	NDPREINIT(&nd);
 restart:
 	bwillwrite();
 	NDINIT_ATRIGHTS(&nd, CREATE, LOCKPARENT | SAVENAME | AUDITVNODE1 |
@@ -1567,6 +1568,7 @@ kern_linkat(struct thread *td, int fd1, int fd2, const char *path1,
 	struct nameidata nd;
 	int error;
 
+	NDPREINIT(&nd);
 	do {
 		bwillwrite();
 		NDINIT_ATRIGHTS(&nd, LOOKUP, AUDITVNODE1 | at2cnpflags(flag,
@@ -1715,6 +1717,7 @@ kern_symlinkat(struct thread *td, const char *path1, int fd, const char *path2,
 		syspath = tmppath;
 	}
 	AUDIT_ARG_TEXT(syspath);
+	NDPREINIT(&nd);
 restart:
 	bwillwrite();
 	NDINIT_ATRIGHTS(&nd, CREATE, LOCKPARENT | SAVENAME | AUDITVNODE1 |
@@ -1779,6 +1782,7 @@ sys_undelete(struct thread *td, struct undelete_args *uap)
 	struct nameidata nd;
 	int error;
 
+	NDPREINIT(&nd);
 restart:
 	bwillwrite();
 	NDINIT(&nd, DELETE, LOCKPARENT | DOWHITEOUT | AUDITVNODE1,
@@ -1892,6 +1896,7 @@ kern_funlinkat(struct thread *td, int dfd, const char *path, int fd,
 			return (error);
 	}
 
+	NDPREINIT(&nd);
 restart:
 	bwillwrite();
 	NDINIT_ATRIGHTS(&nd, DELETE, LOCKPARENT | LOCKLEAF | AUDITVNODE1 |
@@ -2802,9 +2807,11 @@ sys_fchflags(struct thread *td, struct fchflags_args *uap)
 	if (error != 0)
 		return (error);
 #ifdef AUDIT
-	vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
-	AUDIT_ARG_VNODE1(fp->f_vnode);
-	VOP_UNLOCK(fp->f_vnode);
+	if (AUDITING_TD(td)) {
+		vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
+		AUDIT_ARG_VNODE1(fp->f_vnode);
+		VOP_UNLOCK(fp->f_vnode);
+	}
 #endif
 	error = setfflags(td, fp->f_vnode, uap->flags);
 	fdrop(fp, td);
@@ -3303,9 +3310,11 @@ kern_futimes(struct thread *td, int fd, struct timeval *tptr,
 	if (error != 0)
 		return (error);
 #ifdef AUDIT
-	vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
-	AUDIT_ARG_VNODE1(fp->f_vnode);
-	VOP_UNLOCK(fp->f_vnode);
+	if (AUDITING_TD(td)) {
+		vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
+		AUDIT_ARG_VNODE1(fp->f_vnode);
+		VOP_UNLOCK(fp->f_vnode);
+	}
 #endif
 	error = setutimes(td, fp->f_vnode, ts, 2, tptr == NULL);
 	fdrop(fp, td);
@@ -3337,9 +3346,11 @@ kern_futimens(struct thread *td, int fd, struct timespec *tptr,
 	if (error != 0)
 		return (error);
 #ifdef AUDIT
-	vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
-	AUDIT_ARG_VNODE1(fp->f_vnode);
-	VOP_UNLOCK(fp->f_vnode);
+	if (AUDITING_TD(td)) {
+		vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
+		AUDIT_ARG_VNODE1(fp->f_vnode);
+		VOP_UNLOCK(fp->f_vnode);
+	}
 #endif
 	error = setutimes(td, fp->f_vnode, ts, 2, flags & UTIMENS_NULL);
 	fdrop(fp, td);
@@ -3417,6 +3428,7 @@ kern_truncate(struct thread *td, const char *path, enum uio_seg pathseg,
 
 	if (length < 0)
 		return (EINVAL);
+	NDPREINIT(&nd);
 retry:
 	NDINIT(&nd, LOOKUP, FOLLOW | AUDITVNODE1, pathseg, path, td);
 	if ((error = namei(&nd)) != 0)
@@ -3784,6 +3796,7 @@ kern_mkdirat(struct thread *td, int fd, const char *path, enum uio_seg segflg,
 	int error;
 
 	AUDIT_ARG_MODE(mode);
+	NDPREINIT(&nd);
 restart:
 	bwillwrite();
 	NDINIT_ATRIGHTS(&nd, CREATE, LOCKPARENT | SAVENAME | AUDITVNODE1 |
@@ -3854,6 +3867,7 @@ kern_frmdirat(struct thread *td, int dfd, const char *path, int fd,
 			return (error);
 	}
 
+	NDPREINIT(&nd);
 restart:
 	bwillwrite();
 	NDINIT_ATRIGHTS(&nd, DELETE, LOCKPARENT | LOCKLEAF | AUDITVNODE1 |

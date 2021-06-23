@@ -60,14 +60,29 @@ struct restore_state {
 	ucl_object_t *meta_root_obj;
 };
 
+/* Filename that will be used for save/restore */
+struct checkpoint_op {
+	char snapshot_filename[MAX_SNAPSHOT_FILENAME];
+};
+
+/* Messages that a bhyve process understands. */
 enum ipc_opcode {
 	START_CHECKPOINT,
 	START_SUSPEND,
 };
 
-struct checkpoint_op {
-	unsigned int op;
-	char snapshot_filename[MAX_SNAPSHOT_FILENAME];
+/*
+ * The type of message and associated data to
+ * send to a bhyve process.
+ */
+struct ipc_message {
+        enum ipc_opcode code;
+        union {
+                /*
+                 * message specific structures
+                 */
+                struct checkpoint_op op;
+        } data;
 };
 
 struct checkpoint_thread_info {
@@ -112,6 +127,7 @@ int vm_resume_user_devs(struct vmctx *ctx);
 int get_checkpoint_msg(int conn_fd, struct vmctx *ctx);
 void *checkpoint_thread(void *param);
 int init_checkpoint_thread(struct vmctx *ctx);
+void init_snapshot(void);
 
 int load_restore_file(const char *filename, struct restore_state *rstate);
 

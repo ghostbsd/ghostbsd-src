@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/extres/clk/clk.h>
 #include <dev/mmc/bridge.h>
 #include <dev/mmc/mmcbrvar.h>
+#include <dev/mmc/mmc_fdt_helpers.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/sdhci/sdhci.h>
@@ -89,6 +90,9 @@ __FBSDID("$FreeBSD$");
 #define	SDHCI_FSL_ESDHC_CTRL_SNOOP	(1 << 6)
 #define	SDHCI_FSL_ESDHC_CTRL_CLK_DIV2	(1 << 19)
 
+#define SDHCI_FSL_CAN_VDD_MASK		\
+    (SDHCI_CAN_VDD_180 | SDHCI_CAN_VDD_300 | SDHCI_CAN_VDD_330)
+
 struct sdhci_fsl_fdt_softc {
 	device_t				dev;
 	const struct sdhci_fsl_fdt_soc_data	*soc_data;
@@ -96,11 +100,13 @@ struct sdhci_fsl_fdt_softc {
 	struct resource				*irq_res;
 	void					*irq_cookie;
 	uint32_t				baseclk_hz;
+	uint32_t				maxclk_hz;
 	struct sdhci_fdt_gpio			*gpio;
 	struct sdhci_slot			slot;
 	bool					slot_init_done;
 	uint32_t				cmd_and_mode;
 	uint16_t				sdclk_bits;
+	struct mmc_fdt_helper			fdt_helper;
 
 	uint32_t (* read)(struct sdhci_fsl_fdt_softc *, bus_size_t);
 	void (* write)(struct sdhci_fsl_fdt_softc *, bus_size_t, uint32_t);
@@ -109,6 +115,12 @@ struct sdhci_fsl_fdt_softc {
 struct sdhci_fsl_fdt_soc_data {
 	int quirks;
 	int baseclk_div;
+};
+
+static const struct sdhci_fsl_fdt_soc_data sdhci_fsl_fdt_ls1028a_soc_data = {
+	.quirks = SDHCI_QUIRK_DONT_SET_HISPD_BIT |
+	    SDHCI_QUIRK_BROKEN_AUTO_STOP | SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK,
+	.baseclk_div = 2,
 };
 
 static const struct sdhci_fsl_fdt_soc_data sdhci_fsl_fdt_ls1046a_soc_data = {
@@ -122,6 +134,7 @@ static const struct sdhci_fsl_fdt_soc_data sdhci_fsl_fdt_gen_data = {
 };
 
 static const struct ofw_compat_data sdhci_fsl_fdt_compat_data[] = {
+	{"fsl,ls1028a-esdhc",	(uintptr_t)&sdhci_fsl_fdt_ls1028a_soc_data},
 	{"fsl,ls1046a-esdhc",	(uintptr_t)&sdhci_fsl_fdt_ls1046a_soc_data},
 	{"fsl,esdhc",		(uintptr_t)&sdhci_fsl_fdt_gen_data},
 	{NULL,			0}
@@ -187,9 +200,9 @@ fsl_sdhc_fdt_set_clock(struct sdhci_fsl_fdt_softc *sc, uint16_t val)
 	    ((val >> SDHCI_DIVIDER_HI_SHIFT) & SDHCI_DIVIDER_HI_MASK) <<
 	    SDHCI_DIVIDER_MASK_LEN;
 	if (div == 0)
-		freq = sc->baseclk_hz;
+		freq = sc->maxclk_hz;
 	else
-		freq = sc->baseclk_hz / (2 * div);
+		freq = sc->maxclk_hz / (2 * div);
 
 	for (prescale = 2; freq < sc->baseclk_hz / (prescale * 16); )
 		prescale <<= 1;
@@ -285,18 +298,11 @@ sdhci_fsl_fdt_read_4(device_t dev, struct sdhci_slot *slot, bus_size_t off)
 
 	val32 = RD4(sc, off);
 
-	switch (off) {
-	case SDHCI_CAPABILITIES:
-		val32 &= ~(SDHCI_CAN_DO_SUSPEND | SDHCI_CAN_VDD_180);
-		break;
-	case SDHCI_PRESENT_STATE:
+	if (off == SDHCI_PRESENT_STATE) {
 		wrk32 = val32;
 		val32 &= SDHCI_FSL_PRES_COMPAT_MASK;
 		val32 |= (wrk32 >> 4) & SDHCI_STATE_DAT_MASK;
 		val32 |= (wrk32 << 1) & SDHCI_STATE_CMD;
-		break;
-	default:
-		break;
 	}
 
 	return (val32);
@@ -439,6 +445,86 @@ sdhci_fsl_fdt_irq(void *arg)
 }
 
 static int
+sdhci_fsl_fdt_update_ios(device_t brdev, device_t reqdev)
+{
+	int err;
+	struct sdhci_fsl_fdt_softc *sc;
+	struct mmc_ios *ios;
+	struct sdhci_slot *slot;
+
+	err = sdhci_generic_update_ios(brdev, reqdev);
+	if (err != 0)
+		return (err);
+
+	sc = device_get_softc(brdev);
+	slot = device_get_ivars(reqdev);
+	ios = &slot->host.ios;
+
+	switch (ios->power_mode) {
+	case power_on:
+		break;
+	case power_off:
+		if (bootverbose)
+			device_printf(sc->dev, "Powering down sd/mmc\n");
+
+		if (sc->fdt_helper.vmmc_supply)
+			regulator_disable(sc->fdt_helper.vmmc_supply);
+		if (sc->fdt_helper.vqmmc_supply)
+			regulator_disable(sc->fdt_helper.vqmmc_supply);
+		break;
+	case power_up:
+		if (bootverbose)
+			device_printf(sc->dev, "Powering up sd/mmc\n");
+
+		if (sc->fdt_helper.vmmc_supply)
+			regulator_enable(sc->fdt_helper.vmmc_supply);
+		if (sc->fdt_helper.vqmmc_supply)
+			regulator_enable(sc->fdt_helper.vqmmc_supply);
+		break;
+	};
+
+	return (0);
+}
+
+static int
+sdhci_fsl_fdt_switch_vccq(device_t brdev, device_t reqdev)
+{
+	struct sdhci_fsl_fdt_softc *sc;
+	struct sdhci_slot *slot;
+	int uvolt, err;
+
+	sc = device_get_softc(brdev);
+
+	if (sc->fdt_helper.vqmmc_supply == NULL)
+		return EOPNOTSUPP;
+
+	err = sdhci_generic_switch_vccq(brdev, reqdev);
+	if (err != 0)
+		return (err);
+
+	slot = device_get_ivars(reqdev);
+	switch (slot->host.ios.vccq) {
+	case vccq_180:
+		uvolt = 1800000;
+		break;
+	case vccq_330:
+		uvolt = 3300000;
+		break;
+	default:
+		return EINVAL;
+	}
+
+	err = regulator_set_voltage(sc->fdt_helper.vqmmc_supply, uvolt, uvolt);
+	if (err != 0) {
+		device_printf(sc->dev,
+		    "Cannot set vqmmc to %d<->%d\n", uvolt, uvolt);
+		return (err);
+	}
+
+	return (0);
+}
+
+static int
 sdhci_fsl_fdt_get_ro(device_t bus, device_t child)
 {
 	struct sdhci_fsl_fdt_softc *sc;
@@ -456,10 +542,85 @@ sdhci_fsl_fdt_get_card_present(device_t dev, struct sdhci_slot *slot)
 	return (sdhci_fdt_gpio_get_present(sc->gpio));
 }
 
+static uint32_t
+sdhci_fsl_fdt_vddrange_to_mask(device_t dev, uint32_t *vdd_ranges, int len)
+{
+	uint32_t vdd_min, vdd_max;
+	uint32_t vdd_mask = 0;
+	int i;
+
+	/* Ranges are organized as pairs of values. */
+	if ((len % 2) != 0) {
+		device_printf(dev, "Invalid voltage range\n");
+		return (0);
+	}
+	len = len / 2;
+
+	for (i = 0; i < len; i++) {
+		vdd_min = vdd_ranges[2 * i];
+		vdd_max = vdd_ranges[2 * i + 1];
+
+		if (vdd_min > vdd_max || vdd_min < 1650 || vdd_min > 3600 ||
+		    vdd_max < 1650 || vdd_max > 3600) {
+			device_printf(dev, "Voltage range %d - %d is out of bounds\n",
+			    vdd_min, vdd_max);
+			return (0);
+		}
+
+		if (vdd_min <= 1800 && vdd_max >= 1800)
+			vdd_mask |= SDHCI_CAN_VDD_180;
+		if (vdd_min <= 3000 && vdd_max >= 3000)
+			vdd_mask |= SDHCI_CAN_VDD_300;
+		if (vdd_min <= 3300 && vdd_max >= 3300)
+			vdd_mask |= SDHCI_CAN_VDD_330;
+	}
+
+	return (vdd_mask);
+}
+
+static void
+sdhci_fsl_fdt_of_parse(device_t dev)
+{
+	struct sdhci_fsl_fdt_softc *sc;
+	phandle_t node;
+	pcell_t *voltage_ranges;
+	uint32_t vdd_mask = 0;
+	ssize_t num_ranges;
+
+	sc = device_get_softc(dev);
+	node = ofw_bus_get_node(dev);
+
+	/* Call mmc_fdt_parse in order to get mmc related properties. */
+	mmc_fdt_parse(dev, node, &sc->fdt_helper, &sc->slot.host);
+
+	sc->slot.caps = sdhci_fsl_fdt_read_4(dev, &sc->slot,
+	    SDHCI_CAPABILITIES) & ~(SDHCI_CAN_DO_SUSPEND);
+	sc->slot.caps2 = sdhci_fsl_fdt_read_4(dev, &sc->slot,
+	    SDHCI_CAPABILITIES2);
+
+	/* Parse the "voltage-ranges" dts property. */
+	num_ranges = OF_getencprop_alloc(node, "voltage-ranges",
+	    (void **) &voltage_ranges);
+	if (num_ranges <= 0)
+		return;
+	vdd_mask = sdhci_fsl_fdt_vddrange_to_mask(dev, voltage_ranges,
+	    num_ranges / sizeof(uint32_t));
+	OF_prop_free(voltage_ranges);
+
+	/* Overwrite voltage caps only if we got something from dts. */
+	if (vdd_mask != 0 &&
+	    (vdd_mask != (sc->slot.caps & SDHCI_FSL_CAN_VDD_MASK))) {
+		sc->slot.caps &= ~(SDHCI_FSL_CAN_VDD_MASK);
+		sc->slot.caps |= vdd_mask;
+		sc->slot.quirks |= SDHCI_QUIRK_MISSING_CAPS;
+	}
+}
+
 static int
 sdhci_fsl_fdt_attach(device_t dev)
 {
 	struct sdhci_fsl_fdt_softc *sc;
+	struct mmc_host *host;
 	uint32_t val, buf_order;
 	uintptr_t ocd_data;
 	uint64_t clk_hz;
@@ -474,6 +635,7 @@ sdhci_fsl_fdt_attach(device_t dev)
 	sc->soc_data = (struct sdhci_fsl_fdt_soc_data *)ocd_data;
 	sc->dev = dev;
 	sc->slot.quirks = sc->soc_data->quirks;
+	host = &sc->slot.host;
 
 	rid = 0;
 	sc->mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
@@ -527,6 +689,9 @@ sdhci_fsl_fdt_attach(device_t dev)
 		buf_order = SDHCI_FSL_PROT_CTRL_BYTE_SWAP;
 	}
 
+	sdhci_fsl_fdt_of_parse(dev);
+	sc->maxclk_hz = host->f_max ? host->f_max : sc->baseclk_hz;
+
 	/*
 	 * Setting this register affects byte order in SDHCI_BUFFER only.
 	 * If the eSDHC block is connected over a big-endian bus, the data
@@ -548,7 +713,7 @@ sdhci_fsl_fdt_attach(device_t dev)
 	WR4(sc, SDHCI_CLOCK_CONTROL, val & ~SDHCI_FSL_CLK_SDCLKEN);
 	val = RD4(sc, SDHCI_FSL_ESDHC_CTRL);
 	WR4(sc, SDHCI_FSL_ESDHC_CTRL, val | SDHCI_FSL_ESDHC_CTRL_CLK_DIV2);
-	sc->slot.max_clk = sc->baseclk_hz;
+	sc->slot.max_clk = sc->maxclk_hz;
 	sc->gpio = sdhci_fdt_gpio_setup(dev, &sc->slot);
 
 	/*
@@ -649,11 +814,12 @@ static const device_method_t sdhci_fsl_fdt_methods[] = {
 	DEVMETHOD(bus_write_ivar,		sdhci_generic_write_ivar),
 
 	/* MMC bridge interface. */
-	DEVMETHOD(mmcbr_update_ios,		sdhci_generic_update_ios),
 	DEVMETHOD(mmcbr_request,		sdhci_generic_request),
 	DEVMETHOD(mmcbr_get_ro,			sdhci_fsl_fdt_get_ro),
 	DEVMETHOD(mmcbr_acquire_host,		sdhci_generic_acquire_host),
 	DEVMETHOD(mmcbr_release_host,		sdhci_generic_release_host),
+	DEVMETHOD(mmcbr_switch_vccq,		sdhci_fsl_fdt_switch_vccq),
+	DEVMETHOD(mmcbr_update_ios,		sdhci_fsl_fdt_update_ios),
 
 	/* SDHCI accessors. */
 	DEVMETHOD(sdhci_read_1,			sdhci_fsl_fdt_read_1),

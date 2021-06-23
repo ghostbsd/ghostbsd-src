@@ -100,9 +100,6 @@ static bool	linux_trans_osrel(const Elf_Note *note, int32_t *osrel);
 static void	linux_vdso_install(void *param);
 static void	linux_vdso_deinstall(void *param);
 
-static int linux_szplatform;
-const char *linux_kplatform;
-
 #define LINUX_T_UNKNOWN  255
 static int _bsd_to_linux_trapcode[] = {
 	LINUX_T_UNKNOWN,	/* 0 */
@@ -142,6 +139,7 @@ static int _bsd_to_linux_trapcode[] = {
      _bsd_to_linux_trapcode[(code)]: \
      LINUX_T_UNKNOWN)
 
+LINUX_VDSO_SYM_CHAR(linux_platform);
 LINUX_VDSO_SYM_INTPTR(linux_sigcode);
 LINUX_VDSO_SYM_INTPTR(linux_rt_sigcode);
 LINUX_VDSO_SYM_INTPTR(linux_vsyscall);
@@ -192,14 +190,12 @@ linux_copyout_auxargs(struct image_params *imgp, uintptr_t base)
 	struct proc *p;
 	Elf32_Auxargs *args;
 	Elf32_Auxinfo *argarray, *pos;
-	Elf32_Addr *uplatform;
 	struct ps_strings *arginfo;
 	int error, issetugid;
 
 	p = imgp->proc;
 	issetugid = imgp->proc->p_flag & P_SUGID ? 1 : 0;
 	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
-	uplatform = (Elf32_Addr *)((caddr_t)arginfo - linux_szplatform);
 	args = (Elf32_Auxargs *)imgp->auxargs;
 	argarray = pos = malloc(LINUX_AT_COUNT * sizeof(*pos), M_TEMP,
 	    M_WAITOK | M_ZERO);
@@ -231,7 +227,7 @@ linux_copyout_auxargs(struct image_params *imgp, uintptr_t base)
 	AUXARGS_ENTRY(pos, AT_EUID, imgp->proc->p_ucred->cr_svuid);
 	AUXARGS_ENTRY(pos, AT_GID, imgp->proc->p_ucred->cr_rgid);
 	AUXARGS_ENTRY(pos, AT_EGID, imgp->proc->p_ucred->cr_svgid);
-	AUXARGS_ENTRY(pos, LINUX_AT_PLATFORM, PTROUT(uplatform));
+	AUXARGS_ENTRY(pos, LINUX_AT_PLATFORM, PTROUT(linux_platform));
 	AUXARGS_ENTRY_PTR(pos, LINUX_AT_RANDOM, imgp->canary);
 	if (imgp->execpathp != 0)
 		AUXARGS_ENTRY_PTR(pos, LINUX_AT_EXECFN, imgp->execpathp);
@@ -285,13 +281,6 @@ linux_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 		execpath_len = 0;
 	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 	destp = (uintptr_t)arginfo;
-
-	/* Install LINUX_PLATFORM. */
-	destp -= linux_szplatform;
-	destp = rounddown2(destp, sizeof(void *));
-	error = copyout(linux_kplatform, (void *)destp, linux_szplatform);
-	if (error != 0)
-		return (error);
 
 	if (execpath_len != 0) {
 		destp -= execpath_len;
@@ -430,7 +419,7 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	frame.sf_ucontext = &fp->sf_sc;
 
 	/* Fill in POSIX parts. */
-	ksiginfo_to_lsiginfo(ksi, &frame.sf_si, sig);
+	siginfo_to_lsiginfo(&ksi->ksi_info, &frame.sf_si, sig);
 
 	/* Build the signal context to be used by sigreturn. */
 	frame.sf_sc.uc_flags = 0;		/* XXX ??? */
@@ -819,25 +808,6 @@ linux_exec_setregs(struct thread *td, struct image_params *imgp,
 	pcb->pcb_initial_npxcw = __LINUX_NPXCW__;
 }
 
-static void
-linux_get_machine(const char **dst)
-{
-
-	switch (cpu_class) {
-	case CPUCLASS_686:
-		*dst = "i686";
-		break;
-	case CPUCLASS_586:
-		*dst = "i586";
-		break;
-	case CPUCLASS_486:
-		*dst = "i486";
-		break;
-	default:
-		*dst = "i386";
-	}
-}
-
 struct sysentvec linux_sysvec = {
 	.sv_size	= LINUX_SYS_MAXSYSCALL,
 	.sv_table	= linux_sysent,
@@ -859,18 +829,18 @@ struct sysentvec linux_sysvec = {
 	.sv_setregs	= linux_exec_setregs,
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_ABI_LINUX | SV_AOUT | SV_IA32 | SV_ILP32,
+	.sv_flags	= SV_ABI_LINUX | SV_AOUT | SV_IA32 | SV_ILP32 |
+	    SV_SIG_DISCIGN | SV_SIG_WAITNDQ,
 	.sv_set_syscall_retval = linux_set_syscall_retval,
 	.sv_fetch_syscall_args = linux_fetch_syscall_args,
 	.sv_syscallnames = NULL,
-	.sv_shared_page_base = LINUX_SHAREDPAGE,
-	.sv_shared_page_len = PAGE_SIZE,
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= NULL,
 	.sv_onexec	= linux_on_exec,
 	.sv_onexit	= linux_on_exit,
 	.sv_ontdexit	= linux_thread_dtor,
+	.sv_setid_allowed = &linux_setid_allowed_query,
 };
 INIT_SYSENTVEC(aout_sysvec, &linux_sysvec);
 
@@ -896,7 +866,8 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_setregs	= linux_exec_setregs,
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_ABI_LINUX | SV_IA32 | SV_ILP32 | SV_SHP,
+	.sv_flags	= SV_ABI_LINUX | SV_IA32 | SV_ILP32 | SV_SHP |
+	    SV_SIG_DISCIGN | SV_SIG_WAITNDQ,
 	.sv_set_syscall_retval = linux_set_syscall_retval,
 	.sv_fetch_syscall_args = linux_fetch_syscall_args,
 	.sv_syscallnames = NULL,
@@ -908,6 +879,7 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_onexec	= linux_on_exec,
 	.sv_onexit	= linux_on_exit,
 	.sv_ontdexit	= linux_thread_dtor,
+	.sv_setid_allowed = &linux_setid_allowed_query,
 };
 
 static void
@@ -1042,9 +1014,6 @@ linux_elf_modevent(module_t mod, int type, void *data)
 				linux_ioctl_register_handler(*lihp);
 			LIST_INIT(&futex_list);
 			mtx_init(&futex_mtx, "ftllk", NULL, MTX_DEF);
-			linux_get_machine(&linux_kplatform);
-			linux_szplatform = roundup(strlen(linux_kplatform) + 1,
-			    sizeof(char *));
 			linux_dev_shm_create();
 			linux_osd_jail_register();
 			stclohz = (stathz ? stathz : hz);

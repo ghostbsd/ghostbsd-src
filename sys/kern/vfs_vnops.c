@@ -79,6 +79,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/syslog.h>
 #include <sys/unistd.h>
 #include <sys/user.h>
+#include <sys/ktrace.h>
 
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
@@ -200,6 +201,8 @@ open2nameif(int fmode, u_int vn_open_flags)
 	res = ISOPEN | LOCKLEAF;
 	if ((fmode & O_RESOLVE_BENEATH) != 0)
 		res |= RBENEATH;
+	if ((fmode & O_EMPTY_PATH) != 0)
+		res |= EMPTYPATH;
 	if ((vn_open_flags & VN_OPEN_NOAUDIT) == 0)
 		res |= AUDITVNODE1;
 	if ((vn_open_flags & VN_OPEN_NOCAPCHECK) != 0)
@@ -231,7 +234,8 @@ restart:
 	first_open = false;
 	fmode = *flagp;
 	if ((fmode & (O_CREAT | O_EXCL | O_DIRECTORY)) == (O_CREAT |
-	    O_EXCL | O_DIRECTORY))
+	    O_EXCL | O_DIRECTORY) ||
+	    (fmode & (O_CREAT | O_EMPTY_PATH)) == (O_CREAT | O_EMPTY_PATH))
 		return (EINVAL);
 	else if ((fmode & (O_CREAT | O_DIRECTORY)) == O_CREAT) {
 		ndp->ni_cnd.cn_nameiop = CREATE;
@@ -1104,6 +1108,7 @@ vn_write(struct file *fp, struct uio *uio, struct ucred *active_cred, int flags,
 	off_t orig_offset;
 	int error, ioflag, lock_flags;
 	int advice;
+	bool need_finished_write;
 
 	KASSERT(uio->uio_td == td, ("uio_td %p is not td %p",
 	    uio->uio_td, td));
@@ -1118,9 +1123,12 @@ vn_write(struct file *fp, struct uio *uio, struct ucred *active_cred, int flags,
 		ioflag |= IO_NDELAY;
 	if (fp->f_flag & O_DIRECT)
 		ioflag |= IO_DIRECT;
+
+	mp = atomic_load_ptr(&vp->v_mount);
 	if ((fp->f_flag & O_FSYNC) ||
-	    (vp->v_mount && (vp->v_mount->mnt_flag & MNT_SYNCHRONOUS)))
+	    (mp != NULL && (mp->mnt_flag & MNT_SYNCHRONOUS)))
 		ioflag |= IO_SYNC;
+
 	/*
 	 * For O_DSYNC we set both IO_SYNC and IO_DATASYNC, so that VOP_WRITE()
 	 * implementations that don't understand IO_DATASYNC fall back to full
@@ -1129,9 +1137,13 @@ vn_write(struct file *fp, struct uio *uio, struct ucred *active_cred, int flags,
 	if (fp->f_flag & O_DSYNC)
 		ioflag |= IO_SYNC | IO_DATASYNC;
 	mp = NULL;
-	if (vp->v_type != VCHR &&
-	    (error = vn_start_write(vp, &mp, V_WAIT | PCATCH)) != 0)
-		goto unlock;
+	need_finished_write = false;
+	if (vp->v_type != VCHR) {
+		error = vn_start_write(vp, &mp, V_WAIT | PCATCH);
+		if (error != 0)
+			goto unlock;
+		need_finished_write = true;
+	}
 
 	advice = get_advice(fp, uio);
 
@@ -1162,7 +1174,7 @@ vn_write(struct file *fp, struct uio *uio, struct ucred *active_cred, int flags,
 		error = VOP_WRITE(vp, uio, ioflag, fp->f_cred);
 	fp->f_nextoff[UIO_WRITE] = uio->uio_offset;
 	VOP_UNLOCK(vp);
-	if (vp->v_type != VCHR)
+	if (need_finished_write)
 		vn_finished_write(mp);
 	if (error == 0 && advice == POSIX_FADV_NOREUSE &&
 	    orig_offset != uio->uio_offset)
@@ -2349,17 +2361,36 @@ int
 vn_rlimit_fsize(const struct vnode *vp, const struct uio *uio,
     struct thread *td)
 {
+	off_t lim;
+	bool ktr_write;
 
-	if (vp->v_type != VREG || td == NULL)
+	if (td == NULL)
 		return (0);
-	if ((uoff_t)uio->uio_offset + uio->uio_resid >
-	    lim_cur(td, RLIMIT_FSIZE)) {
+
+	/*
+	 * There are conditions where the limit is to be ignored.
+	 * However, since it is almost never reached, check it first.
+	 */
+	ktr_write = (td->td_pflags & TDP_INKTRACE) != 0;
+	lim = lim_cur(td, RLIMIT_FSIZE);
+	if (__predict_false(ktr_write))
+		lim = td->td_ktr_io_lim;
+	if (__predict_true((uoff_t)uio->uio_offset + uio->uio_resid <= lim))
+		return (0);
+
+	/*
+	 * The limit is reached.
+	 */
+	if (vp->v_type != VREG ||
+	    (td->td_pflags2 & TDP2_ACCT) != 0)
+		return (0);
+
+	if (!ktr_write || ktr_filesize_limit_signal) {
 		PROC_LOCK(td->td_proc);
 		kern_psignal(td->td_proc, SIGXFSZ);
 		PROC_UNLOCK(td->td_proc);
-		return (EFBIG);
 	}
-	return (0);
+	return (EFBIG);
 }
 
 int

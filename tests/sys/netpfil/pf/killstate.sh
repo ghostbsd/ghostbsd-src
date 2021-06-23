@@ -384,6 +384,17 @@ match_head()
 	atf_set require.user root
 }
 
+wait_for_state()
+{
+	jail=$1
+	addr=$2
+
+	while ! jexec $jail pfctl -s s | grep $addr >/dev/null;
+	do
+		sleep .1
+	done
+}
+
 match_body()
 {
 	pft_init
@@ -412,6 +423,7 @@ match_body()
 		"pass all"
 
 	nc 198.51.100.2 7 &
+	wait_for_state alcatraz 192.0.2.1
 
 	# Expect two states
 	states=$(jexec alcatraz pfctl -s s | wc -l)
@@ -432,6 +444,7 @@ match_body()
 	jexec alcatraz pfctl -F states
 
 	nc 198.51.100.2 7 &
+	wait_for_state alcatraz 192.0.2.1
 
 	# Kill matching states, expect all of them to be gone
 	jexec alcatraz pfctl -M -k 192.0.2.1
@@ -447,6 +460,65 @@ match_cleanup()
 	pft_cleanup
 }
 
+atf_test_case "interface" "cleanup"
+interface_head()
+{
+	atf_set descr 'Test killing states based on interface'
+	atf_set require.user root
+	atf_set require.progs scapy
+}
+
+interface_body()
+{
+	pft_init
+
+	epair=$(vnet_mkepair)
+	ifconfig ${epair}a 192.0.2.1/24 up
+
+	vnet_mkjail alcatraz ${epair}b
+	jexec alcatraz ifconfig ${epair}b 192.0.2.2/24 up
+	jexec alcatraz pfctl -e
+
+	pft_set_rules alcatraz "block all" \
+		"pass in proto icmp"
+
+	# Sanity check & establish state
+	# Note: use pft_ping so we always use the same ID, so pf considers all
+	# echo requests part of the same flow.
+	atf_check -s exit:0 -o ignore ${common_dir}/pft_ping.py \
+		--sendif ${epair}a \
+		--to 192.0.2.2 \
+		--replyif ${epair}a
+
+	# Change rules to now deny the ICMP traffic
+	pft_set_rules noflush alcatraz "block all"
+
+	# Established state means we can still ping alcatraz
+	atf_check -s exit:0 -o ignore ${common_dir}/pft_ping.py \
+		--sendif ${epair}a \
+		--to 192.0.2.2 \
+		--replyif ${epair}a
+
+	# Flushing states on a different interface doesn't affect our state
+	jexec alcatraz pfctl -i ${epair}a -Fs
+	atf_check -s exit:0 -o ignore ${common_dir}/pft_ping.py \
+		--sendif ${epair}a \
+		--to 192.0.2.2 \
+		--replyif ${epair}a
+
+	# Flushing on the correct interface does (even with floating states)
+	jexec alcatraz pfctl -i ${epair}b -Fs
+	atf_check -s exit:1 -o ignore ${common_dir}/pft_ping.py \
+		--sendif ${epair}a \
+		--to 192.0.2.2 \
+		--replyif ${epair}a
+}
+
+interface_cleanup()
+{
+	pft_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "v4"
@@ -455,4 +527,5 @@ atf_init_test_cases()
 	atf_add_test_case "multilabel"
 	atf_add_test_case "gateway"
 	atf_add_test_case "match"
+	atf_add_test_case "interface"
 }

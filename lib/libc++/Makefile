@@ -32,6 +32,7 @@ SRCS+=		functional.cpp
 SRCS+=		future.cpp
 SRCS+=		hash.cpp
 SRCS+=		ios.cpp
+SRCS+=		ios.instantiations.cpp
 SRCS+=		iostream.cpp
 SRCS+=		locale.cpp
 SRCS+=		memory.cpp
@@ -83,12 +84,13 @@ CFLAGS+=	-fdata-sections
 CXXSTD?=	c++14
 
 LIBADD+=	cxxrt
-INCSGROUPS=	STD EXP EXT
+INCSGROUPS=	STD MEM EXP EXT
 
+STD_HEADERS+=	__availability
 STD_HEADERS+=	__bit_reference
+STD_HEADERS+=	__bits
 STD_HEADERS+=	__bsd_locale_defaults.h
 STD_HEADERS+=	__bsd_locale_fallbacks.h
-STD_HEADERS+=	__config
 STD_HEADERS+=	__debug
 STD_HEADERS+=	__errc
 STD_HEADERS+=	__functional_03
@@ -112,6 +114,7 @@ STD_HEADERS+=	algorithm
 STD_HEADERS+=	any
 STD_HEADERS+=	array
 STD_HEADERS+=	atomic
+STD_HEADERS+=	barrier
 STD_HEADERS+=	bit
 STD_HEADERS+=	bitset
 STD_HEADERS+=	cassert
@@ -131,6 +134,7 @@ STD_HEADERS+=	codecvt
 STD_HEADERS+=	compare
 STD_HEADERS+=	complex
 STD_HEADERS+=	complex.h
+STD_HEADERS+=	concepts
 STD_HEADERS+=	condition_variable
 STD_HEADERS+=	csetjmp
 STD_HEADERS+=	csignal
@@ -149,6 +153,7 @@ STD_HEADERS+=	cwctype
 STD_HEADERS+=	deque
 STD_HEADERS+=	errno.h
 STD_HEADERS+=	exception
+STD_HEADERS+=	execution
 STD_HEADERS+=	fenv.h
 STD_HEADERS+=	filesystem
 STD_HEADERS+=	float.h
@@ -164,6 +169,7 @@ STD_HEADERS+=	iosfwd
 STD_HEADERS+=	iostream
 STD_HEADERS+=	istream
 STD_HEADERS+=	iterator
+STD_HEADERS+=	latch
 STD_HEADERS+=	limits
 STD_HEADERS+=	limits.h
 STD_HEADERS+=	list
@@ -174,6 +180,7 @@ STD_HEADERS+=	math.h
 STD_HEADERS+=	memory
 STD_HEADERS+=	mutex
 STD_HEADERS+=	new
+STD_HEADERS+=	numbers
 STD_HEADERS+=	numeric
 STD_HEADERS+=	optional
 STD_HEADERS+=	ostream
@@ -182,6 +189,7 @@ STD_HEADERS+=	random
 STD_HEADERS+=	ratio
 STD_HEADERS+=	regex
 STD_HEADERS+=	scoped_allocator
+STD_HEADERS+=	semaphore
 STD_HEADERS+=	set
 STD_HEADERS+=	setjmp.h
 STD_HEADERS+=	shared_mutex
@@ -229,6 +237,26 @@ INCSLINKS+=	../${hdr} ${CXXINCLUDEDIR}/tr1/${hdr}
 STD+=		${_LIBCXXRTDIR}/${hdr}
 .endfor
 STDDIR=		${CXXINCLUDEDIR}
+
+# Special case for __config, which as of libc++ 12.0.0 is produced by
+# concatenating the locally generated __config_site and the upstream __config
+# files.
+CONFIG_HEADER=	__config
+
+${CONFIG_HEADER}: ${.CURDIR}/__config_site ${HDRDIR}/__config
+	cat ${.ALLSRC} > ${.TARGET}
+STD+=		${CONFIG_HEADER}
+CLEANFILES+=	${CONFIG_HEADER}
+
+MEM_HEADERS+=	allocator_traits.h
+MEM_HEADERS+=	base.h
+MEM_HEADERS+=	pointer_traits.h
+MEM_HEADERS+=	utilities.h
+
+.for hdr in ${MEM_HEADERS}
+MEM+=		${HDRDIR}/__memory/${hdr}
+.endfor
+MEMDIR=		${CXXINCLUDEDIR}/__memory
 
 EXP_HEADERS+=	__config
 EXP_HEADERS+=	__memory

@@ -73,8 +73,6 @@ __FBSDID("$FreeBSD$");
 
 int (*dtrace_invop_jump_addr)(struct trapframe *);
 
-extern register_t fsu_intr_fault;
-
 /* Called from exception.S */
 void do_trap_supervisor(struct trapframe *);
 void do_trap_user(struct trapframe *);
@@ -228,7 +226,7 @@ page_fault_handler(struct trapframe *frame, int usermode)
 		ftype = VM_PROT_READ;
 	}
 
-	if (pmap_fault_fixup(map->pmap, va, ftype))
+	if (pmap_fault(map->pmap, va, ftype))
 		goto done;
 
 	error = vm_fault_trap(map, va, ftype, VM_FAULT_NORMAL, &sig, &ucode);

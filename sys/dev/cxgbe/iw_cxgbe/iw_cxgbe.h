@@ -56,8 +56,6 @@
 #include <rdma/ib_verbs.h>
 #include <rdma/iw_cm.h>
 
-#undef prefetch
-
 #include "common/common.h"
 #include "common/t4_msg.h"
 #include "common/t4_regs.h"
@@ -178,6 +176,14 @@ static inline int c4iw_fatal_error(struct c4iw_rdev *rdev)
 static inline int c4iw_num_stags(struct c4iw_rdev *rdev)
 {
 	return (int)(rdev->adap->vres.stag.size >> 5);
+}
+
+static inline int t4_max_fr_depth(struct c4iw_rdev *rdev, bool use_dsgl)
+{
+	if (rdev->adap->params.ulptx_memwrite_dsgl && use_dsgl)
+		return rdev->adap->params.dev_512sgl_mr ? T4_MAX_FR_FW_DSGL_DEPTH : T4_MAX_FR_DSGL_DEPTH;
+	else
+		return T4_MAX_FR_IMMD_DEPTH;
 }
 
 #define C4IW_WR_TO (60*HZ)

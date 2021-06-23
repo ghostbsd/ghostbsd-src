@@ -115,7 +115,7 @@ MALLOC_DECLARE(M_USBDEV);
 /* Allow for marginal and non-conforming devices. */
 #define	USB_PORT_RESET_DELAY		50	/* ms */
 #define	USB_PORT_ROOT_RESET_DELAY	200	/* ms */
-#define	USB_PORT_RESET_RECOVERY		250	/* ms */
+#define	USB_PORT_RESET_RECOVERY		10	/* ms */
 #define	USB_PORT_POWERUP_DELAY		300	/* ms */
 #define	USB_PORT_RESUME_DELAY		(20*2)	/* ms */
 #define	USB_SET_ADDRESS_SETTLE		10	/* ms */
@@ -520,6 +520,7 @@ typedef struct usb_interface_assoc_descriptor usb_interface_assoc_descriptor_t;
 
 #define	UICLASS_VENDOR		0xff
 #define	UISUBCLASS_XBOX360_CONTROLLER	0x5d
+#define	UISUBCLASS_VENDOR	0xff
 #define	UIPROTO_XBOX360_GAMEPAD	0x01
 
 struct usb_endpoint_descriptor {

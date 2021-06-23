@@ -976,6 +976,7 @@ update_rtm_from_rc(struct rt_addrinfo *info, struct rt_msghdr **prtm,
 	if ((error = update_rtm_from_info(info, prtm, alloc_len)) != 0)
 		return (error);
 
+	rtm = *prtm;
 	rtm->rtm_flags = rc->rc_rt->rte_flags | nhop_get_rtflags(nh);
 	if (rtm->rtm_flags & RTF_GWFLAG_COMPAT)
 		rtm->rtm_flags = RTF_GATEWAY | 
@@ -1006,6 +1007,7 @@ save_add_notification(struct rib_cmd_info *rc, void *_cbdata)
 }
 #endif
 
+#if defined(INET6) || defined(INET)
 static struct sockaddr *
 alloc_sockaddr_aligned(struct linear_buffer *lb, int len)
 {
@@ -1016,6 +1018,7 @@ alloc_sockaddr_aligned(struct linear_buffer *lb, int len)
 	lb->offset += len;
 	return (sa);
 }
+#endif
 
 /*ARGSUSED*/
 static int
@@ -1357,6 +1360,7 @@ fill_sockaddr_inet6(struct sockaddr_in6 *sin6, const struct in6_addr *addr6,
 }
 #endif
 
+#if defined(INET6) || defined(INET)
 /*
  * Checks if gateway is suitable for lltable operations.
  * Lltable code requires AF_LINK gateway with ifindex
@@ -1447,6 +1451,7 @@ cleanup_xaddrs_gateway(struct rt_addrinfo *info, struct linear_buffer *lb)
 
 	return (0);
 }
+#endif
 
 static void
 remove_netmask(struct rt_addrinfo *info)

@@ -43,12 +43,12 @@
 #include <libpmcstat.h>
 #include "pmu-events/pmu-events.h"
 
-#if defined(__amd64__) || defined(__i386__)
 struct pmu_alias {
 	const char *pa_alias;
 	const char *pa_name;
 };
 
+#if defined(__amd64__) || defined(__i386__)
 typedef enum {
 	PMU_INVALID,
 	PMU_INTEL,
@@ -72,7 +72,7 @@ static struct pmu_alias pmu_intel_alias_table[] = {
 	{"BRANCH-MISSES-RETIRED", "BR_MISP_RETIRED.ALL_BRANCHES"},
 	{"cycles", "tsc-tsc"},
 	{"unhalted-cycles", "CPU_CLK_UNHALTED.THREAD_P_ANY"},
-	{"instructions", "inst-retired.any_p"},
+	{"instructions", "inst_retired.any_p"},
 	{"branch-mispredicts", "br_misp_retired.all_branches"},
 	{"branches", "br_inst_retired.all_branches"},
 	{"interrupts", "hw_interrupts.received"},
@@ -138,6 +138,16 @@ pmu_alias_get(const char *name)
 
 	return (name);
 }
+
+#else
+
+static const char *
+pmu_alias_get(const char *name)
+{
+
+	return (name);
+}
+#endif
 
 struct pmu_event_desc {
 	uint64_t ped_period;
@@ -302,8 +312,6 @@ pmc_pmu_sample_rate_get(const char *event_name)
 	event_name = pmu_alias_get(event_name);
 	if ((pe = pmu_event_get(NULL, event_name, NULL)) == NULL)
 		return (DEFAULT_SAMPLE_COUNT);
-	if (pe->alias && (pe = pmu_event_get(NULL, pe->alias, NULL)) == NULL)
-		return (DEFAULT_SAMPLE_COUNT);
 	if (pe->event == NULL)
 		return (DEFAULT_SAMPLE_COUNT);
 	if (pmu_parse_event(&ped, pe->event))
@@ -419,6 +427,7 @@ pmc_pmu_print_counter_full(const char *ev)
 	}
 }
 
+#if defined(__amd64__) || defined(__i386__)
 static int
 pmc_pmu_amd_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm,
 	struct pmu_event_desc *ped)
@@ -472,9 +481,7 @@ pmc_pmu_intel_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm,
 	struct pmu_event_desc *ped)
 {
 	struct pmc_md_iap_op_pmcallocate *iap;
-	int isfixed;
 
-	isfixed = 0;
 	iap = &pm->pm_md.pm_iap;
 	if (strcasestr(event_name, "UNC_") == event_name ||
 	    strcasestr(event_name, "uncore") != NULL) {
@@ -528,8 +535,6 @@ pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
 	event_name = pmu_alias_get(event_name);
 	if ((pe = pmu_event_get(NULL, event_name, &idx)) == NULL)
 		return (ENOENT);
-	if (pe->alias && (pe = pmu_event_get(NULL, pe->alias, &idx)) == NULL)
-		return (ENOENT);
 	assert(idx >= 0);
 	pm->pm_ev = idx;
 
@@ -544,85 +549,11 @@ pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
 		return (pmc_pmu_amd_pmcallocate(event_name, pm, &ped));
 }
 
-/*
- * Ultimately rely on AMD calling theirs the same
- */
-static const char *stat_mode_cntrs[] = {
-	"cpu_clk_unhalted.thread",
-	"inst_retired.any",
-	"br_inst_retired.all_branches",
-	"br_misp_retired.all_branches",
-	"longest_lat_cache.reference",
-	"longest_lat_cache.miss",
-};
-
-int
-pmc_pmu_stat_mode(const char ***cntrs)
-{
-	if (pmc_pmu_enabled()) {
-		*cntrs = stat_mode_cntrs;
-		return (0);
-	}
-	return (EOPNOTSUPP);
-}
-
 #else
-
-uint64_t
-pmc_pmu_sample_rate_get(const char *event_name __unused)
-{
-	return (DEFAULT_SAMPLE_COUNT);
-}
-
-void
-pmc_pmu_print_counters(const char *event_name __unused)
-{
-}
-
-void
-pmc_pmu_print_counter_desc(const char *e __unused)
-{
-}
-
-void
-pmc_pmu_print_counter_desc_long(const char *e __unused)
-{
-}
-
-void
-pmc_pmu_print_counter_full(const char *e __unused)
-{
-
-}
-
-int
-pmc_pmu_enabled(void)
-{
-	return (0);
-}
 
 int
 pmc_pmu_pmcallocate(const char *e __unused, struct pmc_op_pmcallocate *p __unused)
 {
 	return (EOPNOTSUPP);
 }
-
-const char *
-pmc_pmu_event_get_by_idx(const char *c __unused, int idx __unused)
-{
-	return (NULL);
-}
-
-int
-pmc_pmu_stat_mode(const char ***a __unused)
-{
-	return (EOPNOTSUPP);
-}
-
-int
-pmc_pmu_idx_get_by_event(const char *c __unused, const char *e __unused)
-{
-	return (-1);
-}
-
 #endif

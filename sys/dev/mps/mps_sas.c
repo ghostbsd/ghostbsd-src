@@ -1170,7 +1170,7 @@ mpssas_tm_timeout(void *data)
 	    "task mgmt %p timed out\n", tm);
 
 	KASSERT(tm->cm_state == MPS_CM_STATE_INQUEUE,
-	    ("command not inqueue\n"));
+	    ("command not inqueue, state = %u\n", tm->cm_state));
 
 	tm->cm_state = MPS_CM_STATE_BUSY;
 	mps_reinit(sc);
@@ -2015,7 +2015,7 @@ mpssas_scsiio_complete(struct mps_softc *sc, struct mps_command *cm)
 	if (cm->cm_flags & MPS_CM_FLAGS_ON_RECOVERY) {
 		TAILQ_REMOVE(&cm->cm_targ->timedout_commands, cm, cm_recovery);
 		KASSERT(cm->cm_state == MPS_CM_STATE_BUSY,
-		    ("Not busy for CM_FLAGS_TIMEDOUT: %d\n", cm->cm_state));
+		    ("Not busy for CM_FLAGS_TIMEDOUT: %u\n", cm->cm_state));
 		cm->cm_flags &= ~MPS_CM_FLAGS_ON_RECOVERY;
 		if (cm->cm_reply != NULL)
 			mpssas_log_command(cm, MPS_RECOVERY,
@@ -3204,6 +3204,7 @@ mpssas_async(void *callback_arg, uint32_t code, struct cam_path *path,
 		}
 
 		bzero(&rcap_buf, sizeof(rcap_buf));
+		bzero(&cdai, sizeof(cdai));
 		xpt_setup_ccb(&cdai.ccb_h, path, CAM_PRIORITY_NORMAL);
 		cdai.ccb_h.func_code = XPT_DEV_ADVINFO;
 		cdai.ccb_h.flags = CAM_DIR_IN;

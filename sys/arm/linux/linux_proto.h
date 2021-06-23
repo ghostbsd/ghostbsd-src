@@ -424,6 +424,11 @@ struct linux_getresuid16_args {
 	char euid_l_[PADL_(l_uid16_t *)]; l_uid16_t * euid; char euid_r_[PADR_(l_uid16_t *)];
 	char suid_l_[PADL_(l_uid16_t *)]; l_uid16_t * suid; char suid_r_[PADR_(l_uid16_t *)];
 };
+struct linux_poll_args {
+	char fds_l_[PADL_(struct pollfd*)]; struct pollfd* fds; char fds_r_[PADR_(struct pollfd*)];
+	char nfds_l_[PADL_(unsigned int)]; unsigned int nfds; char nfds_r_[PADR_(unsigned int)];
+	char timeout_l_[PADL_(long)]; long timeout; char timeout_r_[PADR_(long)];
+};
 struct linux_setresgid16_args {
 	char rgid_l_[PADL_(l_gid16_t)]; l_gid16_t rgid; char rgid_r_[PADR_(l_gid16_t)];
 	char egid_l_[PADL_(l_gid16_t)]; l_gid16_t egid; char egid_r_[PADR_(l_gid16_t)];
@@ -463,7 +468,7 @@ struct linux_rt_sigpending_args {
 struct linux_rt_sigtimedwait_args {
 	char mask_l_[PADL_(l_sigset_t *)]; l_sigset_t * mask; char mask_r_[PADR_(l_sigset_t *)];
 	char ptr_l_[PADL_(l_siginfo_t *)]; l_siginfo_t * ptr; char ptr_r_[PADR_(l_siginfo_t *)];
-	char timeout_l_[PADL_(struct l_timeval *)]; struct l_timeval * timeout; char timeout_r_[PADR_(struct l_timeval *)];
+	char timeout_l_[PADL_(struct l_timespec *)]; struct l_timespec * timeout; char timeout_r_[PADR_(struct l_timespec *)];
 	char sigsetsize_l_[PADL_(l_size_t)]; l_size_t sigsetsize; char sigsetsize_r_[PADR_(l_size_t)];
 };
 struct linux_rt_sigqueueinfo_args {
@@ -648,8 +653,8 @@ struct linux_sendfile64_args {
 	char count_l_[PADL_(l_size_t)]; l_size_t count; char count_r_[PADR_(l_size_t)];
 };
 struct linux_sys_futex_args {
-	char uaddr_l_[PADL_(void *)]; void * uaddr; char uaddr_r_[PADR_(void *)];
-	char op_l_[PADL_(int)]; int op; char op_r_[PADR_(int)];
+	char uaddr_l_[PADL_(uint32_t *)]; uint32_t * uaddr; char uaddr_r_[PADR_(uint32_t *)];
+	char op_l_[PADL_(l_int)]; l_int op; char op_r_[PADR_(l_int)];
 	char val_l_[PADL_(uint32_t)]; uint32_t val; char val_r_[PADR_(uint32_t)];
 	char timeout_l_[PADL_(struct l_timespec *)]; struct l_timespec * timeout; char timeout_r_[PADR_(struct l_timespec *)];
 	char uaddr2_l_[PADL_(uint32_t *)]; uint32_t * uaddr2; char uaddr2_r_[PADR_(uint32_t *)];
@@ -1328,6 +1333,7 @@ int	linux_nanosleep(struct thread *, struct linux_nanosleep_args *);
 int	linux_mremap(struct thread *, struct linux_mremap_args *);
 int	linux_setresuid16(struct thread *, struct linux_setresuid16_args *);
 int	linux_getresuid16(struct thread *, struct linux_getresuid16_args *);
+int	linux_poll(struct thread *, struct linux_poll_args *);
 int	linux_setresgid16(struct thread *, struct linux_setresgid16_args *);
 int	linux_getresgid16(struct thread *, struct linux_getresgid16_args *);
 int	linux_prctl(struct thread *, struct linux_prctl_args *);
@@ -1654,6 +1660,7 @@ int	linux_set_tls(struct thread *, struct linux_set_tls_args *);
 #define	LINUX_SYS_AUE_linux_mremap	AUE_NULL
 #define	LINUX_SYS_AUE_linux_setresuid16	AUE_SETRESUID
 #define	LINUX_SYS_AUE_linux_getresuid16	AUE_GETRESUID
+#define	LINUX_SYS_AUE_linux_poll	AUE_POLL
 #define	LINUX_SYS_AUE_linux_setresgid16	AUE_SETRESGID
 #define	LINUX_SYS_AUE_linux_getresgid16	AUE_GETRESGID
 #define	LINUX_SYS_AUE_linux_prctl	AUE_PRCTL

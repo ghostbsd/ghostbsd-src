@@ -330,24 +330,12 @@ vm_object_set_memattr(vm_object_t object, vm_memattr_t memattr)
 {
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
-	switch (object->type) {
-	case OBJT_DEFAULT:
-	case OBJT_DEVICE:
-	case OBJT_MGTDEVICE:
-	case OBJT_PHYS:
-	case OBJT_SG:
-	case OBJT_SWAP:
-	case OBJT_SWAP_TMPFS:
-	case OBJT_VNODE:
-		if (!TAILQ_EMPTY(&object->memq))
-			return (KERN_FAILURE);
-		break;
-	case OBJT_DEAD:
+
+	if (object->type == OBJT_DEAD)
 		return (KERN_INVALID_ARGUMENT);
-	default:
-		panic("vm_object_set_memattr: object %p is of undefined type",
-		    object);
-	}
+	if (!TAILQ_EMPTY(&object->memq))
+		return (KERN_FAILURE);
+
 	object->memattr = memattr;
 	return (KERN_SUCCESS);
 }
@@ -425,7 +413,6 @@ vm_object_allocate(objtype_t type, vm_pindex_t size)
 		flags = OBJ_COLORED;
 		break;
 	case OBJT_SWAP:
-	case OBJT_SWAP_TMPFS:
 		flags = OBJ_COLORED | OBJ_SWAP;
 		break;
 	case OBJT_DEVICE:
@@ -442,10 +429,23 @@ vm_object_allocate(objtype_t type, vm_pindex_t size)
 		flags = 0;
 		break;
 	default:
-		panic("vm_object_allocate: type %d is undefined", type);
+		panic("vm_object_allocate: type %d is undefined or dynamic",
+		    type);
 	}
 	object = (vm_object_t)uma_zalloc(obj_zone, M_WAITOK);
 	_vm_object_allocate(type, size, flags, object, NULL);
+
+	return (object);
+}
+
+vm_object_t
+vm_object_allocate_dyn(objtype_t dyntype, vm_pindex_t size, u_short flags)
+{
+	vm_object_t object;
+
+	MPASS(dyntype >= OBJT_FIRST_DYN /* && dyntype < nitems(pagertab) */);
+	object = (vm_object_t)uma_zalloc(obj_zone, M_WAITOK);
+	_vm_object_allocate(dyntype, size, flags, object, NULL);
 
 	return (object);
 }
@@ -681,7 +681,8 @@ vm_object_deallocate(vm_object_t object)
 		umtx_shm_object_terminated(object);
 		temp = object->backing_object;
 		if (temp != NULL) {
-			KASSERT(object->type != OBJT_SWAP_TMPFS,
+			KASSERT(object->type == OBJT_DEFAULT ||
+			    object->type == OBJT_SWAP,
 			    ("shadowed tmpfs v_object 2 %p", object));
 			vm_object_backing_remove(object);
 		}
@@ -962,7 +963,7 @@ vm_object_terminate(vm_object_t object)
 #endif
 
 	KASSERT(object->cred == NULL || object->type == OBJT_DEFAULT ||
-	    object->type == OBJT_SWAP || object->type == OBJT_SWAP_TMPFS,
+	    (object->flags & OBJ_SWAP) != 0,
 	    ("%s: non-swap obj %p has cred", __func__, object));
 
 	/*
@@ -2467,41 +2468,6 @@ vm_object_busy_wait(vm_object_t obj, const char *wmesg)
 	VM_OBJECT_ASSERT_UNLOCKED(obj);
 
 	(void)blockcount_sleep(&obj->busy, NULL, wmesg, PVM);
-}
-
-/*
- * Return the kvme type of the given object.
- * If vpp is not NULL, set it to the object's vm_object_vnode() or NULL.
- */
-int
-vm_object_kvme_type(vm_object_t object, struct vnode **vpp)
-{
-
-	VM_OBJECT_ASSERT_LOCKED(object);
-	if (vpp != NULL)
-		*vpp = vm_object_vnode(object);
-	switch (object->type) {
-	case OBJT_DEFAULT:
-		return (KVME_TYPE_DEFAULT);
-	case OBJT_VNODE:
-		return (KVME_TYPE_VNODE);
-	case OBJT_SWAP:
-		return (KVME_TYPE_SWAP);
-	case OBJT_SWAP_TMPFS:
-		return (KVME_TYPE_VNODE);
-	case OBJT_DEVICE:
-		return (KVME_TYPE_DEVICE);
-	case OBJT_PHYS:
-		return (KVME_TYPE_PHYS);
-	case OBJT_DEAD:
-		return (KVME_TYPE_DEAD);
-	case OBJT_SG:
-		return (KVME_TYPE_SG);
-	case OBJT_MGTDEVICE:
-		return (KVME_TYPE_MGTDEVICE);
-	default:
-		return (KVME_TYPE_UNKNOWN);
-	}
 }
 
 static int

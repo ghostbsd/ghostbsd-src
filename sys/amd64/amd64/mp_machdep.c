@@ -99,10 +99,10 @@ __FBSDID("$FreeBSD$");
 #define	AP_BOOTPT_SZ		(PAGE_SIZE * 4)
 
 /* Temporary variables for init_secondary()  */
-char *doublefault_stack;
-char *mce_stack;
-char *nmi_stack;
-char *dbg_stack;
+static char *doublefault_stack;
+static char *mce_stack;
+static char *nmi_stack;
+static char *dbg_stack;
 
 extern u_int mptramp_la57;
 
@@ -245,7 +245,7 @@ cpu_mp_start(void)
 	mptramp_la57 = la57;
 
 	/* Start each Application Processor */
-	init_ops.start_all_aps();
+	start_all_aps();
 
 	set_interrupt_apic_ids();
 
@@ -397,7 +397,7 @@ mp_realloc_pcpu(int cpuid, int domain)
  * start each AP in our list
  */
 int
-native_start_all_aps(void)
+start_all_aps(void)
 {
 	u_int64_t *pt5, *pt4, *pt3, *pt2;
 	u_int32_t mpbioswarmvec;

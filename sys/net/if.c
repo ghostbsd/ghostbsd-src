@@ -2468,6 +2468,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 	size_t descrlen;
 	char *descrbuf, *odescrbuf;
 	char new_name[IFNAMSIZ];
+	char old_name[IFNAMSIZ], strbuf[IFNAMSIZ + 8];
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
 
@@ -2653,11 +2654,6 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 			return (error);
 		if (new_name[0] == '\0')
 			return (EINVAL);
-		if (new_name[IFNAMSIZ-1] != '\0') {
-			new_name[IFNAMSIZ-1] = '\0';
-			if (strlen(new_name) == IFNAMSIZ-1)
-				return (EINVAL);
-		}
 		if (strcmp(new_name, ifp->if_xname) == 0)
 			break;
 		if (ifunit(new_name) != NULL)
@@ -2678,6 +2674,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		if_printf(ifp, "changing name to '%s'\n", new_name);
 
 		IF_ADDR_WLOCK(ifp);
+		strlcpy(old_name, ifp->if_xname, sizeof(old_name));
 		strlcpy(ifp->if_xname, new_name, sizeof(ifp->if_xname));
 		ifa = ifp->if_addr;
 		sdl = (struct sockaddr_dl *)ifa->ifa_addr;
@@ -2705,6 +2702,9 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		rt_ifannouncemsg(ifp, IFAN_ARRIVAL);
 
 		ifp->if_flags &= ~IFF_RENAMING;
+
+		snprintf(strbuf, sizeof(strbuf), "name=%s", new_name);
+		devctl_notify("IFNET", old_name, "RENAME", strbuf);
 		break;
 
 #ifdef VIMAGE
@@ -2901,7 +2901,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 		struct ifgroupreq ifgr;
 		struct ifmediareq ifmr;
 	} thunk;
-	caddr_t saved_data;
 	u_long saved_cmd;
 	struct ifconf32 *ifc32;
 	struct ifdrv32 *ifd32;
@@ -2928,7 +2927,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 
 #ifdef COMPAT_FREEBSD32
 	saved_cmd = cmd;
-	saved_data = data;
 	switch (cmd) {
 	case SIOCGIFCONF32:
 		ifc32 = (struct ifconf32 *)data;

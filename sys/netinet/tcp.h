@@ -199,6 +199,7 @@ struct tcphdr {
 #define TCP_PROC_ACCOUNTING 76	/* Do accounting on tcp cpu usage and counts */
 #define TCP_USE_CMP_ACKS 77 	/* The transport can handle the Compressed mbuf acks */
 #define	TCP_PERF_INFO	78	/* retrieve accounting counters */
+#define	TCP_LRD		79	/* toggle Lost Retransmission Detection for A/B testing */
 #define	TCP_KEEPINIT	128	/* N, time to establish connection */
 #define	TCP_KEEPIDLE	256	/* L,N,X start keeplives after this period */
 #define	TCP_KEEPINTVL	512	/* L,N interval between keepalives */
@@ -305,6 +306,7 @@ struct tcphdr {
 #define TCP_FAST_RSM_HACK 1137 /* Do we do the broken thing where we don't twiddle the TLP bits properly in fast_rsm_output? */
 #define TCP_RACK_PACING_BETA 1138	/* Changing the beta for pacing */
 #define TCP_RACK_PACING_BETA_ECN 1139	/* Changing the beta for ecn with pacing */
+#define TCP_RACK_TIMER_SLOP 1140	/* Set or get the timer slop used */
 
 /* Start of reserved space for third-party user-settable options. */
 #define	TCP_VENDOR	SO_VENDOR

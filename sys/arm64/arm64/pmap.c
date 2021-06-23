@@ -742,35 +742,13 @@ pmap_resident_count_dec(pmap_t pmap, int count)
 	pmap->pm_stats.resident_count -= count;
 }
 
-static pt_entry_t *
-pmap_early_page_idx(vm_offset_t l1pt, vm_offset_t va, u_int *l1_slot,
-    u_int *l2_slot)
-{
-	pt_entry_t *l2;
-	pd_entry_t *l1;
-
-	l1 = (pd_entry_t *)l1pt;
-	*l1_slot = (va >> L1_SHIFT) & Ln_ADDR_MASK;
-
-	/* Check locore has used a table L1 map */
-	KASSERT((l1[*l1_slot] & ATTR_DESCR_MASK) == L1_TABLE,
-	   ("Invalid bootstrap L1 table"));
-	/* Find the address of the L2 table */
-	l2 = (pt_entry_t *)init_pt_va;
-	*l2_slot = pmap_l2_index(va);
-
-	return (l2);
-}
-
 static vm_paddr_t
 pmap_early_vtophys(vm_offset_t l1pt, vm_offset_t va)
 {
-	u_int l1_slot, l2_slot;
-	pt_entry_t *l2;
+	vm_paddr_t pa_page;
 
-	l2 = pmap_early_page_idx(l1pt, va, &l1_slot, &l2_slot);
-
-	return ((l2[l2_slot] & ~ATTR_MASK) + (va & L2_OFFSET));
+	pa_page = arm64_address_translate_s1e1r(va) & PAR_PA_MASK;
+	return (pa_page | (va & PAR_LOW_MASK));
 }
 
 static vm_offset_t
@@ -3496,7 +3474,7 @@ pmap_pv_promote_l2(pmap_t pmap, vm_offset_t va, vm_paddr_t pa,
 	va = va & ~L2_OFFSET;
 	pv = pmap_pvh_remove(&m->md, pmap, va);
 	KASSERT(pv != NULL, ("pmap_pv_promote_l2: pv not found"));
-	pvh = pa_to_pvh(pa);
+	pvh = page_to_pvh(m);
 	TAILQ_INSERT_TAIL(&pvh->pv_list, pv, pv_next);
 	pvh->pv_gen++;
 	/* Free the remaining NPTEPG - 1 pv entries. */
@@ -3540,7 +3518,11 @@ setl2:
 
 	if ((newl2 & (ATTR_S1_AP_RW_BIT | ATTR_SW_DBM)) ==
 	    (ATTR_S1_AP(ATTR_S1_AP_RO) | ATTR_SW_DBM)) {
-		if (!atomic_fcmpset_64(l2, &newl2, newl2 & ~ATTR_SW_DBM))
+		/*
+		 * When the mapping is clean, i.e., ATTR_S1_AP_RO is set,
+		 * ATTR_SW_DBM can be cleared without a TLB invalidation.
+		 */
+		if (!atomic_fcmpset_64(firstl3, &newl2, newl2 & ~ATTR_SW_DBM))
 			goto setl2;
 		newl2 &= ~ATTR_SW_DBM;
 	}
@@ -3551,6 +3533,11 @@ setl2:
 setl3:
 		if ((oldl3 & (ATTR_S1_AP_RW_BIT | ATTR_SW_DBM)) ==
 		    (ATTR_S1_AP(ATTR_S1_AP_RO) | ATTR_SW_DBM)) {
+			/*
+			 * When the mapping is clean, i.e., ATTR_S1_AP_RO is
+			 * set, ATTR_SW_DBM can be cleared without a TLB
+			 * invalidation.
+			 */
 			if (!atomic_fcmpset_64(l3, &oldl3, oldl3 &
 			    ~ATTR_SW_DBM))
 				goto setl3;
@@ -3909,7 +3896,7 @@ havel3:
 			if ((om->a.flags & PGA_WRITEABLE) != 0 &&
 			    TAILQ_EMPTY(&om->md.pv_list) &&
 			    ((om->flags & PG_FICTITIOUS) != 0 ||
-			    TAILQ_EMPTY(&pa_to_pvh(opa)->pv_list)))
+			    TAILQ_EMPTY(&page_to_pvh(om)->pv_list)))
 				vm_page_aflag_clear(om, PGA_WRITEABLE);
 		} else {
 			KASSERT((orig_l3 & ATTR_AF) != 0,
@@ -4586,11 +4573,8 @@ pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr, vm_size_t len,
 			    ((srcptepaddr & ATTR_SW_MANAGED) == 0 ||
 			    pmap_pv_insert_l2(dst_pmap, addr, srcptepaddr,
 			    PMAP_ENTER_NORECLAIM, &lock))) {
-				mask = ATTR_AF | ATTR_SW_WIRED;
-				nbits = 0;
-				if ((srcptepaddr & ATTR_SW_DBM) != 0)
-					nbits |= ATTR_S1_AP_RW_BIT;
-				pmap_store(l2, (srcptepaddr & ~mask) | nbits);
+				mask = ATTR_SW_WIRED;
+				pmap_store(l2, srcptepaddr & ~mask);
 				pmap_resident_count_inc(dst_pmap, L2_SIZE /
 				    PAGE_SIZE);
 				atomic_add_long(&pmap_l2_mappings, 1);
@@ -5016,7 +5000,7 @@ pmap_remove_pages(pmap_t pmap)
 				case 1:
 					pmap_resident_count_dec(pmap,
 					    L2_SIZE / PAGE_SIZE);
-					pvh = pa_to_pvh(tpte & ~ATTR_MASK);
+					pvh = page_to_pvh(m);
 					TAILQ_REMOVE(&pvh->pv_list, pv,pv_next);
 					pvh->pv_gen++;
 					if (TAILQ_EMPTY(&pvh->pv_list)) {
@@ -5680,8 +5664,7 @@ restart:
 		l2 = pmap_l2(pmap, pv->pv_va);
 		l3 = pmap_l2_to_l3(l2, pv->pv_va);
 		oldl3 = pmap_load(l3);
-		if (pmap_l3_valid(oldl3) &&
-		    (oldl3 & (ATTR_S1_AP_RW_BIT | ATTR_SW_DBM)) == ATTR_SW_DBM){
+		if ((oldl3 & (ATTR_S1_AP_RW_BIT | ATTR_SW_DBM)) == ATTR_SW_DBM){
 			pmap_set_bits(l3, ATTR_S1_AP(ATTR_S1_AP_RO));
 			pmap_invalidate_page(pmap, pv->pv_va);
 		}

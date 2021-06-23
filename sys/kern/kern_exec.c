@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/acct.h>
 #include <sys/asan.h>
 #include <sys/capsicum.h>
+#include <sys/compressor.h>
 #include <sys/eventhandler.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
@@ -354,6 +355,16 @@ kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	return (do_execve(td, args, mac_p, oldvmspace));
 }
 
+static void
+execve_nosetid(struct image_params *imgp)
+{
+	imgp->credential_setid = false;
+	if (imgp->newcred != NULL) {
+		crfree(imgp->newcred);
+		imgp->newcred = NULL;
+	}
+}
+
 /*
  * In-kernel implementation of execve().  All arguments are assumed to be
  * userspace pointers from the passed thread.
@@ -373,8 +384,7 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	struct pargs *oldargs = NULL, *newargs = NULL;
 	struct sigacts *oldsigacts = NULL, *newsigacts = NULL;
 #ifdef KTRACE
-	struct vnode *tracevp = NULL;
-	struct ucred *tracecred = NULL;
+	struct ktr_io_params *kiop;
 #endif
 	struct vnode *oldtextvp = NULL, *newtextvp;
 	int credential_changing;
@@ -390,6 +400,9 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	static const char fexecv_proc_title[] = "(fexecv)";
 
 	imgp = &image_params;
+#ifdef KTRACE
+	kiop = NULL;
+#endif
 
 	/*
 	 * Lock the process and set the P_INEXEC flag to indicate that
@@ -640,11 +653,7 @@ interpret:
 		vput(newtextvp);
 		vm_object_deallocate(imgp->object);
 		imgp->object = NULL;
-		imgp->credential_setid = false;
-		if (imgp->newcred != NULL) {
-			crfree(imgp->newcred);
-			imgp->newcred = NULL;
-		}
+		execve_nosetid(imgp);
 		imgp->execpath = NULL;
 		free(imgp->freepath, M_TEMP);
 		imgp->freepath = NULL;
@@ -769,6 +778,10 @@ interpret:
 		signotify(td);
 	}
 
+	if (imgp->sysent->sv_setid_allowed != NULL &&
+	    !(*imgp->sysent->sv_setid_allowed)(td, imgp))
+		execve_nosetid(imgp);
+
 	/*
 	 * Implement image setuid/setgid installation.
 	 */
@@ -779,11 +792,8 @@ interpret:
 		 * we do not regain any tracing during a possible block.
 		 */
 		setsugid(p);
-
 #ifdef KTRACE
-		if (p->p_tracecred != NULL &&
-		    priv_check_cred(p->p_tracecred, PRIV_DEBUG_DIFFCRED))
-			ktrprocexec(p, &tracecred, &tracevp);
+		kiop = ktrprocexec(p);
 #endif
 		/*
 		 * Close any file descriptors 0..2 that reference procfs,
@@ -939,10 +949,7 @@ exec_fail:
 	if (oldtextvp != NULL)
 		vrele(oldtextvp);
 #ifdef KTRACE
-	if (tracevp != NULL)
-		vrele(tracevp);
-	if (tracecred != NULL)
-		crfree(tracecred);
+	ktr_io_params_free(kiop);
 #endif
 	pargs_drop(oldargs);
 	pargs_drop(newargs);
@@ -1866,4 +1873,151 @@ exec_unregister(const struct execsw *execsw_arg)
 		free(execsw, M_TEMP);
 	execsw = newexecsw;
 	return (0);
+}
+
+/*
+ * Write out a core segment to the compression stream.
+ */
+static int
+compress_chunk(struct coredump_params *cp, char *base, char *buf, u_int len)
+{
+	u_int chunk_len;
+	int error;
+
+	while (len > 0) {
+		chunk_len = MIN(len, CORE_BUF_SIZE);
+
+		/*
+		 * We can get EFAULT error here.
+		 * In that case zero out the current chunk of the segment.
+		 */
+		error = copyin(base, buf, chunk_len);
+		if (error != 0)
+			bzero(buf, chunk_len);
+		error = compressor_write(cp->comp, buf, chunk_len);
+		if (error != 0)
+			break;
+		base += chunk_len;
+		len -= chunk_len;
+	}
+	return (error);
+}
+
+int
+core_write(struct coredump_params *cp, const void *base, size_t len,
+    off_t offset, enum uio_seg seg, size_t *resid)
+{
+
+	return (vn_rdwr_inchunks(UIO_WRITE, cp->vp, __DECONST(void *, base),
+	    len, offset, seg, IO_UNIT | IO_DIRECT | IO_RANGELOCKED,
+	    cp->active_cred, cp->file_cred, resid, cp->td));
+}
+
+int
+core_output(char *base, size_t len, off_t offset, struct coredump_params *cp,
+    void *tmpbuf)
+{
+	vm_map_t map;
+	struct mount *mp;
+	size_t resid, runlen;
+	int error;
+	bool success;
+
+	KASSERT((uintptr_t)base % PAGE_SIZE == 0,
+	    ("%s: user address %p is not page-aligned", __func__, base));
+
+	if (cp->comp != NULL)
+		return (compress_chunk(cp, base, tmpbuf, len));
+
+	map = &cp->td->td_proc->p_vmspace->vm_map;
+	for (; len > 0; base += runlen, offset += runlen, len -= runlen) {
+		/*
+		 * Attempt to page in all virtual pages in the range.  If a
+		 * virtual page is not backed by the pager, it is represented as
+		 * a hole in the file.  This can occur with zero-filled
+		 * anonymous memory or truncated files, for example.
+		 */
+		for (runlen = 0; runlen < len; runlen += PAGE_SIZE) {
+			error = vm_fault(map, (uintptr_t)base + runlen,
+			    VM_PROT_READ, VM_FAULT_NOFILL, NULL);
+			if (runlen == 0)
+				success = error == KERN_SUCCESS;
+			else if ((error == KERN_SUCCESS) != success)
+				break;
+		}
+
+		if (success) {
+			error = core_write(cp, base, runlen, offset,
+			    UIO_USERSPACE, &resid);
+			if (error != 0) {
+				if (error != EFAULT)
+					break;
+
+				/*
+				 * EFAULT may be returned if the user mapping
+				 * could not be accessed, e.g., because a mapped
+				 * file has been truncated.  Skip the page if no
+				 * progress was made, to protect against a
+				 * hypothetical scenario where vm_fault() was
+				 * successful but core_write() returns EFAULT
+				 * anyway.
+				 */
+				runlen -= resid;
+				if (runlen == 0) {
+					success = false;
+					runlen = PAGE_SIZE;
+				}
+			}
+		}
+		if (!success) {
+			error = vn_start_write(cp->vp, &mp, V_WAIT);
+			if (error != 0)
+				break;
+			vn_lock(cp->vp, LK_EXCLUSIVE | LK_RETRY);
+			error = vn_truncate_locked(cp->vp, offset + runlen,
+			    false, cp->td->td_ucred);
+			VOP_UNLOCK(cp->vp);
+			vn_finished_write(mp);
+			if (error != 0)
+				break;
+		}
+	}
+	return (error);
+}
+
+/*
+ * Drain into a core file.
+ */
+int
+sbuf_drain_core_output(void *arg, const char *data, int len)
+{
+	struct coredump_params *cp;
+	struct proc *p;
+	int error, locked;
+
+	cp = arg;
+	p = cp->td->td_proc;
+
+	/*
+	 * Some kern_proc out routines that print to this sbuf may
+	 * call us with the process lock held. Draining with the
+	 * non-sleepable lock held is unsafe. The lock is needed for
+	 * those routines when dumping a live process. In our case we
+	 * can safely release the lock before draining and acquire
+	 * again after.
+	 */
+	locked = PROC_LOCKED(p);
+	if (locked)
+		PROC_UNLOCK(p);
+	if (cp->comp != NULL)
+		error = compressor_write(cp->comp, __DECONST(char *, data), len);
+	else
+		error = core_write(cp, __DECONST(void *, data), len, cp->offset,
+		    UIO_SYSSPACE, NULL);
+	if (locked)
+		PROC_LOCK(p);
+	if (error != 0)
+		return (-error);
+	cp->offset += len;
+	return (len);
 }

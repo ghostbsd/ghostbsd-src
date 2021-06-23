@@ -81,6 +81,10 @@ extern struct r_debug r_debug; /* For GDB */
 extern int _thread_autoinit_dummy_decl;
 extern void (*__cleanup)(void);
 
+struct dlerror_save {
+	int seen;
+	char *msg;
+};
 
 /*
  * Function declarations.
@@ -100,8 +104,8 @@ static Obj_Entry *dlopen_object(const char *name, int fd, Obj_Entry *refobj,
 static Obj_Entry *do_load_object(int, const char *, char *, struct stat *, int);
 static int do_search_info(const Obj_Entry *obj, int, struct dl_serinfo *);
 static bool donelist_check(DoneList *, const Obj_Entry *);
-static void errmsg_restore(char *);
-static char *errmsg_save(void);
+static void errmsg_restore(struct dlerror_save *);
+static struct dlerror_save *errmsg_save(void);
 static void *fill_search_info(const char *, size_t, void *);
 static char *find_library(const char *, const Obj_Entry *, int *);
 static const char *gethints(bool);
@@ -941,10 +945,16 @@ _rtld_error(const char *fmt, ...)
 /*
  * Return a dynamically-allocated copy of the current error message, if any.
  */
-static char *
+static struct dlerror_save *
 errmsg_save(void)
 {
-	return (xstrdup(lockinfo.dlerror_loc()));
+	struct dlerror_save *res;
+
+	res = xmalloc(sizeof(*res));
+	res->seen = *lockinfo.dlerror_seen();
+	if (res->seen == 0)
+		res->msg = xstrdup(lockinfo.dlerror_loc());
+	return (res);
 }
 
 /*
@@ -952,14 +962,17 @@ errmsg_save(void)
  * by errmsg_save().  The copy is freed.
  */
 static void
-errmsg_restore(char *saved_msg)
+errmsg_restore(struct dlerror_save *saved_msg)
 {
-	if (saved_msg == NULL)
-		_rtld_error("");
-	else {
-		_rtld_error("%s", saved_msg);
-		free(saved_msg);
+	if (saved_msg == NULL || saved_msg->seen == 1) {
+		*lockinfo.dlerror_seen() = 1;
+	} else {
+		*lockinfo.dlerror_seen() = 0;
+		strlcpy(lockinfo.dlerror_loc(), saved_msg->msg,
+		    lockinfo.dlerror_loc_sz);
+		free(saved_msg->msg);
 	}
+	free(saved_msg);
 }
 
 static const char *
@@ -2275,7 +2288,8 @@ init_rtld(caddr_t mapbase, Elf_Auxinfo **aux_info)
     obj_rtld.path = xstrdup(ld_path_rtld);
 
     parse_rtld_phdr(&obj_rtld);
-    obj_enforce_relro(&obj_rtld);
+    if (obj_enforce_relro(&obj_rtld) == -1)
+	rtld_die();
 
     r_debug.r_version = R_DEBUG_VERSION;
     r_debug.r_brk = r_debug_state;
@@ -2736,7 +2750,7 @@ static void
 objlist_call_fini(Objlist *list, Obj_Entry *root, RtldLockState *lockstate)
 {
     Objlist_Entry *elm;
-    char *saved_msg;
+    struct dlerror_save *saved_msg;
     Elf_Addr *fini_addr;
     int index;
 
@@ -2812,7 +2826,7 @@ objlist_call_init(Objlist *list, RtldLockState *lockstate)
 {
     Objlist_Entry *elm;
     Obj_Entry *obj;
-    char *saved_msg;
+    struct dlerror_save *saved_msg;
     Elf_Addr *init_addr;
     void (*reg)(void (*)(void));
     int index;
@@ -5780,6 +5794,8 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
 				break;
 			} else if (opt == 'p') {
 				*use_pathp = true;
+			} else if (opt == 'u') {
+				trust = false;
 			} else if (opt == 'v') {
 				machine[0] = '\0';
 				mib[0] = CTL_HW;
@@ -5850,6 +5866,7 @@ print_usage(const char *argv0)
 	    "  -b <exe>  Execute <exe> instead of <binary>, arg0 is <binary>\n"
 	    "  -f <FD>   Execute <FD> instead of searching for <binary>\n"
 	    "  -p        Search in PATH for named binary\n"
+	    "  -u        Ignore LD_ environment variables\n"
 	    "  -v        Display identification information\n"
 	    "  --        End of RTLD options\n"
 	    "  <binary>  Name of process to execute\n"

@@ -82,6 +82,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/in_cksum.h>
 #include <netinet/ip_carp.h>
 #include <netinet/in_rss.h>
+#include <netinet/ip_mroute.h>
 
 #include <netipsec/ipsec_support.h>
 
@@ -451,6 +452,7 @@ ip_direct_input(struct mbuf *m)
 void
 ip_input(struct mbuf *m)
 {
+	MROUTER_RLOCK_TRACKER;
 	struct rm_priotracker in_ifa_tracker;
 	struct ip *ip = NULL;
 	struct in_ifaddr *ia = NULL;
@@ -736,14 +738,13 @@ passin:
 		}
 		ia = NULL;
 	}
-	/* RFC 3927 2.7: Do not forward datagrams for 169.254.0.0/16. */
-	if (IN_LINKLOCAL(ntohl(ip->ip_dst.s_addr))) {
-		IPSTAT_INC(ips_cantforward);
-		m_freem(m);
-		return;
-	}
 	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
-		if (V_ip_mrouter) {
+		MROUTER_RLOCK();
+		/*
+		 * RFC 3927 2.7: Do not forward multicast packets from
+		 * IN_LINKLOCAL.
+		 */
+		if (V_ip_mrouter && !IN_LINKLOCAL(ntohl(ip->ip_src.s_addr))) {
 			/*
 			 * If we are acting as a multicast router, all
 			 * incoming multicast packets are passed to the
@@ -753,6 +754,7 @@ passin:
 			 * must be discarded, else it may be accepted below.
 			 */
 			if (ip_mforward && ip_mforward(ip, ifp, m, 0) != 0) {
+				MROUTER_RUNLOCK();
 				IPSTAT_INC(ips_cantforward);
 				m_freem(m);
 				return;
@@ -763,10 +765,13 @@ passin:
 			 * all multicast IGMP packets, whether or not this
 			 * host belongs to their destination groups.
 			 */
-			if (ip->ip_p == IPPROTO_IGMP)
+			if (ip->ip_p == IPPROTO_IGMP) {
+				MROUTER_RUNLOCK();
 				goto ours;
+			}
 			IPSTAT_INC(ips_forward);
 		}
+		MROUTER_RUNLOCK();
 		/*
 		 * Assume the packet is for us, to avoid prematurely taking
 		 * a lock on the in_multi hash. Protocols must perform
@@ -778,6 +783,13 @@ passin:
 		goto ours;
 	if (ip->ip_dst.s_addr == INADDR_ANY)
 		goto ours;
+	/* RFC 3927 2.7: Do not forward packets to or from IN_LINKLOCAL. */
+	if (IN_LINKLOCAL(ntohl(ip->ip_dst.s_addr)) ||
+	    IN_LINKLOCAL(ntohl(ip->ip_src.s_addr))) {
+		IPSTAT_INC(ips_cantforward);
+		m_freem(m);
+		return;
+	}
 
 	/*
 	 * Not for us; forward if possible and desirable.

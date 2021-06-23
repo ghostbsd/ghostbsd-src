@@ -42,6 +42,7 @@
 #include <sys/malloc.h>
 #include <sys/nv.h>
 #include <sys/refcount.h>
+#include <sys/sdt.h>
 #include <sys/sysctl.h>
 #include <sys/lock.h>
 #include <sys/rmlock.h>
@@ -50,6 +51,13 @@
 
 #include <net/radix.h>
 #include <netinet/in.h>
+#ifdef _KERNEL
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <netinet/udp.h>
+#include <netinet/ip_icmp.h>
+#include <netinet/icmp6.h>
+#endif
 
 #include <netpfil/pf/pf.h>
 #include <netpfil/pf/pf_altq.h>
@@ -59,6 +67,8 @@
 
 SYSCTL_DECL(_net_pf);
 MALLOC_DECLARE(M_PFHASH);
+
+SDT_PROVIDER_DECLARE(pf);
 
 struct pfi_dynaddr {
 	TAILQ_ENTRY(pfi_dynaddr)	 entry;
@@ -522,6 +532,7 @@ struct pf_state {
 	struct pf_addr		 rt_addr;
 	struct pf_state_key	*key[2];	/* addresses stack and wire  */
 	struct pfi_kkif		*kif;
+	struct pfi_kkif		*orig_kif;	/* The real kif, even if we're a floating state (i.e. if == V_pfi_all). */
 	struct pfi_kkif		*rt_kif;
 	struct pf_ksrc_node	*src_node;
 	struct pf_ksrc_node	*nat_src_node;
@@ -903,14 +914,14 @@ struct pf_pdesc {
 		gid_t	 gid;
 	}		 lookup;
 	u_int64_t	 tot_len;	/* Make Mickey money */
-	union {
-		struct tcphdr		*tcp;
-		struct udphdr		*udp;
-		struct icmp		*icmp;
+	union pf_headers {
+		struct tcphdr		tcp;
+		struct udphdr		udp;
+		struct icmp		icmp;
 #ifdef INET6
-		struct icmp6_hdr	*icmp6;
+		struct icmp6_hdr	icmp6;
 #endif /* INET6 */
-		void			*any;
+		char any[0];
 	} hdr;
 
 	struct pf_krule	*nat_rule;	/* nat/rdr rule applied to packet */
@@ -1257,12 +1268,14 @@ struct pfioc_iface {
 #define DIOCCLRSTATES	_IOWR('D', 18, struct pfioc_state_kill)
 #define DIOCCLRSTATESNV	_IOWR('D', 18, struct pfioc_nv)
 #define DIOCGETSTATE	_IOWR('D', 19, struct pfioc_state)
+#define DIOCGETSTATENV	_IOWR('D', 19, struct pfioc_nv)
 #define DIOCSETSTATUSIF _IOWR('D', 20, struct pfioc_if)
 #define DIOCGETSTATUS	_IOWR('D', 21, struct pf_status)
 #define DIOCCLRSTATUS	_IO  ('D', 22)
 #define DIOCNATLOOK	_IOWR('D', 23, struct pfioc_natlook)
 #define DIOCSETDEBUG	_IOWR('D', 24, u_int32_t)
 #define DIOCGETSTATES	_IOWR('D', 25, struct pfioc_states)
+#define DIOCGETSTATESNV	_IOWR('D', 25, struct pfioc_nv)
 #define DIOCCHANGERULE	_IOWR('D', 26, struct pfioc_rule)
 /* XXX cut 26 - 28 */
 #define DIOCSETTIMEOUT	_IOWR('D', 29, struct pfioc_tm)
@@ -1473,6 +1486,7 @@ extern int			 pf_unlink_state(struct pf_state *, u_int);
 #define	PF_ENTER_LOCKED		0x00000001
 #define	PF_RETURN_LOCKED	0x00000002
 extern int			 pf_state_insert(struct pfi_kkif *,
+				    struct pfi_kkif *,
 				    struct pf_state_key *,
 				    struct pf_state_key *,
 				    struct pf_state *);

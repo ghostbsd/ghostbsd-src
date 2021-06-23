@@ -58,6 +58,12 @@
 /* Struct definitions for CAM control blocks */
 
 /* Common CCB header */
+
+/* CCB memory allocation flags */
+typedef enum {
+	CAM_CCB_FROM_UMA	= 0x00000001,/* CCB from a periph UMA zone */
+} ccb_alloc_flags;
+
 /* CAM CCB flags */
 typedef enum {
 	CAM_CDB_POINTER		= 0x00000001,/* The CDB field is a pointer    */
@@ -247,6 +253,9 @@ typedef enum {
 	XPT_REPROBE_LUN		= 0x38 | XPT_FC_QUEUED | XPT_FC_USER_CCB,
 				/* Query device capacity and notify GEOM */
 
+	XPT_MMC_SET_TRAN_SETTINGS = 0x40 | XPT_FC_DEV_QUEUED,
+	XPT_MMC_GET_TRAN_SETTINGS = 0x41 | XPT_FC_DEV_QUEUED,
+
 /* Vendor Unique codes: 0x80->0x8F */
 	XPT_VUNIQUE		= 0x80
 } xpt_opcode;
@@ -341,7 +350,13 @@ struct ccb_hdr {
 	camq_entry	xpt_links;	/* For chaining in the XPT layer */
 	camq_entry	sim_links;	/* For chaining in the SIM layer */
 	camq_entry	periph_links;	/* For chaining in the type driver */
-	u_int32_t	retry_count;
+#if BYTE_ORDER == LITTLE_ENDIAN
+	u_int16_t       retry_count;
+	u_int16_t       alloc_flags;	/* ccb_alloc_flags */
+#else
+	u_int16_t       alloc_flags;	/* ccb_alloc_flags */
+	u_int16_t       retry_count;
+#endif
 	void		(*cbfcnp)(struct cam_periph *, union ccb *);
 					/* Callback on completion function */
 	xpt_opcode	func_code;	/* XPT function code */

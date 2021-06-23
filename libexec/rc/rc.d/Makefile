@@ -78,6 +78,7 @@ CONFS=	DAEMON \
 	pf \
 	pflog \
 	pfsync \
+	powerd \
 	ppp \
 	pppoed \
 	pwcheck \
@@ -104,6 +105,7 @@ CONFS=	DAEMON \
 	swap \
 	swaplate \
 	sysctl \
+	sysctl_lastload \
 	syslogd \
 	sysvipc \
 	tmp \
@@ -132,10 +134,6 @@ ACCTPACKAGE=	acct
 CONFGROUPS+=	ACPI
 ACPI=		power_profile
 ACPIPACKAGE=	acpi
-.endif
-
-.if ${MK_ACPI} != "no" || ${MK_APM} != "no"
-CONFS+=		powerd
 .endif
 
 .if ${MK_APM} != "no"

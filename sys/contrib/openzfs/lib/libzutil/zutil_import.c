@@ -154,6 +154,17 @@ zutil_strdup(libpc_handle_t *hdl, const char *str)
 	return (ret);
 }
 
+static char *
+zutil_strndup(libpc_handle_t *hdl, const char *str, size_t n)
+{
+	char *ret;
+
+	if ((ret = strndup(str, n)) == NULL)
+		(void) zutil_no_memory(hdl);
+
+	return (ret);
+}
+
 /*
  * Intermediate structures used to gather configuration information.
  */
@@ -889,6 +900,83 @@ label_offset(uint64_t size, int l)
 }
 
 /*
+ * The same description applies as to zpool_read_label below,
+ * except here we do it without aio, presumably because an aio call
+ * errored out in a way we think not using it could circumvent.
+ */
+static int
+zpool_read_label_slow(int fd, nvlist_t **config, int *num_labels)
+{
+	struct stat64 statbuf;
+	int l, count = 0;
+	vdev_phys_t *label;
+	nvlist_t *expected_config = NULL;
+	uint64_t expected_guid = 0, size;
+	int error;
+
+	*config = NULL;
+
+	if (fstat64_blk(fd, &statbuf) == -1)
+		return (0);
+	size = P2ALIGN_TYPED(statbuf.st_size, sizeof (vdev_label_t), uint64_t);
+
+	error = posix_memalign((void **)&label, PAGESIZE, sizeof (*label));
+	if (error)
+		return (-1);
+
+	for (l = 0; l < VDEV_LABELS; l++) {
+		uint64_t state, guid, txg;
+		off_t offset = label_offset(size, l) + VDEV_SKIP_SIZE;
+
+		if (pread64(fd, label, sizeof (vdev_phys_t),
+		    offset) != sizeof (vdev_phys_t))
+			continue;
+
+		if (nvlist_unpack(label->vp_nvlist,
+		    sizeof (label->vp_nvlist), config, 0) != 0)
+			continue;
+
+		if (nvlist_lookup_uint64(*config, ZPOOL_CONFIG_GUID,
+		    &guid) != 0 || guid == 0) {
+			nvlist_free(*config);
+			continue;
+		}
+
+		if (nvlist_lookup_uint64(*config, ZPOOL_CONFIG_POOL_STATE,
+		    &state) != 0 || state > POOL_STATE_L2CACHE) {
+			nvlist_free(*config);
+			continue;
+		}
+
+		if (state != POOL_STATE_SPARE && state != POOL_STATE_L2CACHE &&
+		    (nvlist_lookup_uint64(*config, ZPOOL_CONFIG_POOL_TXG,
+		    &txg) != 0 || txg == 0)) {
+			nvlist_free(*config);
+			continue;
+		}
+
+		if (expected_guid) {
+			if (expected_guid == guid)
+				count++;
+
+			nvlist_free(*config);
+		} else {
+			expected_config = *config;
+			expected_guid = guid;
+			count++;
+		}
+	}
+
+	if (num_labels != NULL)
+		*num_labels = count;
+
+	free(label);
+	*config = expected_config;
+
+	return (0);
+}
+
+/*
  * Given a file descriptor, read the label information and return an nvlist
  * describing the configuration, if there is one.  The number of valid
  * labels found will be returned in num_labels when non-NULL.
@@ -929,6 +1017,8 @@ zpool_read_label(int fd, nvlist_t **config, int *num_labels)
 
 	if (lio_listio(LIO_WAIT, aiocbps, VDEV_LABELS, NULL) != 0) {
 		int saved_errno = errno;
+		boolean_t do_slow = B_FALSE;
+		error = -1;
 
 		if (errno == EAGAIN || errno == EINTR || errno == EIO) {
 			/*
@@ -937,14 +1027,33 @@ zpool_read_label(int fd, nvlist_t **config, int *num_labels)
 			 */
 			for (l = 0; l < VDEV_LABELS; l++) {
 				errno = 0;
-				int r = aio_error(&aiocbs[l]);
-				if (r != EINVAL)
+				switch (aio_error(&aiocbs[l])) {
+				case EINVAL:
+					break;
+				case EINPROGRESS:
+					// This shouldn't be possible to
+					// encounter, die if we do.
+					ASSERT(B_FALSE);
+				case EOPNOTSUPP:
+				case ENOSYS:
+					do_slow = B_TRUE;
+				case 0:
+				default:
 					(void) aio_return(&aiocbs[l]);
+				}
 			}
+		}
+		if (do_slow) {
+			/*
+			 * At least some IO involved access unsafe-for-AIO
+			 * files. Let's try again, without AIO this time.
+			 */
+			error = zpool_read_label_slow(fd, config, num_labels);
+			saved_errno = errno;
 		}
 		free(labels);
 		errno = saved_errno;
-		return (-1);
+		return (error);
 	}
 
 	for (l = 0; l < VDEV_LABELS; l++) {
@@ -1145,9 +1254,21 @@ zpool_find_import_scan_dir(libpc_handle_t *hdl, pthread_mutex_t *lock,
 
 	while ((dp = readdir64(dirp)) != NULL) {
 		const char *name = dp->d_name;
-		if (name[0] == '.' &&
-		    (name[1] == 0 || (name[1] == '.' && name[2] == 0)))
+		if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
 			continue;
+
+		switch (dp->d_type) {
+		case DT_UNKNOWN:
+		case DT_BLK:
+		case DT_LNK:
+#ifdef __FreeBSD__
+		case DT_CHR:
+#endif
+		case DT_REG:
+			break;
+		default:
+			continue;
+		}
 
 		zpool_find_import_scan_add_slice(hdl, lock, cache, path, name,
 		    order);
@@ -1163,20 +1284,22 @@ zpool_find_import_scan_path(libpc_handle_t *hdl, pthread_mutex_t *lock,
 {
 	int error = 0;
 	char path[MAXPATHLEN];
-	char *d, *b;
-	char *dpath, *name;
+	char *d = NULL;
+	ssize_t dl;
+	const char *dpath, *name;
 
 	/*
-	 * Separate the directory part and last part of the
-	 * path. We do this so that we can get the realpath of
+	 * Separate the directory and the basename.
+	 * We do this so that we can get the realpath of
 	 * the directory. We don't get the realpath on the
 	 * whole path because if it's a symlink, we want the
 	 * path of the symlink not where it points to.
 	 */
-	d = zutil_strdup(hdl, dir);
-	b = zutil_strdup(hdl, dir);
-	dpath = dirname(d);
-	name = basename(b);
+	name = zfs_basename(dir);
+	if ((dl = zfs_dirnamelen(dir)) == -1)
+		dpath = ".";
+	else
+		dpath = d = zutil_strndup(hdl, dir, dl);
 
 	if (realpath(dpath, path) == NULL) {
 		error = errno;
@@ -1194,7 +1317,6 @@ zpool_find_import_scan_path(libpc_handle_t *hdl, pthread_mutex_t *lock,
 	zpool_find_import_scan_add_slice(hdl, lock, cache, path, name, order);
 
 out:
-	free(b);
 	free(d);
 	return (error);
 }
@@ -1345,7 +1467,8 @@ zpool_find_import_impl(libpc_handle_t *hdl, importargs_t *iarg,
 				 * would prevent a zdb -e of active pools with
 				 * no cachefile.
 				 */
-				fd = open(slice->rn_name, O_RDONLY | O_EXCL);
+				fd = open(slice->rn_name,
+				    O_RDONLY | O_EXCL | O_CLOEXEC);
 				if (fd >= 0 || iarg->can_be_active) {
 					if (fd >= 0)
 						close(fd);
@@ -1396,6 +1519,7 @@ discover_cached_paths(libpc_handle_t *hdl, nvlist_t *nv,
     avl_tree_t *cache, pthread_mutex_t *lock)
 {
 	char *path = NULL;
+	ssize_t dl;
 	uint_t children;
 	nvlist_t **child;
 
@@ -1408,11 +1532,15 @@ discover_cached_paths(libpc_handle_t *hdl, nvlist_t *nv,
 
 	/*
 	 * Once we have the path, we need to add the directory to
-	 * our directoy cache.
+	 * our directory cache.
 	 */
 	if (nvlist_lookup_string(nv, ZPOOL_CONFIG_PATH, &path) == 0) {
+		if ((dl = zfs_dirnamelen(path)) == -1)
+			path = ".";
+		else
+			path[dl] = '\0';
 		return (zpool_find_import_scan_dir(hdl, lock, cache,
-		    dirname(path), 0));
+		    path, 0));
 	}
 	return (0);
 }
@@ -1437,7 +1565,7 @@ zpool_find_import_cached(libpc_handle_t *hdl, importargs_t *iarg)
 
 	verify(iarg->poolname == NULL || iarg->guid == 0);
 
-	if ((fd = open(iarg->cachefile, O_RDONLY)) < 0) {
+	if ((fd = open(iarg->cachefile, O_RDONLY | O_CLOEXEC)) < 0) {
 		zutil_error_aux(hdl, "%s", strerror(errno));
 		(void) zutil_error(hdl, EZFS_BADCACHE,
 		    dgettext(TEXT_DOMAIN, "failed to open cache file"));
@@ -1688,16 +1816,13 @@ zpool_find_config(void *hdl, const char *target, nvlist_t **configp,
 	nvlist_t *match = NULL;
 	nvlist_t *config = NULL;
 	char *sepp = NULL;
-	char sep = '\0';
 	int count = 0;
 	char *targetdup = strdup(target);
 
 	*configp = NULL;
 
-	if ((sepp = strpbrk(targetdup, "/@")) != NULL) {
-		sep = *sepp;
+	if ((sepp = strpbrk(targetdup, "/@")) != NULL)
 		*sepp = '\0';
-	}
 
 	pools = zpool_search_import(hdl, args, pco);
 

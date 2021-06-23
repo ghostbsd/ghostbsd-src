@@ -97,7 +97,7 @@ __FBSDID("$FreeBSD$");
 static int t4_probe(device_t);
 static int t4_attach(device_t);
 static int t4_detach(device_t);
-static int t4_child_location_str(device_t, device_t, char *, size_t);
+static int t4_child_location(device_t, device_t, struct sbuf *);
 static int t4_ready(device_t);
 static int t4_read_port_device(device_t, int, device_t *);
 static int t4_suspend(device_t);
@@ -111,7 +111,7 @@ static device_method_t t4_methods[] = {
 	DEVMETHOD(device_suspend,	t4_suspend),
 	DEVMETHOD(device_resume,	t4_resume),
 
-	DEVMETHOD(bus_child_location_str, t4_child_location_str),
+	DEVMETHOD(bus_child_location,	t4_child_location),
 	DEVMETHOD(bus_reset_prepare, 	t4_reset_prepare),
 	DEVMETHOD(bus_reset_post, 	t4_reset_post),
 
@@ -176,7 +176,7 @@ static device_method_t t5_methods[] = {
 	DEVMETHOD(device_suspend,	t4_suspend),
 	DEVMETHOD(device_resume,	t4_resume),
 
-	DEVMETHOD(bus_child_location_str, t4_child_location_str),
+	DEVMETHOD(bus_child_location,	t4_child_location),
 	DEVMETHOD(bus_reset_prepare, 	t4_reset_prepare),
 	DEVMETHOD(bus_reset_post, 	t4_reset_post),
 
@@ -215,7 +215,7 @@ static device_method_t t6_methods[] = {
 	DEVMETHOD(device_suspend,	t4_suspend),
 	DEVMETHOD(device_resume,	t4_resume),
 
-	DEVMETHOD(bus_child_location_str, t4_child_location_str),
+	DEVMETHOD(bus_child_location,	t4_child_location),
 	DEVMETHOD(bus_reset_prepare, 	t4_reset_prepare),
 	DEVMETHOD(bus_reset_post, 	t4_reset_post),
 
@@ -838,6 +838,8 @@ static int set_offload_policy(struct adapter *, struct t4_offload_policy *);
 static int read_card_mem(struct adapter *, int, struct t4_mem_range *);
 static int read_i2c(struct adapter *, struct t4_i2c_data *);
 static int clear_stats(struct adapter *, u_int);
+static int hold_clip_addr(struct adapter *, struct t4_clip_addr *);
+static int release_clip_addr(struct adapter *, struct t4_clip_addr *);
 #ifdef TCP_OFFLOAD
 static int toe_capability(struct vi_info *, bool);
 static void t4_async_event(void *, int);
@@ -1570,18 +1572,17 @@ done:
 }
 
 static int
-t4_child_location_str(device_t bus, device_t dev, char *buf, size_t buflen)
+t4_child_location(device_t bus, device_t dev, struct sbuf *sb)
 {
 	struct adapter *sc;
 	struct port_info *pi;
 	int i;
 
 	sc = device_get_softc(bus);
-	buf[0] = '\0';
 	for_each_port(sc, i) {
 		pi = sc->port[i];
 		if (pi != NULL && pi->dev == dev) {
-			snprintf(buf, buflen, "port=%d", pi->port_id);
+			sbuf_printf(sb, "port=%d", pi->port_id);
 			break;
 		}
 	}
@@ -5219,6 +5220,14 @@ get_params__post_init(struct adapter *sc)
 		sc->params.fr_nsmr_tpte_wr_support = val[0] != 0;
 	else
 		sc->params.fr_nsmr_tpte_wr_support = false;
+
+	/* Support for 512 SGL entries per FR MR. */
+	param[0] = FW_PARAM_DEV(DEV_512SGL_MR);
+	rc = -t4_query_params(sc, sc->mbox, sc->pf, 0, 1, param, val);
+	if (rc == 0)
+		sc->params.dev_512sgl_mr = val[0] != 0;
+	else
+		sc->params.dev_512sgl_mr = false;
 
 	param[0] = FW_PARAM_PFVF(MAX_PKTS_PER_ETH_TX_PKTS_WR);
 	rc = -t4_query_params(sc, sc->mbox, sc->pf, 0, 1, param, val);
@@ -11886,6 +11895,14 @@ clear_stats(struct adapter *sc, u_int port_id)
 				ofld_rxq->fl.cl_allocated = 0;
 				ofld_rxq->fl.cl_recycled = 0;
 				ofld_rxq->fl.cl_fast_recycled = 0;
+				counter_u64_zero(
+				    ofld_rxq->rx_iscsi_ddp_setup_ok);
+				counter_u64_zero(
+				    ofld_rxq->rx_iscsi_ddp_setup_error);
+				ofld_rxq->rx_iscsi_ddp_pdus = 0;
+				ofld_rxq->rx_iscsi_ddp_octets = 0;
+				ofld_rxq->rx_iscsi_fl_pdus = 0;
+				ofld_rxq->rx_iscsi_fl_octets = 0;
 				ofld_rxq->rx_toe_tls_records = 0;
 				ofld_rxq->rx_toe_tls_octets = 0;
 			}
@@ -11900,6 +11917,35 @@ clear_stats(struct adapter *sc, u_int port_id)
 	}
 
 	return (0);
+}
+
+static int
+hold_clip_addr(struct adapter *sc, struct t4_clip_addr *ca)
+{
+#ifdef INET6
+	struct in6_addr in6;
+
+	bcopy(&ca->addr[0], &in6.s6_addr[0], sizeof(in6.s6_addr));
+	if (t4_get_clip_entry(sc, &in6, true) != NULL)
+		return (0);
+	else
+		return (EIO);
+#else
+	return (ENOTSUP);
+#endif
+}
+
+static int
+release_clip_addr(struct adapter *sc, struct t4_clip_addr *ca)
+{
+#ifdef INET6
+	struct in6_addr in6;
+
+	bcopy(&ca->addr[0], &in6.s6_addr[0], sizeof(in6.s6_addr));
+	return (t4_release_clip_addr(sc, &in6));
+#else
+	return (ENOTSUP);
+#endif
 }
 
 int
@@ -12172,6 +12218,12 @@ t4_ioctl(struct cdev *dev, unsigned long cmd, caddr_t data, int fflag,
 		break;
 	case CHELSIO_T4_SET_OFLD_POLICY:
 		rc = set_offload_policy(sc, (struct t4_offload_policy *)data);
+		break;
+	case CHELSIO_T4_HOLD_CLIP_ADDR:
+		rc = hold_clip_addr(sc, (struct t4_clip_addr *)data);
+		break;
+	case CHELSIO_T4_RELEASE_CLIP_ADDR:
+		rc = release_clip_addr(sc, (struct t4_clip_addr *)data);
 		break;
 	default:
 		rc = ENOTTY;

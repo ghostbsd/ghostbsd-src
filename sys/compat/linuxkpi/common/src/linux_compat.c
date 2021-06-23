@@ -2,7 +2,7 @@
  * Copyright (c) 2010 Isilon Systems, Inc.
  * Copyright (c) 2010 iX Systems, Inc.
  * Copyright (c) 2010 Panasas, Inc.
- * Copyright (c) 2013-2018 Mellanox Technologies, Ltd.
+ * Copyright (c) 2013-2021 Mellanox Technologies, Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -67,6 +67,7 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #include <linux/kobject.h>
+#include <linux/cpu.h>
 #include <linux/device.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -115,9 +116,11 @@ MALLOC_DEFINE(M_KMALLOC, "linux", "Linux kmalloc compat");
 #undef cdev
 #define	RB_ROOT(head)	(head)->rbh_root
 
+static void linux_destroy_dev(struct linux_cdev *);
 static void linux_cdev_deref(struct linux_cdev *ldev);
 static struct vm_area_struct *linux_cdev_handle_find(void *handle);
 
+cpumask_t cpu_online_mask;
 struct kobject linux_class_root;
 struct device linux_root_device;
 struct class linux_class_misc;
@@ -1232,7 +1235,7 @@ linux_file_kqfilter(struct file *file, struct knote *kn)
 static int
 linux_file_mmap_single(struct file *fp, const struct file_operations *fop,
     vm_ooffset_t *offset, vm_size_t size, struct vm_object **object,
-    int nprot, struct thread *td)
+    int nprot, bool is_shared, struct thread *td)
 {
 	struct task_struct *task;
 	struct vm_area_struct *vmap;
@@ -1267,6 +1270,8 @@ linux_file_mmap_single(struct file *fp, const struct file_operations *fop,
 	vmap->vm_pgoff = *offset / PAGE_SIZE;
 	vmap->vm_pfn = 0;
 	vmap->vm_flags = vmap->vm_page_prot = (nprot & VM_PROT_ALL);
+	if (is_shared)
+		vmap->vm_flags |= VM_SHARED;
 	vmap->vm_ops = NULL;
 	vmap->vm_file = get_file(filp);
 	vmap->vm_mm = mm;
@@ -1601,21 +1606,21 @@ linux_file_ioctl(struct file *fp, u_long cmd, void *data, struct ucred *cred,
 
 static int
 linux_file_mmap_sub(struct thread *td, vm_size_t objsize, vm_prot_t prot,
-    vm_prot_t *maxprotp, int *flagsp, struct file *fp,
+    vm_prot_t maxprot, int flags, struct file *fp,
     vm_ooffset_t *foff, const struct file_operations *fop, vm_object_t *objp)
 {
 	/*
 	 * Character devices do not provide private mappings
 	 * of any kind:
 	 */
-	if ((*maxprotp & VM_PROT_WRITE) == 0 &&
+	if ((maxprot & VM_PROT_WRITE) == 0 &&
 	    (prot & VM_PROT_WRITE) != 0)
 		return (EACCES);
-	if ((*flagsp & (MAP_PRIVATE | MAP_COPY)) != 0)
+	if ((flags & (MAP_PRIVATE | MAP_COPY)) != 0)
 		return (EINVAL);
 
 	return (linux_file_mmap_single(fp, fop, foff, objsize, objp,
-	    (int)prot, td));
+	    (int)prot, (flags & MAP_SHARED) ? true : false, td));
 }
 
 static int
@@ -1673,7 +1678,7 @@ linux_file_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t size
 	maxprot &= cap_maxprot;
 
 	linux_get_fop(filp, &fop, &ldev);
-	error = linux_file_mmap_sub(td, size, prot, &maxprot, &flags, fp,
+	error = linux_file_mmap_sub(td, size, prot, maxprot, flags, fp,
 	    &foff, fop, &object);
 	if (error != 0)
 		goto out;
@@ -2241,7 +2246,43 @@ linux_cdev_static_release(struct kobject *kobj)
 	kobject_put(kobj->parent);
 }
 
+int
+linux_cdev_device_add(struct linux_cdev *ldev, struct device *dev)
+{
+	int ret;
+
+	if (dev->devt != 0) {
+		/* Set parent kernel object. */
+		ldev->kobj.parent = &dev->kobj;
+
+		/*
+		 * Unlike Linux we require the kobject of the
+		 * character device structure to have a valid name
+		 * before calling this function:
+		 */
+		if (ldev->kobj.name == NULL)
+			return (-EINVAL);
+
+		ret = cdev_add(ldev, dev->devt, 1);
+		if (ret)
+			return (ret);
+	}
+	ret = device_add(dev);
+	if (ret != 0 && dev->devt != 0)
+		cdev_del(ldev);
+	return (ret);
+}
+
 void
+linux_cdev_device_del(struct linux_cdev *ldev, struct device *dev)
+{
+	device_del(dev);
+
+	if (dev->devt != 0)
+		cdev_del(ldev);
+}
+
+static void
 linux_destroy_dev(struct linux_cdev *ldev)
 {
 
@@ -2274,6 +2315,7 @@ linux_handle_ifnet_link_event(void *arg, struct ifnet *ifp, int linkstate)
 	struct netdev_notifier_info ni;
 
 	nb = arg;
+	ni.ifp = ifp;
 	ni.dev = (struct net_device *)ifp;
 	if (linkstate == LINK_STATE_UP)
 		nb->notifier_call(nb, NETDEV_UP, &ni);
@@ -2288,6 +2330,7 @@ linux_handle_ifnet_arrival_event(void *arg, struct ifnet *ifp)
 	struct netdev_notifier_info ni;
 
 	nb = arg;
+	ni.ifp = ifp;
 	ni.dev = (struct net_device *)ifp;
 	nb->notifier_call(nb, NETDEV_REGISTER, &ni);
 }
@@ -2299,6 +2342,7 @@ linux_handle_ifnet_departure_event(void *arg, struct ifnet *ifp)
 	struct netdev_notifier_info ni;
 
 	nb = arg;
+	ni.ifp = ifp;
 	ni.dev = (struct net_device *)ifp;
 	nb->notifier_call(nb, NETDEV_UNREGISTER, &ni);
 }
@@ -2310,6 +2354,7 @@ linux_handle_iflladdr_event(void *arg, struct ifnet *ifp)
 	struct netdev_notifier_info ni;
 
 	nb = arg;
+	ni.ifp = ifp;
 	ni.dev = (struct net_device *)ifp;
 	nb->notifier_call(nb, NETDEV_CHANGEADDR, &ni);
 }
@@ -2321,6 +2366,7 @@ linux_handle_ifaddr_event(void *arg, struct ifnet *ifp)
 	struct netdev_notifier_info ni;
 
 	nb = arg;
+	ni.ifp = ifp;
 	ni.dev = (struct net_device *)ifp;
 	nb->notifier_call(nb, NETDEV_CHANGEIFADDR, &ni);
 }
@@ -2418,6 +2464,30 @@ list_sort(void *priv, struct list_head *head, int (*cmp)(void *priv,
 }
 
 void
+lkpi_irq_release(struct device *dev, struct irq_ent *irqe)
+{
+
+	if (irqe->tag != NULL)
+		bus_teardown_intr(dev->bsddev, irqe->res, irqe->tag);
+	if (irqe->res != NULL)
+		bus_release_resource(dev->bsddev, SYS_RES_IRQ,
+		    rman_get_rid(irqe->res), irqe->res);
+	list_del(&irqe->links);
+}
+
+void
+lkpi_devm_irq_release(struct device *dev, void *p)
+{
+	struct irq_ent *irqe;
+
+	if (dev == NULL || p == NULL)
+		return;
+
+	irqe = p;
+	lkpi_irq_release(dev, irqe);
+}
+
+void
 linux_irq_handler(void *ent)
 {
 	struct irq_ent *irqe;
@@ -2426,7 +2496,12 @@ linux_irq_handler(void *ent)
 		return;
 
 	irqe = ent;
-	irqe->handler(irqe->irq, irqe->arg);
+	if (irqe->handler(irqe->irq, irqe->arg) == IRQ_WAKE_THREAD &&
+	    irqe->thread_handler != NULL) {
+		THREAD_SLEEPING_OK();
+		irqe->thread_handler(irqe->irq, irqe->arg);
+		THREAD_NO_SLEEPING();
+	}
 }
 
 #if defined(__i386__) || defined(__amd64__)
@@ -2588,6 +2663,8 @@ linux_compat_init(void *arg)
 		LIST_INIT(&vmmaphead[i]);
 	init_waitqueue_head(&linux_bit_waitq);
 	init_waitqueue_head(&linux_var_waitq);
+
+	CPU_COPY(&all_cpus, &cpu_online_mask);
 }
 SYSINIT(linux_compat, SI_SUB_DRIVERS, SI_ORDER_SECOND, linux_compat_init, NULL);
 

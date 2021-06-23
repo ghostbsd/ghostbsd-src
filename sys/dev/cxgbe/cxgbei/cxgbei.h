@@ -53,6 +53,17 @@ enum {
 	RXF_ACTIVE	= 1 << 0,	/* In the worker thread's queue */
 };
 
+struct cxgbei_cmp {
+	LIST_ENTRY(cxgbei_cmp) link;
+
+	uint32_t tt;		/* Transfer tag. */
+
+	uint32_t next_datasn;
+	uint32_t next_buffer_offset;
+	uint32_t last_datasn;
+};
+LIST_HEAD(cxgbei_cmp_head, cxgbei_cmp);
+
 struct icl_cxgbei_conn {
 	struct icl_conn ic;
 
@@ -67,6 +78,10 @@ struct icl_cxgbei_conn {
 	u_int cwt;
 	STAILQ_HEAD(, icl_pdu) rcvd_pdus;	/* protected by so_rcv lock */
 	TAILQ_ENTRY(icl_cxgbei_conn) rx_link;	/* protected by cwt lock */
+
+	struct cxgbei_cmp_head *cmp_table;	/* protected by cmp_lock */
+	struct mtx cmp_lock;
+	unsigned long cmp_hash_mask;
 };
 
 static inline struct icl_cxgbei_conn *
@@ -96,6 +111,10 @@ struct icl_cxgbei_pdu {
 	uint32_t icp_signature;
 	uint32_t icp_seq;	/* For debug only */
 	u_int icp_flags;
+
+	u_int ref_cnt;
+	icl_pdu_cb cb;
+	int error;
 };
 
 static inline struct icl_cxgbei_pdu *
@@ -113,12 +132,6 @@ struct cxgbei_data {
 	struct ppod_region pr;
 
 	struct sysctl_ctx_list ctx;	/* from uld_activate to deactivate */
-	counter_u64_t ddp_setup_ok;
-	counter_u64_t ddp_setup_error;
-	counter_u64_t ddp_bytes;
-	counter_u64_t ddp_pdus;
-	counter_u64_t fl_bytes;
-	counter_u64_t fl_pdus;
 };
 
 /* cxgbei.c */
@@ -130,5 +143,6 @@ int icl_cxgbei_mod_unload(void);
 struct icl_pdu *icl_cxgbei_new_pdu(int);
 void icl_cxgbei_new_pdu_set_conn(struct icl_pdu *, struct icl_conn *);
 void icl_cxgbei_conn_pdu_free(struct icl_conn *, struct icl_pdu *);
+struct cxgbei_cmp *cxgbei_find_cmp(struct icl_cxgbei_conn *, uint32_t);
 
 #endif

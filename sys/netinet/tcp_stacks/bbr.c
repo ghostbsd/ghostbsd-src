@@ -486,7 +486,7 @@ static void
 			 uint32_t line, uint8_t is_start, uint16_t set);
 
 static struct bbr_sendmap *
-            bbr_find_lowest_rsm(struct tcp_bbr *bbr);
+	    bbr_find_lowest_rsm(struct tcp_bbr *bbr);
 static __inline uint32_t
 bbr_get_rtt(struct tcp_bbr *bbr, int32_t rtt_type);
 static void
@@ -517,6 +517,10 @@ static void
 static void
 bbr_log_pacing_delay_calc(struct tcp_bbr *bbr, uint16_t gain, uint32_t len,
     uint32_t cts, uint32_t usecs, uint64_t bw, uint32_t override, int mod);
+
+static int
+bbr_ctloutput(struct socket *so, struct sockopt *sopt, struct inpcb *inp,
+    struct tcpcb *tp);
 
 static inline uint8_t
 bbr_state_val(struct tcp_bbr *bbr)
@@ -1616,7 +1620,7 @@ bbr_init_sysctls(void)
 	    &bbr_drop_limit, 0,
 	    "Number of segments limit for drop (0=use min_cwnd w/flight)?");
 
-        /* Timeout controls */
+	/* Timeout controls */
 	bbr_timeout = SYSCTL_ADD_NODE(&bbr_sysctl_ctx,
 	    SYSCTL_CHILDREN(bbr_sysctl_root),
 	    OID_AUTO,
@@ -5746,7 +5750,7 @@ tcp_bbr_tso_size_check(struct tcp_bbr *bbr, uint32_t cts)
 	 *         seg = goal_tso / mss
 	 *         tso = seg * mss
 	 *     else
-         *         tso = mss
+	 *         tso = mss
 	 *     if (tso > per-tcb-max)
 	 *         tso = per-tcb-max
 	 *  else if ( bw > 512Mbps)
@@ -6732,7 +6736,7 @@ bbr_update_bbr_info(struct tcp_bbr *bbr, struct bbr_sendmap *rsm, uint32_t rtt, 
 	else
 		bbr->rc_ack_is_cumack = 0;
 	old_rttprop = bbr_get_rtt(bbr, BBR_RTT_PROP);
-        /*
+	/*
 	 * Note the following code differs to the original
 	 * BBR spec. It calls for <= not <. However after a
 	 * long discussion in email with Neal, he acknowledged
@@ -7825,8 +7829,8 @@ bbr_process_ack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	acked_amount = min(acked, (int)sbavail(&so->so_snd));
 	tp->snd_wnd -= acked_amount;
 	mfree = sbcut_locked(&so->so_snd, acked_amount);
-	SOCKBUF_UNLOCK(&so->so_snd);
-	tp->t_flags |= TF_WAKESOW;
+	/* NB: sowwakeup_locked() does an implicit unlock. */
+	sowwakeup_locked(so);
 	m_freem(mfree);
 	if (SEQ_GT(th->th_ack, tp->snd_una)) {
 		bbr_collapse_rtt(tp, bbr, TCP_REXMTVAL(tp));
@@ -8302,13 +8306,14 @@ bbr_process_data(struct mbuf *m, struct tcphdr *th, struct socket *so,
 				appended =
 #endif
 					sbappendstream_locked(&so->so_rcv, m, 0);
-			SOCKBUF_UNLOCK(&so->so_rcv);
-			tp->t_flags |= TF_WAKESOR;
+			/* NB: sorwakeup_locked() does an implicit unlock. */
+			sorwakeup_locked(so);
 #ifdef NETFLIX_SB_LIMITS
 			if (so->so_rcv.sb_shlim && appended != mcnt)
 				counter_fo_release(so->so_rcv.sb_shlim,
 				    mcnt - appended);
 #endif
+
 		} else {
 			/*
 			 * XXX: Due to the header drop above "th" is
@@ -8317,8 +8322,14 @@ bbr_process_data(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			 * trimming from the head.
 			 */
 			tcp_seq temp = save_start;
+
 			thflags = tcp_reass(tp, th, &temp, &tlen, m);
 			tp->t_flags |= TF_ACKNOW;
+			if (tp->t_flags & TF_WAKESOR) {
+				tp->t_flags &= ~TF_WAKESOR;
+				/* NB: sorwakeup_locked() does an implicit unlock. */
+				sorwakeup_locked(so);
+			}
 		}
 		if ((tp->t_flags & TF_SACK_PERMIT) &&
 		    (save_tlen > 0) &&
@@ -8364,9 +8375,8 @@ bbr_process_data(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	 */
 	if (thflags & TH_FIN) {
 		if (TCPS_HAVERCVDFIN(tp->t_state) == 0) {
-			socantrcvmore(so);
 			/* The socket upcall is handled by socantrcvmore. */
-			tp->t_flags &= ~TF_WAKESOR;
+			socantrcvmore(so);
 			/*
 			 * If connection is half-synchronized (ie NEEDSYN
 			 * flag on) then delay ACK, so it may be piggybacked
@@ -8557,8 +8567,8 @@ bbr_do_fastnewdata(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			sbappendstream_locked(&so->so_rcv, m, 0);
 		ctf_calc_rwin(so, tp);
 	}
-	SOCKBUF_UNLOCK(&so->so_rcv);
-	tp->t_flags |= TF_WAKESOR;
+	/* NB: sorwakeup_locked() does an implicit unlock. */
+	sorwakeup_locked(so);
 #ifdef NETFLIX_SB_LIMITS
 	if (so->so_rcv.sb_shlim && mcnt != appended)
 		counter_fo_release(so->so_rcv.sb_shlim, mcnt - appended);
@@ -8749,7 +8759,7 @@ bbr_fastack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		    &tcp_savetcp, 0);
 #endif
 	/* Wake up the socket if we have room to write more */
-	tp->t_flags |= TF_WAKESOW;
+	sowwakeup(so);
 	if (tp->snd_una == tp->snd_max) {
 		/* Nothing left outstanding */
 		bbr_log_progress_event(bbr, tp, ticks, PROGRESS_CLEAR, __LINE__);
@@ -9157,9 +9167,15 @@ bbr_do_syn_recv(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	 * If segment contains data or ACK, will call tcp_reass() later; if
 	 * not, do so now to pass queued data to user.
 	 */
-	if (tlen == 0 && (thflags & TH_FIN) == 0)
+	if (tlen == 0 && (thflags & TH_FIN) == 0) {
 		(void)tcp_reass(tp, (struct tcphdr *)0, NULL, 0,
 			(struct mbuf *)0);
+		if (tp->t_flags & TF_WAKESOR) {
+			tp->t_flags &= ~TF_WAKESOR;
+			/* NB: sorwakeup_locked() does an implicit unlock. */
+			sorwakeup_locked(so);
+		}
+	}
 	tp->snd_wl1 = th->th_seq - 1;
 	if (bbr_process_ack(m, th, so, tp, to, tiwin, tlen, &ourfinisacked, thflags, &ret_val)) {
 		return (ret_val);
@@ -11425,6 +11441,7 @@ bbr_do_segment_nounlock(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	if ((tp->t_flags & TF_RCVD_TSTMP) && !(to.to_flags & TOF_TS) &&
 	    ((thflags & TH_RST) == 0) && (V_tcp_tolerate_missing_ts == 0)) {
 		retval = 0;
+		m_freem(m);
 		goto done_with_input;
 	}
 	/*
@@ -11559,18 +11576,18 @@ bbr_do_segment_nounlock(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	if ((thflags & TH_SYN) && (thflags & TH_FIN) && V_drop_synfin) {
 		retval = 0;
 		m_freem(m);
-                goto done_with_input;
-        }
-        /*
-         * If a segment with the ACK-bit set arrives in the SYN-SENT state
-         * check SEQ.ACK first as described on page 66 of RFC 793, section 3.9.
-         */
-        if ((tp->t_state == TCPS_SYN_SENT) && (thflags & TH_ACK) &&
-            (SEQ_LEQ(th->th_ack, tp->iss) || SEQ_GT(th->th_ack, tp->snd_max))) {
+		goto done_with_input;
+	}
+	/*
+	 * If a segment with the ACK-bit set arrives in the SYN-SENT state
+	 * check SEQ.ACK first as described on page 66 of RFC 793, section 3.9.
+	 */
+	if ((tp->t_state == TCPS_SYN_SENT) && (thflags & TH_ACK) &&
+	    (SEQ_LEQ(th->th_ack, tp->iss) || SEQ_GT(th->th_ack, tp->snd_max))) {
 		tcp_log_end_status(tp, TCP_EI_STATUS_RST_IN_FRONT);
 		ctf_do_dropwithreset_conn(m, tp, th, BANDLIM_RST_OPENPORT, tlen);
-                return (1);
-        }
+		return (1);
+	}
 	in_recovery = IN_RECOVERY(tp->t_flags);
 	if (tiwin > bbr->r_ctl.rc_high_rwnd)
 		bbr->r_ctl.rc_high_rwnd = tiwin;
@@ -11711,7 +11728,6 @@ bbr_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	retval = bbr_do_segment_nounlock(m, th, so, tp,
 					 drop_hdrlen, tlen, iptos, 0, &tv);
 	if (retval == 0) {
-		tcp_handle_wakeup(tp, so);
 		INP_WUNLOCK(tp->t_inpcb);
 	}
 }
@@ -11781,8 +11797,6 @@ bbr_do_send_accounting(struct tcpcb *tp, struct tcp_bbr *bbr, struct bbr_sendmap
 			 * own bin
 			 */
 #ifdef NETFLIX_STATS
-			tp->t_sndtlppack++;
-			tp->t_sndtlpbyte += len;
 			KMOD_TCPSTAT_INC(tcps_tlpresends);
 			KMOD_TCPSTAT_ADD(tcps_tlpresend_bytes, len);
 #endif
@@ -13354,7 +13368,7 @@ send:
 	if (isipv6) {
 		ip6 = mtod(m, struct ip6_hdr *);
 		if (tp->t_port) {
-			udp = (struct udphdr *)((caddr_t)ip6 + ipoptlen + sizeof(struct ip6_hdr));
+			udp = (struct udphdr *)((caddr_t)ip6 + sizeof(struct ip6_hdr));
 			udp->uh_sport = htons(V_tcp_udp_tunneling_port);
 			udp->uh_dport = tp->t_port;
 			ulen = hdrlen + len - sizeof(struct ip6_hdr);
@@ -13372,7 +13386,7 @@ send:
 		ipov = (struct ipovly *)ip;
 #endif
 		if (tp->t_port) {
-			udp = (struct udphdr *)((caddr_t)ip + ipoptlen + sizeof(struct ip));
+			udp = (struct udphdr *)((caddr_t)ip + sizeof(struct ip));
 			udp->uh_sport = htons(V_tcp_udp_tunneling_port);
 			udp->uh_dport = tp->t_port;
 			ulen = hdrlen + len - sizeof(struct ip);
@@ -13736,6 +13750,7 @@ out:
 	 * retransmit.  In persist state, just set snd_max.
 	 */
 	if (error == 0) {
+		tcp_account_for_send(tp, len, (rsm != NULL), doing_tlp);
 		if (TCPS_HAVEESTABLISHED(tp->t_state) &&
 		    (tp->t_flags & TF_SACK_PERMIT) &&
 		    tp->rcv_numsacks > 0)
@@ -14197,6 +14212,33 @@ bbr_mtu_chg(struct tcpcb *tp)
 	}
 }
 
+static int
+bbr_pru_options(struct tcpcb *tp, int flags)
+{
+	if (flags & PRUS_OOB)
+		return (EOPNOTSUPP);
+	return (0);
+}
+
+struct tcp_function_block __tcp_bbr = {
+	.tfb_tcp_block_name = __XSTRING(STACKNAME),
+	.tfb_tcp_output = bbr_output,
+	.tfb_do_queued_segments = ctf_do_queued_segments,
+	.tfb_do_segment_nounlock = bbr_do_segment_nounlock,
+	.tfb_tcp_do_segment = bbr_do_segment,
+	.tfb_tcp_ctloutput = bbr_ctloutput,
+	.tfb_tcp_fb_init = bbr_init,
+	.tfb_tcp_fb_fini = bbr_fini,
+	.tfb_tcp_timer_stop_all = bbr_stopall,
+	.tfb_tcp_timer_activate = bbr_timer_activate,
+	.tfb_tcp_timer_active = bbr_timer_active,
+	.tfb_tcp_timer_stop = bbr_timer_stop,
+	.tfb_tcp_rexmit_tmr = bbr_remxt_tmr,
+	.tfb_tcp_handoff_ok = bbr_handoff_ok,
+	.tfb_tcp_mtu_chg = bbr_mtu_chg,
+	.tfb_pru_options = bbr_pru_options,
+};
+
 /*
  * bbr_ctloutput() must drop the inpcb lock before performing copyin on
  * socket option arguments.  When it re-acquires the lock after the copy, it
@@ -14269,6 +14311,10 @@ bbr_set_sockopt(struct socket *so, struct sockopt *sopt,
 		return (ECONNRESET);
 	}
 	tp = intotcpcb(inp);
+	if (tp->t_fb != &__tcp_bbr) {
+		INP_WUNLOCK(inp);
+		return (ENOPROTOOPT);
+	}
 	bbr = (struct tcp_bbr *)tp->t_fb_ptr;
 	switch (sopt->sopt_name) {
 	case TCP_BBR_PACE_PER_SEC:
@@ -14771,33 +14817,6 @@ out:
 	INP_WUNLOCK(inp);
 	return (error);
 }
-
-static int
-bbr_pru_options(struct tcpcb *tp, int flags)
-{
-	if (flags & PRUS_OOB)
-		return (EOPNOTSUPP);
-	return (0);
-}
-
-struct tcp_function_block __tcp_bbr = {
-	.tfb_tcp_block_name = __XSTRING(STACKNAME),
-	.tfb_tcp_output = bbr_output,
-	.tfb_do_queued_segments = ctf_do_queued_segments,
-	.tfb_do_segment_nounlock = bbr_do_segment_nounlock,
-	.tfb_tcp_do_segment = bbr_do_segment,
-	.tfb_tcp_ctloutput = bbr_ctloutput,
-	.tfb_tcp_fb_init = bbr_init,
-	.tfb_tcp_fb_fini = bbr_fini,
-	.tfb_tcp_timer_stop_all = bbr_stopall,
-	.tfb_tcp_timer_activate = bbr_timer_activate,
-	.tfb_tcp_timer_active = bbr_timer_active,
-	.tfb_tcp_timer_stop = bbr_timer_stop,
-	.tfb_tcp_rexmit_tmr = bbr_remxt_tmr,
-	.tfb_tcp_handoff_ok = bbr_handoff_ok,
-	.tfb_tcp_mtu_chg = bbr_mtu_chg,
-	.tfb_pru_options = bbr_pru_options,
-};
 
 static const char *bbr_stack_names[] = {
 	__XSTRING(STACKNAME),

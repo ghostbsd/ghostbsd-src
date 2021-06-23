@@ -45,6 +45,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
+#include <sys/selinfo.h>
+#include <sys/pipe.h>
 #include <sys/proc.h>
 #include <sys/stat.h>
 #include <sys/sx.h>
@@ -1318,12 +1320,11 @@ linux_mount(struct thread *td, struct linux_mount_args *args)
 		strcpy(fstypename, "linprocfs");
 	} else if (strcmp(fstypename, "vfat") == 0) {
 		strcpy(fstypename, "msdosfs");
-	} else if (strcmp(fstypename, "fuse") == 0) {
+	} else if (strcmp(fstypename, "fuse") == 0 ||
+	    strncmp(fstypename, "fuse.", 5) == 0) {
 		char *fuse_options, *fuse_option, *fuse_name;
 
-		if (strcmp(mntfromname, "fuse") == 0)
-			strcpy(mntfromname, "/dev/fuse");
-
+		strcpy(mntfromname, "/dev/fuse");
 		strcpy(fstypename, "fusefs");
 		data = malloc(MNAMELEN, M_TEMP, M_WAITOK);
 		error = copyinstr(args->data, data, MNAMELEN - 1, NULL);
@@ -1524,6 +1525,7 @@ fcntl_common(struct thread *td, struct linux_fcntl_args *args)
 {
 	struct l_flock linux_flock;
 	struct flock bsd_flock;
+	struct pipe *fpipe;
 	struct file *fp;
 	long arg;
 	int error, result;
@@ -1655,6 +1657,21 @@ fcntl_common(struct thread *td, struct linux_fcntl_args *args)
 	case LINUX_F_ADD_SEALS:
 		return (kern_fcntl(td, args->fd, F_ADD_SEALS,
 		    linux_to_bsd_bits(args->arg, seal_bitmap, 0)));
+
+	case LINUX_F_GETPIPE_SZ:
+		error = fget(td, args->fd,
+		    &cap_fcntl_rights, &fp);
+		if (error != 0)
+			return (error);
+		if (fp->f_type != DTYPE_PIPE) {
+			fdrop(fp, td);
+			return (EINVAL);
+		}
+		fpipe = fp->f_data;
+		td->td_retval[0] = fpipe->pipe_buffer.size;
+		fdrop(fp, td);
+		return (0);
+
 	default:
 		linux_msg(td, "unsupported fcntl cmd %d", args->cmd);
 		return (EINVAL);
@@ -1740,10 +1757,11 @@ int
 linux_fchownat(struct thread *td, struct linux_fchownat_args *args)
 {
 	char *path;
-	int error, dfd, flag;
+	int error, dfd, flag, unsupported;
 
-	if (args->flag & ~(LINUX_AT_SYMLINK_NOFOLLOW | LINUX_AT_EMPTY_PATH)) {
-		linux_msg(td, "fchownat unsupported flag 0x%x", args->flag);
+	unsupported = args->flag & ~(LINUX_AT_SYMLINK_NOFOLLOW | LINUX_AT_EMPTY_PATH);
+	if (unsupported != 0) {
+		linux_msg(td, "fchownat unsupported flag 0x%x", unsupported);
 		return (EINVAL);
 	}
 

@@ -348,7 +348,7 @@ release_offload_resources(struct toepcb *toep)
 	}
 
 	if (toep->ce)
-		t4_release_lip(sc, toep->ce);
+		t4_release_clip_entry(sc, toep->ce);
 
 	if (toep->params.tc_idx != -1)
 		t4_release_cl_rl(sc, toep->vi->pi->port_id, toep->params.tc_idx);
@@ -1024,6 +1024,7 @@ final_cpl_received(struct toepcb *toep)
 		tls_detach(toep);
 	toep->inp = NULL;
 	toep->flags &= ~TPF_CPL_PENDING;
+	mbufq_drain(&toep->ulp_pduq);
 	mbufq_drain(&toep->ulp_pdu_reclaimq);
 
 	if (!(toep->flags & TPF_ATTACHED))
@@ -1990,24 +1991,6 @@ t4_aio_queue_tom(struct socket *so, struct kaiocb *job)
 }
 
 static int
-t4_ctloutput_tom(struct socket *so, struct sockopt *sopt)
-{
-
-	if (sopt->sopt_level != IPPROTO_TCP)
-		return (tcp_ctloutput(so, sopt));
-
-	switch (sopt->sopt_name) {
-	case TCP_TLSOM_SET_TLS_CONTEXT:
-	case TCP_TLSOM_GET_TLS_TOM:
-	case TCP_TLSOM_CLR_TLS_TOM:
-	case TCP_TLSOM_CLR_QUIES:
-		return (t4_ctloutput_tls(so, sopt));
-	default:
-		return (tcp_ctloutput(so, sopt));
-	}
-}
-
-static int
 t4_tom_mod_load(void)
 {
 	/* CPL handlers */
@@ -2027,7 +2010,6 @@ t4_tom_mod_load(void)
 	bcopy(tcp_protosw, &toe_protosw, sizeof(toe_protosw));
 	bcopy(tcp_protosw->pr_usrreqs, &toe_usrreqs, sizeof(toe_usrreqs));
 	toe_usrreqs.pru_aio_queue = t4_aio_queue_tom;
-	toe_protosw.pr_ctloutput = t4_ctloutput_tom;
 	toe_protosw.pr_usrreqs = &toe_usrreqs;
 
 	tcp6_protosw = pffindproto(PF_INET6, IPPROTO_TCP, SOCK_STREAM);
@@ -2036,7 +2018,6 @@ t4_tom_mod_load(void)
 	bcopy(tcp6_protosw, &toe6_protosw, sizeof(toe6_protosw));
 	bcopy(tcp6_protosw->pr_usrreqs, &toe6_usrreqs, sizeof(toe6_usrreqs));
 	toe6_usrreqs.pru_aio_queue = t4_aio_queue_tom;
-	toe6_protosw.pr_ctloutput = t4_ctloutput_tom;
 	toe6_protosw.pr_usrreqs = &toe6_usrreqs;
 
 	return (t4_register_uld(&tom_uld_info));

@@ -1154,7 +1154,7 @@ send:
 	if (isipv6) {
 		ip6 = mtod(m, struct ip6_hdr *);
 		if (tp->t_port) {
-			udp = (struct udphdr *)((caddr_t)ip6 + ipoptlen + sizeof(struct ip6_hdr));
+			udp = (struct udphdr *)((caddr_t)ip6 + sizeof(struct ip6_hdr));
 			udp->uh_sport = htons(V_tcp_udp_tunneling_port);
 			udp->uh_dport = tp->t_port;
 			ulen = hdrlen + len - sizeof(struct ip6_hdr);
@@ -1172,7 +1172,7 @@ send:
 		ipov = (struct ipovly *)ip;
 #endif
 		if (tp->t_port) {
-			udp = (struct udphdr *)((caddr_t)ip + ipoptlen + sizeof(struct ip));
+			udp = (struct udphdr *)((caddr_t)ip + sizeof(struct ip));
 			udp->uh_sport = htons(V_tcp_udp_tunneling_port);
 			udp->uh_dport = tp->t_port;
 			ulen = hdrlen + len - sizeof(struct ip);
@@ -1264,6 +1264,14 @@ send:
 	} else {
 		th->th_seq = htonl(p->rxmit);
 		p->rxmit += len;
+		/*
+		 * Lost Retransmission Detection
+		 * trigger resending of a (then
+		 * still existing) hole, when
+		 * fack acks recoverypoint.
+		 */
+		if ((tp->t_flags & TF_LRD) && SEQ_GEQ(p->rxmit, p->end))
+			p->rxmit = tp->snd_recover;
 		tp->sackhint.sack_bytes_rexmit += len;
 	}
 	if (IN_RECOVERY(tp->t_flags)) {
@@ -1551,6 +1559,8 @@ send:
 #endif /* INET */
 
 out:
+	if (error == 0)
+		tcp_account_for_send(tp, len, (tp->snd_nxt != tp->snd_max), 0);
 	/*
 	 * In transmit state, time the transmission and arrange for
 	 * the retransmit.  In persist state, just set snd_max.

@@ -88,6 +88,7 @@ enum {
 	DDP_DEAD	= (1 << 6),	/* toepcb is shutting down */
 };
 
+struct ctl_sg_entry;
 struct sockopt;
 struct offload_settings;
 
@@ -119,7 +120,6 @@ struct conn_params {
 struct ofld_tx_sdesc {
 	uint32_t plen;		/* payload length */
 	uint8_t tx_credits;	/* firmware tx credits (unit is 16B) */
-	void *iv_buffer;	/* optional buffer holding IVs for TLS */
 };
 
 struct ppod_region {
@@ -331,6 +331,22 @@ td_adapter(struct tom_data *td)
 }
 
 static inline void
+set_mbuf_raw_wr(struct mbuf *m, bool raw)
+{
+
+	M_ASSERTPKTHDR(m);
+	m->m_pkthdr.PH_per.eight[6] = raw;
+}
+
+static inline bool
+mbuf_raw_wr(struct mbuf *m)
+{
+
+	M_ASSERTPKTHDR(m);
+	return (m->m_pkthdr.PH_per.eight[6]);
+}
+
+static inline void
 set_mbuf_ulp_submode(struct mbuf *m, uint8_t ulp_submode)
 {
 
@@ -421,10 +437,14 @@ void t4_free_ppod_region(struct ppod_region *);
 int t4_alloc_page_pods_for_ps(struct ppod_region *, struct pageset *);
 int t4_alloc_page_pods_for_buf(struct ppod_region *, vm_offset_t, int,
     struct ppod_reservation *);
+int t4_alloc_page_pods_for_sgl(struct ppod_region *, struct ctl_sg_entry *, int,
+    struct ppod_reservation *);
 int t4_write_page_pods_for_ps(struct adapter *, struct sge_wrq *, int,
     struct pageset *);
-int t4_write_page_pods_for_buf(struct adapter *, struct sge_wrq *, int,
-    struct ppod_reservation *, vm_offset_t, int);
+int t4_write_page_pods_for_buf(struct adapter *, struct toepcb *,
+    struct ppod_reservation *, vm_offset_t, int, struct mbufq *);
+int t4_write_page_pods_for_sgl(struct adapter *, struct toepcb *,
+    struct ppod_reservation *, struct ctl_sg_entry *, int, int, struct mbufq *);
 void t4_free_page_pods(struct ppod_reservation *);
 int t4_soreceive_ddp(struct socket *, struct sockaddr **, struct uio *,
     struct mbuf **, struct mbuf **, int *);
@@ -445,15 +465,12 @@ const struct offload_settings *lookup_offload_policy(struct adapter *, int,
 /* t4_tls.c */
 bool can_tls_offload(struct adapter *);
 void do_rx_data_tls(const struct cpl_rx_data *, struct toepcb *, struct mbuf *);
-int t4_ctloutput_tls(struct socket *, struct sockopt *);
-void t4_push_tls_records(struct adapter *, struct toepcb *, int);
 void t4_push_ktls(struct adapter *, struct toepcb *, int);
 void t4_tls_mod_load(void);
 void t4_tls_mod_unload(void);
 void tls_detach(struct toepcb *);
 void tls_establish(struct toepcb *);
 void tls_init_toep(struct toepcb *);
-int tls_rx_key(struct toepcb *);
 void tls_stop_handshake_timer(struct toepcb *);
 int tls_tx_key(struct toepcb *);
 void tls_uninit_toep(struct toepcb *);

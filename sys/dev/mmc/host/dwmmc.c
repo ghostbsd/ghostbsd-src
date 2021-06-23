@@ -892,6 +892,8 @@ dwmmc_update_ios(device_t brdev, device_t reqdev)
 	dprintf("Setting up clk %u bus_width %d, timming: %d\n",
 		ios->clock, ios->bus_width, ios->timing);
 
+	mmc_fdt_set_power(&sc->mmc_helper, ios->power_mode);
+
 	if (ios->bus_width == bus_width_8)
 		WRITE4(sc, SDMMC_CTYPE, SDMMC_CTYPE_8BIT);
 	else if (ios->bus_width == bus_width_4)
@@ -1556,6 +1558,8 @@ static device_method_t dwmmc_methods[] = {
 	DEVMETHOD(mmc_sim_get_tran_settings,	dwmmc_get_tran_settings),
 	DEVMETHOD(mmc_sim_set_tran_settings,	dwmmc_set_tran_settings),
 	DEVMETHOD(mmc_sim_cam_request,		dwmmc_cam_request),
+
+	DEVMETHOD(bus_add_child,		bus_generic_add_child),
 #endif
 
 	DEVMETHOD_END

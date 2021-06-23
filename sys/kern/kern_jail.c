@@ -76,7 +76,6 @@ __FBSDID("$FreeBSD$");
 
 #include <security/mac/mac_framework.h>
 
-#define	DEFAULT_HOSTUUID	"00000000-0000-0000-0000-000000000000"
 #define	PRISON0_HOSTUUID_MODULE	"hostuuid"
 
 MALLOC_DEFINE(M_PRISON, "prison", "Prison structures");
@@ -257,14 +256,14 @@ prison0_init(void)
 			 * non-printable characters to be safe.
 			 */
 			while (size > 0 && data[size - 1] <= 0x20) {
-				data[size--] = '\0';
+				size--;
 			}
 			if (validate_uuid(data, size, NULL, 0) == 0) {
 				(void)strlcpy(prison0.pr_hostuuid, data,
 				    size + 1);
 			} else if (bootverbose) {
-				printf("hostuuid: preload data malformed: '%s'",
-				    data);
+				printf("hostuuid: preload data malformed: '%.*s'\n",
+				    (int)size, data);
 			}
 		}
 	}

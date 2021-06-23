@@ -52,7 +52,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
-#include <sys/module.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
 #include <sys/socket.h>
@@ -148,14 +147,17 @@ static struct vfsops nfs_vfsops = {
 	.vfs_sysctl =		nfs_sysctl,
 	.vfs_purge =		nfs_purge,
 };
+/*
+ * This macro declares that the file system type is named "nfs".
+ * It also declares a module name of "nfs" and uses vfs_modevent()
+ * as the event handling function.
+ * The main module declaration is found in sys/fs/nfsclient/nfs_clport.c
+ * for "nfscl" and is needed so that a custom event handling
+ * function gets called.  MODULE_DEPEND() macros are found there.
+ */
 VFS_SET(nfs_vfsops, nfs, VFCF_NETWORK | VFCF_SBDRY);
 
-/* So that loader and kldload(2) can find us, wherever we are.. */
 MODULE_VERSION(nfs, 1);
-MODULE_DEPEND(nfs, nfscommon, 1, 1, 1);
-MODULE_DEPEND(nfs, krpc, 1, 1, 1);
-MODULE_DEPEND(nfs, nfssvc, 1, 1, 1);
-MODULE_DEPEND(nfs, xdr, 1, 1, 1);
 
 /*
  * This structure is now defined in sys/nfs/nfs_diskless.c so that it
@@ -1571,10 +1573,10 @@ mountnfs(struct nfs_args *argp, struct mount *mp, struct sockaddr *nam,
 
 	if ((error = newnfs_connect(nmp, &nmp->nm_sockreq, cred, td, 0, false)))
 		goto bad;
-	/* For NFSv4.1, get the clientid now. */
-	if (nmp->nm_minorvers > 0) {
+	/* For NFSv4, get the clientid now. */
+	if ((argp->flags & NFSMNT_NFSV4) != 0) {
 		NFSCL_DEBUG(3, "at getcl\n");
-		error = nfscl_getcl(mp, cred, td, 0, &clp);
+		error = nfscl_getcl(mp, cred, td, false, &clp);
 		NFSCL_DEBUG(3, "aft getcl=%d\n", error);
 		if (error != 0)
 			goto bad;
@@ -1644,7 +1646,7 @@ mountnfs(struct nfs_args *argp, struct mount *mp, struct sockaddr *nam,
 			lease = 60;
 		}
 		(void) nfscl_loadattrcache(vpp, &nfsva, NULL, NULL, 0, 1);
-		if (nmp->nm_minorvers > 0) {
+		if ((argp->flags & NFSMNT_NFSV4) != 0) {
 			NFSCL_DEBUG(3, "lease=%d\n", (int)lease);
 			NFSLOCKCLSTATE();
 			clp->nfsc_renew = NFSCL_RENEW(lease);

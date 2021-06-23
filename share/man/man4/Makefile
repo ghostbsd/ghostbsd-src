@@ -47,7 +47,6 @@ MAN=	aac.4 \
 	${_amdtemp.4} \
 	${_bxe.4} \
 	amr.4 \
-	an.4 \
 	${_aout.4} \
 	${_apic.4} \
 	arcmsr.4 \
@@ -618,7 +617,6 @@ MLINKS+=altera_sdcard.4 altera_sdcardc.4
 MLINKS+=altq.4 ALTQ.4
 MLINKS+=ath.4 if_ath.4
 MLINKS+=ath_pci.4 if_ath_pci.4
-MLINKS+=an.4 if_an.4
 MLINKS+=aue.4 if_aue.4
 MLINKS+=axe.4 if_axe.4
 MLINKS+=bce.4 if_bce.4
@@ -820,7 +818,6 @@ _imcsmb.4=	imcsmb.4
 _ipmi.4=	ipmi.4
 _io.4=		io.4
 _itwd.4=	itwd.4
-_linux.4=	linux.4
 _nda.4=		nda.4
 _nfe.4=		nfe.4
 _nfsmb.4=	nfsmb.4
@@ -888,6 +885,7 @@ _nvme.4=	nvme.4
 
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386" || \
 	 ${MACHINE_CPUARCH} == "aarch64"
+_linux.4=	linux.4
 _ossl.4=	ossl.4
 .endif
 

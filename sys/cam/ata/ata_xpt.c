@@ -1795,6 +1795,21 @@ static void
 ata_action(union ccb *start_ccb)
 {
 
+	if (start_ccb->ccb_h.func_code != XPT_ATA_IO) {
+#ifdef notyet
+		KASSERT((start_ccb->ccb_h.alloc_flags & CAM_CCB_FROM_UMA) == 0,
+		    ("%s: ccb %p, func_code %#x should not be allocated "
+		    "from UMA zone\n",
+		    __func__, start_ccb, start_ccb->ccb_h.func_code));
+#else
+		if ((start_ccb->ccb_h.alloc_flags & CAM_CCB_FROM_UMA) != 0) {
+			printf("%s: ccb %p, func_code %#x should not be allocated "
+			    "from UMA zone\n",
+			    __func__, start_ccb, start_ccb->ccb_h.func_code);
+		}
+#endif
+	}
+
 	switch (start_ccb->ccb_h.func_code) {
 	case XPT_SET_TRAN_SETTINGS:
 	{
@@ -2180,6 +2195,7 @@ ata_announce_periph_sbuf(struct cam_periph *periph, struct sbuf *sb)
 	struct ccb_trans_settings cts;
 	u_int speed, mb;
 
+	bzero(&cts, sizeof(cts));
 	_ata_announce_periph(periph, &cts, &speed);
 	if ((cts.ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP)
 		return;

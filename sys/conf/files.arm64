@@ -149,6 +149,14 @@ cddl/dev/dtrace/aarch64/dtrace_subr.c		optional dtrace compile-with "${DTRACE_C}
 cddl/dev/fbt/aarch64/fbt_isa.c			optional dtrace_fbt | dtraceall compile-with "${FBT_C}"
 
 ##
+## ASoC support
+##
+dev/sound/fdt/audio_dai_if.m			optional sound fdt
+dev/sound/fdt/audio_soc.c			optional sound fdt
+dev/sound/fdt/dummy_codec.c			optional sound fdt
+dev/sound/fdt/simple_amplifier.c		optional sound fdt
+
+##
 ## Device drivers
 ##
 
@@ -245,7 +253,8 @@ dev/neta/if_mvneta_fdt.c			optional neta fdt
 dev/neta/if_mvneta.c				optional neta mdio mii
 
 dev/ofw/ofw_cpu.c				optional fdt
-dev/ofw/ofwpci.c				optional fdt pci
+dev/ofw/ofw_pci.c				optional fdt pci
+dev/ofw/ofw_pcib.c				optional fdt pci
 
 dev/pci/controller/pci_n1sdp.c			optional pci_n1sdp acpi
 dev/pci/pci_host_generic.c			optional pci
@@ -299,9 +308,12 @@ dev/vnic/lmac_if.m				optional inet | inet6 | vnic
 arm/allwinner/a10_timer.c			optional a10_timer fdt
 arm/allwinner/a10_codec.c			optional sound a10_codec
 arm/allwinner/a31_dmac.c			optional a31_dmac
+arm/allwinner/a33_codec.c			optional fdt sound a33_codec
+arm/allwinner/a64/sun50i_a64_acodec.c		optional fdt sound a64_codec
 arm/allwinner/sunxi_dma_if.m			optional a31_dmac
 arm/allwinner/aw_cir.c				optional evdev aw_cir fdt
 arm/allwinner/aw_dwc3.c				optional aw_dwc3 fdt
+arm/allwinner/aw_i2s.c				optional fdt sound aw_i2s
 arm/allwinner/aw_gpio.c				optional gpio aw_gpio fdt
 arm/allwinner/aw_mmc.c				optional mmc aw_mmc fdt | mmccam aw_mmc fdt
 arm/allwinner/aw_nmi.c				optional aw_nmi fdt \

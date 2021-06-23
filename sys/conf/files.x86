@@ -153,7 +153,6 @@ dev/ipmi/ipmi_smbus.c		optional	ipmi smbus
 dev/ipmi/ipmi_smbios.c		optional	ipmi
 dev/ipmi/ipmi_ssif.c		optional	ipmi smbus
 dev/ipmi/ipmi_pci.c		optional	ipmi pci
-dev/ipmi/ipmi_linux.c		optional	ipmi compat_linux32
 dev/isci/isci.c							optional isci
 dev/isci/isci_controller.c					optional isci
 dev/isci/isci_domain.c						optional isci
@@ -328,5 +327,3 @@ x86/xen/hvm.c			optional	xenhvm
 x86/xen/xen_intr.c		optional	xenhvm
 x86/xen/xen_apic.c		optional	xenhvm
 x86/xen/xenpv.c			optional	xenhvm
-x86/xen/xen_msi.c		optional	xenhvm
-x86/xen/xen_nexus.c		optional	xenhvm

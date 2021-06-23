@@ -1112,7 +1112,7 @@ static void
 cfiscsi_session_terminate_tasks(struct cfiscsi_session *cs)
 {
 	struct cfiscsi_data_wait *cdw;
-	union ctl_io *io;
+	union ctl_io *io, *cdw_io;
 	int error, last, wait;
 
 	if (cs->cs_target == NULL)
@@ -1144,10 +1144,11 @@ cfiscsi_session_terminate_tasks(struct cfiscsi_session *cs)
 		 * assuming that the data transfer actually succeeded
 		 * and writing uninitialized data to disk.
 		 */
-		cdw->cdw_ctl_io->io_hdr.flags &= ~CTL_FLAG_DMA_INPROG;
-		cdw->cdw_ctl_io->scsiio.io_hdr.port_status = 42;
-		ctl_datamove_done(cdw->cdw_ctl_io, false);
+		cdw_io = cdw->cdw_ctl_io;
+		cdw_io->io_hdr.flags &= ~CTL_FLAG_DMA_INPROG;
+		cdw_io->scsiio.io_hdr.port_status = 42;
 		cfiscsi_data_wait_free(cs, cdw);
+		ctl_datamove_done(cdw_io, false);
 		CFISCSI_SESSION_LOCK(cs);
 	}
 	CFISCSI_SESSION_UNLOCK(cs);
@@ -1567,8 +1568,10 @@ cfiscsi_ioctl_handoff(struct ctl_iscsi *ci)
 	 */
 	cs->cs_cmdsn = cihp->cmdsn;
 	cs->cs_statsn = cihp->statsn;
-	cs->cs_max_recv_data_segment_length = cihp->max_recv_data_segment_length;
-	cs->cs_max_send_data_segment_length = cihp->max_send_data_segment_length;
+	cs->cs_conn->ic_max_recv_data_segment_length =
+	    cihp->max_recv_data_segment_length;
+	cs->cs_conn->ic_max_send_data_segment_length =
+	    cihp->max_send_data_segment_length;
 	cs->cs_max_burst_length = cihp->max_burst_length;
 	cs->cs_first_burst_length = cihp->first_burst_length;
 	cs->cs_immediate_data = !!cihp->immediate_data;
@@ -1733,8 +1736,8 @@ cfiscsi_ioctl_list(struct ctl_iscsi *ci)
 		    cs->cs_target->ct_tag,
 		    cs->cs_conn->ic_header_crc32c ? "CRC32C" : "None",
 		    cs->cs_conn->ic_data_crc32c ? "CRC32C" : "None",
-		    cs->cs_max_recv_data_segment_length,
-		    cs->cs_max_send_data_segment_length,
+		    cs->cs_conn->ic_max_recv_data_segment_length,
+		    cs->cs_conn->ic_max_send_data_segment_length,
 		    cs->cs_max_burst_length,
 		    cs->cs_first_burst_length,
 		    cs->cs_immediate_data,
@@ -2533,12 +2536,14 @@ cfiscsi_datamove_in(union ctl_io *io)
 		/*
 		 * Truncate to maximum data segment length.
 		 */
-		KASSERT(response->ip_data_len < cs->cs_max_send_data_segment_length,
+		KASSERT(response->ip_data_len <
+		    cs->cs_conn->ic_max_send_data_segment_length,
 		    ("ip_data_len %zd >= max_send_data_segment_length %d",
-		    response->ip_data_len, cs->cs_max_send_data_segment_length));
+		    response->ip_data_len,
+		    cs->cs_conn->ic_max_send_data_segment_length));
 		if (response->ip_data_len + len >
-		    cs->cs_max_send_data_segment_length) {
-			len = cs->cs_max_send_data_segment_length -
+		    cs->cs_conn->ic_max_send_data_segment_length) {
+			len = cs->cs_conn->ic_max_send_data_segment_length -
 			    response->ip_data_len;
 			KASSERT(len <= sg_len, ("len %zd > sg_len %zd",
 			    len, sg_len));
@@ -2598,7 +2603,8 @@ cfiscsi_datamove_in(union ctl_io *io)
 			i++;
 		}
 
-		if (response->ip_data_len == cs->cs_max_send_data_segment_length) {
+		if (response->ip_data_len ==
+		    cs->cs_conn->ic_max_send_data_segment_length) {
 			/*
 			 * Can't stuff more data into the current PDU;
 			 * queue it.  Note that's not enough to check
@@ -2920,6 +2926,7 @@ cfiscsi_task_management_done(union ctl_io *io)
 	struct cfiscsi_data_wait *cdw, *tmpcdw;
 	struct cfiscsi_session *cs, *tcs;
 	struct cfiscsi_softc *softc;
+	union ctl_io *cdw_io;
 	int cold_reset = 0;
 
 	request = PRIV_REQUEST(io);
@@ -2953,10 +2960,11 @@ cfiscsi_task_management_done(union ctl_io *io)
 #endif
 			TAILQ_REMOVE(&cs->cs_waiting_for_data_out,
 			    cdw, cdw_next);
-			io->io_hdr.flags &= ~CTL_FLAG_DMA_INPROG;
-			cdw->cdw_ctl_io->scsiio.io_hdr.port_status = 43;
-			ctl_datamove_done(cdw->cdw_ctl_io, false);
+			cdw_io = cdw->cdw_ctl_io;
+			cdw_io->io_hdr.flags &= ~CTL_FLAG_DMA_INPROG;
+			cdw_io->scsiio.io_hdr.port_status = 43;
 			cfiscsi_data_wait_free(cs, cdw);
+			ctl_datamove_done(cdw_io, false);
 		}
 		CFISCSI_SESSION_UNLOCK(cs);
 	}

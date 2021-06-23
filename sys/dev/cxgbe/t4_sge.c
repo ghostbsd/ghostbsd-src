@@ -333,7 +333,9 @@ static void drain_wrq_wr_list(struct adapter *, struct sge_wrq *);
 
 static int sysctl_bufsizes(SYSCTL_HANDLER_ARGS);
 #ifdef RATELIMIT
+#if defined(INET) || defined(INET6)
 static inline u_int txpkt_eo_len16(u_int, u_int, u_int);
+#endif
 static int ethofld_fw4_ack(struct sge_iq *, const struct rss_header *,
     struct mbuf *);
 #endif
@@ -1497,12 +1499,14 @@ service_iq(struct sge_iq *iq, int budget)
 	return (0);
 }
 
+#if defined(INET) || defined(INET6)
 static inline int
 sort_before_lro(struct lro_ctrl *lro)
 {
 
 	return (lro->lro_mbuf_max != 0);
 }
+#endif
 
 static inline uint64_t
 last_flit_to_ns(struct adapter *sc, uint64_t lf)
@@ -2311,6 +2315,7 @@ mbuf_eo_nsegs(struct mbuf *m)
 	return (m->m_pkthdr.PH_loc.eight[1]);
 }
 
+#if defined(INET) || defined(INET6)
 static inline void
 set_mbuf_eo_nsegs(struct mbuf *m, uint8_t nsegs)
 {
@@ -2318,6 +2323,7 @@ set_mbuf_eo_nsegs(struct mbuf *m, uint8_t nsegs)
 	M_ASSERTPKTHDR(m);
 	m->m_pkthdr.PH_loc.eight[1] = nsegs;
 }
+#endif
 
 static inline int
 mbuf_eo_len16(struct mbuf *m)
@@ -2331,6 +2337,7 @@ mbuf_eo_len16(struct mbuf *m)
 	return (n);
 }
 
+#if defined(INET) || defined(INET6)
 static inline void
 set_mbuf_eo_len16(struct mbuf *m, uint8_t len16)
 {
@@ -2338,6 +2345,7 @@ set_mbuf_eo_len16(struct mbuf *m, uint8_t len16)
 	M_ASSERTPKTHDR(m);
 	m->m_pkthdr.PH_loc.eight[2] = len16;
 }
+#endif
 
 static inline int
 mbuf_eo_tsclk_tsoff(struct mbuf *m)
@@ -2347,6 +2355,7 @@ mbuf_eo_tsclk_tsoff(struct mbuf *m)
 	return (m->m_pkthdr.PH_loc.eight[3]);
 }
 
+#if defined(INET) || defined(INET6)
 static inline void
 set_mbuf_eo_tsclk_tsoff(struct mbuf *m, uint8_t tsclk_tsoff)
 {
@@ -2354,6 +2363,7 @@ set_mbuf_eo_tsclk_tsoff(struct mbuf *m, uint8_t tsclk_tsoff)
 	M_ASSERTPKTHDR(m);
 	m->m_pkthdr.PH_loc.eight[3] = tsclk_tsoff;
 }
+#endif
 
 static inline int
 needs_eo(struct m_snd_tag *mst)
@@ -2434,6 +2444,7 @@ needs_vxlan_tso(struct mbuf *m)
 	    (m->m_pkthdr.csum_flags & csum_flags) != CSUM_ENCAP_VXLAN);
 }
 
+#if defined(INET) || defined(INET6)
 static inline bool
 needs_inner_tcp_csum(struct mbuf *m)
 {
@@ -2443,6 +2454,7 @@ needs_inner_tcp_csum(struct mbuf *m)
 
 	return (m->m_pkthdr.csum_flags & csum_flags);
 }
+#endif
 
 static inline bool
 needs_l3_csum(struct mbuf *m)
@@ -3926,12 +3938,7 @@ alloc_rxq(struct vi_info *vi, struct sge_rxq *rxq, int idx, int intr_idx,
 		if (rc != 0)
 			return (rc);
 		MPASS(rxq->lro.ifp == ifp);	/* also indicates LRO init'ed */
-
-		if (ifp->if_capenable & IFCAP_LRO)
-			rxq->iq.flags |= IQ_LRO_ENABLED;
 #endif
-		if (ifp->if_capenable & IFCAP_HWRXTSTMP)
-			rxq->iq.flags |= IQ_RX_TIMESTAMP;
 		rxq->ifp = ifp;
 
 		snprintf(name, sizeof(name), "%d", idx);
@@ -3941,6 +3948,12 @@ alloc_rxq(struct vi_info *vi, struct sge_rxq *rxq, int idx, int intr_idx,
 
 		init_iq(&rxq->iq, sc, vi->tmr_idx, vi->pktc_idx, vi->qsize_rxq,
 		    intr_idx, tnl_cong(vi->pi, cong_drop));
+#if defined(INET) || defined(INET6)
+		if (ifp->if_capenable & IFCAP_LRO)
+			rxq->iq.flags |= IQ_LRO_ENABLED;
+#endif
+		if (ifp->if_capenable & IFCAP_HWRXTSTMP)
+			rxq->iq.flags |= IQ_RX_TIMESTAMP;
 		snprintf(name, sizeof(name), "%s rxq%d-fl",
 		    device_get_nameunit(vi->dev), idx);
 		init_fl(sc, &rxq->fl, vi->qsize_rxq / 8, maxp, name);
@@ -4070,6 +4083,9 @@ alloc_ofld_rxq(struct vi_info *vi, struct sge_ofld_rxq *ofld_rxq, int idx,
 			return (rc);
 		}
 		MPASS(ofld_rxq->iq.flags & IQ_SW_ALLOCATED);
+		ofld_rxq->rx_iscsi_ddp_setup_ok = counter_u64_alloc(M_WAITOK);
+		ofld_rxq->rx_iscsi_ddp_setup_error =
+		    counter_u64_alloc(M_WAITOK);
 		add_ofld_rxq_sysctls(&vi->ctx, oid, ofld_rxq);
 	}
 
@@ -4102,6 +4118,8 @@ free_ofld_rxq(struct vi_info *vi, struct sge_ofld_rxq *ofld_rxq)
 		MPASS(!(ofld_rxq->iq.flags & IQ_HW_ALLOCATED));
 		free_iq_fl(vi->adapter, &ofld_rxq->iq, &ofld_rxq->fl);
 		MPASS(!(ofld_rxq->iq.flags & IQ_SW_ALLOCATED));
+		counter_u64_free(ofld_rxq->rx_iscsi_ddp_setup_ok);
+		counter_u64_free(ofld_rxq->rx_iscsi_ddp_setup_error);
 		bzero(ofld_rxq, sizeof(*ofld_rxq));
 	}
 }
@@ -4116,12 +4134,35 @@ add_ofld_rxq_sysctls(struct sysctl_ctx_list *ctx, struct sysctl_oid *oid,
 		return;
 
 	children = SYSCTL_CHILDREN(oid);
-	SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(oid), OID_AUTO,
+	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO,
 	    "rx_toe_tls_records", CTLFLAG_RD, &ofld_rxq->rx_toe_tls_records,
 	    "# of TOE TLS records received");
-	SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(oid), OID_AUTO,
+	SYSCTL_ADD_ULONG(ctx, children, OID_AUTO,
 	    "rx_toe_tls_octets", CTLFLAG_RD, &ofld_rxq->rx_toe_tls_octets,
 	    "# of payload octets in received TOE TLS records");
+
+	oid = SYSCTL_ADD_NODE(ctx, children, OID_AUTO, "iscsi",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "TOE iSCSI statistics");
+	children = SYSCTL_CHILDREN(oid);
+
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "ddp_setup_ok",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_ddp_setup_ok,
+	    "# of times DDP buffer was setup successfully.");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "ddp_setup_error",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_ddp_setup_error,
+	    "# of times DDP buffer setup failed.");
+	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "ddp_octets",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_ddp_octets, 0,
+	    "# of octets placed directly");
+	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "ddp_pdus",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_ddp_pdus, 0,
+	    "# of PDUs with data placed directly.");
+	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "fl_octets",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_fl_octets, 0,
+	    "# of data octets delivered in freelist");
+	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "fl_pdus",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_fl_pdus, 0,
+	    "# of PDUs with data delivered in freelist");
 }
 #endif
 
@@ -4305,7 +4346,8 @@ static void
 free_eq(struct adapter *sc, struct sge_eq *eq)
 {
 	MPASS(eq->flags & EQ_SW_ALLOCATED);
-	MPASS(eq->pidx == eq->cidx);
+	if (eq->type == EQ_ETH)
+		MPASS(eq->pidx == eq->cidx);
 
 	free_ring(sc, eq->desc_tag, eq->desc_map, eq->ba, eq->desc);
 	mtx_destroy(&eq->eq_lock);
@@ -4458,6 +4500,8 @@ free_wrq(struct adapter *sc, struct sge_wrq *wrq)
 {
 	free_eq(sc, &wrq->eq);
 	MPASS(wrq->nwr_pending == 0);
+	MPASS(TAILQ_EMPTY(&wrq->incomplete_wrs));
+	MPASS(STAILQ_EMPTY(&wrq->wr_list));
 	bzero(wrq, sizeof(*wrq));
 }
 
@@ -6393,6 +6437,7 @@ sysctl_bufsizes(SYSCTL_HANDLER_ARGS)
 }
 
 #ifdef RATELIMIT
+#if defined(INET) || defined(INET6)
 /*
  * len16 for a txpkt WR with a GL.  Includes the firmware work request header.
  */
@@ -6416,6 +6461,7 @@ txpkt_eo_len16(u_int nsegs, u_int immhdrs, u_int tso)
 done:
 	return (howmany(n, 16));
 }
+#endif
 
 #define ETID_FLOWC_NPARAMS 6
 #define ETID_FLOWC_LEN (roundup2((sizeof(struct fw_flowc_wr) + \

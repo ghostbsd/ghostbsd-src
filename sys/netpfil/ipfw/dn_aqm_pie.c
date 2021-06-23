@@ -338,7 +338,7 @@ pie_extract_head(struct dn_queue *q, aqm_time_t *pkt_ts, int getts)
 	update_stats(q, -m->m_pkthdr.len, 0);
 
 	if (q->ni.length == 0) /* queue is now idle */
-			q->q_time = dn_cfg.curr_time;
+			q->q_time = V_dn_cfg.curr_time;
 
 	if (getts) {
 		/* extract packet TS*/
@@ -542,11 +542,11 @@ aqm_pie_enqueue(struct dn_queue *q, struct mbuf* m)
 			mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_TS,
 				sizeof(aqm_time_t), M_NOWAIT);
 		if (mtag == NULL) {
-			m_freem(m); 
 			t = DROP;
+		} else {
+			*(aqm_time_t *)(mtag + 1) = AQM_UNOW;
+			m_tag_prepend(m, mtag);
 		}
-		*(aqm_time_t *)(mtag + 1) = AQM_UNOW;
-		m_tag_prepend(m, mtag);
 	}
 
 	if (t != DROP) {

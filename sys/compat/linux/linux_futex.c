@@ -117,29 +117,29 @@ LIN_SDT_PROBE_DEFINE4(futex, futex_atomic_op, decoded_op, "int", "int", "int",
 LIN_SDT_PROBE_DEFINE0(futex, futex_atomic_op, missing_access_check);
 LIN_SDT_PROBE_DEFINE1(futex, futex_atomic_op, unimplemented_op, "int");
 LIN_SDT_PROBE_DEFINE1(futex, futex_atomic_op, unimplemented_cmp, "int");
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, unimplemented_clockswitch);
-LIN_SDT_PROBE_DEFINE1(futex, linux_sys_futex, copyin_error, "int");
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, invalid_cmp_requeue_use);
-LIN_SDT_PROBE_DEFINE3(futex, linux_sys_futex, debug_wait, "uint32_t *",
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, unimplemented_clockswitch);
+LIN_SDT_PROBE_DEFINE1(futex, linux_futex, copyin_error, "int");
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, invalid_cmp_requeue_use);
+LIN_SDT_PROBE_DEFINE3(futex, linux_futex, debug_wait, "uint32_t *",
     "uint32_t", "uint32_t");
-LIN_SDT_PROBE_DEFINE4(futex, linux_sys_futex, debug_wait_value_neq,
+LIN_SDT_PROBE_DEFINE4(futex, linux_futex, debug_wait_value_neq,
     "uint32_t *", "uint32_t", "int", "uint32_t");
-LIN_SDT_PROBE_DEFINE3(futex, linux_sys_futex, debug_wake, "uint32_t *",
+LIN_SDT_PROBE_DEFINE3(futex, linux_futex, debug_wake, "uint32_t *",
     "uint32_t", "uint32_t");
-LIN_SDT_PROBE_DEFINE5(futex, linux_sys_futex, debug_cmp_requeue, "uint32_t *",
+LIN_SDT_PROBE_DEFINE5(futex, linux_futex, debug_cmp_requeue, "uint32_t *",
     "uint32_t", "uint32_t", "uint32_t *", "struct l_timespec *");
-LIN_SDT_PROBE_DEFINE2(futex, linux_sys_futex, debug_cmp_requeue_value_neq,
+LIN_SDT_PROBE_DEFINE2(futex, linux_futex, debug_cmp_requeue_value_neq,
     "uint32_t", "int");
-LIN_SDT_PROBE_DEFINE5(futex, linux_sys_futex, debug_wake_op, "uint32_t *",
+LIN_SDT_PROBE_DEFINE5(futex, linux_futex, debug_wake_op, "uint32_t *",
     "int", "uint32_t", "uint32_t *", "uint32_t");
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, unhandled_efault);
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, unimplemented_lock_pi);
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, unimplemented_unlock_pi);
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, unimplemented_trylock_pi);
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, deprecated_requeue);
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, unimplemented_wait_requeue_pi);
-LIN_SDT_PROBE_DEFINE0(futex, linux_sys_futex, unimplemented_cmp_requeue_pi);
-LIN_SDT_PROBE_DEFINE1(futex, linux_sys_futex, unknown_operation, "int");
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, unhandled_efault);
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, unimplemented_lock_pi);
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, unimplemented_unlock_pi);
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, unimplemented_trylock_pi);
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, deprecated_requeue);
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, unimplemented_wait_requeue_pi);
+LIN_SDT_PROBE_DEFINE0(futex, linux_futex, unimplemented_cmp_requeue_pi);
+LIN_SDT_PROBE_DEFINE1(futex, linux_futex, unknown_operation, "int");
 LIN_SDT_PROBE_DEFINE0(futex, linux_set_robust_list, size_error);
 LIN_SDT_PROBE_DEFINE1(futex, linux_get_robust_list, copyout_error, "int");
 LIN_SDT_PROBE_DEFINE1(futex, handle_futex_death, copyin_error, "int");
@@ -215,8 +215,6 @@ static int futex_get(uint32_t *, struct waiting_proc **, struct futex **,
 static int futex_sleep(struct futex *, struct waiting_proc *, struct timespec *);
 static int futex_wake(struct futex *, int, uint32_t);
 static int futex_requeue(struct futex *, int, struct futex *, int);
-static int futex_copyin_timeout(int, struct l_timespec *, int,
-    struct timespec *);
 static int futex_wait(struct futex *, struct waiting_proc *, struct timespec *,
     uint32_t);
 static void futex_lock(struct futex *);
@@ -227,30 +225,17 @@ static int handle_futex_death(struct linux_emuldata *, uint32_t *,
 static int fetch_robust_entry(struct linux_robust_list **,
     struct linux_robust_list **, unsigned int *);
 
-static int
-futex_copyin_timeout(int op, struct l_timespec *luts, int clockrt,
-    struct timespec *ts)
-{
-	struct l_timespec lts;
-	struct timespec kts;
-	int error;
+struct linux_futex_args {
+	uint32_t	*uaddr;
+	int32_t		op;
+	uint32_t	val;
+	struct timespec	*ts;
+	uint32_t	*uaddr2;
+	uint32_t	val3;
+	struct timespec	kts;
+};
 
-	error = copyin(luts, &lts, sizeof(lts));
-	if (error)
-		return (error);
-
-	error = linux_to_native_timespec(ts, &lts);
-	if (error)
-		return (error);
-	if (clockrt) {
-		nanotime(&kts);
-		timespecsub(ts, &kts, ts);
-	} else if (op == LINUX_FUTEX_WAIT_BITSET) {
-		nanouptime(&kts);
-		timespecsub(ts, &kts, ts);
-	}
-	return (error);
-}
+static int	linux_futex(struct thread *, struct linux_futex_args *);
 
 static void
 futex_put(struct futex *f, struct waiting_proc *wp)
@@ -430,19 +415,17 @@ futex_unlock(struct futex *f)
 static int
 futex_sleep(struct futex *f, struct waiting_proc *wp, struct timespec *ts)
 {
-	struct timespec uts;
 	sbintime_t sbt, prec, tmp;
 	time_t over;
 	int error;
 
 	FUTEX_ASSERT_LOCKED(f);
 	if (ts != NULL) {
-		uts = *ts;
-		if (uts.tv_sec > INT32_MAX / 2) {
-			over = uts.tv_sec - INT32_MAX / 2;
-			uts.tv_sec -= over;
+		if (ts->tv_sec > INT32_MAX / 2) {
+			over = ts->tv_sec - INT32_MAX / 2;
+			ts->tv_sec -= over;
 		}
-		tmp = tstosbt(uts);
+		tmp = tstosbt(*ts);
 		if (TIMESEL(&sbt, tmp))
 			sbt += tc_tick_sbt;
 		sbt += tmp;
@@ -520,7 +503,8 @@ futex_wake(struct futex *f, int n, uint32_t bitset)
 }
 
 static int
-futex_requeue(struct futex *f, int n, struct futex *f2, int n2)
+futex_requeue(struct futex *f, int nrwake, struct futex *f2,
+    int nrrequeue)
 {
 	struct waiting_proc *wp, *wpt;
 	int count = 0;
@@ -529,7 +513,7 @@ futex_requeue(struct futex *f, int n, struct futex *f2, int n2)
 	FUTEX_ASSERT_LOCKED(f2);
 
 	TAILQ_FOREACH_SAFE(wp, &f->f_waiting_proc, wp_list, wpt) {
-		if (++count <= n) {
+		if (++count <= nrwake) {
 			LINUX_CTR2(sys_futex, "futex_req_wake uaddr %p wp %p",
 			    f->f_uaddr, wp);
 			wp->wp_flags |= FUTEX_WP_REMOVED;
@@ -555,7 +539,7 @@ futex_requeue(struct futex *f, int n, struct futex *f2, int n2)
 			FUTEXES_LOCK;
 			++f2->f_refcount;
 			FUTEXES_UNLOCK;
-			if (count - n >= n2)
+			if (count - nrwake >= nrrequeue)
 				break;
 		}
 	}
@@ -654,14 +638,14 @@ futex_atomic_op(struct thread *td, int encoded_op, uint32_t *uaddr)
 	return (ret);
 }
 
-int
-linux_sys_futex(struct thread *td, struct linux_sys_futex_args *args)
+static int
+linux_futex(struct thread *td, struct linux_futex_args *args)
 {
-	int clockrt, nrwake, op_ret, ret;
+	int clockrt, nrwake, nrrequeue, op_ret, ret;
 	struct linux_pemuldata *pem;
 	struct waiting_proc *wp;
 	struct futex *f, *f2;
-	struct timespec uts, *ts;
+	struct timespec kts;
 	int error, save;
 	uint32_t flags, val;
 
@@ -681,7 +665,7 @@ linux_sys_futex(struct thread *td, struct linux_sys_futex_args *args)
 	args->op = args->op & ~LINUX_FUTEX_CLOCK_REALTIME;
 	if (clockrt && args->op != LINUX_FUTEX_WAIT_BITSET &&
 		args->op != LINUX_FUTEX_WAIT_REQUEUE_PI) {
-		LIN_SDT_PROBE0(futex, linux_sys_futex,
+		LIN_SDT_PROBE0(futex, linux_futex,
 		    unimplemented_clockswitch);
 		return (ENOSYS);
 	}
@@ -695,22 +679,20 @@ linux_sys_futex(struct thread *td, struct linux_sys_futex_args *args)
 		/* FALLTHROUGH */
 
 	case LINUX_FUTEX_WAIT_BITSET:
-		LIN_SDT_PROBE3(futex, linux_sys_futex, debug_wait, args->uaddr,
+		LIN_SDT_PROBE3(futex, linux_futex, debug_wait, args->uaddr,
 		    args->val, args->val3);
 		LINUX_CTR3(sys_futex, "WAIT uaddr %p val 0x%x bitset 0x%x",
 		    args->uaddr, args->val, args->val3);
 
-		if (args->timeout != NULL) {
-			error = futex_copyin_timeout(args->op, args->timeout,
-			    clockrt, &uts);
-			if (error) {
-				LIN_SDT_PROBE1(futex, linux_sys_futex, copyin_error,
-				    error);
-				return (error);
+		if (args->ts != NULL) {
+			if (clockrt) {
+				nanotime(&kts);
+				timespecsub(args->ts, &kts, args->ts);
+			} else if (args->op == LINUX_FUTEX_WAIT_BITSET) {
+				nanouptime(&kts);
+				timespecsub(args->ts, &kts, args->ts);
 			}
-			ts = &uts;
-		} else
-			ts = NULL;
+		}
 
 retry0:
 		error = futex_get(args->uaddr, &wp, &f,
@@ -724,14 +706,14 @@ retry0:
 			error = copyin(args->uaddr, &val, sizeof(val));
 			if (error == 0)
 				goto retry0;
-			LIN_SDT_PROBE1(futex, linux_sys_futex, copyin_error,
+			LIN_SDT_PROBE1(futex, linux_futex, copyin_error,
 			    error);
 			LINUX_CTR1(sys_futex, "WAIT copyin failed %d",
 			    error);
 			return (error);
 		}
 		if (val != args->val) {
-			LIN_SDT_PROBE4(futex, linux_sys_futex,
+			LIN_SDT_PROBE4(futex, linux_futex,
 			    debug_wait_value_neq, args->uaddr, args->val, val,
 			    args->val3);
 			LINUX_CTR3(sys_futex,
@@ -741,7 +723,7 @@ retry0:
 			return (EWOULDBLOCK);
 		}
 
-		error = futex_wait(f, wp, ts, args->val3);
+		error = futex_wait(f, wp, args->ts, args->val3);
 		break;
 
 	case LINUX_FUTEX_WAKE:
@@ -749,7 +731,7 @@ retry0:
 		/* FALLTHROUGH */
 
 	case LINUX_FUTEX_WAKE_BITSET:
-		LIN_SDT_PROBE3(futex, linux_sys_futex, debug_wake, args->uaddr,
+		LIN_SDT_PROBE3(futex, linux_futex, debug_wake, args->uaddr,
 		    args->val, args->val3);
 		LINUX_CTR3(sys_futex, "WAKE uaddr %p nrwake 0x%x bitset 0x%x",
 		    args->uaddr, args->val, args->val3);
@@ -768,23 +750,32 @@ retry0:
 		break;
 
 	case LINUX_FUTEX_CMP_REQUEUE:
-		LIN_SDT_PROBE5(futex, linux_sys_futex, debug_cmp_requeue,
+		LIN_SDT_PROBE5(futex, linux_futex, debug_cmp_requeue,
 		    args->uaddr, args->val, args->val3, args->uaddr2,
-		    args->timeout);
+		    args->ts);
 		LINUX_CTR5(sys_futex, "CMP_REQUEUE uaddr %p "
 		    "nrwake 0x%x uval 0x%x uaddr2 %p nrequeue 0x%x",
 		    args->uaddr, args->val, args->val3, args->uaddr2,
-		    args->timeout);
+		    args->ts);
 
 		/*
 		 * Linux allows this, we would not, it is an incorrect
 		 * usage of declared ABI, so return EINVAL.
 		 */
 		if (args->uaddr == args->uaddr2) {
-			LIN_SDT_PROBE0(futex, linux_sys_futex,
+			LIN_SDT_PROBE0(futex, linux_futex,
 			    invalid_cmp_requeue_use);
 			return (EINVAL);
 		}
+
+		nrrequeue = (int)(unsigned long)args->ts;
+		nrwake = args->val;
+		/*
+		 * Sanity check to prevent signed integer overflow,
+		 * see Linux CVE-2018-6927
+		 */
+		if (nrwake < 0 || nrrequeue < 0)
+			return (EINVAL);
 
 retry1:
 		error = futex_get(args->uaddr, NULL, &f, flags | FUTEX_DONTLOCK);
@@ -813,14 +804,14 @@ retry1:
 			error = copyin(args->uaddr, &val, sizeof(val));
 			if (error == 0)
 				goto retry1;
-			LIN_SDT_PROBE1(futex, linux_sys_futex, copyin_error,
+			LIN_SDT_PROBE1(futex, linux_futex, copyin_error,
 			    error);
 			LINUX_CTR1(sys_futex, "CMP_REQUEUE copyin failed %d",
 			    error);
 			return (error);
 		}
 		if (val != args->val3) {
-			LIN_SDT_PROBE2(futex, linux_sys_futex,
+			LIN_SDT_PROBE2(futex, linux_futex,
 			    debug_cmp_requeue_value_neq, args->val, val);
 			LINUX_CTR2(sys_futex, "CMP_REQUEUE val 0x%x != uval 0x%x",
 			    args->val, val);
@@ -829,19 +820,18 @@ retry1:
 			return (EAGAIN);
 		}
 
-		nrwake = (int)(unsigned long)args->timeout;
-		td->td_retval[0] = futex_requeue(f, args->val, f2, nrwake);
+		td->td_retval[0] = futex_requeue(f, nrwake, f2, nrrequeue);
 		futex_put(f2, NULL);
 		futex_put(f, NULL);
 		break;
 
 	case LINUX_FUTEX_WAKE_OP:
-		LIN_SDT_PROBE5(futex, linux_sys_futex, debug_wake_op,
+		LIN_SDT_PROBE5(futex, linux_futex, debug_wake_op,
 		    args->uaddr, args->op, args->val, args->uaddr2, args->val3);
 		LINUX_CTR5(sys_futex, "WAKE_OP "
 		    "uaddr %p nrwake 0x%x uaddr2 %p op 0x%x nrwake2 0x%x",
 		    args->uaddr, args->val, args->uaddr2, args->val3,
-		    args->timeout);
+		    args->ts);
 
 		if (args->uaddr == args->uaddr2)
 			return (EINVAL);
@@ -884,7 +874,7 @@ retry2:
 
 		if (op_ret > 0) {
 			op_ret = 0;
-			nrwake = (int)(unsigned long)args->timeout;
+			nrwake = (int)(unsigned long)args->ts;
 
 			if (f2 != NULL)
 				op_ret += futex_wake(f2, nrwake, args->val3);
@@ -904,7 +894,7 @@ retry2:
 		if ((pem->flags & LINUX_XUNSUP_FUTEXPIOP) == 0) {
 			linux_msg(td, "unsupported FUTEX_LOCK_PI");
 			pem->flags |= LINUX_XUNSUP_FUTEXPIOP;
-			LIN_SDT_PROBE0(futex, linux_sys_futex,
+			LIN_SDT_PROBE0(futex, linux_futex,
 			    unimplemented_lock_pi);
 		}
 		return (ENOSYS);
@@ -915,7 +905,7 @@ retry2:
 		if ((pem->flags & LINUX_XUNSUP_FUTEXPIOP) == 0) {
 			linux_msg(td, "unsupported FUTEX_UNLOCK_PI");
 			pem->flags |= LINUX_XUNSUP_FUTEXPIOP;
-			LIN_SDT_PROBE0(futex, linux_sys_futex,
+			LIN_SDT_PROBE0(futex, linux_futex,
 			    unimplemented_unlock_pi);
 		}
 		return (ENOSYS);
@@ -926,7 +916,7 @@ retry2:
 		if ((pem->flags & LINUX_XUNSUP_FUTEXPIOP) == 0) {
 			linux_msg(td, "unsupported FUTEX_TRYLOCK_PI");
 			pem->flags |= LINUX_XUNSUP_FUTEXPIOP;
-			LIN_SDT_PROBE0(futex, linux_sys_futex,
+			LIN_SDT_PROBE0(futex, linux_futex,
 			    unimplemented_trylock_pi);
 		}
 		return (ENOSYS);
@@ -942,7 +932,7 @@ retry2:
 		if ((pem->flags & LINUX_XDEPR_REQUEUEOP) == 0) {
 			linux_msg(td, "unsupported FUTEX_REQUEUE");
 			pem->flags |= LINUX_XDEPR_REQUEUEOP;
-			LIN_SDT_PROBE0(futex, linux_sys_futex,
+			LIN_SDT_PROBE0(futex, linux_futex,
 			    deprecated_requeue);
 		}
 		return (EINVAL);
@@ -953,7 +943,7 @@ retry2:
 		if ((pem->flags & LINUX_XUNSUP_FUTEXPIOP) == 0) {
 			linux_msg(td, "unsupported FUTEX_WAIT_REQUEUE_PI");
 			pem->flags |= LINUX_XUNSUP_FUTEXPIOP;
-			LIN_SDT_PROBE0(futex, linux_sys_futex,
+			LIN_SDT_PROBE0(futex, linux_futex,
 			    unimplemented_wait_requeue_pi);
 		}
 		return (ENOSYS);
@@ -964,20 +954,89 @@ retry2:
 		if ((pem->flags & LINUX_XUNSUP_FUTEXPIOP) == 0) {
 			linux_msg(td, "unsupported FUTEX_CMP_REQUEUE_PI");
 			pem->flags |= LINUX_XUNSUP_FUTEXPIOP;
-			LIN_SDT_PROBE0(futex, linux_sys_futex,
+			LIN_SDT_PROBE0(futex, linux_futex,
 			    unimplemented_cmp_requeue_pi);
 		}
 		return (ENOSYS);
 
 	default:
 		linux_msg(td, "unsupported futex op %d", args->op);
-		LIN_SDT_PROBE1(futex, linux_sys_futex, unknown_operation,
+		LIN_SDT_PROBE1(futex, linux_futex, unknown_operation,
 		    args->op);
 		return (ENOSYS);
 	}
 
 	return (error);
 }
+
+int
+linux_sys_futex(struct thread *td, struct linux_sys_futex_args *args)
+{
+	struct linux_futex_args fargs = {
+		.uaddr = args->uaddr,
+		.op = args->op,
+		.val = args->val,
+		.ts = NULL,
+		.uaddr2 = args->uaddr2,
+		.val3 = args->val3,
+	};
+	struct l_timespec lts;
+	int error;
+
+	switch (args->op & LINUX_FUTEX_CMD_MASK) {
+	case LINUX_FUTEX_WAIT:
+	case LINUX_FUTEX_WAIT_BITSET:
+		if (args->timeout != NULL) {
+			error = copyin(args->timeout, &lts, sizeof(lts));
+			if (error != 0)
+				return (error);
+			error = linux_to_native_timespec(&fargs.kts, &lts);
+			if (error != 0)
+				return (error);
+			fargs.ts = &fargs.kts;
+		}
+		break;
+	default:
+		fargs.ts = PTRIN(args->timeout);
+	}
+	return (linux_futex(td, &fargs));
+}
+
+#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
+int
+linux_sys_futex_time64(struct thread *td,
+    struct linux_sys_futex_time64_args *args)
+{
+	struct linux_futex_args fargs = {
+		.uaddr = args->uaddr,
+		.op = args->op,
+		.val = args->val,
+		.ts = NULL,
+		.uaddr2 = args->uaddr2,
+		.val3 = args->val3,
+	};
+	struct l_timespec64 lts;
+	int error;
+
+	switch (args->op & LINUX_FUTEX_CMD_MASK) {
+	case LINUX_FUTEX_WAIT:
+	case LINUX_FUTEX_WAIT_BITSET:
+		if (args->timeout != NULL) {
+			error = copyin(args->timeout, &lts, sizeof(lts));
+			if (error != 0)
+				return (error);
+			error = linux_to_native_timespec64(&fargs.kts, &lts);
+			if (error != 0)
+				return (error);
+			fargs.ts = &fargs.kts;
+		}
+		break;
+	default:
+		fargs.ts = PTRIN(args->timeout);
+	}
+	return (linux_futex(td, &fargs));
+}
+#endif
 
 int
 linux_set_robust_list(struct thread *td, struct linux_set_robust_list_args *args)

@@ -788,8 +788,6 @@ int	vn_io_fault_uiomove(char *data, int xfersize, struct uio *uio);
 int	vn_io_fault_pgmove(vm_page_t ma[], vm_offset_t offset, int xfersize,
 	    struct uio *uio);
 
-void	vn_seqc_write_begin_unheld_locked(struct vnode *vp);
-void	vn_seqc_write_begin_unheld(struct vnode *vp);
 void	vn_seqc_write_begin_locked(struct vnode *vp);
 void	vn_seqc_write_begin(struct vnode *vp);
 void	vn_seqc_write_end_locked(struct vnode *vp);
@@ -828,7 +826,6 @@ int	vfs_write_suspend(struct mount *mp, int flags);
 int	vfs_write_suspend_umnt(struct mount *mp);
 struct vnode *vnlru_alloc_marker(void);
 void	vnlru_free_marker(struct vnode *);
-void	vnlru_free(int, struct vfsops *);
 void	vnlru_free_vfsops(int, struct vfsops *, struct vnode *);
 int	vop_stdbmap(struct vop_bmap_args *);
 int	vop_stdfdatasync_buf(struct vop_fdatasync_args *);

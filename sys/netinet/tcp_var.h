@@ -261,6 +261,8 @@ struct tcpcb {
 	uint32_t t_maxpeakrate;		/* max peak rate set by user, in bytes/s */
 	uint32_t t_sndtlppack;		/* tail loss probe packets sent */
 	uint64_t t_sndtlpbyte;		/* total tail loss probe bytes sent */
+	uint64_t t_sndbytes;		/* total bytes sent */
+	uint64_t t_snd_rxt_bytes;	/* total bytes retransmitted */
 
 	uint8_t t_tfo_client_cookie_len; /* TCP Fast Open client cookie length */
 	uint32_t t_end_info_status;	/* Status flag of end info */
@@ -408,9 +410,9 @@ TAILQ_HEAD(tcp_funchead, tcp_function);
 #define	TF_FORCEDATA	0x00800000	/* force out a byte */
 #define	TF_TSO		0x01000000	/* TSO enabled on this connection */
 #define	TF_TOE		0x02000000	/* this connection is offloaded */
-#define	TF_WAKESOW	0x04000000	/* wake up send socket */
+#define	TF_UNUSED0	0x04000000	/* unused */
 #define	TF_UNUSED1	0x08000000	/* unused */
-#define	TF_UNUSED2	0x10000000	/* unused */
+#define	TF_LRD		0x10000000	/* Lost Retransmission Detection */
 #define	TF_CONGRECOVERY	0x20000000	/* congestion recovery mode */
 #define	TF_WASCRECOVERY	0x40000000	/* was in congestion recovery */
 #define	TF_FASTOPEN	0x80000000	/* TCP Fast Open indication */
@@ -673,6 +675,7 @@ struct	tcpstat {
 	uint64_t tcps_sack_rexmit_bytes;    /* SACK rexmit bytes      */
 	uint64_t tcps_sack_rcv_blocks;	    /* SACK blocks (options) received */
 	uint64_t tcps_sack_send_blocks;	    /* SACK blocks (options) sent     */
+	uint64_t tcps_sack_lostrexmt;	    /* SACK lost retransmission recovered */
 	uint64_t tcps_sack_sboverflow;	    /* times scoreboard overflowed */
 
 	/* ECN related stats */
@@ -697,7 +700,7 @@ struct	tcpstat {
 	uint64_t tcps_tunneled_pkts;	/* Packets encap's in UDP received */
 	uint64_t tcps_tunneled_errs;	/* Packets that had errors that were UDP encaped */
 
-	uint64_t _pad[10];		/* 6 UTO, 6 TBD */
+	uint64_t _pad[9];		/* 6 UTO, 3 TBD */
 };
 
 #define	tcps_rcvmemdrop	tcps_rcvreassfull	/* compat */
@@ -859,6 +862,7 @@ VNET_DECLARE(int, tcp_delack_enabled);
 VNET_DECLARE(int, tcp_do_autorcvbuf);
 VNET_DECLARE(int, tcp_do_autosndbuf);
 VNET_DECLARE(int, tcp_do_ecn);
+VNET_DECLARE(int, tcp_do_lrd);
 VNET_DECLARE(int, tcp_do_prr);
 VNET_DECLARE(int, tcp_do_prr_conservative);
 VNET_DECLARE(int, tcp_do_newcwv);
@@ -893,6 +897,7 @@ VNET_DECLARE(int, tcp_udp_tunneling_port);
 VNET_DECLARE(struct inpcbhead, tcb);
 VNET_DECLARE(struct inpcbinfo, tcbinfo);
 
+#define	V_tcp_do_lrd			VNET(tcp_do_lrd)
 #define	V_tcp_do_prr			VNET(tcp_do_prr)
 #define	V_tcp_do_prr_conservative	VNET(tcp_do_prr_conservative)
 #define	V_tcp_do_newcwv			VNET(tcp_do_newcwv)
@@ -1091,8 +1096,10 @@ void	 tcp_clean_sackreport(struct tcpcb *tp);
 void	 tcp_sack_adjust(struct tcpcb *tp);
 struct sackhole *tcp_sack_output(struct tcpcb *tp, int *sack_bytes_rexmt);
 void	 tcp_do_prr_ack(struct tcpcb *, struct tcphdr *, struct tcpopt *);
+void	 tcp_lost_retransmission(struct tcpcb *, struct tcphdr *);
 void	 tcp_sack_partialack(struct tcpcb *, struct tcphdr *);
 void	 tcp_free_sackholes(struct tcpcb *tp);
+void	 tcp_sack_lost_retransmission(struct tcpcb *, struct tcphdr *);
 int	 tcp_newreno(struct tcpcb *, struct tcphdr *);
 int	 tcp_compute_pipe(struct tcpcb *);
 uint32_t tcp_compute_initwnd(uint32_t);
@@ -1128,6 +1135,22 @@ tcp_fields_to_net(struct tcphdr *th)
 	th->th_win = htons(th->th_win);
 	th->th_urp = htons(th->th_urp);
 }
+
+static inline void
+tcp_account_for_send(struct tcpcb *tp, uint32_t len, uint8_t is_rxt, uint8_t is_tlp)
+{
+	if (is_tlp) {
+		tp->t_sndtlppack++;
+		tp->t_sndtlpbyte += len;
+	}
+	/* To get total bytes sent you must add t_snd_rxt_bytes to t_sndbytes */
+	if (is_rxt)
+		tp->t_snd_rxt_bytes += len;
+	else
+		tp->t_sndbytes += len;
+
+}
+
 #endif /* _KERNEL */
 
 #endif /* _NETINET_TCP_VAR_H_ */
