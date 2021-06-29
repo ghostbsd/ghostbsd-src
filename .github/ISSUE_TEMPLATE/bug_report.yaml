@@ -1,0 +1,34 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+        For question or comment use the [Telegram](https://t.me/ghostbsd), [Element](https://app.element.io/#/room/#ghostbsd:matrix.org), [Forums](https://forums.ghostbsd.org) or [Discussions](https://github.com/ghostbsd/networkmgr/discussions).
+  - type: textarea
+    id: describe 
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+      placeholder: What happen?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce the bug?
+      description: The steps to reproduce the behavior.
+      placeholder: What are the steps to reproduce the behavior?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen
+      placeholder: What you expected to happen?
+    validations:
+      required: true
