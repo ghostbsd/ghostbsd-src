@@ -325,9 +325,8 @@ device		bwn			# Broadcom BCM43xx wireless NICs.
 device		ipw			# Intel 2100 wireless NICs.
 device		iwi			# Intel 2200BG/2225BG/2915ABG wireless NICs.
 device		iwn			# Intel 4965/1000/5000/6000 wireless NICs.
-device		iwm			# Intel IEEE 802.11ac	wireless network driver
-device		iwmfw		# Load iwm3160fw iwm3168fw iwm7260fw iwm7265fw iwm8000Cfw iwm8265fw
-device		malo		# Marvell Libertas wireless NICs.
+device		iwmfw		# Firmware Module for Intel	Wireless driver
+device		malo			# Marvell Libertas wireless NICs.
 device		mwl			# Marvell 88W8363 802.11n wireless NICs.
 device		ral			# Ralink Technology RT2500 wireless NICs.
 device		rtwn		# Realtek IEEE 802.11 wireless network driver
