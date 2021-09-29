@@ -1,0 +1,35 @@
+name: Enhancement Request
+description: File suggestion to improvement and enhancement for GhostBSD
+title: "[Enhancement]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this enhancement request!
+        For question or comment use [Telegram](https://t.me/ghostbsd), [Element](https://app.element.io/#/room/#ghostbsd:matrix.org), the [Forums](https://forums.ghostbsd.org) or [GitHub Discussions](https://github.com/ghostbsd/networkmgr/discussions).
+        **Please be concise and clear.**
+  - type: textarea
+    id: describe
+    attributes:
+      label: Why this enhancement request?
+      description: A clear and concise description of why this enhancement request.
+      placeholder: Please be concise and clear.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Describe the solution?
+      description: A clear and concise description of the solution or new behavior.
+      placeholder: Please be concise and clear.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Additional context
+      description: Add any other context about the enhancement request here.
+      placeholder: Please be concise and clear.
+    validations:
+      required: false

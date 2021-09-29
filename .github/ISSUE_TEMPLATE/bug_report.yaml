@@ -8,12 +8,13 @@ body:
       value: |
         Thanks for taking the time to fill out this bug report!
         For question or comment use [Telegram](https://t.me/ghostbsd), [Element](https://app.element.io/#/room/#ghostbsd:matrix.org), the [Forums](https://forums.ghostbsd.org) or [GitHub Discussions](https://github.com/ghostbsd/networkmgr/discussions).
+        **Please add details as mush popsible and be concise and clear.**
   - type: textarea
     id: describe 
     attributes:
       label: Describe the bug
       description: A clear and concise description of what the bug is.
-      placeholder: What happen?
+      placeholder: What happen? Please be concise and clear.
     validations:
       required: true
   - type: textarea
@@ -21,7 +22,7 @@ body:
     attributes:
       label: How to reproduce the bug?
       description: The steps to reproduce the behavior.
-      placeholder: What are the steps to reproduce the behavior?
+      placeholder: What are the steps to reproduce the behavior? Please be concise and clear.
     validations:
       required: true
   - type: textarea
@@ -29,6 +30,6 @@ body:
     attributes:
       label: Expected behavior
       description: A clear and concise description of what you expected to happen
-      placeholder: What you expected to happen?
+      placeholder: What you expected to happen? Please be concise and clear.
     validations:
       required: true
