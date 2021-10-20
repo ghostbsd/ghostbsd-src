@@ -466,14 +466,14 @@ fuse_vnop_advlock(struct vop_advlock_args *ap)
 	fdisp_make_vp(&fdi, op, vp, td, cred);
 	fli = fdi.indata;
 	fli->fh = fufh->fh_id;
-	fli->owner = fl->l_pid;
+	fli->owner = td->td_proc->p_pid;
 	fli->lk.start = fl->l_start;
 	if (fl->l_len != 0)
 		fli->lk.end = fl->l_start + fl->l_len - 1;
 	else
 		fli->lk.end = INT64_MAX;
 	fli->lk.type = fl->l_type;
-	fli->lk.pid = fl->l_pid;
+	fli->lk.pid = td->td_proc->p_pid;
 
 	err = fdisp_wait_answ(&fdi);
 	fdisp_destroy(&fdi);
@@ -1177,8 +1177,6 @@ fuse_lookup_alloc(struct mount *mp, void *arg, int lkflags, struct vnode **vpp)
 
 SDT_PROBE_DEFINE3(fusefs, , vnops, cache_lookup,
 	"int", "struct timespec*", "struct timespec*");
-SDT_PROBE_DEFINE2(fusefs, , vnops, lookup_cache_incoherent,
-	"struct vnode*", "struct fuse_entry_out*");
 /*
     struct vnop_lookup_args {
 	struct vnodeop_desc *a_desc;
@@ -1388,20 +1386,19 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 			     ((vap = VTOVA(vp)) &&
 			      filesize != vap->va_size)))
 			{
-				SDT_PROBE2(fusefs, , vnops, lookup_cache_incoherent, vp, feo);
 				fvdat->flag &= ~FN_SIZECHANGE;
 				/*
 				 * The server changed the file's size even
 				 * though we had it cached, or had dirty writes
 				 * in the WB cache!
 				 */
-				printf("%s: cache incoherent on %s!  "
-		    		    "Buggy FUSE server detected.  To prevent "
+				fuse_warn(data, FSESS_WARN_CACHE_INCOHERENT,
+				    "cache incoherent!  "
+				    "To prevent "
 				    "data corruption, disable the data cache "
 				    "by mounting with -o direct_io, or as "
 				    "directed otherwise by your FUSE server's "
-		    		    "documentation\n", __func__,
-				    vnode_mount(vp)->mnt_stat.f_mntonname);
+				    "documentation.");
 				int iosize = fuse_iosize(vp);
 				v_inval_buf_range(vp, 0, INT64_MAX, iosize);
 			}
@@ -2202,25 +2199,24 @@ fuse_gbp_getblkno(struct vnode *vp, vm_ooffset_t off)
 }
 
 static int
-fuse_gbp_getblksz(struct vnode *vp, daddr_t lbn)
+fuse_gbp_getblksz(struct vnode *vp, daddr_t lbn, long *blksz)
 {
 	off_t filesize;
-	int blksz, err;
+	int err;
 	const int biosize = fuse_iosize(vp);
 
 	err = fuse_vnode_size(vp, &filesize, NULL, NULL);
-	KASSERT(err == 0, ("vfs_bio_getpages can't handle errors here"));
-	if (err)
-		return biosize;
-
-	if ((off_t)lbn * biosize >= filesize) {
-		blksz = 0;
+	if (err) {
+		/* This will turn into a SIGBUS */
+		return (EIO);
+	} else if ((off_t)lbn * biosize >= filesize) {
+		*blksz = 0;
 	} else if ((off_t)(lbn + 1) * biosize > filesize) {
-		blksz = filesize - (off_t)lbn *biosize;
+		*blksz = filesize - (off_t)lbn *biosize;
 	} else {
-		blksz = biosize;
+		*blksz = biosize;
 	}
-	return (blksz);
+	return (0);
 }
 
 /*
@@ -2595,9 +2591,12 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	linux_list = fdi.answ;
 	/* FUSE doesn't allow the server to return more data than requested */
 	if (fdi.iosize > linux_list_len) {
-		printf("WARNING: FUSE protocol violation.  Server returned "
+		struct fuse_data *data = fuse_get_mpdata(mp);
+
+		fuse_warn(data, FSESS_WARN_LSEXTATTR_LONG,
+			"server returned "
 			"more extended attribute data than requested; "
-			"should've returned ERANGE instead");
+			"should've returned ERANGE instead.");
 	} else {
 		/* But returning less data is fine */
 		linux_list_len = fdi.iosize;

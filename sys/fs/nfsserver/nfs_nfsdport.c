@@ -76,6 +76,9 @@ extern struct nfsdontlisthead nfsrv_dontlisthead;
 extern volatile int nfsrv_dontlistlen;
 extern volatile int nfsrv_devidcnt;
 extern int nfsrv_maxpnfsmirror;
+extern uint32_t nfs_srvmaxio;
+extern int nfs_bufpackets;
+extern u_long sb_max_adj;
 struct vfsoptlist nfsv4root_opt, nfsv4root_newopt;
 NFSDLOCKMUTEX;
 NFSSTATESPINLOCK;
@@ -194,6 +197,84 @@ sysctl_dsdirsize(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_vfs_nfsd, OID_AUTO, dsdirsize,
     CTLTYPE_UINT | CTLFLAG_MPSAFE | CTLFLAG_RW, 0, sizeof(nfsrv_dsdirsize),
     sysctl_dsdirsize, "IU", "Number of dsN subdirs on the DS servers");
+
+/*
+ * nfs_srvmaxio can only be increased and only when the nfsd threads are
+ * not running.  The setting must be a power of 2, with the current limit of
+ * 1Mbyte.
+ */
+static int
+sysctl_srvmaxio(SYSCTL_HANDLER_ARGS)
+{
+	int error;
+	u_int newsrvmaxio;
+	uint64_t tval;
+
+	newsrvmaxio = nfs_srvmaxio;
+	error = sysctl_handle_int(oidp, &newsrvmaxio, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (newsrvmaxio == nfs_srvmaxio)
+		return (0);
+	if (newsrvmaxio < nfs_srvmaxio) {
+		printf("nfsd: vfs.nfsd.srvmaxio can only be increased\n");
+		return (EINVAL);
+	}
+	if (newsrvmaxio > 1048576) {
+		printf("nfsd: vfs.nfsd.srvmaxio cannot be > 1Mbyte\n");
+		return (EINVAL);
+	}
+	if ((newsrvmaxio & (newsrvmaxio - 1)) != 0) {
+		printf("nfsd: vfs.nfsd.srvmaxio must be a power of 2\n");
+		return (EINVAL);
+	}
+
+	/*
+	 * Check that kern.ipc.maxsockbuf is large enough for
+	 * newsrviomax, given the setting of vfs.nfs.bufpackets.
+	 */
+	if ((newsrvmaxio + NFS_MAXXDR) * nfs_bufpackets >
+	    sb_max_adj) {
+		/*
+		 * Suggest vfs.nfs.bufpackets * maximum RPC message for
+		 * sb_max_adj.
+		 */
+		tval = (newsrvmaxio + NFS_MAXXDR) * nfs_bufpackets;
+
+		/*
+		 * Convert suggested sb_max_adj value to a suggested
+		 * sb_max value, which is what is set via kern.ipc.maxsockbuf.
+		 * Perform the inverse calculation of (from uipc_sockbuf.c):
+		 * sb_max_adj = (u_quad_t)sb_max * MCLBYTES /
+		 *     (MSIZE + MCLBYTES);
+		 * XXX If the calculation of sb_max_adj from sb_max changes,
+		 *     this calculation must be changed as well.
+		 */
+		tval *= (MSIZE + MCLBYTES);  /* Brackets for readability. */
+		tval += MCLBYTES - 1;        /* Round up divide. */
+		tval /= MCLBYTES;
+		printf("nfsd: set kern.ipc.maxsockbuf to a minimum of "
+		    "%ju to support %ubyte NFS I/O\n", (uintmax_t)tval,
+		    newsrvmaxio);
+		return (EINVAL);
+	}
+
+	NFSD_LOCK();
+	if (newnfs_numnfsd != 0) {
+		NFSD_UNLOCK();
+		printf("nfsd: cannot set vfs.nfsd.srvmaxio when nfsd "
+		    "threads are running\n");
+		return (EINVAL);
+	}
+
+
+	nfs_srvmaxio = newsrvmaxio;
+	NFSD_UNLOCK();
+	return (0);
+}
+SYSCTL_PROC(_vfs_nfsd, OID_AUTO, srvmaxio,
+    CTLTYPE_UINT | CTLFLAG_MPSAFE | CTLFLAG_RW, NULL, 0,
+    sysctl_srvmaxio, "IU", "Maximum I/O size in bytes");
 
 #define	MAX_REORDERED_RPC	16
 #define	NUM_HEURISTIC		1031
@@ -3103,9 +3184,9 @@ nfsmout:
  */
 int
 nfsd_excred(struct nfsrv_descript *nd, struct nfsexstuff *exp,
-    struct ucred *credanon)
+    struct ucred *credanon, bool testsec)
 {
-	int error = 0;
+	int error;
 
 	/*
 	 * Check/setup credentials.
@@ -3115,18 +3196,12 @@ nfsd_excred(struct nfsrv_descript *nd, struct nfsexstuff *exp,
 
 	/*
 	 * Check to see if the operation is allowed for this security flavor.
-	 * RFC2623 suggests that the NFSv3 Fsinfo RPC be allowed to
-	 * AUTH_NONE or AUTH_SYS for file systems requiring RPCSEC_GSS.
-	 * Also, allow Secinfo, so that it can acquire the correct flavor(s).
 	 */
-	if (nfsvno_testexp(nd, exp) &&
-	    nd->nd_procnum != NFSV4OP_SECINFO &&
-	    nd->nd_procnum != NFSPROC_FSINFO) {
-		if (nd->nd_flag & ND_NFSV4)
-			error = NFSERR_WRONGSEC;
-		else
-			error = (NFSERR_AUTHERR | AUTH_TOOWEAK);
-		goto out;
+	error = 0;
+	if (testsec) {
+		error = nfsvno_testexp(nd, exp);
+		if (error != 0)
+			goto out;
 	}
 
 	/*
@@ -3246,7 +3321,7 @@ nfsvno_fhtovp(struct mount *mp, fhandle_t *fhp, struct sockaddr *nam,
 void
 nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
     struct vnode **vpp, struct nfsexstuff *exp,
-    struct mount **mpp, int startwrite)
+    struct mount **mpp, int startwrite, int nextop)
 {
 	struct mount *mp, *mpw;
 	struct ucred *credanon;
@@ -3293,19 +3368,6 @@ nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
 	}
 
 	/*
-	 * If TLS is required by the export, check the flags in nd_flag.
-	 */
-	if (nd->nd_repstat == 0 && ((NFSVNO_EXTLS(exp) &&
-	    (nd->nd_flag & ND_TLS) == 0) ||
-	     (NFSVNO_EXTLSCERT(exp) &&
-	      (nd->nd_flag & ND_TLSCERT) == 0) ||
-	     (NFSVNO_EXTLSCERTUSER(exp) &&
-	      (nd->nd_flag & ND_TLSCERTUSER) == 0))) {
-		vput(*vpp);
-		nd->nd_repstat = NFSERR_ACCES;
-	}
-
-	/*
 	 * Personally, I've never seen any point in requiring a
 	 * reserved port#, since only in the rare case where the
 	 * clients are all boxes with secure system privileges,
@@ -3342,7 +3404,8 @@ nfsd_fhtovp(struct nfsrv_descript *nd, struct nfsrvfh *nfp, int lktype,
 	 */
 	if (!nd->nd_repstat) {
 		nd->nd_saveduid = nd->nd_cred->cr_uid;
-		nd->nd_repstat = nfsd_excred(nd, exp, credanon);
+		nd->nd_repstat = nfsd_excred(nd, exp, credanon,
+		    nfsrv_checkwrongsec(nd, nextop, (*vpp)->v_type));
 		if (nd->nd_repstat)
 			vput(*vpp);
 	}
@@ -3982,6 +4045,24 @@ nfsvno_testexp(struct nfsrv_descript *nd, struct nfsexstuff *exp)
 	int i;
 
 	/*
+	 * Allow NFSv3 Fsinfo per RFC2623.
+	 */
+	if (((nd->nd_flag & ND_NFSV4) != 0 ||
+	     nd->nd_procnum != NFSPROC_FSINFO) &&
+	    ((NFSVNO_EXTLS(exp) && (nd->nd_flag & ND_TLS) == 0) ||
+	     (NFSVNO_EXTLSCERT(exp) &&
+	      (nd->nd_flag & ND_TLSCERT) == 0) ||
+	     (NFSVNO_EXTLSCERTUSER(exp) &&
+	      (nd->nd_flag & ND_TLSCERTUSER) == 0))) {
+		if ((nd->nd_flag & ND_NFSV4) != 0)
+			return (NFSERR_WRONGSEC);
+		else if ((nd->nd_flag & ND_TLS) == 0)
+			return (NFSERR_AUTHERR | AUTH_NEEDS_TLS);
+		else
+			return (NFSERR_AUTHERR | AUTH_NEEDS_TLS_MUTUAL_HOST);
+	}
+
+	/*
 	 * This seems odd, but allow the case where the security flavor
 	 * list is empty. This happens when NFSv4 is traversing non-exported
 	 * file systems. Exported file systems should always have a non-empty
@@ -4008,7 +4089,9 @@ nfsvno_testexp(struct nfsrv_descript *nd, struct nfsexstuff *exp)
 		    (nd->nd_flag & ND_GSS) == 0)
 			return (0);
 	}
-	return (1);
+	if ((nd->nd_flag & ND_NFSV4) != 0)
+		return (NFSERR_WRONGSEC);
+	return (NFSERR_AUTHERR | AUTH_TOOWEAK);
 }
 
 /*
@@ -6316,7 +6399,8 @@ int
 nfsvno_allocate(struct vnode *vp, off_t off, off_t len, struct ucred *cred,
     NFSPROC_T *p)
 {
-	int error, trycnt;
+	int error;
+	off_t olen;
 
 	ASSERT_VOP_ELOCKED(vp, "nfsvno_allocate vp");
 	/*
@@ -6327,15 +6411,17 @@ nfsvno_allocate(struct vnode *vp, off_t off, off_t len, struct ucred *cred,
 	    NULL, NULL, NULL, NULL, &len, 0, NULL);
 	if (error != ENOENT)
 		return (error);
-	error = 0;
 
 	/*
-	 * Do the actual VOP_ALLOCATE(), looping a reasonable number of
-	 * times to achieve completion.
+	 * Do the actual VOP_ALLOCATE(), looping so long as
+	 * progress is being made, to achieve completion.
 	 */
-	trycnt = 0;
-	while (error == 0 && len > 0 && trycnt++ < 20)
+	do {
+		olen = len;
 		error = VOP_ALLOCATE(vp, &off, &len);
+		if (error == 0 && len > 0 && olen > len)
+			maybe_yield();
+	} while (error == 0 && len > 0 && olen > len);
 	if (error == 0 && len > 0)
 		error = NFSERR_IO;
 	NFSEXITCODE(error);
@@ -6614,6 +6700,37 @@ nfsm_trimtrailing(struct nfsrv_descript *nd, struct mbuf *mb, char *bpos,
 		mb->m_len = bpos - mtod(mb, char *);
 	nd->nd_mb = mb;
 	nd->nd_bpos = bpos;
+}
+
+
+/*
+ * Check to see if a put file handle operation should test for
+ * NFSERR_WRONGSEC, although NFSv3 actually returns NFSERR_AUTHERR.
+ * When Open is the next operation, NFSERR_WRONGSEC cannot be
+ * replied for the Open cases that use a component.  Thia can
+ * be identified by the fact that the file handle's type is VDIR.
+ */
+bool
+nfsrv_checkwrongsec(struct nfsrv_descript *nd, int nextop, enum vtype vtyp)
+{
+
+	if ((nd->nd_flag & ND_NFSV4) == 0) {
+		if (nd->nd_procnum == NFSPROC_FSINFO)
+			return (false);
+		return (true);
+	}
+
+	if ((nd->nd_flag & ND_LASTOP) != 0)
+		return (false);
+
+	if (nextop == NFSV4OP_PUTROOTFH || nextop == NFSV4OP_PUTFH ||
+	    nextop == NFSV4OP_PUTPUBFH || nextop == NFSV4OP_RESTOREFH ||
+	    nextop == NFSV4OP_LOOKUP || nextop == NFSV4OP_LOOKUPP ||
+	    nextop == NFSV4OP_SECINFO || nextop == NFSV4OP_SECINFONONAME)
+		return (false);
+	if (nextop == NFSV4OP_OPEN && vtyp == VDIR)
+		return (false);
+	return (true);
 }
 
 extern int (*nfsd_call_nfsd)(struct thread *, struct nfssvc_args *);

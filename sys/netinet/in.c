@@ -87,6 +87,12 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, no_same_prefix, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(nosameprefix), 0,
 	"Refuse to create same prefixes on different interfaces");
 
+VNET_DEFINE_STATIC(bool, broadcast_lowest);
+#define	V_broadcast_lowest		VNET(broadcast_lowest)
+SYSCTL_BOOL(_net_inet_ip, OID_AUTO, broadcast_lowest, CTLFLAG_VNET | CTLFLAG_RW,
+	&VNET_NAME(broadcast_lowest), 0,
+	"Treat lowest address on a subnet (host 0) as broadcast");
+
 VNET_DECLARE(struct inpcbinfo, ripcbinfo);
 #define	V_ripcbinfo			VNET(ripcbinfo)
 
@@ -376,7 +382,7 @@ in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 	    (dstaddr->sin_len != sizeof(struct sockaddr_in) ||
 	     dstaddr->sin_addr.s_addr == INADDR_ANY))
 		return (EDESTADDRREQ);
-	if (vhid > 0 && carp_attach_p == NULL)
+	if (vhid != 0 && carp_attach_p == NULL)
 		return (EPROTONOSUPPORT);
 
 	/*
@@ -1135,10 +1141,10 @@ in_ifaddr_broadcast(struct in_addr in, struct in_ifaddr *ia)
 
 	return ((in.s_addr == ia->ia_broadaddr.sin_addr.s_addr ||
 	     /*
-	      * Check for old-style (host 0) broadcast, but
+	      * Optionally check for old-style (host 0) broadcast, but
 	      * taking into account that RFC 3021 obsoletes it.
 	      */
-	    (ia->ia_subnetmask != IN_RFC3021_MASK &&
+	    (V_broadcast_lowest && ia->ia_subnetmask != IN_RFC3021_MASK &&
 	    ntohl(in.s_addr) == ia->ia_subnet)) &&
 	     /*
 	      * Check for an all one subnetmask. These
@@ -1262,19 +1268,6 @@ in_lltable_destroy_lle_unlocked(epoch_context_t ctx)
 	LLE_LOCK_DESTROY(lle);
 	LLE_REQ_DESTROY(lle);
 	free(lle, M_LLTABLE);
-}
-
-/*
- * Called by the datapath to indicate that
- * the entry was used.
- */
-static void
-in_lltable_mark_used(struct llentry *lle)
-{
-
-	LLE_REQ_LOCK(lle);
-	lle->r_skip_req = 0;
-	LLE_REQ_UNLOCK(lle);
 }
 
 /*
@@ -1681,7 +1674,7 @@ in_lltattach(struct ifnet *ifp)
 	llt->llt_fill_sa_entry = in_lltable_fill_sa_entry;
 	llt->llt_free_entry = in_lltable_free_entry;
 	llt->llt_match_prefix = in_lltable_match_prefix;
-	llt->llt_mark_used = in_lltable_mark_used;
+	llt->llt_mark_used = llentry_mark_used;
  	lltable_link(llt);
 
 	return (llt);

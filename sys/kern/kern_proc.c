@@ -122,13 +122,13 @@ static void pargs_free(struct pargs *pa);
 /*
  * Other process lists
  */
-struct pidhashhead *pidhashtbl;
+struct pidhashhead *pidhashtbl = NULL;
 struct sx *pidhashtbl_lock;
 u_long pidhash;
 u_long pidhashlock;
 struct pgrphashhead *pgrphashtbl;
 u_long pgrphash;
-struct proclist allproc;
+struct proclist allproc = LIST_HEAD_INITIALIZER(allproc);
 struct sx __exclusive_cache_line allproc_lock;
 struct sx __exclusive_cache_line proctree_lock;
 struct mtx __exclusive_cache_line ppeers_lock;
@@ -185,7 +185,6 @@ procinit(void)
 	sx_init(&proctree_lock, "proctree");
 	mtx_init(&ppeers_lock, "p_peers", NULL, MTX_DEF);
 	mtx_init(&procid_lock, "procid", NULL, MTX_DEF);
-	LIST_INIT(&allproc);
 	pidhashtbl = hashinit(maxproc / 4, M_PROC, &pidhash);
 	pidhashlock = (pidhash + 1) / 64;
 	if (pidhashlock > 0)
@@ -2297,7 +2296,7 @@ static int
 sysctl_kern_proc_ovmmap(SYSCTL_HANDLER_ARGS)
 {
 	vm_map_entry_t entry, tmp_entry;
-	unsigned int last_timestamp;
+	unsigned int last_timestamp, namelen;
 	char *fullpath, *freepath;
 	struct kinfo_ovmentry *kve;
 	struct vattr va;
@@ -2307,6 +2306,10 @@ sysctl_kern_proc_ovmmap(SYSCTL_HANDLER_ARGS)
 	struct proc *p;
 	vm_map_t map;
 	struct vmspace *vm;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 	error = pget((pid_t)name[0], PGET_WANTREAD, &p);
@@ -2678,7 +2681,12 @@ sysctl_kern_proc_vmmap(SYSCTL_HANDLER_ARGS)
 {
 	struct proc *p;
 	struct sbuf sb;
+	u_int namelen;
 	int error, error2, *name;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 	sbuf_new_for_sysctl(&sb, NULL, sizeof(struct kinfo_vmentry), req);
@@ -2705,6 +2713,11 @@ sysctl_kern_proc_kstack(SYSCTL_HANDLER_ARGS)
 	struct stack *st;
 	struct sbuf sb;
 	struct proc *p;
+	u_int namelen;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 	error = pget((pid_t)name[0], PGET_NOTINEXEC | PGET_WANTREAD, &p);

@@ -764,13 +764,20 @@ malloc_domainset_exec(size_t size, struct malloc_type *mtp, struct domainset *ds
 }
 
 void *
+malloc_aligned(size_t size, size_t align, struct malloc_type *type, int flags)
+{
+	return (malloc_domainset_aligned(size, align, type, DOMAINSET_RR(),
+	    flags));
+}
+
+void *
 malloc_domainset_aligned(size_t size, size_t align,
     struct malloc_type *mtp, struct domainset *ds, int flags)
 {
 	void *res;
 	size_t asize;
 
-	KASSERT(align != 0 && powerof2(align),
+	KASSERT(powerof2(align),
 	    ("malloc_domainset_aligned: wrong align %#zx size %#zx",
 	    align, size));
 	KASSERT(align <= PAGE_SIZE,
@@ -785,6 +792,8 @@ malloc_domainset_aligned(size_t size, size_t align,
 	 * align, since malloc zones provide alignment equal to their
 	 * size.
 	 */
+	if (size == 0)
+		size = 1;
 	asize = size <= align ? align : 1UL << flsl(size - 1);
 
 	res = malloc_domainset(asize, mtp, ds, flags);

@@ -166,6 +166,7 @@ SUBDIR=	\
 	if_vlan \
 	if_vxlan \
 	iflib \
+	${_igc} \
 	${_iir} \
 	imgact_binmisc \
 	${_intelspi} \
@@ -333,6 +334,7 @@ SUBDIR=	\
 	${_sctp} \
 	sdhci \
 	${_sdhci_acpi} \
+	${_sdhci_fdt} \
 	sdhci_pci \
 	sdio \
 	sem \
@@ -618,6 +620,10 @@ _em=		em
 _rockchip=	rockchip
 .endif
 
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm"
+_sdhci_fdt=	sdhci_fdt
+.endif
+
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _agp=		agp
 _an=		an
@@ -636,6 +642,7 @@ _et=		et
 _ftwd=		ftwd
 _exca=		exca
 _if_ndis=	if_ndis
+_igc=		igc
 _io=		io
 _itwd=		itwd
 _ix=		ix
@@ -723,6 +730,7 @@ _tpm=		tpm
 _twa=		twa
 _vesa=		vesa
 _viawd=		viawd
+_vmd=		vmd
 _wpi=		wpi
 .if ${MK_SOURCELESS_UCODE} != "no"
 _wpifw=		wpifw
@@ -741,7 +749,6 @@ _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
 _sume=		sume
-_vmd=		vmd
 .if ${MK_SOURCELESS_UCODE} != "no"
 _qlxgbe=	qlxgbe
 _qlnx=		qlnx

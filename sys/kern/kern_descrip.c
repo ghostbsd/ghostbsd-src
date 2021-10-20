@@ -1031,18 +1031,16 @@ funsetown_locked(struct sigio *sigio)
 
 	if (sigio == NULL)
 		return (NULL);
-	*(sigio->sio_myref) = NULL;
+	*sigio->sio_myref = NULL;
 	if (sigio->sio_pgid < 0) {
 		pg = sigio->sio_pgrp;
 		PGRP_LOCK(pg);
-		SLIST_REMOVE(&sigio->sio_pgrp->pg_sigiolst, sigio,
-		    sigio, sio_pgsigio);
+		SLIST_REMOVE(&pg->pg_sigiolst, sigio, sigio, sio_pgsigio);
 		PGRP_UNLOCK(pg);
 	} else {
 		p = sigio->sio_proc;
 		PROC_LOCK(p);
-		SLIST_REMOVE(&sigio->sio_proc->p_sigiolst, sigio,
-		    sigio, sio_pgsigio);
+		SLIST_REMOVE(&p->p_sigiolst, sigio, sigio, sio_pgsigio);
 		PROC_UNLOCK(p);
 	}
 	return (sigio);
@@ -1155,76 +1153,69 @@ fsetown(pid_t pgid, struct sigio **sigiop)
 		return (0);
 	}
 
-	ret = 0;
-
 	sigio = malloc(sizeof(struct sigio), M_SIGIO, M_WAITOK);
 	sigio->sio_pgid = pgid;
 	sigio->sio_ucred = crhold(curthread->td_ucred);
 	sigio->sio_myref = sigiop;
 
-	sx_slock(&proctree_lock);
-	SIGIO_LOCK();
-	osigio = funsetown_locked(*sigiop);
+	ret = 0;
 	if (pgid > 0) {
-		proc = pfind(pgid);
-		if (proc == NULL) {
-			ret = ESRCH;
-			goto fail;
-		}
-
-		/*
-		 * Policy - Don't allow a process to FSETOWN a process
-		 * in another session.
-		 *
-		 * Remove this test to allow maximum flexibility or
-		 * restrict FSETOWN to the current process or process
-		 * group for maximum safety.
-		 */
-		if (proc->p_session != curthread->td_proc->p_session) {
+		ret = pget(pgid, PGET_NOTWEXIT | PGET_NOTID | PGET_HOLD, &proc);
+		SIGIO_LOCK();
+		osigio = funsetown_locked(*sigiop);
+		if (ret == 0) {
+			PROC_LOCK(proc);
+			_PRELE(proc);
+			if ((proc->p_flag & P_WEXIT) != 0) {
+				ret = ESRCH;
+			} else if (proc->p_session !=
+			    curthread->td_proc->p_session) {
+				/*
+				 * Policy - Don't allow a process to FSETOWN a
+				 * process in another session.
+				 *
+				 * Remove this test to allow maximum flexibility
+				 * or restrict FSETOWN to the current process or
+				 * process group for maximum safety.
+				 */
+				ret = EPERM;
+			} else {
+				sigio->sio_proc = proc;
+				SLIST_INSERT_HEAD(&proc->p_sigiolst, sigio,
+				    sio_pgsigio);
+			}
 			PROC_UNLOCK(proc);
-			ret = EPERM;
-			goto fail;
 		}
-
-		sigio->sio_proc = proc;
-		SLIST_INSERT_HEAD(&proc->p_sigiolst, sigio, sio_pgsigio);
-		PROC_UNLOCK(proc);
 	} else /* if (pgid < 0) */ {
+		sx_slock(&proctree_lock);
+		SIGIO_LOCK();
+		osigio = funsetown_locked(*sigiop);
 		pgrp = pgfind(-pgid);
 		if (pgrp == NULL) {
 			ret = ESRCH;
-			goto fail;
-		}
-
-		/*
-		 * Policy - Don't allow a process to FSETOWN a process
-		 * in another session.
-		 *
-		 * Remove this test to allow maximum flexibility or
-		 * restrict FSETOWN to the current process or process
-		 * group for maximum safety.
-		 */
-		if (pgrp->pg_session != curthread->td_proc->p_session) {
+		} else {
+			if (pgrp->pg_session != curthread->td_proc->p_session) {
+				/*
+				 * Policy - Don't allow a process to FSETOWN a
+				 * process in another session.
+				 *
+				 * Remove this test to allow maximum flexibility
+				 * or restrict FSETOWN to the current process or
+				 * process group for maximum safety.
+				 */
+				ret = EPERM;
+			} else {
+				sigio->sio_pgrp = pgrp;
+				SLIST_INSERT_HEAD(&pgrp->pg_sigiolst, sigio,
+				    sio_pgsigio);
+			}
 			PGRP_UNLOCK(pgrp);
-			ret = EPERM;
-			goto fail;
 		}
-
-		SLIST_INSERT_HEAD(&pgrp->pg_sigiolst, sigio, sio_pgsigio);
-		sigio->sio_pgrp = pgrp;
-		PGRP_UNLOCK(pgrp);
+		sx_sunlock(&proctree_lock);
 	}
-	sx_sunlock(&proctree_lock);
-	*sigiop = sigio;
+	if (ret == 0)
+		*sigiop = sigio;
 	SIGIO_UNLOCK();
-	if (osigio != NULL)
-		sigiofree(osigio);
-	return (0);
-
-fail:
-	SIGIO_UNLOCK();
-	sx_sunlock(&proctree_lock);
-	sigiofree(sigio);
 	if (osigio != NULL)
 		sigiofree(osigio);
 	return (ret);
@@ -3569,11 +3560,15 @@ sys_flock(struct thread *td, struct flock_args *uap)
 	error = fget(td, uap->fd, &cap_flock_rights, &fp);
 	if (error != 0)
 		return (error);
-	if (fp->f_type != DTYPE_VNODE || fp->f_ops == &path_fileops) {
-		fdrop(fp, td);
-		return (EOPNOTSUPP);
+	error = EOPNOTSUPP;
+	if (fp->f_type != DTYPE_VNODE && fp->f_type != DTYPE_FIFO) {
+		goto done;
+	}
+	if (fp->f_ops == &path_fileops) {
+		goto done;
 	}
 
+	error = 0;
 	vp = fp->f_vnode;
 	lf.l_whence = SEEK_SET;
 	lf.l_start = 0;
@@ -3582,7 +3577,7 @@ sys_flock(struct thread *td, struct flock_args *uap)
 		lf.l_type = F_UNLCK;
 		atomic_clear_int(&fp->f_flag, FHASLOCK);
 		error = VOP_ADVLOCK(vp, (caddr_t)fp, F_UNLCK, &lf, F_FLOCK);
-		goto done2;
+		goto done;
 	}
 	if (uap->how & LOCK_EX)
 		lf.l_type = F_WRLCK;
@@ -3590,12 +3585,12 @@ sys_flock(struct thread *td, struct flock_args *uap)
 		lf.l_type = F_RDLCK;
 	else {
 		error = EBADF;
-		goto done2;
+		goto done;
 	}
 	atomic_set_int(&fp->f_flag, FHASLOCK);
 	error = VOP_ADVLOCK(vp, (caddr_t)fp, F_SETLK, &lf,
 	    (uap->how & LOCK_NB) ? F_FLOCK : F_FLOCK | F_WAIT);
-done2:
+done:
 	fdrop(fp, td);
 	return (error);
 }
@@ -3793,6 +3788,26 @@ pwd_hold(struct thread *td)
 	pwd = pwd_hold_pwddesc(pdp);
 	MPASS(pwd != NULL);
 	PWDDESC_XUNLOCK(pdp);
+	return (pwd);
+}
+
+struct pwd *
+pwd_hold_proc(struct proc *p)
+{
+	struct pwddesc *pdp;
+	struct pwd *pwd;
+
+	PROC_ASSERT_HELD(p);
+	PROC_LOCK(p);
+	pdp = pdhold(p);
+	MPASS(pdp != NULL);
+	PROC_UNLOCK(p);
+
+	PWDDESC_XLOCK(pdp);
+	pwd = pwd_hold_pwddesc(pdp);
+	MPASS(pwd != NULL);
+	PWDDESC_XUNLOCK(pdp);
+	pddrop(pdp);
 	return (pwd);
 }
 
@@ -4092,7 +4107,12 @@ sysctl_kern_proc_nfds(SYSCTL_HANDLER_ARGS)
 {
 	NDSLOTTYPE *map;
 	struct filedesc *fdp;
+	u_int namelen;
 	int count, off, minoff;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	if (*(int *)arg1 != 0)
 		return (EINVAL);
@@ -4482,7 +4502,12 @@ sysctl_kern_proc_filedesc(SYSCTL_HANDLER_ARGS)
 	struct sbuf sb;
 	struct proc *p;
 	ssize_t maxlen;
+	u_int namelen;
 	int error, error2, *name;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 
@@ -4561,9 +4586,14 @@ sysctl_kern_proc_ofiledesc(SYSCTL_HANDLER_ARGS)
 	struct filedesc *fdp;
 	struct pwddesc *pdp;
 	struct pwd *pwd;
+	u_int namelen;
 	int error, i, lastfile, *name;
 	struct file *fp;
 	struct proc *p;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 	error = pget((pid_t)name[0], PGET_CANDEBUG | PGET_NOTWEXIT, &p);
@@ -4706,7 +4736,12 @@ sysctl_kern_proc_cwd(SYSCTL_HANDLER_ARGS)
 	struct sbuf sb;
 	struct proc *p;
 	ssize_t maxlen;
+	u_int namelen;
 	int error, error2, *name;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 

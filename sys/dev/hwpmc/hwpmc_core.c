@@ -261,8 +261,8 @@ iaf_allocate_pmc(int cpu, int ri, struct pmc *pm,
 	if ((cpu_stdext_feature3 & CPUID_STDEXT3_TSXFA) != 0 &&
 	    !pmc_tsx_force_abort_set) {
 		pmc_tsx_force_abort_set = true;
-		x86_msr_op(MSR_TSX_FORCE_ABORT, MSR_OP_RENDEZVOUS |
-		    MSR_OP_WRITE, 1);
+		x86_msr_op(MSR_TSX_FORCE_ABORT, MSR_OP_RENDEZVOUS_ALL |
+		    MSR_OP_WRITE, 1, NULL);
 	}
 
 	flags = 0;
@@ -403,8 +403,8 @@ iaf_release_pmc(int cpu, int ri, struct pmc *pmc)
 	MPASS(pmc_alloc_refs > 0);
 	if (pmc_alloc_refs-- == 1 && pmc_tsx_force_abort_set) {
 		pmc_tsx_force_abort_set = false;
-		x86_msr_op(MSR_TSX_FORCE_ABORT, MSR_OP_RENDEZVOUS |
-		    MSR_OP_WRITE, 0);
+		x86_msr_op(MSR_TSX_FORCE_ABORT, MSR_OP_RENDEZVOUS_ALL |
+		    MSR_OP_WRITE, 0, NULL);
 	}
 
 	return (0);
@@ -741,7 +741,6 @@ static int
 iap_allocate_pmc(int cpu, int ri, struct pmc *pm,
     const struct pmc_op_pmcallocate *a)
 {
-	enum pmc_event map;
 	uint8_t ev;
 	uint32_t caps;
 	const struct pmc_md_iap_op_pmcallocate *iap;
@@ -755,7 +754,6 @@ iap_allocate_pmc(int cpu, int ri, struct pmc *pm,
 	caps = a->pm_caps;
 	if ((IAP_PMC_CAPS & caps) != caps)
 		return (EPERM);
-	map = 0;	/* XXX: silent GCC warning */
 	iap = &a->pm_md.pm_iap;
 	ev = IAP_EVSEL_GET(iap->pm_iap_config);
 
@@ -961,7 +959,7 @@ iap_start_pmc(int cpu, int ri)
 static int
 iap_stop_pmc(int cpu, int ri)
 {
-	struct pmc *pm;
+	struct pmc *pm __diagused;
 	struct core_cpu *cc;
 	uint64_t msr;
 
@@ -985,7 +983,6 @@ iap_stop_pmc(int cpu, int ri)
 	if (core_cputype == PMC_CPU_INTEL_CORE)
 		return (0);
 
-	msr = 0;
 	do {
 		cc->pc_resync = 0;
 		cc->pc_globalctrl &= ~(1ULL << ri);

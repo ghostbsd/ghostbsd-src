@@ -317,6 +317,7 @@ static struct codel_opts	 codel_opts;
 static struct node_hfsc_opts	 hfsc_opts;
 static struct node_fairq_opts	 fairq_opts;
 static struct node_state_opt	*keep_state_defaults = NULL;
+static struct pfctl_watermarks	 syncookie_opts;
 
 int		 disallow_table(struct node_host *, const char *);
 int		 disallow_urpf_failed(struct node_host *, const char *);
@@ -442,6 +443,7 @@ typedef struct {
 		struct node_hfsc_opts	 hfsc_opts;
 		struct node_fairq_opts	 fairq_opts;
 		struct codel_opts	 codel_opts;
+		struct pfctl_watermarks	*watermarks;
 	} v;
 	int lineno;
 } YYSTYPE;
@@ -456,7 +458,7 @@ int	parseport(char *, struct range *r, int);
 
 %}
 
-%token	PASS BLOCK SCRUB RETURN IN OS OUT LOG QUICK ON FROM TO FLAGS
+%token	PASS BLOCK MATCH SCRUB RETURN IN OS OUT LOG QUICK ON FROM TO FLAGS
 %token	RETURNRST RETURNICMP RETURNICMP6 PROTO INET INET6 ALL ANY ICMPTYPE
 %token	ICMP6TYPE CODE KEEP MODULATE STATE PORT RDR NAT BINAT ARROW NODF
 %token	MINTTL ERROR ALLOWOPTS FASTROUTE FILENAME ROUTETO DUPTO REPLYTO NO LABEL
@@ -464,7 +466,7 @@ int	parseport(char *, struct range *r, int);
 %token	REASSEMBLE FRAGDROP FRAGCROP ANCHOR NATANCHOR RDRANCHOR BINATANCHOR
 %token	SET OPTIMIZATION TIMEOUT LIMIT LOGINTERFACE BLOCKPOLICY FAILPOLICY
 %token	RANDOMID REQUIREORDER SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
-%token	ANTISPOOF FOR INCLUDE KEEPCOUNTERS
+%token	ANTISPOOF FOR INCLUDE KEEPCOUNTERS SYNCOOKIES
 %token	BITMASK RANDOM SOURCEHASH ROUNDROBIN STATICPORT PROBABILITY MAPEPORTSET
 %token	ALTQ CBQ CODEL PRIQ HFSC FAIRQ BANDWIDTH TBRSIZE LINKSHARE REALTIME
 %token	UPPERLIMIT QUEUE PRIORITY QLIMIT HOGS BUCKETS RTABLE TARGET INTERVAL
@@ -480,7 +482,7 @@ int	parseport(char *, struct range *r, int);
 %type	<v.number>		number icmptype icmp6type uid gid
 %type	<v.number>		tos not yesno
 %type	<v.probability>		probability
-%type	<v.i>			no dir af fragcache optimizer
+%type	<v.i>			no dir af fragcache optimizer syncookie_val
 %type	<v.i>			sourcetrack flush unaryop statelock
 %type	<v.b>			action nataction natpasslog scrubaction
 %type	<v.b>			flags flag blockspec prio
@@ -527,6 +529,7 @@ int	parseport(char *, struct range *r, int);
 %type	<v.pool_opts>		pool_opts pool_opt pool_opts_l
 %type	<v.tagged>		tagged
 %type	<v.rtableid>		rtable
+%type	<v.watermarks>		syncookie_opts
 %%
 
 ruleset		: /* empty */
@@ -724,6 +727,57 @@ option		: SET OPTIMIZATION STRING		{
 		}
 		| SET KEEPCOUNTERS {
 			pf->keep_counters = true;
+		}
+		| SET SYNCOOKIES syncookie_val syncookie_opts {
+			if (pfctl_cfg_syncookies(pf, $3, $4)) {
+				yyerror("error setting syncookies");
+				YYERROR;
+			}
+		}
+		;
+
+syncookie_val  : STRING        {
+			if (!strcmp($1, "never"))
+				$$ = PFCTL_SYNCOOKIES_NEVER;
+			else if (!strcmp($1, "adaptive"))
+				$$ = PFCTL_SYNCOOKIES_ADAPTIVE;
+			else if (!strcmp($1, "always"))
+				$$ = PFCTL_SYNCOOKIES_ALWAYS;
+			else {
+				yyerror("illegal value for syncookies");
+				YYERROR;
+			}
+		}
+		;
+syncookie_opts  : /* empty */                   { $$ = NULL; }
+		| {
+			memset(&syncookie_opts, 0, sizeof(syncookie_opts));
+		  } '(' syncookie_opt_l ')'     { $$ = &syncookie_opts; }
+		;
+
+syncookie_opt_l : syncookie_opt_l comma syncookie_opt
+		| syncookie_opt
+		;
+
+syncookie_opt   : STRING STRING {
+			double   val;
+			char    *cp;
+
+			val = strtod($2, &cp);
+			if (cp == NULL || strcmp(cp, "%"))
+				YYERROR;
+			if (val <= 0 || val > 100) {
+				yyerror("illegal percentage value");
+				YYERROR;
+			}
+			if (!strcmp($1, "start")) {
+				syncookie_opts.hi = val;
+			} else if (!strcmp($1, "end")) {
+				syncookie_opts.lo = val;
+			} else {
+				yyerror("illegal syncookie option");
+				YYERROR;
+			}
 		}
 		;
 
@@ -2677,6 +2731,7 @@ action		: PASS 			{
 			$$.w = returnicmpdefault;
 			$$.w2 = returnicmp6default;
 		}
+		| MATCH			{ $$.b1 = PF_MATCH; $$.b2 = $$.w = 0; }
 		| BLOCK blockspec	{ $$ = $2; $$.b1 = PF_DROP; }
 		;
 
@@ -5017,13 +5072,13 @@ expand_label_port(const char *name, char *label, size_t len,
 void
 expand_label_proto(const char *name, char *label, size_t len, u_int8_t proto)
 {
-	struct protoent *pe;
+	const char *protoname;
 	char n[4];
 
 	if (strstr(label, name) != NULL) {
-		pe = getprotobynumber(proto);
-		if (pe != NULL)
-			expand_label_str(label, len, name, pe->p_name);
+		protoname = pfctl_proto2name(proto);
+		if (protoname != NULL)
+			expand_label_str(label, len, name, protoname);
 		else {
 			snprintf(n, sizeof(n), "%u", proto);
 			expand_label_str(label, len, name, n);
@@ -5612,6 +5667,7 @@ lookup(char *s)
 		{ "log",		LOG},
 		{ "loginterface",	LOGINTERFACE},
 		{ "map-e-portset",	MAPEPORTSET},
+		{ "match",		MATCH},
 		{ "max",		MAXIMUM},
 		{ "max-mss",		MAXMSS},
 		{ "max-src-conn",	MAXSRCCONN},
@@ -5671,6 +5727,7 @@ lookup(char *s)
 		{ "state-policy",	STATEPOLICY},
 		{ "static-port",	STATICPORT},
 		{ "sticky-address",	STICKYADDRESS},
+		{ "syncookies",         SYNCOOKIES},
 		{ "synproxy",		SYNPROXY},
 		{ "table",		TABLE},
 		{ "tag",		TAG},

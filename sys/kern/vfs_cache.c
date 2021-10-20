@@ -237,7 +237,7 @@ SDT_PROBE_DEFINE2(vfs, namecache, removecnp, hit, "struct vnode *",
     "struct componentname *");
 SDT_PROBE_DEFINE2(vfs, namecache, removecnp, miss, "struct vnode *",
     "struct componentname *");
-SDT_PROBE_DEFINE1(vfs, namecache, purge, done, "struct vnode *");
+SDT_PROBE_DEFINE3(vfs, namecache, purge, done, "struct vnode *", "size_t", "size_t");
 SDT_PROBE_DEFINE1(vfs, namecache, purge, batch, "int");
 SDT_PROBE_DEFINE1(vfs, namecache, purge_negative, done, "struct vnode *");
 SDT_PROBE_DEFINE1(vfs, namecache, purgevfs, done, "struct mount *");
@@ -2582,6 +2582,30 @@ out_unlock_free:
 	return;
 }
 
+/*
+ * A variant of the above accepting flags.
+ *
+ * - VFS_CACHE_DROPOLD -- if a conflicting entry is found, drop it.
+ *
+ * TODO: this routine is a hack. It blindly removes the old entry, even if it
+ * happens to match and it is doing it in an inefficient manner. It was added
+ * to accomodate NFS which runs into a case where the target for a given name
+ * may change from under it. Note this does nothing to solve the following
+ * race: 2 callers of cache_enter_time_flags pass a different target vnode for
+ * the same [dvp, cnp]. It may be argued that code doing this is broken.
+ */
+void
+cache_enter_time_flags(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
+    struct timespec *tsp, struct timespec *dtsp, int flags)
+{
+
+	MPASS((flags & ~(VFS_CACHE_DROPOLD)) == 0);
+
+	if (flags & VFS_CACHE_DROPOLD)
+		cache_remove_cnp(dvp, cnp);
+	cache_enter_time(dvp, vp, cnp, tsp, dtsp);
+}
+
 static u_int
 cache_roundup_2(u_int val)
 {
@@ -2990,13 +3014,15 @@ void
 cache_purgevfs(struct mount *mp)
 {
 	struct vnode *vp, *mvp;
+	size_t visited, purged;
 
-	SDT_PROBE1(vfs, namecache, purgevfs, done, mp);
+	visited = purged = 0;
 	/*
 	 * Somewhat wasteful iteration over all vnodes. Would be better to
 	 * support filtering and avoid the interlock to begin with.
 	 */
 	MNT_VNODE_FOREACH_ALL(vp, mp, mvp) {
+		visited++;
 		if (!cache_has_entries(vp)) {
 			VI_UNLOCK(vp);
 			continue;
@@ -3004,8 +3030,11 @@ cache_purgevfs(struct mount *mp)
 		vholdl(vp);
 		VI_UNLOCK(vp);
 		cache_purge(vp);
+		purged++;
 		vdrop(vp);
 	}
+
+	SDT_PROBE3(vfs, namecache, purgevfs, done, mp, visited, purged);
 }
 
 /*

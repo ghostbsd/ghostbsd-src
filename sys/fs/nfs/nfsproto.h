@@ -73,7 +73,6 @@
  */
 #define	NFS_MAXPKTHDR	404
 #define	NFS_MAXXDR	4096
-#define	NFS_MAXPACKET	(NFS_SRVMAXIO + NFS_MAXXDR)
 #define	NFS_MINPACKET	20
 #define	NFS_FABLKSIZE	512	/* Size in bytes of a block wrt fa_blocks */
 #define	NFSV4_MINORVERSION	0	/* V4 Minor version */
@@ -725,6 +724,10 @@
 #define	NFSCDFS4_FORE		0x1
 #define	NFSCDFS4_BACK		0x2
 #define	NFSCDFS4_BOTH		0x3
+
+/* Enum values for Secinfo_no_name. */
+#define	NFSSECINFONONAME_CURFH	0
+#define	NFSSECINFONONAME_PARENT	1
 
 #if defined(_KERNEL) || defined(KERNEL)
 /* Conversion macros */

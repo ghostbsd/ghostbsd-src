@@ -139,9 +139,12 @@ extern vm_offset_t virtual_end;
 
 struct thread;
 
+#define	pmap_vm_page_alloc_check(m)
+
 void	pmap_activate_boot(pmap_t);
 void	pmap_activate_sw(struct thread *);
 void	pmap_bootstrap(vm_offset_t, vm_paddr_t, vm_size_t);
+int	pmap_change_attr(vm_offset_t va, vm_size_t size, int mode);
 void	pmap_kenter_device(vm_offset_t, vm_size_t, vm_paddr_t);
 vm_paddr_t pmap_kextract(vm_offset_t va);
 void	pmap_kremove(vm_offset_t);

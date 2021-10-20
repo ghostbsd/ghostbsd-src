@@ -779,6 +779,8 @@ mps_attach_sas(struct mps_softc *sc)
 
 	callout_init(&sassc->discovery_callout, 1 /*mpsafe*/);
 
+	mps_unlock(sc);
+
 	/*
 	 * Register for async events so we can determine the EEDP
 	 * capabilities of devices.
@@ -811,8 +813,6 @@ mps_attach_sas(struct mps_softc *sc)
 		 */
 		mps_printf(sc, "EEDP capabilities disabled.\n");
 	}
-
-	mps_unlock(sc);
 
 	mpssas_register_events(sc);
 out:
@@ -847,18 +847,18 @@ mps_detach_sas(struct mps_softc *sc)
 	if (sassc->ev_tq != NULL)
 		taskqueue_free(sassc->ev_tq);
 
-	/* Make sure CAM doesn't wedge if we had to bail out early. */
-	mps_lock(sc);
-
-	while (sassc->startup_refcount != 0)
-		mpssas_startup_decrement(sassc);
-
 	/* Deregister our async handler */
 	if (sassc->path != NULL) {
 		xpt_register_async(0, mpssas_async, sc, sassc->path);
 		xpt_free_path(sassc->path);
 		sassc->path = NULL;
 	}
+
+	/* Make sure CAM doesn't wedge if we had to bail out early. */
+	mps_lock(sc);
+
+	while (sassc->startup_refcount != 0)
+		mpssas_startup_decrement(sassc);
 
 	if (sassc->flags & MPSSAS_IN_STARTUP)
 		xpt_release_simq(sassc->sim, 1);
@@ -1170,7 +1170,7 @@ mpssas_tm_timeout(void *data)
 	    "task mgmt %p timed out\n", tm);
 
 	KASSERT(tm->cm_state == MPS_CM_STATE_INQUEUE,
-	    ("command not inqueue\n"));
+	    ("command not inqueue, state = %u\n", tm->cm_state));
 
 	tm->cm_state = MPS_CM_STATE_BUSY;
 	mps_reinit(sc);
@@ -2015,7 +2015,7 @@ mpssas_scsiio_complete(struct mps_softc *sc, struct mps_command *cm)
 	if (cm->cm_flags & MPS_CM_FLAGS_ON_RECOVERY) {
 		TAILQ_REMOVE(&cm->cm_targ->timedout_commands, cm, cm_recovery);
 		KASSERT(cm->cm_state == MPS_CM_STATE_BUSY,
-		    ("Not busy for CM_FLAGS_TIMEDOUT: %d\n", cm->cm_state));
+		    ("Not busy for CM_FLAGS_TIMEDOUT: %u\n", cm->cm_state));
 		cm->cm_flags &= ~MPS_CM_FLAGS_ON_RECOVERY;
 		if (cm->cm_reply != NULL)
 			mpssas_log_command(cm, MPS_RECOVERY,
@@ -3150,6 +3150,7 @@ mpssas_async(void *callback_arg, uint32_t code, struct cam_path *path,
 
 	sc = (struct mps_softc *)callback_arg;
 
+	mps_lock(sc);
 	switch (code) {
 	case AC_ADVINFO_CHANGED: {
 		struct mpssas_target *target;
@@ -3240,6 +3241,7 @@ mpssas_async(void *callback_arg, uint32_t code, struct cam_path *path,
 	default:
 		break;
 	}
+	mps_unlock(sc);
 }
 
 /*

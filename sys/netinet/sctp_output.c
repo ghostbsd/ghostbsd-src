@@ -6631,7 +6631,7 @@ sctp_sendall_iterator(struct sctp_inpcb *inp, struct sctp_tcb *stcb, void *ptr,
 		 * us.
 		 */
 		atomic_add_int(&stcb->asoc.refcnt, 1);
-		sctp_abort_an_association(inp, stcb, m, SCTP_SO_NOT_LOCKED);
+		sctp_abort_an_association(inp, stcb, m, false, SCTP_SO_NOT_LOCKED);
 		/*
 		 * sctp_abort_an_association calls sctp_free_asoc() free
 		 * association will NOT free it since we incremented the
@@ -6715,7 +6715,7 @@ sctp_sendall_iterator(struct sctp_inpcb *inp, struct sctp_tcb *stcb, void *ptr,
 						    msg);
 						atomic_add_int(&stcb->asoc.refcnt, 1);
 						sctp_abort_an_association(stcb->sctp_ep, stcb,
-						    op_err, SCTP_SO_NOT_LOCKED);
+						    op_err, false, SCTP_SO_NOT_LOCKED);
 						atomic_add_int(&stcb->asoc.refcnt, -1);
 						goto no_chunk_output;
 					}
@@ -6770,7 +6770,9 @@ sctp_sendall_completes(void *ptr, uint32_t val SCTP_UNUSED)
 	/* now free everything */
 	if (ca->inp) {
 		/* Lets clear the flag to allow others to run. */
+		SCTP_INP_WLOCK(ca->inp);
 		ca->inp->sctp_flags &= ~SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+		SCTP_INP_WUNLOCK(ca->inp);
 	}
 	sctp_m_freem(ca->m);
 	SCTP_FREE(ca, SCTP_M_COPYAL);
@@ -6825,10 +6827,6 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 	int ret;
 	struct sctp_copy_all *ca;
 
-	if (inp->sctp_flags & SCTP_PCB_FLAGS_SND_ITERATOR_UP) {
-		/* There is another. */
-		return (EBUSY);
-	}
 	if (uio->uio_resid > (ssize_t)SCTP_BASE_SYSCTL(sctp_sendall_limit)) {
 		/* You must not be larger than the limit! */
 		return (EMSGSIZE);
@@ -6846,6 +6844,18 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 	if (srcv) {
 		memcpy(&ca->sndrcv, srcv, sizeof(struct sctp_nonpad_sndrcvinfo));
 	}
+
+	/* Serialize. */
+	SCTP_INP_WLOCK(inp);
+	if ((inp->sctp_flags & SCTP_PCB_FLAGS_SND_ITERATOR_UP) != 0) {
+		SCTP_INP_WUNLOCK(inp);
+		sctp_m_freem(m);
+		SCTP_FREE(ca, SCTP_M_COPYAL);
+		return (EBUSY);
+	}
+	inp->sctp_flags |= SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+	SCTP_INP_WUNLOCK(inp);
+
 	/*
 	 * take off the sendall flag, it would be bad if we failed to do
 	 * this :-0
@@ -6857,6 +6867,10 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 		ca->m = sctp_copy_out_all(uio, ca->sndlen);
 		if (ca->m == NULL) {
 			SCTP_FREE(ca, SCTP_M_COPYAL);
+			sctp_m_freem(m);
+			SCTP_INP_WLOCK(inp);
+			inp->sctp_flags &= ~SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+			SCTP_INP_WUNLOCK(inp);
 			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_OUTPUT, ENOMEM);
 			return (ENOMEM);
 		}
@@ -6869,14 +6883,15 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 			ca->sndlen += SCTP_BUF_LEN(mat);
 		}
 	}
-	inp->sctp_flags |= SCTP_PCB_FLAGS_SND_ITERATOR_UP;
 	ret = sctp_initiate_iterator(NULL, sctp_sendall_iterator, NULL,
 	    SCTP_PCB_ANY_FLAGS, SCTP_PCB_ANY_FEATURES,
 	    SCTP_ASOC_ANY_STATE,
 	    (void *)ca, 0,
 	    sctp_sendall_completes, inp, 1);
 	if (ret) {
+		SCTP_INP_WLOCK(inp);
 		inp->sctp_flags &= ~SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+		SCTP_INP_WUNLOCK(inp);
 		SCTP_FREE(ca, SCTP_M_COPYAL);
 		SCTP_LTRACE_ERR_RET_PKT(m, inp, NULL, NULL, SCTP_FROM_SCTP_OUTPUT, EFAULT);
 		return (EFAULT);
@@ -9555,7 +9570,7 @@ sctp_chunk_retransmission(struct sctp_inpcb *inp,
 			    msg);
 			atomic_add_int(&stcb->asoc.refcnt, 1);
 			sctp_abort_an_association(stcb->sctp_ep, stcb, op_err,
-			    so_locked);
+			    false, so_locked);
 			SCTP_TCB_LOCK(stcb);
 			atomic_subtract_int(&stcb->asoc.refcnt, 1);
 			return (SCTP_RETRAN_EXIT);
@@ -12689,8 +12704,8 @@ sctp_lower_sosend(struct socket *so,
 			if ((sinfo_flags & SCTP_ABORT) ||
 			    ((sinfo_flags & SCTP_EOF) && (sndlen == 0))) {
 				/*-
-				 * User asks to abort a non-existant assoc,
-				 * or EOF a non-existant assoc with no data
+				 * User asks to abort a non-existent assoc,
+				 * or EOF a non-existent assoc with no data
 				 */
 				SCTP_LTRACE_ERR_RET(inp, stcb, net, SCTP_FROM_SCTP_OUTPUT, ENOENT);
 				error = ENOENT;
@@ -12703,7 +12718,7 @@ sctp_lower_sosend(struct socket *so,
 				panic("Error, should hold create lock and I don't?");
 			}
 #endif
-			stcb = sctp_aloc_assoc(inp, addr, &error, 0, vrf_id,
+			stcb = sctp_aloc_assoc(inp, addr, &error, 0, 0, vrf_id,
 			    inp->sctp_ep.pre_open_stream_count,
 			    inp->sctp_ep.port,
 			    p,
@@ -12967,7 +12982,7 @@ sctp_lower_sosend(struct socket *so,
 		free_cnt_applied = 0;
 		/* release this lock, otherwise we hang on ourselves */
 		NET_EPOCH_ENTER(et);
-		sctp_abort_an_association(stcb->sctp_ep, stcb, mm, SCTP_SO_LOCKED);
+		sctp_abort_an_association(stcb->sctp_ep, stcb, mm, false, SCTP_SO_LOCKED);
 		NET_EPOCH_EXIT(et);
 		/* now relock the stcb so everything is sane */
 		hold_tcblock = 0;
@@ -13544,7 +13559,7 @@ dataless_eof:
 					    msg);
 					NET_EPOCH_ENTER(et);
 					sctp_abort_an_association(stcb->sctp_ep, stcb,
-					    op_err, SCTP_SO_LOCKED);
+					    op_err, false, SCTP_SO_LOCKED);
 					NET_EPOCH_EXIT(et);
 					/*
 					 * now relock the stcb so everything

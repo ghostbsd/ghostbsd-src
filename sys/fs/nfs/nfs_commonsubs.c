@@ -85,6 +85,7 @@ extern volatile int nfsrv_devidcnt;
 extern int nfscl_debuglevel;
 extern struct nfsdevicehead nfsrv_devidhead;
 extern struct nfsstatsv1 nfsstatsv1;
+extern uint32_t nfs_srvmaxio;
 
 SYSCTL_DECL(_vfs_nfs);
 SYSCTL_INT(_vfs_nfs, OID_AUTO, enable_uidtostring, CTLFLAG_RW,
@@ -93,10 +94,6 @@ SYSCTL_INT(_vfs_nfs, OID_AUTO, enable_uidtostring, CTLFLAG_RW,
 int nfsrv_maxpnfsmirror = 1;
 SYSCTL_INT(_vfs_nfs, OID_AUTO, pnfsmirror, CTLFLAG_RD,
     &nfsrv_maxpnfsmirror, 0, "Mirror level for pNFS service");
-
-int nfs_maxcopyrange = 10 * 1024 * 1024;
-SYSCTL_INT(_vfs_nfs, OID_AUTO, maxcopyrange, CTLFLAG_RW,
-    &nfs_maxcopyrange, 0, "Max size of a Copy so RPC times reasonable");
 
 /*
  * This array of structures indicates, for V4:
@@ -168,7 +165,7 @@ struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 1, 0, 1, LK_EXCLUSIVE, 1, 1 },		/* Layout Commit */
 	{ 0, 1, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Layout Get */
 	{ 0, 1, 0, 1, LK_EXCLUSIVE, 1, 0 },		/* Layout Return */
-	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Secinfo No name */
+	{ 0, 1, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Secinfo No name */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 0 },		/* Sequence */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Set SSV */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Test StateID */
@@ -2201,7 +2198,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 			attrsum += NFSX_UNSIGNED;
 			i = fxdr_unsigned(int, *tl);
-			if (compare && !(*retcmpp) && i != NFS_SRVMAXIO)
+			if (compare && !(*retcmpp) && i != nfs_srvmaxio)
 				*retcmpp = NFSERR_NOTSAME;
 			break;
 		default:
@@ -3012,7 +3009,7 @@ nfsv4_fillattr(struct nfsrv_descript *nd, struct mount *mp, vnode_t vp,
 		case NFSATTRBIT_LAYOUTALIGNMENT:
 		case NFSATTRBIT_LAYOUTBLKSIZE:
 			NFSM_BUILD(tl, u_int32_t *, NFSX_UNSIGNED);
-			*tl = txdr_unsigned(NFS_SRVMAXIO);
+			*tl = txdr_unsigned(nfs_srvmaxio);
 			retnum += NFSX_UNSIGNED;
 			break;
 		case NFSATTRBIT_XATTRSUPPORT:
@@ -3624,7 +3621,8 @@ nfsrv_nfsuserdport(struct nfsuserd_args *nargs, NFSPROC_T *p)
  	}
 	rp->nr_vers = RPCNFSUSERD_VERS;
 	if (error == 0)
-		error = newnfs_connect(NULL, rp, NFSPROCCRED(p), p, 0, false);
+		error = newnfs_connect(NULL, rp, NFSPROCCRED(p), p, 0, false,
+		    &rp->nr_client);
 	if (error == 0) {
 		NFSLOCKNAMEID();
 		nfsrv_nfsuserd = RUNNING;
@@ -3658,7 +3656,7 @@ nfsrv_nfsuserddelport(void)
 		msleep(&nfsrv_userdupcalls, NFSNAMEIDMUTEXPTR, PVFS,
 		    "nfsupcalls", 0);
 	NFSUNLOCKNAMEID();
-	newnfs_disconnect(&nfsrv_nfsuserdsock);
+	newnfs_disconnect(NULL, &nfsrv_nfsuserdsock);
 	free(nfsrv_nfsuserdsock.nr_nam, M_SONAME);
 	NFSLOCKNAMEID();
 	nfsrv_nfsuserd = NOTRUNNING;

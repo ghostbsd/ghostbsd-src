@@ -1743,6 +1743,10 @@ zfs_send_resume_impl(libzfs_handle_t *hdl, sendflags_t *flags, int outfd,
 			tmpflags.compress = B_TRUE;
 		if (lzc_flags & LZC_SEND_FLAG_EMBED_DATA)
 			tmpflags.embed_data = B_TRUE;
+		if (lzc_flags & LZC_SEND_FLAG_RAW)
+			tmpflags.raw = B_TRUE;
+		if (lzc_flags & LZC_SEND_FLAG_SAVED)
+			tmpflags.saved = B_TRUE;
 		error = estimate_size(zhp, fromname, outfd, &tmpflags,
 		    resumeobj, resumeoff, bytes, redact_book, errbuf);
 	}
@@ -2399,7 +2403,6 @@ zfs_send_one(zfs_handle_t *zhp, const char *from, int fd, sendflags_t *flags,
 	int err;
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
 	char *name = zhp->zfs_name;
-	int orig_fd = fd;
 	pthread_t ptid;
 	progress_arg_t pa = { 0 };
 
@@ -2531,7 +2534,7 @@ zfs_send_one(zfs_handle_t *zhp, const char *from, int fd, sendflags_t *flags,
 
 	if (flags->props || flags->holds || flags->backup) {
 		/* Write the final end record. */
-		err = send_conclusion_record(orig_fd, NULL);
+		err = send_conclusion_record(fd, NULL);
 		if (err != 0)
 			return (zfs_standard_error(hdl, err, errbuf));
 	}

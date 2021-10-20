@@ -49,6 +49,7 @@ SRCS+= closefrom.c
 SRCS+= pipe.c
 SRCS+= shm_open.c
 SRCS+= vadvise.c
+SRCS+= POSIX2x_Fork.c
 
 SRCS+=	compat-stub.c
 

@@ -59,15 +59,14 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/vmm.h>
 #include <vmmapi.h>
+
+#include "config.h"
+#include "debug.h"
 #include "pci_emul.h"
 #include "mem.h"
 
 #ifndef _PATH_DEVPCI
 #define	_PATH_DEVPCI	"/dev/pci"
-#endif
-
-#ifndef	_PATH_DEVIO
-#define	_PATH_DEVIO	"/dev/io"
 #endif
 
 #ifndef _PATH_MEM
@@ -80,7 +79,6 @@ __FBSDID("$FreeBSD$");
 #define MSIX_CAPLEN 12
 
 static int pcifd = -1;
-static int iofd = -1;
 static int memfd = -1;
 
 struct passthru_softc {
@@ -616,14 +614,38 @@ done:
 }
 
 static int
-passthru_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
+passthru_legacy_config(nvlist_t *nvl, const char *opts)
+{
+	char value[16];
+	int bus, slot, func;
+
+	if (opts == NULL)
+		return (0);
+
+	if (sscanf(opts, "%d/%d/%d", &bus, &slot, &func) != 3) {
+		EPRINTLN("passthru: invalid options \"%s\"", opts);
+		return (-1);
+	}
+
+	snprintf(value, sizeof(value), "%d", bus);
+	set_config_value_node(nvl, "bus", value);
+	snprintf(value, sizeof(value), "%d", slot);
+	set_config_value_node(nvl, "slot", value);
+	snprintf(value, sizeof(value), "%d", func);
+	set_config_value_node(nvl, "func", value);
+	return (0);
+}
+
+static int
+passthru_init(struct vmctx *ctx, struct pci_devinst *pi, nvlist_t *nvl)
 {
 	int bus, slot, func, error, memflags;
 	struct passthru_softc *sc;
+	const char *value;
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_t rights;
-	cap_ioctl_t pci_ioctls[] = { PCIOCREAD, PCIOCWRITE, PCIOCGETBAR };
-	cap_ioctl_t io_ioctls[] = { IODEV_PIO };
+	cap_ioctl_t pci_ioctls[] =
+	    { PCIOCREAD, PCIOCWRITE, PCIOCGETBAR, PCIOCBARIO };
 #endif
 
 	sc = NULL;
@@ -654,21 +676,6 @@ passthru_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 
-	if (iofd < 0) {
-		iofd = open(_PATH_DEVIO, O_RDWR, 0);
-		if (iofd < 0) {
-			warn("failed to open %s", _PATH_DEVIO);
-			return (error);
-		}
-	}
-
-#ifndef WITHOUT_CAPSICUM
-	if (caph_rights_limit(iofd, &rights) == -1)
-		errx(EX_OSERR, "Unable to apply rights for sandbox");
-	if (caph_ioctls_limit(iofd, io_ioctls, nitems(io_ioctls)) == -1)
-		errx(EX_OSERR, "Unable to apply rights for sandbox");
-#endif
-
 	if (memfd < 0) {
 		memfd = open(_PATH_MEM, O_RDWR, 0);
 		if (memfd < 0) {
@@ -684,11 +691,18 @@ passthru_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 
-	if (opts == NULL ||
-	    sscanf(opts, "%d/%d/%d", &bus, &slot, &func) != 3) {
-		warnx("invalid passthru options");
-		return (error);
-	}
+#define GET_INT_CONFIG(var, name) do {					\
+	value = get_config_value_node(nvl, name);			\
+	if (value == NULL) {						\
+		EPRINTLN("passthru: missing required %s setting", name); \
+		return (error);						\
+	}								\
+	var = atoi(value);						\
+} while (0)
+
+	GET_INT_CONFIG(bus, "bus");
+	GET_INT_CONFIG(slot, "slot");
+	GET_INT_CONFIG(func, "func");
 
 	if (vm_assign_pptdev(ctx, bus, slot, func) != 0) {
 		warnx("PCI device at %d/%d/%d is not using the ppt(4) driver",
@@ -876,7 +890,7 @@ passthru_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi, int baridx,
 	       uint64_t offset, int size, uint64_t value)
 {
 	struct passthru_softc *sc;
-	struct iodev_pio_req pio;
+	struct pci_bar_ioreq pio;
 
 	sc = pi->pi_arg;
 
@@ -884,13 +898,18 @@ passthru_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi, int baridx,
 		msix_table_write(ctx, vcpu, sc, offset, size, value);
 	} else {
 		assert(pi->pi_bar[baridx].type == PCIBAR_IO);
-		bzero(&pio, sizeof(struct iodev_pio_req));
-		pio.access = IODEV_PIO_WRITE;
-		pio.port = sc->psc_bar[baridx].addr + offset;
-		pio.width = size;
-		pio.val = value;
-		
-		(void)ioctl(iofd, IODEV_PIO, &pio);
+		assert(size == 1 || size == 2 || size == 4);
+		assert(offset <= UINT32_MAX && offset + size <= UINT32_MAX);
+
+		bzero(&pio, sizeof(pio));
+		pio.pbi_sel = sc->psc_sel;
+		pio.pbi_op = PCIBARIO_WRITE;
+		pio.pbi_bar = baridx;
+		pio.pbi_offset = (uint32_t)offset;
+		pio.pbi_width = size;
+		pio.pbi_value = (uint32_t)value;
+
+		(void)ioctl(pcifd, PCIOCBARIO, &pio);
 	}
 }
 
@@ -899,7 +918,7 @@ passthru_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi, int baridx,
 	      uint64_t offset, int size)
 {
 	struct passthru_softc *sc;
-	struct iodev_pio_req pio;
+	struct pci_bar_ioreq pio;
 	uint64_t val;
 
 	sc = pi->pi_arg;
@@ -908,15 +927,19 @@ passthru_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi, int baridx,
 		val = msix_table_read(sc, offset, size);
 	} else {
 		assert(pi->pi_bar[baridx].type == PCIBAR_IO);
-		bzero(&pio, sizeof(struct iodev_pio_req));
-		pio.access = IODEV_PIO_READ;
-		pio.port = sc->psc_bar[baridx].addr + offset;
-		pio.width = size;
-		pio.val = 0;
+		assert(size == 1 || size == 2 || size == 4);
+		assert(offset <= UINT32_MAX && offset + size <= UINT32_MAX);
 
-		(void)ioctl(iofd, IODEV_PIO, &pio);
+		bzero(&pio, sizeof(pio));
+		pio.pbi_sel = sc->psc_sel;
+		pio.pbi_op = PCIBARIO_READ;
+		pio.pbi_bar = baridx;
+		pio.pbi_offset = (uint32_t)offset;
+		pio.pbi_width = size;
 
-		val = pio.val;
+		(void)ioctl(pcifd, PCIOCBARIO, &pio);
+
+		val = pio.pbi_value;
 	}
 
 	return (val);
@@ -1011,6 +1034,7 @@ passthru_addr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 struct pci_devemu passthru = {
 	.pe_emu		= "passthru",
 	.pe_init	= passthru_init,
+	.pe_legacy_config = passthru_legacy_config,
 	.pe_cfgwrite	= passthru_cfgwrite,
 	.pe_cfgread	= passthru_cfgread,
 	.pe_barwrite 	= passthru_write,

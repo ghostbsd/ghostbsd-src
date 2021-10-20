@@ -187,6 +187,8 @@ _sleep(const void *ident, struct lock_object *lock, int priority,
 	DROP_GIANT();
 	if (lock != NULL && lock != &Giant.lock_object &&
 	    !(class->lc_flags & LC_SLEEPABLE)) {
+		KASSERT(!(class->lc_flags & LC_SPINLOCK),
+		    ("spin locks can only use msleep_spin"));
 		WITNESS_SAVE(lock, lock_witness);
 		lock_state = class->lc_unlock(lock);
 	} else
@@ -366,8 +368,7 @@ wakeup_one(const void *ident)
 	int wakeup_swapper;
 
 	sleepq_lock(ident);
-	wakeup_swapper = sleepq_signal(ident, SLEEPQ_SLEEP, 0, 0);
-	sleepq_release(ident);
+	wakeup_swapper = sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_DROP, 0, 0);
 	if (wakeup_swapper)
 		kick_proc0();
 }
@@ -378,9 +379,8 @@ wakeup_any(const void *ident)
 	int wakeup_swapper;
 
 	sleepq_lock(ident);
-	wakeup_swapper = sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_UNFAIR,
-	    0, 0);
-	sleepq_release(ident);
+	wakeup_swapper = sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_UNFAIR |
+	    SLEEPQ_DROP, 0, 0);
 	if (wakeup_swapper)
 		kick_proc0();
 }

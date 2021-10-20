@@ -150,6 +150,11 @@ static int map_at_zero = 0;
 SYSCTL_INT(_security_bsd, OID_AUTO, map_at_zero, CTLFLAG_RWTUN, &map_at_zero, 0,
     "Permit processes to map an object at virtual address 0.");
 
+int core_dump_can_intr = 1;
+SYSCTL_INT(_kern, OID_AUTO, core_dump_can_intr, CTLFLAG_RWTUN,
+    &core_dump_can_intr, 0,
+    "Core dumping interruptible with SIGKILL");
+
 static int
 sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS)
 {
@@ -776,8 +781,9 @@ interpret:
 		signotify(td);
 	}
 
-	if (imgp->sysent->sv_setid_allowed != NULL &&
-	    !(*imgp->sysent->sv_setid_allowed)(td, imgp))
+	if ((imgp->sysent->sv_setid_allowed != NULL &&
+	    !(*imgp->sysent->sv_setid_allowed)(td, imgp)) ||
+	    (p->p_flag2 & P2_NO_NEW_PRIVS) != 0)
 		execve_nosetid(imgp);
 
 	/*
@@ -1033,6 +1039,13 @@ exec_unmap_first_page(struct image_params *imgp)
 	}
 }
 
+void
+exec_onexec_old(struct thread *td)
+{
+	sigfastblock_clear(td);
+	umtx_exec(td->td_proc);
+}
+
 /*
  * Destroy old address space, and allocate a new stack.
  *	The new stack is only sgrowsiz large because it is grown
@@ -1055,8 +1068,8 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	imgp->vmspace_destroyed = 1;
 	imgp->sysent = sv;
 
-	sigfastblock_clear(td);
-	umtx_exec(p);
+	if (p->p_sysent->sv_onexec_old != NULL)
+		p->p_sysent->sv_onexec_old(td);
 	itimers_exec(p);
 	if (sv->sv_onexec != NULL)
 		sv->sv_onexec(p, imgp);

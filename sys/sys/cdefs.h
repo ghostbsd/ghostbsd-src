@@ -97,16 +97,12 @@
 #define	__GNUCLIKE_BUILTIN_VAALIST 1
 #endif
 
-#if defined(__GNUC__)
 #define	__GNUC_VA_LIST_COMPATIBILITY 1
-#endif
 
 /*
  * Compiler memory barriers, specific to gcc and clang.
  */
-#if defined(__GNUC__)
 #define	__compiler_membar()	__asm __volatile(" " : : : "memory")
-#endif
 
 #define	__GNUCLIKE_BUILTIN_NEXT_ARG 1
 #define	__GNUCLIKE_MATH_BUILTIN_RELOPS
@@ -872,11 +868,31 @@
 #define __nosanitizethread	__attribute__((no_sanitize("thread")))
 #else
 #define __nosanitizeaddress
+#define __nosanitizememory
 #define __nosanitizethread
 #endif
 
 /* Guard variables and structure members by lock. */
 #define	__guarded_by(x)		__lock_annotate(guarded_by(x))
 #define	__pt_guarded_by(x)	__lock_annotate(pt_guarded_by(x))
+
+/* Alignment builtins for better type checking and improved code generation. */
+/* Provide fallback versions for other compilers (GCC/Clang < 10): */
+#if !__has_builtin(__builtin_is_aligned)
+#define __builtin_is_aligned(x, align)	\
+	(((__uintptr_t)x & ((align) - 1)) == 0)
+#endif
+#if !__has_builtin(__builtin_align_up)
+#define __builtin_align_up(x, align)	\
+	((__typeof__(x))(((__uintptr_t)(x)+((align)-1))&(~((align)-1))))
+#endif
+#if !__has_builtin(__builtin_align_down)
+#define __builtin_align_down(x, align)	\
+	((__typeof__(x))((x)&(~((align)-1))))
+#endif
+
+#define __align_up(x, y) __builtin_align_up(x, y)
+#define __align_down(x, y) __builtin_align_down(x, y)
+#define __is_aligned(x, y) __builtin_is_aligned(x, y)
 
 #endif /* !_SYS_CDEFS_H_ */

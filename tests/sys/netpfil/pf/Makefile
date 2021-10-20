@@ -5,11 +5,13 @@ PACKAGE=	tests
 TESTSDIR=       ${TESTSBASE}/sys/netpfil/pf
 TESTS_SUBDIRS+=	ioctl
 
-ATF_TESTS_SH+=	anchor \
+ATF_TESTS_SH+=	altq \
+		anchor \
 		checksum \
 		dup \
 		forward \
 		fragmentation \
+		get_state \
 		icmp \
 		killstate \
 		map_e \
@@ -17,12 +19,14 @@ ATF_TESTS_SH+=	anchor \
 		nat \
 		pass_block \
 		pfsync	\
+		proxy \
 		rdr \
 		route_to \
 		rules_counter \
 		set_skip \
 		set_tos \
 		src_track \
+		syncookie \
 		synproxy \
 		table \
 		tos
