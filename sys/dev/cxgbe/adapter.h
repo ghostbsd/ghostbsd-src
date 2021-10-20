@@ -258,14 +258,22 @@ struct tx_ch_rl_params {
 	uint32_t maxrate;
 };
 
+/* CLRL state */
+enum clrl_state {
+	CS_UNINITIALIZED = 0,
+	CS_PARAMS_SET,			/* sw parameters have been set. */
+	CS_HW_UPDATE_REQUESTED,		/* async HW update requested. */
+	CS_HW_UPDATE_IN_PROGRESS,	/* sync hw update in progress. */
+	CS_HW_CONFIGURED		/* configured in the hardware. */
+};
+
+/* CLRL flags */
 enum {
-	CLRL_USER	= (1 << 0),	/* allocated manually. */
-	CLRL_SYNC	= (1 << 1),	/* sync hw update in progress. */
-	CLRL_ASYNC	= (1 << 2),	/* async hw update requested. */
-	CLRL_ERR	= (1 << 3),	/* last hw setup ended in error. */
+	CF_USER		= (1 << 0),	/* was configured by driver ioctl. */
 };
 
 struct tx_cl_rl_params {
+	enum clrl_state state;
 	int refcount;
 	uint8_t flags;
 	enum fw_sched_params_rate ratemode;	/* %port REL or ABS value */
@@ -666,6 +674,9 @@ struct sge_ofld_rxq {
 	uint64_t rx_iscsi_ddp_octets;
 	uint64_t rx_iscsi_fl_pdus;
 	uint64_t rx_iscsi_fl_octets;
+	uint64_t rx_iscsi_padding_errors;
+	uint64_t rx_iscsi_header_digest_errors;
+	uint64_t rx_iscsi_data_digest_errors;
 	u_long	rx_toe_tls_records;
 	u_long	rx_toe_tls_octets;
 } __aligned(CACHE_LINE_SIZE);
@@ -731,6 +742,7 @@ struct sge_ofld_txq {
 	struct sge_wrq wrq;
 	counter_u64_t tx_iscsi_pdus;
 	counter_u64_t tx_iscsi_octets;
+	counter_u64_t tx_iscsi_iso_wrs;
 	counter_u64_t tx_toe_tls_records;
 	counter_u64_t tx_toe_tls_octets;
 } __aligned(CACHE_LINE_SIZE);
@@ -1280,7 +1292,6 @@ void t4_os_dump_devlog(struct adapter *);
 /* t4_kern_tls.c */
 int cxgbe_tls_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
     struct m_snd_tag **);
-void cxgbe_tls_tag_free(struct m_snd_tag *);
 void t6_ktls_modload(void);
 void t6_ktls_modunload(void);
 int t6_ktls_try(struct ifnet *, struct socket *, struct ktls_session *);
@@ -1300,7 +1311,8 @@ struct tls_keyctx;
 void t4_aes_getdeckey(void *, const void *, unsigned int);
 void t4_copy_partial_hash(int, union authctx *, void *);
 void t4_init_gmac_hash(const char *, int, char *);
-void t4_init_hmac_digest(struct auth_hash *, u_int, const char *, int, char *);
+void t4_init_hmac_digest(const struct auth_hash *, u_int, const char *, int,
+    char *);
 #ifdef KERN_TLS
 u_int t4_tls_key_info_size(const struct ktls_session *);
 int t4_tls_proto_ver(const struct ktls_session *);
@@ -1396,9 +1408,6 @@ void t4_free_etid_table(struct adapter *);
 struct cxgbe_rate_tag *lookup_etid(struct adapter *, int);
 int cxgbe_rate_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
     struct m_snd_tag **);
-int cxgbe_rate_tag_modify(struct m_snd_tag *, union if_snd_tag_modify_params *);
-int cxgbe_rate_tag_query(struct m_snd_tag *, union if_snd_tag_query_params *);
-void cxgbe_rate_tag_free(struct m_snd_tag *);
 void cxgbe_rate_tag_free_locked(struct cxgbe_rate_tag *);
 void cxgbe_ratelimit_query(struct ifnet *, struct if_ratelimit_query_results *);
 #endif

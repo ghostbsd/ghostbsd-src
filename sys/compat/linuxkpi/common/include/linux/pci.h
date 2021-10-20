@@ -130,6 +130,14 @@ struct pci_device_id {
 #define	PCI_EXP_LNKCAP2_SLS_5_0GB 0x04	/* Supported Link Speed 5.0GT/s */
 #define	PCI_EXP_LNKCAP2_SLS_8_0GB 0x08	/* Supported Link Speed 8.0GT/s */
 #define	PCI_EXP_LNKCAP2_SLS_16_0GB 0x10	/* Supported Link Speed 16.0GT/s */
+#define	PCI_EXP_LNKCTL2_TLS		0x000f
+#define	PCI_EXP_LNKCTL2_TLS_2_5GT	0x0001	/* Supported Speed 2.5GT/s */
+#define	PCI_EXP_LNKCTL2_TLS_5_0GT	0x0002	/* Supported Speed 5GT/s */
+#define	PCI_EXP_LNKCTL2_TLS_8_0GT	0x0003	/* Supported Speed 8GT/s */
+#define	PCI_EXP_LNKCTL2_TLS_16_0GT	0x0004	/* Supported Speed 16GT/s */
+#define	PCI_EXP_LNKCTL2_TLS_32_0GT	0x0005	/* Supported Speed 32GT/s */
+#define	PCI_EXP_LNKCTL2_ENTER_COMP	0x0010	/* Enter Compliance */
+#define	PCI_EXP_LNKCTL2_TX_MARGIN	0x0380	/* Transmit Margin */
 
 #define PCI_EXP_LNKCTL_HAWD	PCIEM_LINK_CTL_HAWD
 #define PCI_EXP_LNKCAP_CLKPM	0x00040000
@@ -178,6 +186,10 @@ typedef int pci_power_t;
 
 #define	PCI_EXT_CAP_ID_ERR		PCIZ_AER
 
+#define	PCI_IRQ_LEGACY			0x01
+#define	PCI_IRQ_MSI			0x02
+#define	PCI_IRQ_MSIX			0x04
+
 struct pci_dev;
 
 struct pci_driver {
@@ -212,6 +224,25 @@ extern struct list_head pci_devices;
 extern spinlock_t pci_lock;
 
 #define	__devexit_p(x)	x
+
+#define module_pci_driver(_driver)					\
+									\
+static inline int							\
+_pci_init(void)								\
+{									\
+									\
+	return (linux_pci_register_driver(&_driver));			\
+}									\
+									\
+static inline void							\
+_pci_exit(void)								\
+{									\
+									\
+	linux_pci_unregister_driver(&_driver);				\
+}									\
+									\
+module_init(_pci_init);							\
+module_exit(_pci_exit)
 
 /*
  * If we find drivers accessing this from multiple KPIs we may have to
@@ -280,19 +311,27 @@ pci_resource_type(struct pci_dev *pdev, int bar)
 		return (SYS_RES_MEMORY);
 }
 
+struct resource_list_entry *linux_pci_reserve_bar(struct pci_dev *pdev,
+		    struct resource_list *rl, int type, int rid);
+
 static inline struct resource_list_entry *
-linux_pci_get_rle(struct pci_dev *pdev, int type, int rid)
+linux_pci_get_rle(struct pci_dev *pdev, int type, int rid, bool reserve_bar)
 {
 	struct pci_devinfo *dinfo;
 	struct resource_list *rl;
+	struct resource_list_entry *rle;
 
 	dinfo = device_get_ivars(pdev->dev.bsddev);
 	rl = &dinfo->resources;
-	return resource_list_find(rl, type, rid);
+	rle = resource_list_find(rl, type, rid);
+	/* Reserve resources for this BAR if needed. */
+	if (rle == NULL && reserve_bar)
+		rle = linux_pci_reserve_bar(pdev, rl, type, rid);
+	return (rle);
 }
 
 static inline struct resource_list_entry *
-linux_pci_get_bar(struct pci_dev *pdev, int bar)
+linux_pci_get_bar(struct pci_dev *pdev, int bar, bool reserve)
 {
 	int type;
 
@@ -300,7 +339,7 @@ linux_pci_get_bar(struct pci_dev *pdev, int bar)
 	if (type < 0)
 		return (NULL);
 	bar = PCIR_BAR(bar);
-	return (linux_pci_get_rle(pdev, type, bar));
+	return (linux_pci_get_rle(pdev, type, bar, reserve));
 }
 
 static inline struct device *
@@ -490,7 +529,7 @@ pci_release_region(struct pci_dev *pdev, int bar)
 	struct pci_devres *dr;
 	struct pci_mmio_region *mmio, *p;
 
-	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
+	if ((rle = linux_pci_get_bar(pdev, bar, false)) == NULL)
 		return;
 
 	/*
@@ -572,6 +611,7 @@ lkpi_pci_disable_msi(struct pci_dev *pdev)
 	pdev->msi_enabled = false;
 }
 #define	pci_disable_msi(pdev)		lkpi_pci_disable_msi(pdev)
+#define	pci_free_irq_vectors(pdev)	lkpi_pci_disable_msi(pdev)
 
 unsigned long	pci_resource_start(struct pci_dev *pdev, int bar);
 unsigned long	pci_resource_len(struct pci_dev *pdev, int bar);
@@ -747,7 +787,7 @@ pci_enable_msix(struct pci_dev *pdev, struct msix_entry *entries, int nreq)
 		pci_release_msi(pdev->dev.bsddev);
 		return avail;
 	}
-	rle = linux_pci_get_rle(pdev, SYS_RES_IRQ, 1);
+	rle = linux_pci_get_rle(pdev, SYS_RES_IRQ, 1, false);
 	pdev->dev.irq_start = rle->start;
 	pdev->dev.irq_end = rle->start + avail;
 	for (i = 0; i < nreq; i++)
@@ -800,12 +840,48 @@ pci_enable_msi(struct pci_dev *pdev)
 	if ((error = -pci_alloc_msi(pdev->dev.bsddev, &avail)) != 0)
 		return error;
 
-	rle = linux_pci_get_rle(pdev, SYS_RES_IRQ, 1);
+	rle = linux_pci_get_rle(pdev, SYS_RES_IRQ, 1, false);
 	pdev->dev.irq_start = rle->start;
 	pdev->dev.irq_end = rle->start + avail;
 	pdev->irq = rle->start;
 	pdev->msi_enabled = true;
 	return (0);
+}
+
+static inline int
+pci_alloc_irq_vectors(struct pci_dev *pdev, int minv, int maxv,
+    unsigned int flags)
+{
+	int error;
+
+	if (flags & PCI_IRQ_MSIX) {
+		struct msix_entry *entries;
+		int i;
+
+		entries = kcalloc(maxv, sizeof(*entries), GFP_KERNEL);
+		if (entries == NULL) {
+			error = -ENOMEM;
+			goto out;
+		}
+		for (i = 0; i < maxv; ++i)
+			entries[i].entry = i;
+		error = pci_enable_msix(pdev, entries, maxv);
+out:
+		kfree(entries);
+		if (error == 0 && pdev->msix_enabled)
+			return (pdev->dev.irq_end - pdev->dev.irq_start);
+	}
+	if (flags & PCI_IRQ_MSI) {
+		error = pci_enable_msi(pdev);
+		if (error == 0 && pdev->msi_enabled)
+			return (pdev->dev.irq_end - pdev->dev.irq_start);
+	}
+	if (flags & PCI_IRQ_LEGACY) {
+		if (pdev->irq)
+			return (1);
+	}
+
+	return (-EINVAL);
 }
 
 static inline int

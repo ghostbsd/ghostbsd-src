@@ -1,11 +1,11 @@
 /*-
- * Copyright (c) 2013 Dmitry Chagin
  * Copyright (c) 2004 Tim J. Robbins
  * Copyright (c) 2003 Peter Wemm
  * Copyright (c) 2002 Doug Rabson
  * Copyright (c) 1998-1999 Andrew Gallatin
  * Copyright (c) 1994-1996 Søren Schmidt
  * All rights reserved.
+ * Copyright (c) 2013, 2021 Dmitry Chagin <dchagin@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -50,6 +50,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
+#include <sys/stddef.h>
 #include <sys/signalvar.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
@@ -72,9 +73,11 @@ __FBSDID("$FreeBSD$");
 #include <machine/specialreg.h>
 #include <machine/trap.h>
 
+#include <x86/linux/linux_x86.h>
 #include <amd64/linux/linux.h>
 #include <amd64/linux/linux_proto.h>
 #include <compat/linux/linux_emul.h>
+#include <compat/linux/linux_fork.h>
 #include <compat/linux/linux_ioctl.h>
 #include <compat/linux/linux_mib.h>
 #include <compat/linux/linux_misc.h>
@@ -85,11 +88,24 @@ __FBSDID("$FreeBSD$");
 
 MODULE_VERSION(linux64, 1);
 
+#define	LINUX_VDSOPAGE_SIZE	PAGE_SIZE * 2
+#define	LINUX_VDSOPAGE_LA48	(VM_MAXUSER_ADDRESS_LA48 - \
+				    LINUX_VDSOPAGE_SIZE)
+#define	LINUX_SHAREDPAGE_LA48	(LINUX_VDSOPAGE_LA48 - PAGE_SIZE)
+				/*
+				 * PAGE_SIZE - the size
+				 * of the native SHAREDPAGE
+				 */
+#define	LINUX_USRSTACK_LA48	LINUX_SHAREDPAGE_LA48
+#define	LINUX_PS_STRINGS_LA48	(LINUX_USRSTACK_LA48 - \
+				    sizeof(struct ps_strings))
+
 static int linux_szsigcode;
-static vm_object_t linux_shared_page_obj;
-static char *linux_shared_page_mapping;
-extern char _binary_linux_locore_o_start;
-extern char _binary_linux_locore_o_end;
+static vm_object_t linux_vdso_obj;
+static char *linux_vdso_mapping;
+extern char _binary_linux_vdso_so_o_start;
+extern char _binary_linux_vdso_so_o_end;
+static vm_offset_t linux_vdso_base;
 
 extern struct sysent linux_sysent[LINUX_SYS_MAXSYSCALL];
 
@@ -100,12 +116,17 @@ static int	linux_copyout_strings(struct image_params *imgp,
 static int	linux_fixup_elf(uintptr_t *stack_base,
 		    struct image_params *iparams);
 static bool	linux_trans_osrel(const Elf_Note *note, int32_t *osrel);
-static void	linux_vdso_install(void *param);
-static void	linux_vdso_deinstall(void *param);
+static void	linux_vdso_install(const void *param);
+static void	linux_vdso_deinstall(const void *param);
+static void	linux_vdso_reloc(char *mapping, Elf_Addr offset);
 static void	linux_set_syscall_retval(struct thread *td, int error);
 static int	linux_fetch_syscall_args(struct thread *td);
 static void	linux_exec_setregs(struct thread *td, struct image_params *imgp,
 		    uintptr_t stack);
+static void	linux_exec_sysvec_init(void *param);
+static int	linux_on_exec_vmspace(struct proc *p,
+		    struct image_params *imgp);
+static void	linux_set_fork_retval(struct thread *td);
 static int	linux_vsyscall(struct thread *td);
 
 #define LINUX_T_UNKNOWN  255
@@ -149,6 +170,8 @@ static int _bsd_to_linux_trapcode[] = {
 
 LINUX_VDSO_SYM_INTPTR(linux_rt_sigcode);
 LINUX_VDSO_SYM_CHAR(linux_platform);
+LINUX_VDSO_SYM_INTPTR(kern_timekeep_base);
+LINUX_VDSO_SYM_INTPTR(kern_tsc_selector);
 
 /*
  * If FreeBSD & Linux have a difference of opinion about what a trap
@@ -191,6 +214,7 @@ linux_fetch_syscall_args(struct thread *td)
 	sa->args[4] = frame->tf_r8;
 	sa->args[5] = frame->tf_r9;
 	sa->code = frame->tf_rax;
+	sa->original_code = sa->code;
 
 	if (sa->code >= p->p_sysent->sv_size)
 		/* nosys */
@@ -212,7 +236,7 @@ linux_set_syscall_retval(struct thread *td, int error)
 	switch (error) {
 	case 0:
 		frame->tf_rax = td->td_retval[0];
- 		frame->tf_r10 = frame->tf_rcx;
+		frame->tf_r10 = frame->tf_rcx;
 		break;
 
 	case ERESTART:
@@ -225,7 +249,7 @@ linux_set_syscall_retval(struct thread *td, int error)
 		frame->tf_rip -= frame->tf_err;
 		frame->tf_r10 = frame->tf_rcx;
 		break;
- 
+
 	case EJUSTRETURN:
 		break;
 
@@ -247,6 +271,14 @@ linux_set_syscall_retval(struct thread *td, int error)
 	set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
 }
 
+static void
+linux_set_fork_retval(struct thread *td)
+{
+	struct trapframe *frame = td->td_frame;
+
+	frame->tf_rax = 0;
+}
+
 static int
 linux_copyout_auxargs(struct image_params *imgp, uintptr_t base)
 {
@@ -261,8 +293,7 @@ linux_copyout_auxargs(struct image_params *imgp, uintptr_t base)
 	    M_WAITOK | M_ZERO);
 
 	issetugid = p->p_flag & P_SUGID ? 1 : 0;
-	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO_EHDR,
-	    imgp->proc->p_sysent->sv_shared_page_base);
+	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO_EHDR, linux_vdso_base);
 	AUXARGS_ENTRY(pos, LINUX_AT_HWCAP, cpu_feature);
 	AUXARGS_ENTRY(pos, AT_PAGESZ, args->pagesz);
 	AUXARGS_ENTRY(pos, LINUX_AT_CLKTCK, stclohz);
@@ -524,10 +555,9 @@ linux_rt_sigreturn(struct thread *td, struct linux_rt_sigreturn_args *args)
 	 * Corruption of the PSL_RF bit at worst causes one more or
 	 * one less debugger trap, so allowing it is fairly harmless.
 	 */
-
-#define RFLAG_SECURE(ef, oef)     ((((ef) ^ (oef)) & ~PSL_USERCHANGE) == 0)
-	if (!RFLAG_SECURE(rflags & ~PSL_RF, regs->tf_rflags & ~PSL_RF)) {
-		printf("linux_rt_sigreturn: rflags = 0x%lx\n", rflags);
+	if (!EFL_SECURE(rflags & ~PSL_RF, regs->tf_rflags & ~PSL_RF)) {
+		uprintf("pid %d comm %s linux mangled rflags %#lx\n",
+		    p->p_pid, p->p_comm, rflags);
 		return (EINVAL);
 	}
 
@@ -536,9 +566,9 @@ linux_rt_sigreturn(struct thread *td, struct linux_rt_sigreturn_args *args)
 	 * hardware check for invalid selectors, excess privilege in
 	 * other selectors, invalid %eip's and invalid %esp's.
 	 */
-#define CS_SECURE(cs)           (ISPL(cs) == SEL_UPL)
 	if (!CS_SECURE(context->sc_cs)) {
-		printf("linux_rt_sigreturn: cs = 0x%x\n", context->sc_cs);
+		uprintf("pid %d comm %s linux mangled cs %#x\n",
+		    p->p_pid, p->p_comm, context->sc_cs);
 		ksiginfo_init_trap(&ksi);
 		ksi.ksi_signo = SIGBUS;
 		ksi.ksi_code = BUS_OBJERR;
@@ -609,9 +639,6 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	LINUX_CTR4(rt_sendsig, "%p, %d, %p, %u",
 	    catcher, sig, mask, code);
 
-	/* Translate the signal. */
-	sig = bsd_to_linux_signal(sig);
-
 	/* Save user context. */
 	bzero(&sf, sizeof(sf));
 	bsd_to_linux_sigset(mask, &sf.sf_sc.uc_sigmask);
@@ -654,6 +681,9 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		sp = (caddr_t)regs->tf_rsp - sizeof(struct l_rt_sigframe) - 128;
 	/* Align to 16 bytes. */
 	sfp = (struct l_rt_sigframe *)((unsigned long)sp & ~0xFul);
+
+	/* Translate the signal. */
+	sig = bsd_to_linux_signal(sig);
 
 	/* Build the argument list for the signal handler. */
 	regs->tf_rdi = sig;			/* arg 1 in %rdi */
@@ -736,16 +766,19 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_transtrap	= linux_translate_traps,
 	.sv_fixup	= linux_fixup_elf,
 	.sv_sendsig	= linux_rt_sendsig,
-	.sv_sigcode	= &_binary_linux_locore_o_start,
+	.sv_sigcode	= &_binary_linux_vdso_so_o_start,
 	.sv_szsigcode	= &linux_szsigcode,
 	.sv_name	= "Linux ELF64",
 	.sv_coredump	= elf64_coredump,
+	.sv_elf_core_osabi = ELFOSABI_NONE,
+	.sv_elf_core_abi_vendor = LINUX_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = linux64_prepare_notes,
 	.sv_imgact_try	= linux_exec_imgact_try,
 	.sv_minsigstksz	= LINUX_MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS_LA48,
-	.sv_usrstack	= USRSTACK_LA48,
-	.sv_psstrings	= PS_STRINGS_LA48,
+	.sv_usrstack	= LINUX_USRSTACK_LA48,
+	.sv_psstrings	= LINUX_PS_STRINGS_LA48,
 	.sv_stackprot	= VM_PROT_ALL,
 	.sv_copyout_auxargs = linux_copyout_auxargs,
 	.sv_copyout_strings = linux_copyout_strings,
@@ -753,56 +786,152 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
 	.sv_flags	= SV_ABI_LINUX | SV_LP64 | SV_SHP | SV_SIG_DISCIGN |
-	    SV_SIG_WAITNDQ,
+	    SV_SIG_WAITNDQ | SV_TIMEKEEP,
 	.sv_set_syscall_retval = linux_set_syscall_retval,
 	.sv_fetch_syscall_args = linux_fetch_syscall_args,
 	.sv_syscallnames = NULL,
-	.sv_shared_page_base = SHAREDPAGE_LA48,
+	.sv_shared_page_base = LINUX_SHAREDPAGE_LA48,
 	.sv_shared_page_len = PAGE_SIZE,
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= linux_vsyscall,
-	.sv_onexec	= linux_on_exec,
+	.sv_onexec	= linux_on_exec_vmspace,
 	.sv_onexit	= linux_on_exit,
 	.sv_ontdexit	= linux_thread_dtor,
 	.sv_setid_allowed = &linux_setid_allowed_query,
+	.sv_set_fork_retval = linux_set_fork_retval,
 };
 
-static void
-linux_vdso_install(void *param)
+static int
+linux_on_exec_vmspace(struct proc *p, struct image_params *imgp)
 {
+	int error;
 
-	amd64_lower_shared_page(&elf_linux_sysvec);
-
-	linux_szsigcode = (&_binary_linux_locore_o_end -
-	    &_binary_linux_locore_o_start);
-
-	if (linux_szsigcode > elf_linux_sysvec.sv_shared_page_len)
-		panic("Linux invalid vdso size\n");
-
-	__elfN(linux_vdso_fixup)(&elf_linux_sysvec);
-
-	linux_shared_page_obj = __elfN(linux_shared_page_init)
-	    (&linux_shared_page_mapping);
-
-	__elfN(linux_vdso_reloc)(&elf_linux_sysvec);
-
-	bcopy(elf_linux_sysvec.sv_sigcode, linux_shared_page_mapping,
-	    linux_szsigcode);
-	elf_linux_sysvec.sv_shared_page_obj = linux_shared_page_obj;
+	error = linux_map_vdso(p, linux_vdso_obj, linux_vdso_base,
+	    LINUX_VDSOPAGE_SIZE, imgp);
+	if (error == 0)
+		linux_on_exec(p, imgp);
+	return (error);
 }
-SYSINIT(elf_linux_vdso_init, SI_SUB_EXEC, SI_ORDER_ANY,
+
+/*
+ * linux_vdso_install() and linux_exec_sysvec_init() must be called
+ * after exec_sysvec_init() which is SI_SUB_EXEC (SI_ORDER_ANY).
+ */
+static void
+linux_exec_sysvec_init(void *param)
+{
+	l_uintptr_t *ktimekeep_base, *ktsc_selector;
+	struct sysentvec *sv;
+	ptrdiff_t tkoff;
+
+	sv = param;
+	amd64_lower_shared_page(sv);
+	/* Fill timekeep_base */
+	exec_sysvec_init(sv);
+
+	tkoff = kern_timekeep_base - linux_vdso_base;
+	ktimekeep_base = (l_uintptr_t *)(linux_vdso_mapping + tkoff);
+	*ktimekeep_base = sv->sv_timekeep_base;
+
+	tkoff = kern_tsc_selector - linux_vdso_base;
+	ktsc_selector = (l_uintptr_t *)(linux_vdso_mapping + tkoff);
+	*ktsc_selector = linux_vdso_tsc_selector_idx();
+	if (bootverbose)
+		printf("Linux x86-64 vDSO tsc_selector: %lu\n", *ktsc_selector);
+}
+SYSINIT(elf_linux_exec_sysvec_init, SI_SUB_EXEC + 1, SI_ORDER_ANY,
+    linux_exec_sysvec_init, &elf_linux_sysvec);
+
+static void
+linux_vdso_install(const void *param)
+{
+	char *vdso_start = &_binary_linux_vdso_so_o_start;
+	char *vdso_end = &_binary_linux_vdso_so_o_end;
+
+	linux_szsigcode = vdso_end - vdso_start;
+	MPASS(linux_szsigcode <= LINUX_VDSOPAGE_SIZE);
+
+	linux_vdso_base = LINUX_VDSOPAGE_LA48;
+	if (hw_lower_amd64_sharedpage != 0)
+		linux_vdso_base -= PAGE_SIZE;
+
+	__elfN(linux_vdso_fixup)(vdso_start, linux_vdso_base);
+
+	linux_vdso_obj = __elfN(linux_shared_page_init)
+	    (&linux_vdso_mapping, LINUX_VDSOPAGE_SIZE);
+	bcopy(vdso_start, linux_vdso_mapping, linux_szsigcode);
+
+	linux_vdso_reloc(linux_vdso_mapping, linux_vdso_base);
+}
+SYSINIT(elf_linux_vdso_init, SI_SUB_EXEC + 1, SI_ORDER_FIRST,
     linux_vdso_install, NULL);
 
 static void
-linux_vdso_deinstall(void *param)
+linux_vdso_deinstall(const void *param)
 {
 
-	__elfN(linux_shared_page_fini)(linux_shared_page_obj,
-	    linux_shared_page_mapping);
+	__elfN(linux_shared_page_fini)(linux_vdso_obj,
+	    linux_vdso_mapping, LINUX_VDSOPAGE_SIZE);
 }
 SYSUNINIT(elf_linux_vdso_uninit, SI_SUB_EXEC, SI_ORDER_FIRST,
     linux_vdso_deinstall, NULL);
+
+static void
+linux_vdso_reloc(char *mapping, Elf_Addr offset)
+{
+	const Elf_Ehdr *ehdr;
+	const Elf_Shdr *shdr;
+	Elf64_Addr *where, val;
+	Elf_Size rtype, symidx;
+	const Elf_Rela *rela;
+	Elf_Addr addr, addend;
+	int relacnt;
+	int i, j;
+
+	MPASS(offset != 0);
+
+	relacnt = 0;
+	ehdr = (const Elf_Ehdr *)mapping;
+	shdr = (const Elf_Shdr *)(mapping + ehdr->e_shoff);
+	for (i = 0; i < ehdr->e_shnum; i++)
+	{
+		switch (shdr[i].sh_type) {
+		case SHT_REL:
+			printf("Linux x86_64 vDSO: unexpected Rel section\n");
+			break;
+		case SHT_RELA:
+			rela = (const Elf_Rela *)(mapping + shdr[i].sh_offset);
+			relacnt = shdr[i].sh_size / sizeof(*rela);
+		}
+	}
+
+	for (j = 0; j < relacnt; j++, rela++) {
+		where = (Elf_Addr *)(mapping + rela->r_offset);
+		addend = rela->r_addend;
+		rtype = ELF_R_TYPE(rela->r_info);
+		symidx = ELF_R_SYM(rela->r_info);
+
+		switch (rtype) {
+		case R_X86_64_NONE:	/* none */
+			break;
+
+		case R_X86_64_RELATIVE:	/* B + A */
+			addr = (Elf_Addr)(offset + addend);
+			val = addr;
+			if (*where != val)
+				*where = val;
+			break;
+		case R_X86_64_IRELATIVE:
+			printf("Linux x86_64 vDSO: unexpected ifunc relocation, "
+			    "symbol index %ld\n", symidx);
+			break;
+		default:
+			printf("Linux x86_64 vDSO: unexpected relocation type %ld, "
+			    "symbol index %ld\n", rtype, symidx);
+		}
+	}
+}
 
 static char GNULINUX_ABI_VENDOR[] = "GNU";
 static int GNULINUX_ABI_DESC = 0;
@@ -872,7 +1001,8 @@ static Elf64_Brandinfo linux_muslbrand = {
 	.sysvec		= &elf_linux_sysvec,
 	.interp_newpath	= NULL,
 	.brand_note	= &linux64_brandnote,
-	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE
+	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE |
+			    LINUX_BI_FUTEX_REQUEUE
 };
 
 Elf64_Brandinfo *linux_brandlist[] = {
@@ -921,9 +1051,9 @@ linux64_elf_modevent(module_t mod, int type, void *data)
 			SET_FOREACH(lihp, linux_ioctl_handler_set)
 				linux_ioctl_unregister_handler(*lihp);
 			if (bootverbose)
-				printf("Linux ELF exec handler removed\n");
+				printf("Linux x86_64 ELF exec handler removed\n");
 		} else
-			printf("Could not deinstall ELF interpreter entry\n");
+			printf("Could not deinstall Linux x86_64 ELF interpreter entry\n");
 		break;
 	default:
 		return (EOPNOTSUPP);

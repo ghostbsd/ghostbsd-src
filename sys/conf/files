@@ -375,31 +375,6 @@ cddl/dev/fbt/fbt.c			optional dtrace_fbt      | dtraceall compile-with "${FBT_C}
 cddl/dev/systrace/systrace.c		optional dtrace_systrace | dtraceall compile-with "${CDDL_C}"
 cddl/dev/prototype.c			optional dtrace_prototype | dtraceall compile-with "${CDDL_C}"
 fs/nfsclient/nfs_clkdtrace.c		optional dtnfscl nfscl   | dtraceall nfscl compile-with "${CDDL_C}"
-compat/cloudabi/cloudabi_clock.c	optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_errno.c	optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_fd.c		optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_file.c		optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_futex.c	optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_mem.c		optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_proc.c		optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_random.c	optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_sock.c		optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_thread.c	optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi/cloudabi_vdso.c		optional compat_cloudabi32 | compat_cloudabi64
-compat/cloudabi32/cloudabi32_fd.c	optional compat_cloudabi32
-compat/cloudabi32/cloudabi32_module.c	optional compat_cloudabi32
-compat/cloudabi32/cloudabi32_poll.c	optional compat_cloudabi32
-compat/cloudabi32/cloudabi32_sock.c	optional compat_cloudabi32
-compat/cloudabi32/cloudabi32_syscalls.c	optional compat_cloudabi32
-compat/cloudabi32/cloudabi32_sysent.c	optional compat_cloudabi32
-compat/cloudabi32/cloudabi32_thread.c	optional compat_cloudabi32
-compat/cloudabi64/cloudabi64_fd.c	optional compat_cloudabi64
-compat/cloudabi64/cloudabi64_module.c	optional compat_cloudabi64
-compat/cloudabi64/cloudabi64_poll.c	optional compat_cloudabi64
-compat/cloudabi64/cloudabi64_sock.c	optional compat_cloudabi64
-compat/cloudabi64/cloudabi64_syscalls.c	optional compat_cloudabi64
-compat/cloudabi64/cloudabi64_sysent.c	optional compat_cloudabi64
-compat/cloudabi64/cloudabi64_thread.c	optional compat_cloudabi64
 compat/freebsd32/freebsd32_capability.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_ioctl.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_misc.c	optional compat_freebsd32
@@ -1405,6 +1380,7 @@ dev/bwn/if_bwn_phy_lp.c		optional bwn bhnd
 dev/bwn/if_bwn_phy_n.c		optional bwn bhnd
 dev/bwn/if_bwn_util.c		optional bwn bhnd
 dev/cadence/if_cgem.c		optional cgem fdt
+dev/cardbus/card_if.m		standard
 dev/cardbus/cardbus.c		optional cardbus
 dev/cardbus/cardbus_cis.c	optional cardbus
 dev/cardbus/cardbus_device.c	optional cardbus
@@ -1519,7 +1495,7 @@ t4fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t4fw.fwo"
 t4fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t4fw-1.25.6.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t4fw-1.26.2.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t4fw.fw"
@@ -1553,7 +1529,7 @@ t5fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t5fw.fwo"
 t5fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t5fw-1.25.6.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t5fw-1.26.2.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t5fw.fw"
@@ -1587,7 +1563,7 @@ t6fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t6fw.fwo"
 t6fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t6fw-1.25.6.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t6fw-1.26.2.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t6fw.fw"
@@ -1673,6 +1649,8 @@ dev/e1000/e1000_i210.c		optional em \
 	compile-with "${NORMAL_C} -I$S/dev/e1000"
 dev/e1000/e1000_api.c		optional em \
 	compile-with "${NORMAL_C} -I$S/dev/e1000"
+dev/e1000/e1000_base.c		optional em \
+	compile-with "${NORMAL_C} -I$S/dev/e1000"
 dev/e1000/e1000_mac.c		optional em \
 	compile-with "${NORMAL_C} -I$S/dev/e1000"
 dev/e1000/e1000_manage.c	optional em \
@@ -1693,6 +1671,8 @@ dev/ena/ena.c			optional ena \
 dev/ena/ena_datapath.c		optional ena \
 	compile-with "${NORMAL_C} -I$S/contrib"
 dev/ena/ena_netmap.c		optional ena \
+	compile-with "${NORMAL_C} -I$S/contrib"
+dev/ena/ena_rss.c		optional ena \
 	compile-with "${NORMAL_C} -I$S/contrib"
 dev/ena/ena_sysctl.c 		optional ena \
 	compile-with "${NORMAL_C} -I$S/contrib"
@@ -1881,9 +1861,18 @@ dev/iicbus/s35390a.c		optional s35390a
 dev/iicbus/sy8106a.c		optional sy8106a ext_resources fdt
 dev/iicbus/syr827.c		optional syr827 ext_resources fdt
 dev/iicbus/gpio/tca6416.c	optional tca6416 fdt
+dev/iicbus/pmic/fan53555.c	optional fan53555 ext_resources fdt
 dev/iir/iir.c			optional iir
 dev/iir/iir_ctrl.c		optional iir
 dev/iir/iir_pci.c		optional iir pci
+dev/igc/if_igc.c		optional igc iflib pci
+dev/igc/igc_api.c		optional igc iflib pci
+dev/igc/igc_base.c		optional igc iflib pci
+dev/igc/igc_i225.c		optional igc iflib pci
+dev/igc/igc_mac.c		optional igc iflib pci
+dev/igc/igc_nvm.c		optional igc iflib pci
+dev/igc/igc_phy.c		optional igc iflib pci
+dev/igc/igc_txrx.c		optional igc iflib pci
 dev/intpm/intpm.c		optional intpm pci
 # XXX Work around clang warning, until maintainer approves fix.
 dev/ips/ips.c			optional ips \
@@ -2469,6 +2458,7 @@ dev/mmc/mmcbr_if.m		standard
 dev/mmc/mmcbus_if.m		standard
 dev/mmc/mmcsd.c			optional mmcsd !mmccam
 dev/mmc/mmc_fdt_helpers.c	optional ext_resources mmc fdt | ext_resources mmccam fdt
+dev/mmc/mmc_helpers.c		optional ext_resources mmc | ext_resources mmccam
 dev/mmc/mmc_pwrseq.c		optional ext_resources mmc fdt | ext_resources mmccam fdt
 dev/mmc/mmc_pwrseq_if.m		optional ext_resources mmc fdt | ext_resources mmccam fdt
 dev/mmcnull/mmcnull.c		optional mmcnull
@@ -2579,6 +2569,7 @@ dev/oce/oce_mbox.c		optional oce pci
 dev/oce/oce_queue.c		optional oce pci
 dev/oce/oce_sysctl.c		optional oce pci
 dev/oce/oce_util.c		optional oce pci
+dev/ocs_fc/ocs_gendump.c	optional ocs_fc pci
 dev/ocs_fc/ocs_pci.c		optional ocs_fc pci
 dev/ocs_fc/ocs_ioctl.c		optional ocs_fc pci
 dev/ocs_fc/ocs_os.c		optional ocs_fc pci
@@ -2618,7 +2609,6 @@ dev/ow/own_if.m			optional ow
 dev/ow/ow_temp.c		optional ow_temp
 dev/ow/owc_gpiobus.c		optional owc gpio
 dev/pbio/pbio.c			optional pbio isa
-dev/pccard/card_if.m		standard
 dev/pccard/pccard.c		optional pccard
 dev/pccard/pccard_cis.c		optional pccard
 dev/pccard/pccard_cis_quirks.c	optional pccard
@@ -3531,14 +3521,15 @@ dev/xdma/xdma_sglist.c		optional xdma
 dev/xen/balloon/balloon.c	optional xenhvm
 dev/xen/blkfront/blkfront.c	optional xenhvm
 dev/xen/blkback/blkback.c	optional xenhvm
+dev/xen/bus/xenpv.c		optional xenhvm
 dev/xen/console/xen_console.c	optional xenhvm
 dev/xen/control/control.c	optional xenhvm
 dev/xen/efi/pvefi.c		optional xenhvm efirt
 dev/xen/grant_table/grant_table.c	optional xenhvm
 dev/xen/netback/netback.c	optional xenhvm
 dev/xen/netfront/netfront.c	optional xenhvm
+dev/xen/timer/timer.c		optional xenhvm xentimer
 dev/xen/xenpci/xenpci.c		optional xenpci
-dev/xen/timer/timer.c		optional xenhvm
 dev/xen/xenstore/xenstore.c	optional xenhvm
 dev/xen/xenstore/xenstore_dev.c	optional xenhvm
 dev/xen/xenstore/xenstored_dev.c	optional xenhvm
@@ -3815,7 +3806,7 @@ kern/kern_idle.c		standard
 kern/kern_intr.c		standard
 kern/kern_jail.c		standard
 kern/kern_kcov.c		optional kcov			\
-	compile-with "${NORMAL_C:N-fsanitize*}"
+	compile-with "${NORMAL_C:N-fsanitize*} ${NORMAL_C:M-fsanitize=kernel-memory}"
 kern/kern_khelp.c		standard
 kern/kern_kthread.c		standard
 kern/kern_ktr.c			optional ktr
@@ -3914,6 +3905,8 @@ kern/subr_lock.c		standard
 kern/subr_log.c			standard
 kern/subr_mchain.c		optional libmchain
 kern/subr_module.c		standard
+kern/subr_msan.c		optional kmsan \
+	compile-with "${NORMAL_C:N-fsanitize*}"
 kern/subr_msgbuf.c		standard
 kern/subr_param.c		standard
 kern/subr_pcpu.c		standard
@@ -4089,6 +4082,7 @@ libkern/strncat.c		standard
 libkern/strncmp.c		standard
 libkern/strncpy.c		standard
 libkern/strnlen.c		standard
+libkern/strnstr.c		standard
 libkern/strrchr.c		standard
 libkern/strsep.c		standard
 libkern/strspn.c		standard
@@ -4259,7 +4253,6 @@ netgraph/atm/sscop/ng_sscop.c optional ngatm_sscop \
 netgraph/atm/uni/ng_uni.c	optional ngatm_uni \
 	compile-with "${NORMAL_C} -I$S/contrib/ngatm"
 netgraph/bluetooth/common/ng_bluetooth.c optional netgraph_bluetooth
-netgraph/bluetooth/drivers/h4/ng_h4.c optional netgraph_bluetooth_h4
 netgraph/bluetooth/drivers/ubt/ng_ubt.c optional netgraph_bluetooth_ubt usb
 netgraph/bluetooth/drivers/ubt/ng_ubt_intel.c optional netgraph_bluetooth_ubt usb
 netgraph/bluetooth/drivers/ubtbcmfw/ubtbcmfw.c optional netgraph_bluetooth_ubtbcmfw usb
@@ -4525,6 +4518,7 @@ netpfil/pf/pf_norm.c		optional pf inet
 netpfil/pf/pf_nv.c		optional pf inet
 netpfil/pf/pf_osfp.c		optional pf inet
 netpfil/pf/pf_ruleset.c		optional pf inet
+netpfil/pf/pf_syncookies.c	optional pf inet
 netpfil/pf/pf_table.c		optional pf inet
 netpfil/pf/in4_cksum.c		optional pf inet
 netsmb/smb_conn.c		optional netsmb
@@ -4565,7 +4559,11 @@ compat/linuxkpi/common/src/linux_domain.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_firmware.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_fpu.c		optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_hrtimer.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_interrupt.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_kthread.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
@@ -4616,6 +4614,8 @@ ofed/drivers/infiniband/core/ib_cm.c			optional ofed	\
 	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_cma.c			optional ofed	\
 	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_core_uverbs.c		optional ofed	\
+	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_cq.c			optional ofed	\
 	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_device.c		optional ofed	\
@@ -4635,6 +4635,8 @@ ofed/drivers/infiniband/core/ib_mad_rmpp.c		optional ofed	\
 ofed/drivers/infiniband/core/ib_multicast.c		optional ofed	\
 	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_packer.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_rdma_core.c		optional ofed	\
 	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_roce_gid_mgmt.c		optional ofed	\
 	compile-with "${OFED_C}"
@@ -4656,9 +4658,29 @@ ofed/drivers/infiniband/core/ib_user_mad.c		optional ofed	\
 	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_uverbs_cmd.c		optional ofed	\
 	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_ioctl.c		optional ofed	\
+	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_uverbs_main.c		optional ofed	\
 	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_uverbs_marshall.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types_async_fd.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types_counters.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types_cq.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types_device.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types_dm.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types_flow_action.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_std_types_mr.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_uapi.c		optional ofed	\
 	compile-with "${OFED_C}"
 ofed/drivers/infiniband/core/ib_verbs.c			optional ofed	\
 	compile-with "${OFED_C}"
@@ -4814,6 +4836,8 @@ dev/mlx5/mlx5_ib/mlx5_ib_ah.c			optional mlx5ib pci ofed \
 dev/mlx5/mlx5_ib/mlx5_ib_cong.c			optional mlx5ib pci ofed \
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_ib/mlx5_ib_cq.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_devx.c			optional mlx5ib pci ofed \
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_ib/mlx5_ib_doorbell.c		optional mlx5ib pci ofed \
 	compile-with "${OFED_C}"

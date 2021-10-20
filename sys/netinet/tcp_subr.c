@@ -268,7 +268,14 @@ SYSCTL_INT(_net_inet_tcp, TCPCTL_DO_RFC1323, rfc1323, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(tcp_do_rfc1323), 0,
     "Enable rfc1323 (high performance TCP) extensions");
 
-VNET_DEFINE(int, tcp_tolerate_missing_ts) = 0;
+/*
+ * As of June 2021, several TCP stacks violate RFC 7323 from September 2014.
+ * Some stacks negotiate TS, but never send them after connection setup. Some
+ * stacks negotiate TS, but don't send them when sending keep-alive segments.
+ * These include modern widely deployed TCP stacks.
+ * Therefore tolerating violations for now...
+ */
+VNET_DEFINE(int, tcp_tolerate_missing_ts) = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, tolerate_missing_ts, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(tcp_tolerate_missing_ts), 0,
     "Tolerate missing TCP timestamps");
@@ -382,6 +389,30 @@ static struct tcp_function_block tcp_def_funcblk = {
 static int tcp_fb_cnt = 0;
 struct tcp_funchead t_functions;
 static struct tcp_function_block *tcp_func_set_ptr = &tcp_def_funcblk;
+
+void
+tcp_record_dsack(struct tcpcb *tp, tcp_seq start, tcp_seq end, int tlp)
+{
+	TCPSTAT_INC(tcps_dsack_count);
+	tp->t_dsack_pack++;
+	if (tlp == 0) {
+		if (SEQ_GT(end, start)) {
+			tp->t_dsack_bytes += (end - start);
+			TCPSTAT_ADD(tcps_dsack_bytes, (end - start));
+		} else {
+			tp->t_dsack_tlp_bytes += (start - end);
+			TCPSTAT_ADD(tcps_dsack_bytes, (start - end));
+		}
+	} else {
+		if (SEQ_GT(end, start)) {
+			tp->t_dsack_bytes += (end - start);
+			TCPSTAT_ADD(tcps_dsack_tlp_bytes, (end - start));
+		} else {
+			tp->t_dsack_tlp_bytes += (start - end);
+			TCPSTAT_ADD(tcps_dsack_tlp_bytes, (start - end));
+		}
+	}
+}
 
 static struct tcp_function_block *
 find_tcp_functions_locked(struct tcp_function_set *fs)
@@ -1513,6 +1544,7 @@ tcp_init(void)
 	tcp_would_have_but = counter_u64_alloc(M_WAITOK);
 	tcp_comp_total = counter_u64_alloc(M_WAITOK);
 	tcp_uncomp_total = counter_u64_alloc(M_WAITOK);
+	tcp_bad_csums = counter_u64_alloc(M_WAITOK);
 #ifdef TCPPCAP
 	tcp_pcap_init();
 #endif
@@ -3995,6 +4027,9 @@ tcp_inptoxtp(const struct inpcb *inp, struct xtcpcb *xt)
 		xt->t_snd_wnd = tp->snd_wnd;
 		xt->t_snd_cwnd = tp->snd_cwnd;
 		xt->t_snd_ssthresh = tp->snd_ssthresh;
+		xt->t_dsack_bytes = tp->t_dsack_bytes;
+		xt->t_dsack_tlp_bytes = tp->t_dsack_tlp_bytes;
+		xt->t_dsack_pack = tp->t_dsack_pack;
 		xt->t_maxseg = tp->t_maxseg;
 		xt->xt_ecn = (tp->t_flags2 & TF2_ECN_PERMIT) ? 1 : 0 +
 			     (tp->t_flags2 & TF2_ACE_PERMIT) ? 2 : 0;

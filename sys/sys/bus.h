@@ -90,7 +90,6 @@ struct u_device {
 #define	DF_QUIET	0x10		/* don't print verbose attach message */
 #define	DF_DONENOMATCH	0x20		/* don't execute DEVICE_NOMATCH again */
 #define	DF_EXTERNALSOFTC 0x40		/* softc not allocated by us */
-#define	DF_REBID	0x80		/* Can rebid after attach */
 #define	DF_SUSPENDED	0x100		/* Device is suspended. */
 #define	DF_QUIET_CHILDREN 0x200		/* Default to quiet for all my children */
 #define	DF_ATTACHED_ONCE 0x400		/* Has been attached at least once */
@@ -631,6 +630,8 @@ int	device_set_unit(device_t dev, int unit);	/* XXX DONT USE XXX */
 int	device_shutdown(device_t dev);
 void	device_unbusy(device_t dev);
 void	device_verbose(device_t dev);
+ssize_t	device_get_property(device_t dev, const char *prop, void *val, size_t sz);
+bool device_has_property(device_t dev, const char *prop);
 
 /*
  * Access functions for devclass.

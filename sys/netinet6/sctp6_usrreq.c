@@ -200,7 +200,7 @@ sctp6_notify(struct sctp_inpcb *inp,
 	case ICMP6_PARAM_PROB:
 		/* Treat it like an ABORT. */
 		if (icmp6_code == ICMP6_PARAMPROB_NEXTHEADER) {
-			sctp_abort_notification(stcb, 1, 0, NULL, SCTP_SO_NOT_LOCKED);
+			sctp_abort_notification(stcb, true, false, 0, NULL, SCTP_SO_NOT_LOCKED);
 			(void)sctp_free_assoc(inp, stcb, SCTP_NORMAL_PROC,
 			    SCTP_FROM_SCTP_USRREQ + SCTP_LOC_2);
 		} else {
@@ -771,7 +771,8 @@ sctp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 			return (EINVAL);
 		}
 	}
-	if (IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
+	if ((addr->sa_family == AF_INET6) &&
+	    IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
 		struct sockaddr_in sin;
 
 		/* convert v4-mapped into v4 addr and send */
@@ -909,7 +910,8 @@ sctp6_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 			return (EINVAL);
 		}
 	}
-	if (IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
+	if ((addr->sa_family == AF_INET6) &&
+	    IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
 		/* convert v4-mapped into v4 addr */
 		in6_sin6_2_sin(&store.sin, sin6);
 		addr = &store.sa;
@@ -943,7 +945,7 @@ sctp6_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 		return (EALREADY);
 	}
 	/* We are GOOD to go */
-	stcb = sctp_aloc_assoc(inp, addr, &error, 0, vrf_id,
+	stcb = sctp_aloc_assoc_connected(inp, addr, &error, 0, 0, vrf_id,
 	    inp->sctp_ep.pre_open_stream_count,
 	    inp->sctp_ep.port, p,
 	    SCTP_INITIALIZE_AUTH_PARAMS);
@@ -951,11 +953,6 @@ sctp6_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 	if (stcb == NULL) {
 		/* Gak! no memory */
 		return (error);
-	}
-	if (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) {
-		stcb->sctp_ep->sctp_flags |= SCTP_PCB_FLAGS_CONNECTED;
-		/* Set the connected flag so we can queue data */
-		soisconnecting(so);
 	}
 	SCTP_SET_STATE(stcb, SCTP_STATE_COOKIE_WAIT);
 	(void)SCTP_GETTIME_TIMEVAL(&stcb->asoc.time_entered);

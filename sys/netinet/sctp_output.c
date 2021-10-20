@@ -5817,7 +5817,9 @@ do_a_abort:
 			atomic_add_int(&asoc->refcnt, 1);
 			SCTP_TCB_UNLOCK(stcb);
 	new_tag:
+			SCTP_INP_INFO_RLOCK();
 			vtag = sctp_select_a_tag(inp, inp->sctp_lport, sh->src_port, 1);
+			SCTP_INP_INFO_RUNLOCK();
 			if ((asoc->peer_supports_nat) && (vtag == asoc->my_vtag)) {
 				/*
 				 * Got a duplicate vtag on some guy behind a
@@ -5834,7 +5836,9 @@ do_a_abort:
 		} else {
 			SCTP_INP_INCR_REF(inp);
 			SCTP_INP_RUNLOCK(inp);
+			SCTP_INP_INFO_RLOCK();
 			vtag = sctp_select_a_tag(inp, inp->sctp_lport, sh->src_port, 1);
+			SCTP_INP_INFO_RUNLOCK();
 			initack->init.initiate_tag = htonl(vtag);
 			/* get a TSN to use too */
 			initack->init.initial_tsn = htonl(sctp_select_initial_TSN(&inp->sctp_ep));
@@ -6333,7 +6337,6 @@ sctp_msg_append(struct sctp_tcb *stcb,
 		error = EINVAL;
 		goto out_now;
 	}
-	strm = &stcb->asoc.strmout[srcv->sinfo_stream];
 	/* Now can we send this? */
 	if ((SCTP_GET_STATE(stcb) == SCTP_STATE_SHUTDOWN_SENT) ||
 	    (SCTP_GET_STATE(stcb) == SCTP_STATE_SHUTDOWN_ACK_SENT) ||
@@ -6392,10 +6395,11 @@ sctp_msg_append(struct sctp_tcb *stcb,
 	if (hold_stcb_lock == 0) {
 		SCTP_TCB_SEND_LOCK(stcb);
 	}
+	strm = &stcb->asoc.strmout[srcv->sinfo_stream];
 	sctp_snd_sb_alloc(stcb, sp->length);
 	atomic_add_int(&stcb->asoc.stream_queue_cnt, 1);
 	TAILQ_INSERT_TAIL(&strm->outqueue, sp, next);
-	stcb->asoc.ss_functions.sctp_ss_add_to_stream(stcb, &stcb->asoc, strm, sp, 1);
+	stcb->asoc.ss_functions.sctp_ss_add_to_stream(stcb, &stcb->asoc, strm, sp);
 	m = NULL;
 	if (hold_stcb_lock == 0) {
 		SCTP_TCB_SEND_UNLOCK(stcb);
@@ -6631,7 +6635,7 @@ sctp_sendall_iterator(struct sctp_inpcb *inp, struct sctp_tcb *stcb, void *ptr,
 		 * us.
 		 */
 		atomic_add_int(&stcb->asoc.refcnt, 1);
-		sctp_abort_an_association(inp, stcb, m, SCTP_SO_NOT_LOCKED);
+		sctp_abort_an_association(inp, stcb, m, false, SCTP_SO_NOT_LOCKED);
 		/*
 		 * sctp_abort_an_association calls sctp_free_asoc() free
 		 * association will NOT free it since we incremented the
@@ -6715,7 +6719,7 @@ sctp_sendall_iterator(struct sctp_inpcb *inp, struct sctp_tcb *stcb, void *ptr,
 						    msg);
 						atomic_add_int(&stcb->asoc.refcnt, 1);
 						sctp_abort_an_association(stcb->sctp_ep, stcb,
-						    op_err, SCTP_SO_NOT_LOCKED);
+						    op_err, false, SCTP_SO_NOT_LOCKED);
 						atomic_add_int(&stcb->asoc.refcnt, -1);
 						goto no_chunk_output;
 					}
@@ -6770,7 +6774,9 @@ sctp_sendall_completes(void *ptr, uint32_t val SCTP_UNUSED)
 	/* now free everything */
 	if (ca->inp) {
 		/* Lets clear the flag to allow others to run. */
+		SCTP_INP_WLOCK(ca->inp);
 		ca->inp->sctp_flags &= ~SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+		SCTP_INP_WUNLOCK(ca->inp);
 	}
 	sctp_m_freem(ca->m);
 	SCTP_FREE(ca, SCTP_M_COPYAL);
@@ -6825,10 +6831,6 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 	int ret;
 	struct sctp_copy_all *ca;
 
-	if (inp->sctp_flags & SCTP_PCB_FLAGS_SND_ITERATOR_UP) {
-		/* There is another. */
-		return (EBUSY);
-	}
 	if (uio->uio_resid > (ssize_t)SCTP_BASE_SYSCTL(sctp_sendall_limit)) {
 		/* You must not be larger than the limit! */
 		return (EMSGSIZE);
@@ -6846,6 +6848,18 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 	if (srcv) {
 		memcpy(&ca->sndrcv, srcv, sizeof(struct sctp_nonpad_sndrcvinfo));
 	}
+
+	/* Serialize. */
+	SCTP_INP_WLOCK(inp);
+	if ((inp->sctp_flags & SCTP_PCB_FLAGS_SND_ITERATOR_UP) != 0) {
+		SCTP_INP_WUNLOCK(inp);
+		sctp_m_freem(m);
+		SCTP_FREE(ca, SCTP_M_COPYAL);
+		return (EBUSY);
+	}
+	inp->sctp_flags |= SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+	SCTP_INP_WUNLOCK(inp);
+
 	/*
 	 * take off the sendall flag, it would be bad if we failed to do
 	 * this :-0
@@ -6857,6 +6871,10 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 		ca->m = sctp_copy_out_all(uio, ca->sndlen);
 		if (ca->m == NULL) {
 			SCTP_FREE(ca, SCTP_M_COPYAL);
+			sctp_m_freem(m);
+			SCTP_INP_WLOCK(inp);
+			inp->sctp_flags &= ~SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+			SCTP_INP_WUNLOCK(inp);
 			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_OUTPUT, ENOMEM);
 			return (ENOMEM);
 		}
@@ -6869,14 +6887,15 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 			ca->sndlen += SCTP_BUF_LEN(mat);
 		}
 	}
-	inp->sctp_flags |= SCTP_PCB_FLAGS_SND_ITERATOR_UP;
 	ret = sctp_initiate_iterator(NULL, sctp_sendall_iterator, NULL,
 	    SCTP_PCB_ANY_FLAGS, SCTP_PCB_ANY_FEATURES,
 	    SCTP_ASOC_ANY_STATE,
 	    (void *)ca, 0,
 	    sctp_sendall_completes, inp, 1);
 	if (ret) {
+		SCTP_INP_WLOCK(inp);
 		inp->sctp_flags &= ~SCTP_PCB_FLAGS_SND_ITERATOR_UP;
+		SCTP_INP_WUNLOCK(inp);
 		SCTP_FREE(ca, SCTP_M_COPYAL);
 		SCTP_LTRACE_ERR_RET_PKT(m, inp, NULL, NULL, SCTP_FROM_SCTP_OUTPUT, EFAULT);
 		return (EFAULT);
@@ -7123,6 +7142,7 @@ sctp_can_we_split_this(struct sctp_tcb *stcb, uint32_t length,
 
 static uint32_t
 sctp_move_to_outqueue(struct sctp_tcb *stcb,
+    struct sctp_nets *net,
     struct sctp_stream_out *strq,
     uint32_t space_left,
     uint32_t frag_point,
@@ -7188,13 +7208,13 @@ one_more_time:
 				    sp->put_last_out,
 				    send_lock_up);
 			}
-			if ((TAILQ_NEXT(sp, next) == NULL) && (send_lock_up == 0)) {
+			if (send_lock_up == 0) {
 				SCTP_TCB_SEND_LOCK(stcb);
 				send_lock_up = 1;
 			}
 			atomic_subtract_int(&asoc->stream_queue_cnt, 1);
 			TAILQ_REMOVE(&strq->outqueue, sp, next);
-			stcb->asoc.ss_functions.sctp_ss_remove_from_stream(stcb, asoc, strq, sp, send_lock_up);
+			stcb->asoc.ss_functions.sctp_ss_remove_from_stream(stcb, asoc, strq, sp);
 			if ((strq->state == SCTP_STREAM_RESET_PENDING) &&
 			    (strq->chunks_on_queues == 0) &&
 			    TAILQ_EMPTY(&strq->outqueue)) {
@@ -7536,6 +7556,7 @@ dont_do_it:
 		sctp_auth_key_acquire(stcb, chk->auth_keyid);
 		chk->holds_key_ref = 1;
 	}
+	stcb->asoc.ss_functions.sctp_ss_scheduled(stcb, net, asoc, strq, to_move);
 	chk->rec.data.tsn = atomic_fetchadd_int(&asoc->sending_seq, 1);
 	if (SCTP_BASE_SYSCTL(sctp_logging_level) & SCTP_LOG_AT_SEND_2_OUTQ) {
 		sctp_misc_ints(SCTP_STRMOUT_LOG_SEND,
@@ -7619,13 +7640,13 @@ dont_do_it:
 			    sp->put_last_out,
 			    send_lock_up);
 		}
-		if ((send_lock_up == 0) && (TAILQ_NEXT(sp, next) == NULL)) {
+		if (send_lock_up == 0) {
 			SCTP_TCB_SEND_LOCK(stcb);
 			send_lock_up = 1;
 		}
 		atomic_subtract_int(&asoc->stream_queue_cnt, 1);
 		TAILQ_REMOVE(&strq->outqueue, sp, next);
-		stcb->asoc.ss_functions.sctp_ss_remove_from_stream(stcb, asoc, strq, sp, send_lock_up);
+		stcb->asoc.ss_functions.sctp_ss_remove_from_stream(stcb, asoc, strq, sp);
 		if ((strq->state == SCTP_STREAM_RESET_PENDING) &&
 		    (strq->chunks_on_queues == 0) &&
 		    TAILQ_EMPTY(&strq->outqueue)) {
@@ -7653,8 +7674,8 @@ out_of:
 }
 
 static void
-sctp_fill_outqueue(struct sctp_tcb *stcb,
-    struct sctp_nets *net, int frag_point, int eeor_mode, int *quit_now, int so_locked)
+sctp_fill_outqueue(struct sctp_tcb *stcb, struct sctp_nets *net, int frag_point,
+    int eeor_mode, int *quit_now, int so_locked)
 {
 	struct sctp_association *asoc;
 	struct sctp_stream_out *strq;
@@ -7689,9 +7710,9 @@ sctp_fill_outqueue(struct sctp_tcb *stcb,
 	giveup = 0;
 	bail = 0;
 	while ((space_left > 0) && (strq != NULL)) {
-		moved = sctp_move_to_outqueue(stcb, strq, space_left, frag_point,
-		    &giveup, eeor_mode, &bail, so_locked);
-		stcb->asoc.ss_functions.sctp_ss_scheduled(stcb, net, asoc, strq, moved);
+		moved = sctp_move_to_outqueue(stcb, net, strq, space_left,
+		    frag_point, &giveup, eeor_mode,
+		    &bail, so_locked);
 		if ((giveup != 0) || (bail != 0)) {
 			break;
 		}
@@ -9555,7 +9576,7 @@ sctp_chunk_retransmission(struct sctp_inpcb *inp,
 			    msg);
 			atomic_add_int(&stcb->asoc.refcnt, 1);
 			sctp_abort_an_association(stcb->sctp_ep, stcb, op_err,
-			    so_locked);
+			    false, so_locked);
 			SCTP_TCB_LOCK(stcb);
 			atomic_subtract_int(&stcb->asoc.refcnt, 1);
 			return (SCTP_RETRAN_EXIT);
@@ -11313,7 +11334,7 @@ sctp_send_hb(struct sctp_tcb *stcb, struct sctp_nets *net, int so_locked)
 	/* Fill out hb parameter */
 	hb->heartbeat.hb_info.ph.param_type = htons(SCTP_HEARTBEAT_INFO);
 	hb->heartbeat.hb_info.ph.param_length = htons(sizeof(struct sctp_heartbeat_info_param));
-	hb->heartbeat.hb_info.time_value_1 = now.tv_sec;
+	hb->heartbeat.hb_info.time_value_1 = (uint32_t)now.tv_sec;
 	hb->heartbeat.hb_info.time_value_2 = now.tv_usec;
 	/* Did our user request this one, put it in */
 	hb->heartbeat.hb_info.addr_family = (uint8_t)net->ro._l_addr.sa.sa_family;
@@ -12157,7 +12178,7 @@ sctp_send_str_reset_req(struct sctp_tcb *stcb,
 		 * initializing the new stuff.
 		 */
 		SCTP_TCB_SEND_LOCK(stcb);
-		stcb->asoc.ss_functions.sctp_ss_clear(stcb, &stcb->asoc, 0, 1);
+		stcb->asoc.ss_functions.sctp_ss_clear(stcb, &stcb->asoc, false);
 		for (i = 0; i < stcb->asoc.streamoutcnt; i++) {
 			TAILQ_INIT(&stcb->asoc.strmout[i].outqueue);
 			/* FIX ME FIX ME */
@@ -12188,7 +12209,7 @@ sctp_send_str_reset_req(struct sctp_tcb *stcb,
 			}
 		}
 		/* now the new streams */
-		stcb->asoc.ss_functions.sctp_ss_init(stcb, &stcb->asoc, 1);
+		stcb->asoc.ss_functions.sctp_ss_init(stcb, &stcb->asoc);
 		for (i = stcb->asoc.streamoutcnt; i < (stcb->asoc.streamoutcnt + adding_o); i++) {
 			TAILQ_INIT(&stcb->asoc.strmout[i].outqueue);
 			stcb->asoc.strmout[i].chunks_on_queues = 0;
@@ -12434,9 +12455,13 @@ sctp_sosend(struct socket *so,
 	}
 	addr_to_use = addr;
 #if defined(INET) && defined(INET6)
-	if ((addr) && (addr->sa_family == AF_INET6)) {
+	if ((addr != NULL) && (addr->sa_family == AF_INET6)) {
 		struct sockaddr_in6 *sin6;
 
+		if (addr->sa_len != sizeof(struct sockaddr_in6)) {
+			SCTP_LTRACE_ERR_RET(NULL, NULL, NULL, SCTP_FROM_SCTP_OUTPUT, EINVAL);
+			return (EINVAL);
+		}
 		sin6 = (struct sockaddr_in6 *)addr;
 		if (IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
 			in6_sin6_2_sin(&sin, sin6);
@@ -12467,7 +12492,7 @@ sctp_lower_sosend(struct socket *so,
 {
 	struct epoch_tracker et;
 	ssize_t sndlen = 0, max_len, local_add_more;
-	int error, len;
+	int error;
 	struct mbuf *top = NULL;
 	int queue_only = 0, queue_only_for_init = 0;
 	int free_cnt_applied = 0;
@@ -12689,8 +12714,8 @@ sctp_lower_sosend(struct socket *so,
 			if ((sinfo_flags & SCTP_ABORT) ||
 			    ((sinfo_flags & SCTP_EOF) && (sndlen == 0))) {
 				/*-
-				 * User asks to abort a non-existant assoc,
-				 * or EOF a non-existant assoc with no data
+				 * User asks to abort a non-existent assoc,
+				 * or EOF a non-existent assoc with no data
 				 */
 				SCTP_LTRACE_ERR_RET(inp, stcb, net, SCTP_FROM_SCTP_OUTPUT, ENOENT);
 				error = ENOENT;
@@ -12703,7 +12728,7 @@ sctp_lower_sosend(struct socket *so,
 				panic("Error, should hold create lock and I don't?");
 			}
 #endif
-			stcb = sctp_aloc_assoc(inp, addr, &error, 0, vrf_id,
+			stcb = sctp_aloc_assoc_connected(inp, addr, &error, 0, 0, vrf_id,
 			    inp->sctp_ep.pre_open_stream_count,
 			    inp->sctp_ep.port,
 			    p,
@@ -12711,14 +12736,6 @@ sctp_lower_sosend(struct socket *so,
 			if (stcb == NULL) {
 				/* Error is setup for us in the call */
 				goto out_unlocked;
-			}
-			if (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) {
-				stcb->sctp_ep->sctp_flags |= SCTP_PCB_FLAGS_CONNECTED;
-				/*
-				 * Set the connected flag so we can queue
-				 * data
-				 */
-				soisconnecting(so);
 			}
 			hold_tcblock = 1;
 			if (create_lock_applied) {
@@ -12738,7 +12755,7 @@ sctp_lower_sosend(struct socket *so,
 
 			if (control) {
 				if (sctp_process_cmsgs_for_init(stcb, control, &error)) {
-					sctp_free_assoc(inp, stcb, SCTP_PCBFREE_FORCE,
+					sctp_free_assoc(inp, stcb, SCTP_NORMAL_PROC,
 					    SCTP_FROM_SCTP_OUTPUT + SCTP_LOC_6);
 					hold_tcblock = 0;
 					stcb = NULL;
@@ -12828,7 +12845,7 @@ sctp_lower_sosend(struct socket *so,
 		SCTP_TCB_UNLOCK(stcb);
 		hold_tcblock = 0;
 	} else {
-		atomic_add_int(&stcb->asoc.sb_send_resv, sndlen);
+		atomic_add_int(&stcb->asoc.sb_send_resv, (int)sndlen);
 	}
 	local_soresv = sndlen;
 	if (stcb->asoc.state & SCTP_STATE_ABOUT_TO_BE_FREED) {
@@ -12967,7 +12984,7 @@ sctp_lower_sosend(struct socket *so,
 		free_cnt_applied = 0;
 		/* release this lock, otherwise we hang on ourselves */
 		NET_EPOCH_ENTER(et);
-		sctp_abort_an_association(stcb->sctp_ep, stcb, mm, SCTP_SO_LOCKED);
+		sctp_abort_an_association(stcb->sctp_ep, stcb, mm, false, SCTP_SO_LOCKED);
 		NET_EPOCH_EXIT(et);
 		/* now relock the stcb so everything is sane */
 		hold_tcblock = 0;
@@ -13027,7 +13044,6 @@ sctp_lower_sosend(struct socket *so,
 		 */
 		local_add_more = sndlen;
 	}
-	len = 0;
 	if (non_blocking) {
 		goto skip_preblock;
 	}
@@ -13123,6 +13139,8 @@ skip_preblock:
 				goto out;
 			}
 			SCTP_TCB_SEND_LOCK(stcb);
+			/* The out streams might be reallocated. */
+			strm = &stcb->asoc.strmout[srcv->sinfo_stream];
 			if (sp->msg_is_complete) {
 				strm->last_msg_incomplete = 0;
 				asoc->stream_locked = 0;
@@ -13145,7 +13163,7 @@ skip_preblock:
 			}
 			sp->processing = 1;
 			TAILQ_INSERT_TAIL(&strm->outqueue, sp, next);
-			stcb->asoc.ss_functions.sctp_ss_add_to_stream(stcb, asoc, strm, sp, 1);
+			stcb->asoc.ss_functions.sctp_ss_add_to_stream(stcb, asoc, strm, sp);
 		} else {
 			sp = TAILQ_LAST(&strm->outqueue, sctp_streamhead);
 			if (sp == NULL) {
@@ -13228,7 +13246,6 @@ skip_preblock:
 				}
 				sctp_snd_sb_alloc(stcb, sndout);
 				atomic_add_int(&sp->length, sndout);
-				len += sndout;
 				if (sinfo_flags & SCTP_SACK_IMMEDIATELY) {
 					sp->sinfo_flags |= SCTP_SACK_IMMEDIATELY;
 				}
@@ -13544,7 +13561,7 @@ dataless_eof:
 					    msg);
 					NET_EPOCH_ENTER(et);
 					sctp_abort_an_association(stcb->sctp_ep, stcb,
-					    op_err, SCTP_SO_LOCKED);
+					    op_err, false, SCTP_SO_LOCKED);
 					NET_EPOCH_EXIT(et);
 					/*
 					 * now relock the stcb so everything
@@ -13667,7 +13684,7 @@ out:
 out_unlocked:
 
 	if (local_soresv && stcb) {
-		atomic_subtract_int(&stcb->asoc.sb_send_resv, sndlen);
+		atomic_subtract_int(&stcb->asoc.sb_send_resv, (int)sndlen);
 	}
 	if (create_lock_applied) {
 		SCTP_ASOC_CREATE_UNLOCK(inp);

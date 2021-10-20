@@ -138,10 +138,25 @@ pci_host_generic_setup_fdt(device_t dev)
 	/* TODO parse FDT bus ranges */
 	sc->base.bus_start = 0;
 	sc->base.bus_end = 0xFF;
+	
+	/*
+	 * ofw_pcib uses device unit as PCI domain number.
+	 * Do the same. Some boards have multiple RCs handled
+	 * by different drivers, this ensures that there are
+	 * no collisions.
+	 */
+	sc->base.ecam = device_get_unit(dev);
 
 	error = pci_host_generic_core_attach(dev);
 	if (error != 0)
 		return (error);
+
+	if (ofw_bus_is_compatible(dev, "marvell,armada8k-pcie-ecam") ||
+	    ofw_bus_is_compatible(dev, "socionext,synquacer-pcie-ecam") ||
+	    ofw_bus_is_compatible(dev, "snps,dw-pcie-ecam")) {
+		device_set_desc(dev, "Synopsys DesignWare PCIe Controller");
+		sc->base.quirks |= PCIE_ECAM_DESIGNWARE_QUIRK;
+	}
 
 	ofw_bus_setup_iinfo(node, &sc->pci_iinfo, sizeof(cell_t));
 

@@ -203,7 +203,6 @@ enum {
 	FDDUP_NORMAL,		/* dup() behavior. */
 	FDDUP_FCNTL,		/* fcntl()-style errors. */
 	FDDUP_FIXED,		/* Force fixed allocation. */
-	FDDUP_MUSTREPLACE,	/* Target must exist. */
 	FDDUP_LASTMODE,
 };
 
@@ -250,12 +249,8 @@ void	fdclose(struct thread *td, struct file *fp, int idx);
 void	fdcloseexec(struct thread *td);
 void	fdsetugidsafety(struct thread *td);
 struct	filedesc *fdcopy(struct filedesc *fdp);
-int	fdcopy_remapped(struct filedesc *fdp, const int *fds, size_t nfds,
-	    struct filedesc **newfdp);
-void	fdinstall_remapped(struct thread *td, struct filedesc *fdp);
 void	fdunshare(struct thread *td);
 void	fdescfree(struct thread *td);
-void	fdescfree_remapped(struct filedesc *fdp);
 int	fdlastfile(struct filedesc *fdp);
 int	fdlastfile_single(struct filedesc *fdp);
 struct	filedesc *fdinit(struct filedesc *fdp, bool prepfiles, int *lastfile);
@@ -341,6 +336,7 @@ void	pwd_set_rootvnode(void);
 
 struct pwd *pwd_hold_pwddesc(struct pwddesc *pdp);
 bool	pwd_hold_smr(struct pwd *pwd);
+struct pwd *pwd_hold_proc(struct proc *p);
 struct pwd *pwd_hold(struct thread *td);
 void	pwd_drop(struct pwd *pwd);
 static inline void

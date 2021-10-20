@@ -138,6 +138,7 @@ struct kevent32_freebsd11 {
 #define EV_ENABLE	0x0004		/* enable event */
 #define EV_DISABLE	0x0008		/* disable event (not reported) */
 #define EV_FORCEONESHOT	0x0100		/* enable _ONESHOT and force trigger */
+#define EV_KEEPUDATA	0x0200		/* do not update the udata field */
 
 /* flags */
 #define EV_ONESHOT	0x0010		/* only report one occurrence */
@@ -349,6 +350,7 @@ int 	kqfd_register(int fd, struct kevent *kev, struct thread *p,
 	    int mflag);
 int	kqueue_add_filteropts(int filt, struct filterops *filtops);
 int	kqueue_del_filteropts(int filt);
+void	kqueue_drain_schedtask(void);
 
 #else 	/* !_KERNEL */
 

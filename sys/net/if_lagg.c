@@ -583,10 +583,6 @@ lagg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	ifp->if_flags = IFF_SIMPLEX | IFF_BROADCAST | IFF_MULTICAST;
 #if defined(KERN_TLS) || defined(RATELIMIT)
 	ifp->if_snd_tag_alloc = lagg_snd_tag_alloc;
-	ifp->if_snd_tag_modify = lagg_snd_tag_modify;
-	ifp->if_snd_tag_query = lagg_snd_tag_query;
-	ifp->if_snd_tag_free = lagg_snd_tag_free;
-	ifp->if_next_snd_tag = lagg_next_snd_tag;
 	ifp->if_ratelimit_query = lagg_ratelimit_query;
 #endif
 	ifp->if_capenable = ifp->if_capabilities = IFCAP_HWSTATS;
@@ -969,14 +965,16 @@ lagg_port_destroy(struct lagg_port *lp, int rundelport)
 			bcopy(lladdr, IF_LLADDR(sc->sc_ifp), sc->sc_ifp->if_addrlen);
 			lagg_proto_lladdr(sc);
 			EVENTHANDLER_INVOKE(iflladdr_event, sc->sc_ifp);
-		}
 
-		/*
-		 * Update lladdr for each port (new primary needs update
-		 * as well, to switch from old lladdr to its 'real' one)
-		 */
-		CK_SLIST_FOREACH(lp_ptr, &sc->sc_ports, lp_entries)
-			if_setlladdr(lp_ptr->lp_ifp, lladdr, lp_ptr->lp_ifp->if_addrlen);
+			/*
+			 * Update lladdr for each port (new primary needs update
+			 * as well, to switch from old lladdr to its 'real' one).
+			 * We can skip this if the lagg is being destroyed.
+			 */
+			CK_SLIST_FOREACH(lp_ptr, &sc->sc_ports, lp_entries)
+				if_setlladdr(lp_ptr->lp_ifp, lladdr,
+				    lp_ptr->lp_ifp->if_addrlen);
+		}
 	}
 
 	if (lp->lp_ifflags)
@@ -1739,6 +1737,44 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 }
 
 #if defined(KERN_TLS) || defined(RATELIMIT)
+#ifdef RATELIMIT
+static const struct if_snd_tag_sw lagg_snd_tag_ul_sw = {
+	.snd_tag_modify = lagg_snd_tag_modify,
+	.snd_tag_query = lagg_snd_tag_query,
+	.snd_tag_free = lagg_snd_tag_free,
+	.next_snd_tag = lagg_next_snd_tag,
+	.type = IF_SND_TAG_TYPE_UNLIMITED
+};
+
+static const struct if_snd_tag_sw lagg_snd_tag_rl_sw = {
+	.snd_tag_modify = lagg_snd_tag_modify,
+	.snd_tag_query = lagg_snd_tag_query,
+	.snd_tag_free = lagg_snd_tag_free,
+	.next_snd_tag = lagg_next_snd_tag,
+	.type = IF_SND_TAG_TYPE_RATE_LIMIT
+};
+#endif
+
+#ifdef KERN_TLS
+static const struct if_snd_tag_sw lagg_snd_tag_tls_sw = {
+	.snd_tag_modify = lagg_snd_tag_modify,
+	.snd_tag_query = lagg_snd_tag_query,
+	.snd_tag_free = lagg_snd_tag_free,
+	.next_snd_tag = lagg_next_snd_tag,
+	.type = IF_SND_TAG_TYPE_TLS
+};
+
+#ifdef RATELIMIT
+static const struct if_snd_tag_sw lagg_snd_tag_tls_rl_sw = {
+	.snd_tag_modify = lagg_snd_tag_modify,
+	.snd_tag_query = lagg_snd_tag_query,
+	.snd_tag_free = lagg_snd_tag_free,
+	.next_snd_tag = lagg_next_snd_tag,
+	.type = IF_SND_TAG_TYPE_TLS_RATE_LIMIT
+};
+#endif
+#endif
+
 static inline struct lagg_snd_tag *
 mst_to_lst(struct m_snd_tag *mst)
 {
@@ -1794,6 +1830,7 @@ lagg_snd_tag_alloc(struct ifnet *ifp,
     struct m_snd_tag **ppmt)
 {
 	struct epoch_tracker et;
+	const struct if_snd_tag_sw *sw;
 	struct lagg_snd_tag *lst;
 	struct lagg_softc *sc;
 	struct lagg_port *lp;
@@ -1801,6 +1838,29 @@ lagg_snd_tag_alloc(struct ifnet *ifp,
 	int error;
 
 	sc = ifp->if_softc;
+
+	switch (params->hdr.type) {
+#ifdef RATELIMIT
+	case IF_SND_TAG_TYPE_UNLIMITED:
+		sw = &lagg_snd_tag_ul_sw;
+		break;
+	case IF_SND_TAG_TYPE_RATE_LIMIT:
+		sw = &lagg_snd_tag_rl_sw;
+		break;
+#endif
+#ifdef KERN_TLS
+	case IF_SND_TAG_TYPE_TLS:
+		sw = &lagg_snd_tag_tls_sw;
+		break;
+#ifdef RATELIMIT
+	case IF_SND_TAG_TYPE_TLS_RATE_LIMIT:
+		sw = &lagg_snd_tag_tls_rl_sw;
+		break;
+#endif
+#endif
+	default:
+		return (EOPNOTSUPP);
+	}
 
 	NET_EPOCH_ENTER(et);
 	lp = lookup_snd_tag_port(ifp, params->hdr.flowid,
@@ -1830,7 +1890,7 @@ lagg_snd_tag_alloc(struct ifnet *ifp,
 		return (error);
 	}
 
-	m_snd_tag_init(&lst->com, ifp, lst->tag->type);
+	m_snd_tag_init(&lst->com, ifp, sw);
 
 	*ppmt = &lst->com;
 	return (0);
@@ -1852,7 +1912,7 @@ lagg_snd_tag_modify(struct m_snd_tag *mst,
 	struct lagg_snd_tag *lst;
 
 	lst = mst_to_lst(mst);
-	return (lst->tag->ifp->if_snd_tag_modify(lst->tag, params));
+	return (lst->tag->sw->snd_tag_modify(lst->tag, params));
 }
 
 static int
@@ -1862,7 +1922,7 @@ lagg_snd_tag_query(struct m_snd_tag *mst,
 	struct lagg_snd_tag *lst;
 
 	lst = mst_to_lst(mst);
-	return (lst->tag->ifp->if_snd_tag_query(lst->tag, params));
+	return (lst->tag->sw->snd_tag_query(lst->tag, params));
 }
 
 static void

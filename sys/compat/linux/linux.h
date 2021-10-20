@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2015 Dmitry Chagin
- * All rights reserved.
+ * Copyright (c) 2015 Dmitry Chagin <dchagin@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,6 +29,11 @@
 #define _LINUX_MI_H_
 
 #include <sys/queue.h>
+
+/*
+ * Private Brandinfo flags
+ */
+#define	LINUX_BI_FUTEX_REQUEUE	0x01000000
 
 /*
  * poll()
@@ -169,9 +173,6 @@ void bsd_to_linux_sigset(sigset_t *, l_sigset_t *);
 int linux_to_bsd_signal(int sig);
 int bsd_to_linux_signal(int sig);
 
-extern LIST_HEAD(futex_list, futex) futex_list;
-extern struct mtx futex_mtx;
-
 void linux_dev_shm_create(void);
 void linux_dev_shm_destroy(void);
 
@@ -263,5 +264,7 @@ struct l_statx {
 	uint64_t stx_mnt_id;
 	uint64_t __spare2[13];
 };
+
+#define	lower_32_bits(n)	((uint32_t)((n) & 0xffffffff))
 
 #endif /* _LINUX_MI_H_ */

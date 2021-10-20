@@ -2018,7 +2018,7 @@ pci_emul_cfgaddr(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
 	} else {
 		x = *eax;
 		cfgenable = (x & CONF1_ENABLE) == CONF1_ENABLE;
-		cfgoff = x & PCI_REGMAX;
+		cfgoff = (x & PCI_REGMAX) & ~0x03;
 		cfgfunc = (x >> 8) & PCI_FUNCMAX;
 		cfgslot = (x >> 11) & PCI_SLOTMAX;
 		cfgbus = (x >> 16) & PCI_BUSMAX;
@@ -2079,7 +2079,6 @@ pci_snapshot_pci_dev(struct vm_snapshot_meta *meta)
 	SNAPSHOT_VAR_OR_LEAVE(pi->pi_msix.pba_offset, meta, ret, done);
 	SNAPSHOT_VAR_OR_LEAVE(pi->pi_msix.pba_size, meta, ret, done);
 	SNAPSHOT_VAR_OR_LEAVE(pi->pi_msix.function_mask, meta, ret, done);
-	SNAPSHOT_VAR_OR_LEAVE(pi->pi_msix.pba_page_offset, meta, ret, done);
 
 	SNAPSHOT_BUF_OR_LEAVE(pi->pi_cfgdata, sizeof(pi->pi_cfgdata),
 			      meta, ret, done);

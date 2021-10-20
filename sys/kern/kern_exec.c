@@ -56,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/reg.h>
 #include <sys/resourcevar.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
@@ -70,7 +71,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 #include <sys/timers.h>
-#include <sys/umtx.h>
+#include <sys/umtxvar.h>
 #include <sys/vnode.h>
 #include <sys/wait.h>
 #ifdef KTRACE
@@ -90,8 +91,6 @@ __FBSDID("$FreeBSD$");
 #ifdef	HWPMC_HOOKS
 #include <sys/pmckern.h>
 #endif
-
-#include <machine/reg.h>
 
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
@@ -120,6 +119,7 @@ SYSCTL_INT(_kern, OID_AUTO, coredump_pack_vmmapinfo, CTLFLAG_RWTUN,
 
 static int sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS);
 static int sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS);
+static int sysctl_kern_stacktop(SYSCTL_HANDLER_ARGS);
 static int sysctl_kern_stackprot(SYSCTL_HANDLER_ARGS);
 static int do_execve(struct thread *td, struct image_args *args,
     struct mac *mac_p, struct vmspace *oldvmspace);
@@ -133,6 +133,10 @@ SYSCTL_PROC(_kern, KERN_PS_STRINGS, ps_strings, CTLTYPE_ULONG|CTLFLAG_RD|
 SYSCTL_PROC(_kern, KERN_USRSTACK, usrstack, CTLTYPE_ULONG|CTLFLAG_RD|
     CTLFLAG_CAPRD|CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_usrstack, "LU",
     "Top of process stack");
+
+SYSCTL_PROC(_kern, KERN_STACKTOP, stacktop, CTLTYPE_ULONG | CTLFLAG_RD |
+    CTLFLAG_CAPRD | CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_stacktop, "LU",
+    "Top of process stack with stack gap.");
 
 SYSCTL_PROC(_kern, OID_AUTO, stackprot, CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_MPSAFE,
     NULL, 0, sysctl_kern_stackprot, "I",
@@ -151,6 +155,11 @@ SYSCTL_INT(_kern, OID_AUTO, disallow_high_osrel, CTLFLAG_RW,
 static int map_at_zero = 0;
 SYSCTL_INT(_security_bsd, OID_AUTO, map_at_zero, CTLFLAG_RWTUN, &map_at_zero, 0,
     "Permit processes to map an object at virtual address 0.");
+
+static int core_dump_can_intr = 1;
+SYSCTL_INT(_kern, OID_AUTO, core_dump_can_intr, CTLFLAG_RWTUN,
+    &core_dump_can_intr, 0,
+    "Core dumping interruptible with SIGKILL");
 
 static int
 sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS)
@@ -187,7 +196,31 @@ sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS)
 #endif
 		error = SYSCTL_OUT(req, &p->p_sysent->sv_usrstack,
 		    sizeof(p->p_sysent->sv_usrstack));
-	return error;
+	return (error);
+}
+
+static int
+sysctl_kern_stacktop(SYSCTL_HANDLER_ARGS)
+{
+	vm_offset_t stacktop;
+	struct proc *p;
+	int error;
+
+	p = curproc;
+#ifdef SCTL_MASK32
+	if (req->flags & SCTL_MASK32) {
+		unsigned int val;
+
+		val = (unsigned int)(p->p_sysent->sv_usrstack -
+		    p->p_vmspace->vm_stkgap);
+		error = SYSCTL_OUT(req, &val, sizeof(val));
+	} else
+#endif
+	{
+		stacktop = p->p_sysent->sv_usrstack - p->p_vmspace->vm_stkgap;
+		error = SYSCTL_OUT(req, &stacktop, sizeof(stacktop));
+	}
+	return (error);
 }
 
 static int
@@ -348,6 +381,7 @@ kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
     struct vmspace *oldvmspace)
 {
 
+	TSEXEC(td->td_proc->p_pid, args->begin_argv);
 	AUDIT_ARG_ARGV(args->begin_argv, args->argc,
 	    exec_args_get_begin_envv(args) - args->begin_argv);
 	AUDIT_ARG_ENVV(exec_args_get_begin_envv(args), args->envc,
@@ -397,6 +431,7 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 #endif
 	int error, i, orig_osrel;
 	uint32_t orig_fctl0;
+	Elf_Brandinfo *orig_brandinfo;
 	static const char fexecv_proc_title[] = "(fexecv)";
 
 	imgp = &image_params;
@@ -427,6 +462,7 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	oldcred = p->p_ucred;
 	orig_osrel = p->p_osrel;
 	orig_fctl0 = p->p_fctl0;
+	orig_brandinfo = p->p_elf_brandinfo;
 
 #ifdef MAC
 	error = mac_execve_enter(imgp, mac_p);
@@ -499,6 +535,7 @@ interpret:
 
 	imgp->proc->p_osrel = 0;
 	imgp->proc->p_fctl0 = 0;
+	imgp->proc->p_elf_brandinfo = NULL;
 
 	/*
 	 * Implement image setuid/setgid.
@@ -679,10 +716,6 @@ interpret:
 		goto exec_fail_dealloc;
 	}
 
-	/* ABI enforces the use of Capsicum. Switch into capabilities mode. */
-	if (SV_PROC_FLAG(p, SV_CAPSICUM))
-		sys_cap_enter(td, NULL);
-
 	/*
 	 * Copy out strings (args and env) and initialize stack base.
 	 */
@@ -701,21 +734,14 @@ interpret:
 		goto exec_fail_dealloc;
 	}
 
-	if (args->fdp != NULL) {
-		/* Install a brand new file descriptor table. */
-		fdinstall_remapped(td, args->fdp);
-		args->fdp = NULL;
-	} else {
-		/*
-		 * Keep on using the existing file descriptor table. For
-		 * security and other reasons, the file descriptor table
-		 * cannot be shared after an exec.
-		 */
-		fdunshare(td);
-		pdunshare(td);
-		/* close files on exec */
-		fdcloseexec(td);
-	}
+	/*
+	 * For security and other reasons, the file descriptor table cannot be
+	 * shared after an exec.
+	 */
+	fdunshare(td);
+	pdunshare(td);
+	/* close files on exec */
+	fdcloseexec(td);
 
 	/*
 	 * Malloc things before we need locks.
@@ -778,8 +804,9 @@ interpret:
 		signotify(td);
 	}
 
-	if (imgp->sysent->sv_setid_allowed != NULL &&
-	    !(*imgp->sysent->sv_setid_allowed)(td, imgp))
+	if ((imgp->sysent->sv_setid_allowed != NULL &&
+	    !(*imgp->sysent->sv_setid_allowed)(td, imgp)) ||
+	    (p->p_flag2 & P2_NO_NEW_PRIVS) != 0)
 		execve_nosetid(imgp);
 
 	/*
@@ -894,6 +921,7 @@ exec_fail_dealloc:
 	if (error != 0) {
 		p->p_osrel = orig_osrel;
 		p->p_fctl0 = orig_fctl0;
+		p->p_elf_brandinfo = orig_brandinfo;
 	}
 
 	if (imgp->firstpage != NULL)
@@ -1035,6 +1063,13 @@ exec_unmap_first_page(struct image_params *imgp)
 	}
 }
 
+void
+exec_onexec_old(struct thread *td)
+{
+	sigfastblock_clear(td);
+	umtx_exec(td->td_proc);
+}
+
 /*
  * Destroy old address space, and allocate a new stack.
  *	The new stack is only sgrowsiz large because it is grown
@@ -1057,11 +1092,9 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	imgp->vmspace_destroyed = 1;
 	imgp->sysent = sv;
 
-	sigfastblock_clear(td);
-	umtx_exec(p);
+	if (p->p_sysent->sv_onexec_old != NULL)
+		p->p_sysent->sv_onexec_old(td);
 	itimers_exec(p);
-	if (sv->sv_onexec != NULL)
-		sv->sv_onexec(p, imgp);
 
 	EVENTHANDLER_DIRECT_INVOKE(process_exec, p, imgp);
 
@@ -1145,6 +1178,7 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 		    stack_prot, error, vm_mmap_to_errno(error));
 		return (vm_mmap_to_errno(error));
 	}
+	vmspace->vm_stkgap = 0;
 
 	/*
 	 * vm_ssize and vm_maxsaddr are somewhat antiquated concepts, but they
@@ -1153,7 +1187,7 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	vmspace->vm_ssize = sgrowsiz >> PAGE_SHIFT;
 	vmspace->vm_maxsaddr = (char *)stack_addr;
 
-	return (0);
+	return (sv->sv_onexec != NULL ? sv->sv_onexec(p, imgp) : 0);
 }
 
 /*
@@ -1224,69 +1258,6 @@ exec_copyin_args(struct image_args *args, const char *fname,
 
 	return (0);
 
-err_exit:
-	exec_free_args(args);
-	return (error);
-}
-
-int
-exec_copyin_data_fds(struct thread *td, struct image_args *args,
-    const void *data, size_t datalen, const int *fds, size_t fdslen)
-{
-	struct filedesc *ofdp;
-	const char *p;
-	int *kfds;
-	int error;
-
-	memset(args, '\0', sizeof(*args));
-	ofdp = td->td_proc->p_fd;
-	if (datalen >= ARG_MAX || fdslen >= ofdp->fd_nfiles)
-		return (E2BIG);
-	error = exec_alloc_args(args);
-	if (error != 0)
-		return (error);
-
-	args->begin_argv = args->buf;
-	args->stringspace = ARG_MAX;
-
-	if (datalen > 0) {
-		/*
-		 * Argument buffer has been provided. Copy it into the
-		 * kernel as a single string and add a terminating null
-		 * byte.
-		 */
-		error = copyin(data, args->begin_argv, datalen);
-		if (error != 0)
-			goto err_exit;
-		args->begin_argv[datalen] = '\0';
-		args->endp = args->begin_argv + datalen + 1;
-		args->stringspace -= datalen + 1;
-
-		/*
-		 * Traditional argument counting. Count the number of
-		 * null bytes.
-		 */
-		for (p = args->begin_argv; p < args->endp; ++p)
-			if (*p == '\0')
-				++args->argc;
-	} else {
-		/* No argument buffer provided. */
-		args->endp = args->begin_argv;
-	}
-
-	/* Create new file descriptor table. */
-	kfds = malloc(fdslen * sizeof(int), M_TEMP, M_WAITOK);
-	error = copyin(fds, kfds, fdslen * sizeof(int));
-	if (error != 0) {
-		free(kfds, M_TEMP);
-		goto err_exit;
-	}
-	error = fdcopy_remapped(ofdp, kfds, fdslen, &args->fdp);
-	free(kfds, M_TEMP);
-	if (error != 0)
-		goto err_exit;
-
-	return (0);
 err_exit:
 	exec_free_args(args);
 	return (error);
@@ -1428,8 +1399,6 @@ exec_free_args(struct image_args *args)
 		free(args->fname_buf, M_TEMP);
 		args->fname_buf = NULL;
 	}
-	if (args->fdp != NULL)
-		fdescfree_remapped(args->fdp);
 }
 
 /*
@@ -1555,12 +1524,16 @@ exec_args_get_begin_envv(struct image_args *args)
 void
 exec_stackgap(struct image_params *imgp, uintptr_t *dp)
 {
+	struct proc *p = imgp->proc;
+
 	if (imgp->sysent->sv_stackgap == NULL ||
-	    (imgp->proc->p_fctl0 & (NT_FREEBSD_FCTL_ASLR_DISABLE |
+	    (p->p_fctl0 & (NT_FREEBSD_FCTL_ASLR_DISABLE |
 	    NT_FREEBSD_FCTL_ASG_DISABLE)) != 0 ||
-	    (imgp->map_flags & MAP_ASLR) == 0)
+	    (imgp->map_flags & MAP_ASLR) == 0) {
+		p->p_vmspace->vm_stkgap = 0;
 		return;
-	imgp->sysent->sv_stackgap(imgp, dp);
+	}
+	p->p_vmspace->vm_stkgap = imgp->sysent->sv_stackgap(imgp, dp);
 }
 
 /*
@@ -1879,9 +1852,9 @@ exec_unregister(const struct execsw *execsw_arg)
  * Write out a core segment to the compression stream.
  */
 static int
-compress_chunk(struct coredump_params *cp, char *base, char *buf, u_int len)
+compress_chunk(struct coredump_params *cp, char *base, char *buf, size_t len)
 {
-	u_int chunk_len;
+	size_t chunk_len;
 	int error;
 
 	while (len > 0) {
@@ -1938,6 +1911,8 @@ core_output(char *base, size_t len, off_t offset, struct coredump_params *cp,
 		 * anonymous memory or truncated files, for example.
 		 */
 		for (runlen = 0; runlen < len; runlen += PAGE_SIZE) {
+			if (core_dump_can_intr && curproc_sigkilled())
+				return (EINTR);
 			error = vm_fault(map, (uintptr_t)base + runlen,
 			    VM_PROT_READ, VM_FAULT_NOFILL, NULL);
 			if (runlen == 0)

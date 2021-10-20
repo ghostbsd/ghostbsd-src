@@ -751,12 +751,15 @@ gfxfb_blt(void *BltBuffer, GFXFB_BLT_OPERATION BltOperation,
 #if defined(EFI)
 	EFI_STATUS status;
 	EFI_GRAPHICS_OUTPUT *gop = gfx_state.tg_private;
+	extern int boot_services_gone;
+	EFI_TPL tpl;
 
 	/*
 	 * We assume Blt() does work, if not, we will need to build
 	 * exception list case by case.
 	 */
-	if (gop != NULL) {
+	if (gop != NULL && boot_services_gone == 0) {
+		tpl = BS->RaiseTPL(TPL_NOTIFY);
 		switch (BltOperation) {
 		case GfxFbBltVideoFill:
 			status = gop->Blt(gop, BltBuffer, EfiBltVideoFill,
@@ -803,6 +806,7 @@ gfxfb_blt(void *BltBuffer, GFXFB_BLT_OPERATION BltOperation,
 			break;
 		}
 
+		BS->RestoreTPL(tpl);
 		return (rv);
 	}
 #endif
@@ -976,20 +980,26 @@ gfx_fb_fill(void *arg, const teken_rect_t *r, teken_char_t c,
 }
 
 static void
-gfx_fb_cursor_draw(teken_gfx_t *state, const teken_pos_t *p, bool on)
+gfx_fb_cursor_draw(teken_gfx_t *state, const teken_pos_t *pos, bool on)
 {
 	unsigned x, y, width, height;
 	const uint8_t *glyph;
+	teken_pos_t p;
 	int idx;
 
-	idx = p->tp_col + p->tp_row * state->tg_tp.tp_col;
+	p = *pos;
+	if (p.tp_col >= state->tg_tp.tp_col)
+		p.tp_col = state->tg_tp.tp_col - 1;
+	if (p.tp_row >= state->tg_tp.tp_row)
+		p.tp_row = state->tg_tp.tp_row - 1;
+	idx = p.tp_col + p.tp_row * state->tg_tp.tp_col;
 	if (idx >= state->tg_tp.tp_col * state->tg_tp.tp_row)
 		return;
 
 	width = state->tg_font.vf_width;
 	height = state->tg_font.vf_height;
-	x = state->tg_origin.tp_col + p->tp_col * width;
-	y = state->tg_origin.tp_row + p->tp_row * height;
+	x = state->tg_origin.tp_col + p.tp_col * width;
+	y = state->tg_origin.tp_row + p.tp_row * height;
 
 	/*
 	 * Save original display content to preserve image data.
@@ -1017,7 +1027,7 @@ gfx_fb_cursor_draw(teken_gfx_t *state, const teken_pos_t *p, bool on)
 		if (state->tg_cursor_image != NULL &&
 		    gfxfb_blt(state->tg_cursor_image, GfxFbBltBufferToVideo,
 		    0, 0, x, y, width, height, 0) == 0) {
-			state->tg_cursor = *p;
+			state->tg_cursor = p;
 			return;
 		}
 	}
@@ -1025,29 +1035,21 @@ gfx_fb_cursor_draw(teken_gfx_t *state, const teken_pos_t *p, bool on)
 	glyph = font_lookup(&state->tg_font, screen_buffer[idx].c,
 	    &screen_buffer[idx].a);
 	gfx_bitblt_bitmap(state, glyph, &screen_buffer[idx].a, 0xff, on);
-	gfx_fb_printchar(state, p);
+	gfx_fb_printchar(state, &p);
 
-	state->tg_cursor = *p;
+	state->tg_cursor = p;
 }
 
 void
 gfx_fb_cursor(void *arg, const teken_pos_t *p)
 {
 	teken_gfx_t *state = arg;
-#if defined(EFI)
-	EFI_TPL tpl;
-
-	tpl = BS->RaiseTPL(TPL_NOTIFY);
-#endif
 
 	/* Switch cursor off in old location and back on in new. */
 	if (state->tg_cursor_visible) {
 		gfx_fb_cursor_draw(state, &state->tg_cursor, false);
 		gfx_fb_cursor_draw(state, p, true);
 	}
-#if defined(EFI)
-	BS->RestoreTPL(tpl);
-#endif
 }
 
 void

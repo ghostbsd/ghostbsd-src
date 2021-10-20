@@ -632,7 +632,7 @@ abd_alloc_zero_scatter(void)
 boolean_t
 abd_size_alloc_linear(size_t size)
 {
-	return (size < zfs_abd_scatter_min_size ? B_TRUE : B_FALSE);
+	return (!zfs_abd_scatter_enabled || size < zfs_abd_scatter_min_size);
 }
 
 void
@@ -835,7 +835,8 @@ abd_alloc_for_io(size_t size, boolean_t is_metadata)
 }
 
 abd_t *
-abd_get_offset_scatter(abd_t *abd, abd_t *sabd, size_t off)
+abd_get_offset_scatter(abd_t *abd, abd_t *sabd, size_t off,
+    size_t size)
 {
 	int i = 0;
 	struct scatterlist *sg = NULL;

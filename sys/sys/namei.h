@@ -49,7 +49,6 @@ struct componentname {
 	 */
 	u_int64_t cn_origflags;	/* flags to namei */
 	u_int64_t cn_flags;	/* flags to namei */
-	struct	thread *cn_thread;/* thread requesting lookup */
 	struct	ucred *cn_cred;	/* credentials */
 	enum nameiop cn_nameiop;	/* namei operation */
 	int	cn_lkflags;	/* Lock flags LK_EXCLUSIVE or LK_SHARED */
@@ -183,8 +182,8 @@ int	cache_fplookup(struct nameidata *ndp, enum cache_fpl_status *status,
 #define	AUDITVNODE1	0x00040000 /* audit the looked up vnode information */
 #define	AUDITVNODE2	0x00080000 /* audit the looked up vnode information */
 #define	NOCAPCHECK	0x00100000 /* do not perform capability checks */
-/* UNUSED		0x00200000 */
-/* UNUSED		0x00400000 */
+#define	OPENREAD	0x00200000 /* open for reading */
+#define	OPENWRITE	0x00400000 /* open for writing */
 /* UNUSED		0x00800000 */
 #define	HASBUF		0x01000000 /* has allocated pathname buffer */
 #define	NOEXECCHECK	0x02000000 /* do not perform exec check on dir */
@@ -262,7 +261,6 @@ do {										\
 	_ndp->ni_startdir = startdir;						\
 	_ndp->ni_resflags = 0;							\
 	filecaps_init(&_ndp->ni_filecaps);					\
-	_ndp->ni_cnd.cn_thread = td;						\
 	_ndp->ni_rightsneeded = _rightsp;					\
 } while (0)
 

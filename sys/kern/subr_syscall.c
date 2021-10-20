@@ -215,8 +215,6 @@ syscallret(struct thread *td)
 	ksiginfo_t ksi;
 	int traced;
 
-	KASSERT((td->td_pflags & TDP_FORKING) == 0,
-	    ("fork() did not clear TDP_FORKING upon completion"));
 	KASSERT(td->td_errno != ERELOOKUP,
 	    ("ERELOOKUP not consumed syscall %d", td->td_sa.code));
 
@@ -230,6 +228,7 @@ syscallret(struct thread *td)
 			ksi.ksi_signo = SIGTRAP;
 			ksi.ksi_errno = td->td_errno;
 			ksi.ksi_code = TRAP_CAP;
+			ksi.ksi_info.si_syscall = sa->original_code;
 			trapsignal(td, &ksi);
 		}
 	}

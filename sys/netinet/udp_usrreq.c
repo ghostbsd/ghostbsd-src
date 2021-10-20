@@ -379,7 +379,7 @@ udp_append(struct inpcb *inp, struct ip *ip, struct mbuf *n, int off,
 	so = inp->inp_socket;
 	SOCKBUF_LOCK(&so->so_rcv);
 	if (sbappendaddr_locked(&so->so_rcv, append_sa, n, opts) == 0) {
-		SOCKBUF_UNLOCK(&so->so_rcv);
+		soroverflow_locked(so);
 		m_freem(n);
 		if (opts)
 			m_freem(opts);
@@ -1635,6 +1635,7 @@ udp_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 		 * Preserve compatibility with old programs.
 		 */
 		if (nam->sa_family != AF_UNSPEC ||
+		    nam->sa_len < offsetof(struct sockaddr_in, sin_zero) ||
 		    sinp->sin_addr.s_addr != INADDR_ANY)
 			return (EAFNOSUPPORT);
 		nam->sa_family = AF_INET;

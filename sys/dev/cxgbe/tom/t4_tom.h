@@ -76,6 +76,7 @@ enum {
 	TPF_INITIALIZED    = (1 << 12), /* init_toepcb has been called */
 	TPF_TLS_RECEIVE	   = (1 << 13), /* should receive TLS records */
 	TPF_TLS_ESTABLISHED = (1 << 14), /* TLS handshake timer initialized */
+	TPF_WAITING_FOR_FINAL = (1<< 15), /* waiting for wakeup on final CPL */
 };
 
 enum {
@@ -360,6 +361,58 @@ mbuf_ulp_submode(struct mbuf *m)
 
 	M_ASSERTPKTHDR(m);
 	return (m->m_pkthdr.PH_per.eight[0]);
+}
+
+static inline void
+set_mbuf_iscsi_iso(struct mbuf *m, bool iso)
+{
+
+	M_ASSERTPKTHDR(m);
+	m->m_pkthdr.PH_per.eight[1] = iso;
+}
+
+static inline bool
+mbuf_iscsi_iso(struct mbuf *m)
+{
+
+	M_ASSERTPKTHDR(m);
+	return (m->m_pkthdr.PH_per.eight[1]);
+}
+
+/* Flags for iSCSI segmentation offload. */
+#define	CXGBE_ISO_TYPE(flags)	((flags) & 0x3)
+#define	CXGBE_ISO_F		0x4
+
+static inline void
+set_mbuf_iscsi_iso_flags(struct mbuf *m, uint8_t flags)
+{
+
+	M_ASSERTPKTHDR(m);
+	m->m_pkthdr.PH_per.eight[2] = flags;
+}
+
+static inline uint8_t
+mbuf_iscsi_iso_flags(struct mbuf *m)
+{
+
+	M_ASSERTPKTHDR(m);
+	return (m->m_pkthdr.PH_per.eight[2]);
+}
+
+static inline void
+set_mbuf_iscsi_iso_mss(struct mbuf *m, uint16_t mss)
+{
+
+	M_ASSERTPKTHDR(m);
+	m->m_pkthdr.PH_per.sixteen[2] = mss;
+}
+
+static inline uint16_t
+mbuf_iscsi_iso_mss(struct mbuf *m)
+{
+
+	M_ASSERTPKTHDR(m);
+	return (m->m_pkthdr.PH_per.sixteen[2]);
 }
 
 /* t4_tom.c */

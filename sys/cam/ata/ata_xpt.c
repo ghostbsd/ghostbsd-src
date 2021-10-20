@@ -1758,9 +1758,11 @@ ata_dev_advinfo(union ccb *start_ccb)
 		break;
 	case CDAI_TYPE_PHYS_PATH:
 		if (cdai->flags & CDAI_FLAG_STORE) {
-			if (device->physpath != NULL)
+			if (device->physpath != NULL) {
 				free(device->physpath, M_CAMXPT);
-			device->physpath_len = cdai->bufsiz;
+				device->physpath = NULL;
+				device->physpath_len = 0;
+			}
 			/* Clear existing buffer if zero length */
 			if (cdai->bufsiz == 0)
 				break;
@@ -1769,6 +1771,7 @@ ata_dev_advinfo(union ccb *start_ccb)
 				start_ccb->ccb_h.status = CAM_REQ_ABORTED;
 				return;
 			}
+			device->physpath_len = cdai->bufsiz;
 			memcpy(device->physpath, cdai->buf, cdai->bufsiz);
 		} else {
 			cdai->provsiz = device->physpath_len;
@@ -1796,18 +1799,10 @@ ata_action(union ccb *start_ccb)
 {
 
 	if (start_ccb->ccb_h.func_code != XPT_ATA_IO) {
-#ifdef notyet
 		KASSERT((start_ccb->ccb_h.alloc_flags & CAM_CCB_FROM_UMA) == 0,
 		    ("%s: ccb %p, func_code %#x should not be allocated "
 		    "from UMA zone\n",
 		    __func__, start_ccb, start_ccb->ccb_h.func_code));
-#else
-		if ((start_ccb->ccb_h.alloc_flags & CAM_CCB_FROM_UMA) != 0) {
-			printf("%s: ccb %p, func_code %#x should not be allocated "
-			    "from UMA zone\n",
-			    __func__, start_ccb, start_ccb->ccb_h.func_code);
-		}
-#endif
 	}
 
 	switch (start_ccb->ccb_h.func_code) {

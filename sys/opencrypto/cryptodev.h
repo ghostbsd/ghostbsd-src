@@ -23,12 +23,15 @@
  * PURPOSE.
  *
  * Copyright (c) 2001 Theo de Raadt
- * Copyright (c) 2014 The FreeBSD Foundation
+ * Copyright (c) 2014-2021 The FreeBSD Foundation
  * All rights reserved.
  *
  * Portions of this software were developed by John-Mark Gurney
  * under sponsorship of the FreeBSD Foundation and
  * Rubicon Communications, LLC (Netgate).
+ *
+ * Portions of this software were developed by Ararat River
+ * Consulting, LLC under sponsorship of the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -241,7 +244,9 @@ struct session2_op {
 
   	uint32_t	ses;		/* returns: session # */ 
 	int		crid;		/* driver id + flags (rw) */
-	int		pad[4];		/* for future expansion */
+	int		ivlen;		/* length of nonce/IV */
+	int		maclen;		/* length of MAC/tag */
+	int		pad[2];		/* for future expansion */
 };
 
 struct crypt_op {
@@ -589,8 +594,8 @@ uint32_t crypto_ses2caps(crypto_session_t crypto_session);
 void *crypto_get_driver_session(crypto_session_t crypto_session);
 const struct crypto_session_params *crypto_get_params(
     crypto_session_t crypto_session);
-struct auth_hash *crypto_auth_hash(const struct crypto_session_params *csp);
-struct enc_xform *crypto_cipher(const struct crypto_session_params *csp);
+const struct auth_hash *crypto_auth_hash(const struct crypto_session_params *csp);
+const struct enc_xform *crypto_cipher(const struct crypto_session_params *csp);
 
 MALLOC_DECLARE(M_CRYPTO_DATA);
 
@@ -679,6 +684,35 @@ crypto_read_iv(struct cryptop *crp, void *iv)
 		memcpy(iv, crp->crp_iv, csp->csp_ivlen);
 	else
 		crypto_copydata(crp, crp->crp_iv_start, csp->csp_ivlen, iv);
+}
+
+static __inline size_t
+ccm_max_payload_length(const struct crypto_session_params *csp)
+{
+	/* RFC 3160 */
+	const u_int L = 15 - csp->csp_ivlen;
+
+	switch (L) {
+	case 2:
+		return (0xffff);
+	case 3:
+		return (0xffffff);
+#ifdef __LP64__
+	case 4:
+		return (0xffffffff);
+	case 5:
+		return (0xffffffffff);
+	case 6:
+		return (0xffffffffffff);
+	case 7:
+		return (0xffffffffffffff);
+	default:
+		return (0xffffffffffffffff);
+#else
+	default:
+		return (0xffffffff);
+#endif
+	}
 }
 
 #endif /* _KERNEL */

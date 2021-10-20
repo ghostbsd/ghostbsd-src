@@ -6,6 +6,8 @@
 .include <bsd.compiler.mk>
 .include <bsd.linker.mk>
 
+__<bsd.lib.mk>__:
+
 .if defined(LIB_CXX) || defined(SHLIB_CXX)
 _LD=	${CXX}
 .else
@@ -106,10 +108,18 @@ CXXFLAGS+= -ftrivial-auto-var-init=pattern
 .endif
 .endif
 
+# bsd.sanitizer.mk is not installed, so don't require it (e.g. for ports).
+.sinclude "bsd.sanitizer.mk"
+
 .if ${MK_DEBUG_FILES} != "no" && empty(DEBUG_FLAGS:M-g) && \
     empty(DEBUG_FLAGS:M-gdwarf*)
+.if !${COMPILER_FEATURES:Mcompressed-debug}
+CFLAGS+= ${DEBUG_FILES_CFLAGS:N-gz*}
+CXXFLAGS+= ${DEBUG_FILES_CFLAGS:N-gz*}
+.else
 CFLAGS+= ${DEBUG_FILES_CFLAGS}
 CXXFLAGS+= ${DEBUG_FILES_CFLAGS}
+.endif
 CTFFLAGS+= -g
 .endif
 
@@ -147,7 +157,7 @@ PO_FLAG=-pg
 	${CTFCONVERT_CMD}
 
 .c.nossppico:
-	${CC} ${PICFLAG} -DPIC ${SHARED_CFLAGS:C/^-fstack-protector.*$//} ${CFLAGS:C/^-fstack-protector.*$//} -c ${.IMPSRC} -o ${.TARGET}
+	${CC} ${PICFLAG} -DPIC ${SHARED_CFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} ${CFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
 .c.pieo:
@@ -161,7 +171,7 @@ PO_FLAG=-pg
 	${CXX} ${PICFLAG} -DPIC ${SHARED_CXXFLAGS} ${CXXFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 
 .cc.nossppico .C.nossppico .cpp.nossppico .cxx.nossppico:
-	${CXX} ${PICFLAG} -DPIC ${SHARED_CXXFLAGS:C/^-fstack-protector.*$//} ${CXXFLAGS:C/^-fstack-protector.*$//} -c ${.IMPSRC} -o ${.TARGET}
+	${CXX} ${PICFLAG} -DPIC ${SHARED_CXXFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} ${CXXFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} -c ${.IMPSRC} -o ${.TARGET}
 
 .cc.pieo .C.pieo .cpp.pieo .cxx.pieo:
 	${CXX} ${PIEFLAG} ${SHARED_CXXFLAGS} ${CXXFLAGS} -c ${.IMPSRC} -o ${.TARGET}
@@ -261,9 +271,12 @@ CLEANFILES+=	${OBJS} ${BCOBJS} ${LLOBJS} ${STATICOBJS}
 .endif
 
 .if defined(LIB) && !empty(LIB)
-_LIBS=		lib${LIB_PRIVATE}${LIB}.a
+.if defined(STATIC_LDSCRIPT)
+_STATICLIB_SUFFIX=	_real
+.endif
+_LIBS=		lib${LIB_PRIVATE}${LIB}${_STATICLIB_SUFFIX}.a
 
-lib${LIB_PRIVATE}${LIB}.a: ${OBJS} ${STATICOBJS}
+lib${LIB_PRIVATE}${LIB}${_STATICLIB_SUFFIX}.a: ${OBJS} ${STATICOBJS}
 	@${ECHO} building static ${LIB} library
 	@rm -f ${.TARGET}
 	${AR} ${ARFLAGS} ${.TARGET} ${OBJS} ${STATICOBJS} ${ARADD}
@@ -380,7 +393,7 @@ lib${LIB_PRIVATE}${LIB}_nossp_pic.a: ${NOSSPSOBJS}
 
 .endif # !defined(INTERNALLIB)
 
-.if defined(INTERNALLIB) && ${MK_PIE} != "no"
+.if defined(INTERNALLIB) && ${MK_PIE} != "no" && defined(LIB) && !empty(LIB)
 PIEOBJS+=	${OBJS:.o=.pieo}
 DEPENDOBJS+=	${PIEOBJS}
 CLEANFILES+=	${PIEOBJS}
@@ -467,7 +480,7 @@ realinstall: _libinstall installpcfiles
 _libinstall:
 .if defined(LIB) && !empty(LIB) && ${MK_INSTALLLIB} != "no"
 	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -C -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
-	    ${_INSTALLFLAGS} lib${LIB_PRIVATE}${LIB}.a ${DESTDIR}${_LIBDIR}/
+	    ${_INSTALLFLAGS} lib${LIB_PRIVATE}${LIB}${_STATICLIB_SUFFIX}.a ${DESTDIR}${_LIBDIR}/
 .endif
 .if ${MK_PROFILE} != "no" && defined(LIB) && !empty(LIB)
 	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -C -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \

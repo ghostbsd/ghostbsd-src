@@ -906,7 +906,7 @@ kern_dup(struct thread *td, u_int mode, int flags, int old, int new)
 	FILEDESC_XLOCK(fdp);
 	if (fget_locked(fdp, old) == NULL)
 		goto unlock;
-	if ((mode == FDDUP_FIXED || mode == FDDUP_MUSTREPLACE) && old == new) {
+	if (mode == FDDUP_FIXED && old == new) {
 		td->td_retval[0] = new;
 		if (flags & FDDUP_FLAG_CLOEXEC)
 			fdp->fd_ofiles[new].fde_flags |= UF_EXCLOSE;
@@ -928,13 +928,6 @@ kern_dup(struct thread *td, u_int mode, int flags, int old, int new)
 	case FDDUP_NORMAL:
 	case FDDUP_FCNTL:
 		if ((error = fdalloc(td, new, &new)) != 0) {
-			fdrop(oldfp, td);
-			goto unlock;
-		}
-		break;
-	case FDDUP_MUSTREPLACE:
-		/* Target file descriptor must exist. */
-		if (fget_locked(fdp, new) == NULL) {
 			fdrop(oldfp, td);
 			goto unlock;
 		}
@@ -1031,18 +1024,16 @@ funsetown_locked(struct sigio *sigio)
 
 	if (sigio == NULL)
 		return (NULL);
-	*(sigio->sio_myref) = NULL;
+	*sigio->sio_myref = NULL;
 	if (sigio->sio_pgid < 0) {
 		pg = sigio->sio_pgrp;
 		PGRP_LOCK(pg);
-		SLIST_REMOVE(&sigio->sio_pgrp->pg_sigiolst, sigio,
-		    sigio, sio_pgsigio);
+		SLIST_REMOVE(&pg->pg_sigiolst, sigio, sigio, sio_pgsigio);
 		PGRP_UNLOCK(pg);
 	} else {
 		p = sigio->sio_proc;
 		PROC_LOCK(p);
-		SLIST_REMOVE(&sigio->sio_proc->p_sigiolst, sigio,
-		    sigio, sio_pgsigio);
+		SLIST_REMOVE(&p->p_sigiolst, sigio, sigio, sio_pgsigio);
 		PROC_UNLOCK(p);
 	}
 	return (sigio);
@@ -1155,76 +1146,69 @@ fsetown(pid_t pgid, struct sigio **sigiop)
 		return (0);
 	}
 
-	ret = 0;
-
 	sigio = malloc(sizeof(struct sigio), M_SIGIO, M_WAITOK);
 	sigio->sio_pgid = pgid;
 	sigio->sio_ucred = crhold(curthread->td_ucred);
 	sigio->sio_myref = sigiop;
 
-	sx_slock(&proctree_lock);
-	SIGIO_LOCK();
-	osigio = funsetown_locked(*sigiop);
+	ret = 0;
 	if (pgid > 0) {
-		proc = pfind(pgid);
-		if (proc == NULL) {
-			ret = ESRCH;
-			goto fail;
-		}
-
-		/*
-		 * Policy - Don't allow a process to FSETOWN a process
-		 * in another session.
-		 *
-		 * Remove this test to allow maximum flexibility or
-		 * restrict FSETOWN to the current process or process
-		 * group for maximum safety.
-		 */
-		if (proc->p_session != curthread->td_proc->p_session) {
+		ret = pget(pgid, PGET_NOTWEXIT | PGET_NOTID | PGET_HOLD, &proc);
+		SIGIO_LOCK();
+		osigio = funsetown_locked(*sigiop);
+		if (ret == 0) {
+			PROC_LOCK(proc);
+			_PRELE(proc);
+			if ((proc->p_flag & P_WEXIT) != 0) {
+				ret = ESRCH;
+			} else if (proc->p_session !=
+			    curthread->td_proc->p_session) {
+				/*
+				 * Policy - Don't allow a process to FSETOWN a
+				 * process in another session.
+				 *
+				 * Remove this test to allow maximum flexibility
+				 * or restrict FSETOWN to the current process or
+				 * process group for maximum safety.
+				 */
+				ret = EPERM;
+			} else {
+				sigio->sio_proc = proc;
+				SLIST_INSERT_HEAD(&proc->p_sigiolst, sigio,
+				    sio_pgsigio);
+			}
 			PROC_UNLOCK(proc);
-			ret = EPERM;
-			goto fail;
 		}
-
-		sigio->sio_proc = proc;
-		SLIST_INSERT_HEAD(&proc->p_sigiolst, sigio, sio_pgsigio);
-		PROC_UNLOCK(proc);
 	} else /* if (pgid < 0) */ {
+		sx_slock(&proctree_lock);
+		SIGIO_LOCK();
+		osigio = funsetown_locked(*sigiop);
 		pgrp = pgfind(-pgid);
 		if (pgrp == NULL) {
 			ret = ESRCH;
-			goto fail;
-		}
-
-		/*
-		 * Policy - Don't allow a process to FSETOWN a process
-		 * in another session.
-		 *
-		 * Remove this test to allow maximum flexibility or
-		 * restrict FSETOWN to the current process or process
-		 * group for maximum safety.
-		 */
-		if (pgrp->pg_session != curthread->td_proc->p_session) {
+		} else {
+			if (pgrp->pg_session != curthread->td_proc->p_session) {
+				/*
+				 * Policy - Don't allow a process to FSETOWN a
+				 * process in another session.
+				 *
+				 * Remove this test to allow maximum flexibility
+				 * or restrict FSETOWN to the current process or
+				 * process group for maximum safety.
+				 */
+				ret = EPERM;
+			} else {
+				sigio->sio_pgrp = pgrp;
+				SLIST_INSERT_HEAD(&pgrp->pg_sigiolst, sigio,
+				    sio_pgsigio);
+			}
 			PGRP_UNLOCK(pgrp);
-			ret = EPERM;
-			goto fail;
 		}
-
-		SLIST_INSERT_HEAD(&pgrp->pg_sigiolst, sigio, sio_pgsigio);
-		sigio->sio_pgrp = pgrp;
-		PGRP_UNLOCK(pgrp);
+		sx_sunlock(&proctree_lock);
 	}
-	sx_sunlock(&proctree_lock);
-	*sigiop = sigio;
+	if (ret == 0)
+		*sigiop = sigio;
 	SIGIO_UNLOCK();
-	if (osigio != NULL)
-		sigiofree(osigio);
-	return (0);
-
-fail:
-	SIGIO_UNLOCK();
-	sx_sunlock(&proctree_lock);
-	sigiofree(sigio);
 	if (osigio != NULL)
 		sigiofree(osigio);
 	return (ret);
@@ -1543,7 +1527,7 @@ kern_fstat(struct thread *td, int fd, struct stat *sbp)
 
 	AUDIT_ARG_FILE(td->td_proc, fp);
 
-	error = fo_stat(fp, sbp, td->td_ucred, td);
+	error = fo_stat(fp, sbp, td->td_ucred);
 	fdrop(fp, td);
 #ifdef __STAT_TIME_T_EXT
 	sbp->st_atim_ext = 0;
@@ -2329,14 +2313,6 @@ pdunshare(struct thread *td)
 	p->p_pd = pdp;
 }
 
-void
-fdinstall_remapped(struct thread *td, struct filedesc *fdp)
-{
-
-	fdescfree(td);
-	td->td_proc->p_fd = fdp;
-}
-
 /*
  * Copy a filedesc structure.  A NULL pointer in returns a NULL reference,
  * this is to ease callers, not catch errors.
@@ -2387,66 +2363,6 @@ pdcopy(struct pwddesc *pdp)
 	newpdp->pd_cmask = pdp->pd_cmask;
 	PWDDESC_XUNLOCK(pdp);
 	return (newpdp);
-}
-
-/*
- * Copies a filedesc structure, while remapping all file descriptors
- * stored inside using a translation table.
- *
- * File descriptors are copied over to the new file descriptor table,
- * regardless of whether the close-on-exec flag is set.
- */
-int
-fdcopy_remapped(struct filedesc *fdp, const int *fds, size_t nfds,
-    struct filedesc **ret)
-{
-	struct filedesc *newfdp;
-	struct filedescent *nfde, *ofde;
-	int error, i, lastfile;
-
-	MPASS(fdp != NULL);
-
-	newfdp = fdinit(fdp, true, &lastfile);
-	if (nfds > lastfile + 1) {
-		/* New table cannot be larger than the old one. */
-		error = E2BIG;
-		goto bad;
-	}
-	/* Copy all passable descriptors (i.e. not kqueue). */
-	newfdp->fd_freefile = nfds;
-	for (i = 0; i < nfds; ++i) {
-		if (fds[i] < 0 || fds[i] > lastfile) {
-			/* File descriptor out of bounds. */
-			error = EBADF;
-			goto bad;
-		}
-		ofde = &fdp->fd_ofiles[fds[i]];
-		if (ofde->fde_file == NULL) {
-			/* Unused file descriptor. */
-			error = EBADF;
-			goto bad;
-		}
-		if ((ofde->fde_file->f_ops->fo_flags & DFLAG_PASSABLE) == 0) {
-			/* File descriptor cannot be passed. */
-			error = EINVAL;
-			goto bad;
-		}
-		if (!fhold(ofde->fde_file)) {
-			error = EBADF;
-			goto bad;
-		}
-		nfde = &newfdp->fd_ofiles[i];
-		*nfde = *ofde;
-		filecaps_copy(&ofde->fde_caps, &nfde->fde_caps, true);
-		fdused_init(newfdp, i);
-	}
-	FILEDESC_SUNLOCK(fdp);
-	*ret = newfdp;
-	return (0);
-bad:
-	FILEDESC_SUNLOCK(fdp);
-	fdescfree_remapped(newfdp);
-	return (error);
 }
 
 /*
@@ -2535,7 +2451,7 @@ retry:
  * Release a filedesc structure.
  */
 static void
-fdescfree_fds(struct thread *td, struct filedesc *fdp, bool needclose)
+fdescfree_fds(struct thread *td, struct filedesc *fdp)
 {
 	struct filedesc0 *fdp0;
 	struct freetable *ft, *tft;
@@ -2560,10 +2476,7 @@ fdescfree_fds(struct thread *td, struct filedesc *fdp, bool needclose)
 		fp = fde->fde_file;
 		if (fp != NULL) {
 			fdefree_last(fde);
-			if (needclose)
-				(void) closef(fp, td);
-			else
-				fdrop(fp, td);
+			(void) closef(fp, td);
 		}
 	}
 
@@ -2607,7 +2520,7 @@ fdescfree(struct thread *td)
 	if (refcount_release(&fdp->fd_refcnt) == 0)
 		return;
 
-	fdescfree_fds(td, fdp, 1);
+	fdescfree_fds(td, fdp);
 }
 
 void
@@ -2628,17 +2541,6 @@ pdescfree(struct thread *td)
 	PROC_WAIT_UNLOCKED(p);
 
 	pddrop(pdp);
-}
-
-void
-fdescfree_remapped(struct filedesc *fdp)
-{
-#ifdef INVARIANTS
-	/* fdescfree_fds() asserts that fd_refcnt == 0. */
-	if (!refcount_release(&fdp->fd_refcnt))
-		panic("%s: fd table %p has extra references", __func__, fdp);
-#endif
-	fdescfree_fds(curthread, fdp, 0);
 }
 
 /*
@@ -3001,7 +2903,7 @@ fgetvp_lookup_smr(int fd, struct nameidata *ndp, struct vnode **vpp, bool *fsear
 		return (EAGAIN);
 	*fsearch = ((fp->f_flag & FSEARCH) != 0);
 	vp = fp->f_vnode;
-	if (__predict_false(vp == NULL || vp->v_type != VDIR)) {
+	if (__predict_false(vp == NULL)) {
 		return (EAGAIN);
 	}
 	if (!filecaps_copy(&fde->fde_caps, &ndp->ni_filecaps, false)) {
@@ -3569,11 +3471,15 @@ sys_flock(struct thread *td, struct flock_args *uap)
 	error = fget(td, uap->fd, &cap_flock_rights, &fp);
 	if (error != 0)
 		return (error);
-	if (fp->f_type != DTYPE_VNODE || fp->f_ops == &path_fileops) {
-		fdrop(fp, td);
-		return (EOPNOTSUPP);
+	error = EOPNOTSUPP;
+	if (fp->f_type != DTYPE_VNODE && fp->f_type != DTYPE_FIFO) {
+		goto done;
+	}
+	if (fp->f_ops == &path_fileops) {
+		goto done;
 	}
 
+	error = 0;
 	vp = fp->f_vnode;
 	lf.l_whence = SEEK_SET;
 	lf.l_start = 0;
@@ -3582,7 +3488,7 @@ sys_flock(struct thread *td, struct flock_args *uap)
 		lf.l_type = F_UNLCK;
 		atomic_clear_int(&fp->f_flag, FHASLOCK);
 		error = VOP_ADVLOCK(vp, (caddr_t)fp, F_UNLCK, &lf, F_FLOCK);
-		goto done2;
+		goto done;
 	}
 	if (uap->how & LOCK_EX)
 		lf.l_type = F_WRLCK;
@@ -3590,12 +3496,12 @@ sys_flock(struct thread *td, struct flock_args *uap)
 		lf.l_type = F_RDLCK;
 	else {
 		error = EBADF;
-		goto done2;
+		goto done;
 	}
 	atomic_set_int(&fp->f_flag, FHASLOCK);
 	error = VOP_ADVLOCK(vp, (caddr_t)fp, F_SETLK, &lf,
 	    (uap->how & LOCK_NB) ? F_FLOCK : F_FLOCK | F_WAIT);
-done2:
+done:
 	fdrop(fp, td);
 	return (error);
 }
@@ -3793,6 +3699,26 @@ pwd_hold(struct thread *td)
 	pwd = pwd_hold_pwddesc(pdp);
 	MPASS(pwd != NULL);
 	PWDDESC_XUNLOCK(pdp);
+	return (pwd);
+}
+
+struct pwd *
+pwd_hold_proc(struct proc *p)
+{
+	struct pwddesc *pdp;
+	struct pwd *pwd;
+
+	PROC_ASSERT_HELD(p);
+	PROC_LOCK(p);
+	pdp = pdhold(p);
+	MPASS(pdp != NULL);
+	PROC_UNLOCK(p);
+
+	PWDDESC_XLOCK(pdp);
+	pwd = pwd_hold_pwddesc(pdp);
+	MPASS(pwd != NULL);
+	PWDDESC_XUNLOCK(pdp);
+	pddrop(pdp);
 	return (pwd);
 }
 
@@ -4092,7 +4018,12 @@ sysctl_kern_proc_nfds(SYSCTL_HANDLER_ARGS)
 {
 	NDSLOTTYPE *map;
 	struct filedesc *fdp;
+	u_int namelen;
 	int count, off, minoff;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	if (*(int *)arg1 != 0)
 		return (EINVAL);
@@ -4482,7 +4413,12 @@ sysctl_kern_proc_filedesc(SYSCTL_HANDLER_ARGS)
 	struct sbuf sb;
 	struct proc *p;
 	ssize_t maxlen;
+	u_int namelen;
 	int error, error2, *name;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 
@@ -4561,9 +4497,14 @@ sysctl_kern_proc_ofiledesc(SYSCTL_HANDLER_ARGS)
 	struct filedesc *fdp;
 	struct pwddesc *pdp;
 	struct pwd *pwd;
+	u_int namelen;
 	int error, i, lastfile, *name;
 	struct file *fp;
 	struct proc *p;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 	error = pget((pid_t)name[0], PGET_CANDEBUG | PGET_NOTWEXIT, &p);
@@ -4706,7 +4647,12 @@ sysctl_kern_proc_cwd(SYSCTL_HANDLER_ARGS)
 	struct sbuf sb;
 	struct proc *p;
 	ssize_t maxlen;
+	u_int namelen;
 	int error, error2, *name;
+
+	namelen = arg2;
+	if (namelen != 1)
+		return (EINVAL);
 
 	name = (int *)arg1;
 
@@ -4925,8 +4871,7 @@ badfo_kqfilter(struct file *fp, struct knote *kn)
 }
 
 static int
-badfo_stat(struct file *fp, struct stat *sb, struct ucred *active_cred,
-    struct thread *td)
+badfo_stat(struct file *fp, struct stat *sb, struct ucred *active_cred)
 {
 
 	return (EBADF);

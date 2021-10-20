@@ -193,7 +193,6 @@ vop_stat {
 	OUT struct stat *sb;
 	IN struct ucred *active_cred;
 	IN struct ucred *file_cred;
-	IN struct thread *td;
 };
 
 
@@ -798,6 +797,18 @@ vop_vput_pair {
 	IN struct vnode *dvp;
 	INOUT struct vnode **vpp;
 	IN bool unlock_vp;
+};
+
+
+%% deallocate	vp	L L L
+
+vop_deallocate {
+	IN struct vnode *vp;
+	INOUT off_t *offset;
+	INOUT off_t *len;
+	IN int flags;
+	IN int ioflag;
+	IN struct ucred *cred;
 };
 
 

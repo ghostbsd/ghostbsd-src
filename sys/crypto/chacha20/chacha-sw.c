@@ -18,9 +18,10 @@ chacha20_xform_setkey(void *ctx, const uint8_t *key, int len)
 }
 
 static void
-chacha20_xform_reinit(void *ctx, const uint8_t *iv)
+chacha20_xform_reinit(void *ctx, const uint8_t *iv, size_t ivlen)
 {
-
+	KASSERT(ivlen == CHACHA_NONCELEN + CHACHA_CTRLEN,
+	    ("%s: invalid IV length", __func__));
 	chacha_ivsetup(ctx, iv + 8, iv);
 }
 
@@ -39,7 +40,7 @@ chacha20_xform_crypt_last(void *ctx, const uint8_t *in, uint8_t *out,
 	chacha_encrypt_bytes(ctx, in, out, len);
 }
 
-struct enc_xform enc_xform_chacha20 = {
+const struct enc_xform enc_xform_chacha20 = {
 	.type = CRYPTO_CHACHA20,
 	.name = "chacha20",
 	.ctxsize = sizeof(struct chacha_ctx),

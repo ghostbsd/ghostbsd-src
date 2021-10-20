@@ -40,6 +40,33 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20210929:
+OLD_FILES+=usr/sbin/hcseriald
+OLD_FILES+=usr/share/man/man8/hcseriald.8.gz
+
+# 20210929: Remove ng_h4
+OLD_FILES+=usr/share/man/man4/ng_h4.4.gz
+
+# 20210923: rename boot(9) to kern_reboot(9)
+OLD_FILES+=usr/share/man/man9/boot.9.gz
+
+# 20210921: remove cloudabi
+OLD_FILES+=usr/share/man/man4/cloudabi.4.gz
+
+# 20210906: stop installing {llvm,clang,lldb}-tblgen
+OLD_FILES+=usr/bin/llvm-tblgen
+OLD_FILES+=usr/bin/clang-tblgen
+OLD_FILES+=usr/bin/lldb-tblgen
+OLD_FILES+=usr/share/man/man1/llvm-tblgen.1.gz
+
+# 20210810: remove Pentium-related man pages and references
+OLD_FILES+=usr/share/man/man3/pmc.p4.3.gz
+OLD_FILES+=usr/share/man/man3/pmc.p5.3.gz
+OLD_FILES+=usr/share/man/man3/pmc.p6.3.gz
+
+# 20210805: C.UTF-8 installed to the wrong location
+OLD_FILES+=usr/share/C.UTF-8.LC_CTYPE
+
 # 20210619: new clang import which bumps version from 12.0.0 to 12.0.1.
 OLD_FILES+=usr/lib/clang/12.0.0/include/cuda_wrappers/algorithm
 OLD_FILES+=usr/lib/clang/12.0.0/include/cuda_wrappers/complex
@@ -3967,6 +3994,9 @@ OLD_FILES+=usr/libexec/kgdb
 OLD_FILES+=usr/share/man/man4/hme.4.gz
 OLD_FILES+=usr/share/man/man4/if_hme.4.gz
 
+# 20201129: RADIX_MPATH removed
+OLD_FILES+=usr/include/net/radix_mpath.h
+
 # 20201124: ping6(8) was merged into ping(8)
 OLD_FILES+=usr/lib/debug/sbin/ping6.debug
 OLD_FILES+=usr/share/man/man8/ping6.8.gz
@@ -4048,11 +4078,14 @@ OLD_FILES+=boot/lua/logo-fbsdbw.lua
 OLD_FILES+=boot/lua/logo-orb.lua
 OLD_FILES+=boot/lua/logo-orbbw.lua
 
+# 20200828: net/route/shared.h moved to net/route/route_var.h
+OLD_FILES+=usr/include/net/route/shared.h
+
 # 20200825: merged OpenZFS support
 OLD_LIBS+=lib/libzfs.so.3
 OLD_LIBS+=usr/lib32/libzfs.so.3
 OLD_FILES+=usr/share/man/man1/zstreamdump.1.gz
-OLD_FILES+=usr/share/man/man7/zpool-features.7.gz
+#OLD_FILES+=usr/share/man/man7/zpool-features.7.gz
 
 # 20200923: memfd_test moved to /usr/tests/sys/posixshm
 OLD_FILES+=usr/tests/sys/kern/memfd_test
@@ -4322,6 +4355,9 @@ OLD_FILES+=usr/share/man/man9/uma_zfree_domain.9.gz
 OLD_FILES+=usr/share/man/man4/cy.4.gz
 OLD_FILES+=usr/share/man/man4/rc.4.gz
 OLD_FILES+=usr/share/man/man4/rp.4.gz
+
+# 20200721: sys/iommu.h moved to dev/iommu/
+OLD_FILES+=usr/include/sys/iommu.h
 
 # 20200715: rework of devstat(9) man page
 OLD_FILES+=usr/share/man/man9/devstat_add_entry.9.gz
@@ -5782,6 +5818,37 @@ OLD_FILES+=usr/libexec/cc1plus
 OLD_FILES+=usr/share/man/man1/gcpp.1.gz
 OLD_FILES+=usr/share/man/man1/gperf.1.gz
 OLD_FILES+=usr/share/man/man7/gperf.7.gz
+OLD_DIRS+=usr/include/c++/4.2/tr1
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/unordered_iterator
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/trie_policy
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/tree_policy
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/thin_heap_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/splay_tree_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/resize_policy
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/rc_binomial_heap_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/rb_tree_map_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/pat_trie_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/pairing_heap_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/ov_tree_map_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/list_update_policy
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/list_update_map_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/left_child_next_sibling_heap_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/hash_fn
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/gp_hash_table_map_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/eq_fn
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/cc_hash_table_map_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/binomial_heap_base_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/binomial_heap_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/binary_heap_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/bin_search_tree_
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail/basic_tree_policy
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds/detail
+OLD_DIRS+=usr/include/c++/4.2/ext/pb_ds
+OLD_DIRS+=usr/include/c++/4.2/ext
+OLD_DIRS+=usr/include/c++/4.2/debug
+OLD_DIRS+=usr/include/c++/4.2/bits
+OLD_DIRS+=usr/include/c++/4.2/backward
+OLD_DIRS+=usr/include/c++/4.2
 
 # 20200220: Upgrade of ncurses, shlib bumped to version 9
 OLD_LIBS+=lib/libncurses.so.8
@@ -5797,6 +5864,7 @@ OLD_FILES+=usr/share/man/man1/elf2aout.1.gz
 OLD_FILES+=usr/sbin/simple_httpd
 
 # 20200127: vpo removed
+OLD_FILES+=usr/include/dev/ppbus/vpoio.h
 OLD_FILES+=usr/share/man/man4/imm.4.gz
 OLD_FILES+=usr/share/man/man4/vpo.4.gz
 
@@ -7538,6 +7606,9 @@ OLD_FILES+=tests/sys/geom/class/eli/onetime_d_test.sh
 OLD_DIRS+=etc/skel
 # 20171208: Remove basename_r(3)
 OLD_FILES+=usr/share/man/man3/basename_r.3.gz
+# 20171206: Remove sponge(1)
+OLD_FILES+=usr/bin/sponge
+OLD_FILES+=usr/share/man/man1/sponge.1.gz
 # 20171204: Move fdformat man page from volume 1 to volume 8.
 OLD_FILES+=usr/share/man/man1/fdformat.1.gz
 # 20171203: libproc version bump
@@ -14766,8 +14837,6 @@ OLD_FILES+=usr/share/man/man3/isnanf.3.gz
 OLD_FILES+=usr/share/man/man3/libautofs.3.gz
 OLD_FILES+=usr/share/man/man3/pthread_attr_setsstack.3.gz
 OLD_FILES+=usr/share/man/man3/pthread_getcancelstate.3.gz
-OLD_FILES+=usr/share/man/man3/pthread_mutexattr_getpshared.3.gz
-OLD_FILES+=usr/share/man/man3/pthread_mutexattr_setpshared.3.gz
 OLD_FILES+=usr/share/man/man3/set_assertion_failure_callback.3.gz
 OLD_FILES+=usr/share/man/man3/setkey.3.gz
 OLD_FILES+=usr/share/man/man3/setvfsent.3.gz
@@ -14797,13 +14866,9 @@ OLD_FILES+=usr/share/man/man5/utf2.5.gz
 OLD_FILES+=usr/share/man/man7/groff_mwww.7.gz
 OLD_FILES+=usr/share/man/man7/mmroff.7.gz
 OLD_FILES+=usr/share/man/man7/mwww.7.gz
-OLD_FILES+=usr/share/man/man8/apm.8.gz
-OLD_FILES+=usr/share/man/man8/apmconf.8.gz
-OLD_FILES+=usr/share/man/man8/apmd.8.gz
 OLD_FILES+=usr/share/man/man8/dm.8.gz
 OLD_FILES+=usr/share/man/man8/pam_ftp.8.gz
 OLD_FILES+=usr/share/man/man8/pam_wheel.8.gz
-OLD_FILES+=usr/share/man/man8/sconfig.8.gz
 OLD_FILES+=usr/share/man/man8/ssl.8.gz
 OLD_FILES+=usr/share/man/man8/wlconfig.8.gz
 OLD_FILES+=usr/share/man/man9/CURSIG.9.gz

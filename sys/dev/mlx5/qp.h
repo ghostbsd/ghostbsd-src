@@ -466,6 +466,7 @@ struct mlx5_core_qp {
 	int			qpn;
 	struct mlx5_rsc_debug	*dbg;
 	int			pid;
+	u16			uid;
 };
 
 struct mlx5_qp_path {
@@ -562,7 +563,7 @@ static inline struct mlx5_core_qp *__mlx5_qp_lookup(struct mlx5_core_dev *dev, u
 	return radix_tree_lookup(&dev->priv.qp_table.tree, qpn);
 }
 
-static inline struct mlx5_core_mr *__mlx5_mr_lookup(struct mlx5_core_dev *dev, u32 key)
+static inline struct mlx5_core_mkey *__mlx5_mr_lookup(struct mlx5_core_dev *dev, u32 key)
 {
 	return radix_tree_lookup(&dev->priv.mr_table.tree, key);
 }

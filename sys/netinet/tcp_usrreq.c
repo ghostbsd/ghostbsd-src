@@ -326,6 +326,7 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 		 * Preserve compatibility with old programs.
 		 */
 		if (nam->sa_family != AF_UNSPEC ||
+		    nam->sa_len < offsetof(struct sockaddr_in, sin_zero) ||
 		    sinp->sin_addr.s_addr != INADDR_ANY)
 			return (EAFNOSUPPORT);
 		nam->sa_family = AF_INET;
@@ -456,10 +457,15 @@ tcp_usr_listen(struct socket *so, int backlog, struct thread *td)
 	TCPDEBUG1();
 	SOCK_LOCK(so);
 	error = solisten_proto_check(so);
-	INP_HASH_WLOCK(&V_tcbinfo);
-	if (error == 0 && inp->inp_lport == 0)
-		error = in_pcbbind(inp, (struct sockaddr *)0, td->td_ucred);
-	INP_HASH_WUNLOCK(&V_tcbinfo);
+	if (error != 0) {
+		SOCK_UNLOCK(so);
+		goto out;
+	}
+	if (inp->inp_lport == 0) {
+		INP_HASH_WLOCK(&V_tcbinfo);
+		error = in_pcbbind(inp, NULL, td->td_ucred);
+		INP_HASH_WUNLOCK(&V_tcbinfo);
+	}
 	if (error == 0) {
 		tcp_state_change(tp, TCPS_LISTEN);
 		solisten_proto(so, backlog);
@@ -467,6 +473,8 @@ tcp_usr_listen(struct socket *so, int backlog, struct thread *td)
 		if ((so->so_options & SO_NO_OFFLOAD) == 0)
 			tcp_offload_listen_start(tp);
 #endif
+	} else {
+		solisten_proto_abort(so);
 	}
 	SOCK_UNLOCK(so);
 
@@ -503,12 +511,16 @@ tcp6_usr_listen(struct socket *so, int backlog, struct thread *td)
 	TCPDEBUG1();
 	SOCK_LOCK(so);
 	error = solisten_proto_check(so);
+	if (error != 0) {
+		SOCK_UNLOCK(so);
+		goto out;
+	}
 	INP_HASH_WLOCK(&V_tcbinfo);
-	if (error == 0 && inp->inp_lport == 0) {
+	if (inp->inp_lport == 0) {
 		inp->inp_vflag &= ~INP_IPV4;
 		if ((inp->inp_flags & IN6P_IPV6_V6ONLY) == 0)
 			inp->inp_vflag |= INP_IPV4;
-		error = in6_pcbbind(inp, (struct sockaddr *)0, td->td_ucred);
+		error = in6_pcbbind(inp, NULL, td->td_ucred);
 	}
 	INP_HASH_WUNLOCK(&V_tcbinfo);
 	if (error == 0) {
@@ -518,6 +530,8 @@ tcp6_usr_listen(struct socket *so, int backlog, struct thread *td)
 		if ((so->so_options & SO_NO_OFFLOAD) == 0)
 			tcp_offload_listen_start(tp);
 #endif
+	} else {
+		solisten_proto_abort(so);
 	}
 	SOCK_UNLOCK(so);
 
@@ -580,6 +594,10 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 		error = ECONNREFUSED;
 		goto out;
 	}
+	if (SOLISTENING(so)) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
 	NET_EPOCH_ENTER(et);
@@ -640,6 +658,10 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	}
 	if (inp->inp_flags & INP_DROPPED) {
 		error = ECONNREFUSED;
+		goto out;
+	}
+	if (SOLISTENING(so)) {
+		error = EINVAL;
 		goto out;
 	}
 	tp = intotcpcb(inp);
@@ -1020,6 +1042,10 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 
 	TCPDEBUG1();
 	if (nam != NULL && tp->t_state < TCPS_SYN_SENT) {
+		if (tp->t_state == TCPS_LISTEN) {
+			error = EINVAL;
+			goto out;
+		}
 		switch (nam->sa_family) {
 #ifdef INET
 		case AF_INET:
@@ -1118,6 +1144,9 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 		sbappendstream(&so->so_snd, m, flags);
 		m = NULL;
 		if (nam && tp->t_state < TCPS_SYN_SENT) {
+			KASSERT(tp->t_state == TCPS_CLOSED,
+			    ("%s: tp %p is listening", __func__, tp));
+
 			/*
 			 * Do implied connect if not yet connected,
 			 * initialize window to default value, and
@@ -2534,14 +2563,18 @@ unhold:
 #endif
 #ifdef KERN_TLS
 		case TCP_TXTLS_MODE:
-			optval = ktls_get_tx_mode(so);
+			error = ktls_get_tx_mode(so, &optval);
 			INP_WUNLOCK(inp);
-			error = sooptcopyout(sopt, &optval, sizeof(optval));
+			if (error == 0)
+				error = sooptcopyout(sopt, &optval,
+				    sizeof(optval));
 			break;
 		case TCP_RXTLS_MODE:
-			optval = ktls_get_rx_mode(so);
+			error = ktls_get_rx_mode(so, &optval);
 			INP_WUNLOCK(inp);
-			error = sooptcopyout(sopt, &optval, sizeof(optval));
+			if (error == 0)
+				error = sooptcopyout(sopt, &optval,
+				    sizeof(optval));
 			break;
 #endif
 		case TCP_LRD:

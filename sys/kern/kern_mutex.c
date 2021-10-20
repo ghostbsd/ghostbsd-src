@@ -215,7 +215,7 @@ void
 lock_spin(struct lock_object *lock, uintptr_t how)
 {
 
-	panic("spin locks can only use msleep_spin");
+	mtx_lock_spin((struct mtx *)lock);
 }
 
 uintptr_t
@@ -232,8 +232,12 @@ unlock_mtx(struct lock_object *lock)
 uintptr_t
 unlock_spin(struct lock_object *lock)
 {
+	struct mtx *m;
 
-	panic("spin locks can only use msleep_spin");
+	m = (struct mtx *)lock;
+	mtx_assert(m, MA_OWNED | MA_NOTRECURSED);
+	mtx_unlock_spin(m);
+	return (0);
 }
 
 #ifdef KDTRACE_HOOKS
@@ -895,6 +899,8 @@ thread_lock_flags_(struct thread *td, int opts, const char *file, int line)
 	doing_lockprof = 1;
 #elif defined(KDTRACE_HOOKS)
 	doing_lockprof = lockstat_enabled;
+#endif
+#ifdef KDTRACE_HOOKS
 	if (__predict_false(doing_lockprof))
 		spin_time -= lockstat_nsecs(&td->td_lock->lock_object);
 #endif

@@ -60,6 +60,8 @@
 	..
 	init.d
         ..
+        jail.conf.d
+        ..
         kyua             tags=package=tests
         ..
         mail

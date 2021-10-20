@@ -1,8 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (c) 2013 Dmitry Chagin
- * All rights reserved.
+ * Copyright (c) 2013 Dmitry Chagin <dchagin@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -139,11 +138,9 @@ DUMMY(fsconfig);
 DUMMY(fsmount);
 DUMMY(fspick);
 DUMMY(pidfd_open);
-DUMMY(clone3);
 DUMMY(close_range);
 DUMMY(openat2);
 DUMMY(pidfd_getfd);
-DUMMY(faccessat2);
 DUMMY(process_madvise);
 DUMMY(epoll_pwait2);
 DUMMY(mount_setattr);

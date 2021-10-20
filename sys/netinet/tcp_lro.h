@@ -56,18 +56,25 @@
 #define TSTMP_LRO		0x0100
 #define TSTMP_HDWR		0x0200
 #define HAS_TSTMP		0x0400
+/*
+ * Default number of interrupts on the same cpu in a row
+ * that will cause us to declare a "affinity cpu".
+ */
+#define TCP_LRO_CPU_DECLARATION_THRESH 50
 
 struct inpcb;
 
 union lro_address {
 	u_long raw[1];
 	struct {
-		uint16_t lro_type;	/* internal */
+		uint8_t lro_type;	/* internal */
 #define	LRO_TYPE_NONE     0
 #define	LRO_TYPE_IPV4_TCP 1
 #define	LRO_TYPE_IPV6_TCP 2
 #define	LRO_TYPE_IPV4_UDP 3
 #define	LRO_TYPE_IPV6_UDP 4
+		uint8_t lro_flags;
+#define	LRO_FLAG_DECRYPTED 1
 		uint16_t vlan_id;	/* VLAN identifier */
 		uint16_t s_port;	/* source TCP/UDP port */
 		uint16_t d_port;	/* destination TCP/UDP port */
@@ -162,12 +169,15 @@ struct lro_ctrl {
 	unsigned	lro_mbuf_count;
 	unsigned	lro_mbuf_max;
 	unsigned short	lro_ackcnt_lim;		/* max # of aggregated ACKs */
+	unsigned short	lro_cpu;		/* Guess at the cpu we have affinity too */
 	unsigned 	lro_length_lim;		/* max len of aggregated data */
-
 	u_long		lro_hashsz;
+	uint32_t	lro_last_cpu;
+	uint32_t 	lro_cnt_of_same_cpu;
 	struct lro_head	*lro_hash;
 	struct lro_head	lro_active;
 	struct lro_head	lro_free;
+	uint8_t		lro_cpu_is_set;		/* Flag to say its ok to set the CPU on the inp */
 };
 
 struct tcp_ackent {

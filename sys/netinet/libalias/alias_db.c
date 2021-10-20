@@ -119,7 +119,6 @@ StartPointIn(struct libalias *la,
 	SPLAY_INSERT(splay_in, &la->linkSplayIn, grp);
 	return (grp);
 }
-#undef INGUARD
 
 static int
 SeqDiff(u_long x, u_long y)
@@ -612,8 +611,6 @@ AddLink(struct libalias *la, struct in_addr src_addr, struct in_addr dst_addr,
 		break;
 	case LINK_FRAGMENT_PTR:
 		lnk->expire.time = FRAGMENT_PTR_EXPIRE_TIME;
-		break;
-	case LINK_ADDR:
 		break;
 	default:
 		lnk->expire.time = PROTO_EXPIRE_TIME;
@@ -1772,7 +1769,7 @@ HouseKeeping(struct libalias *la)
 	 * Reduce the amount of house keeping work substantially by
 	 * sampling over the packets.
 	 */
-	if (packets % packet_limit == 0) {
+	if (packet_limit <= 1 || packets % packet_limit == 0) {
 		time_t now;
 
 #ifdef _KERNEL
@@ -2050,9 +2047,15 @@ LibAliasSetAliasPortRange(struct libalias *la, u_short port_low,
     u_short port_high)
 {
 	LIBALIAS_LOCK(la);
-	la->aliasPortLower = port_low;
-	/* Add 1 to the aliasPortLength as modulo has range of 1 to n-1 */
-	la->aliasPortLength = port_high - port_low + 1;
+	if (port_low) {
+		la->aliasPortLower = port_low;
+		/* Add 1 to the aliasPortLength as modulo has range of 1 to n-1 */
+		la->aliasPortLength = port_high - port_low + 1;
+	} else {
+		/* Set default values */
+		la->aliasPortLower = 0x8000;
+		la->aliasPortLength = 0x8000;
+	}
 	LIBALIAS_UNLOCK(la);
 }
 

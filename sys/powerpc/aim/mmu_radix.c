@@ -25,6 +25,8 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "opt_platform.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -84,6 +86,9 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/mmuvar.h>
 
+/* For pseries bit. */
+#include <powerpc/pseries/phyp-hvcall.h>
+
 #ifdef INVARIANTS
 #include <vm/uma_dbg.h>
 #endif
@@ -93,6 +98,7 @@ __FBSDID("$FreeBSD$");
 #define PPC_BITLSHIFT_VAL(val, bit) ((val) << PPC_BITLSHIFT(bit))
 
 #include "opt_ddb.h"
+
 #ifdef DDB
 static void pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va);
 #endif
@@ -651,10 +657,10 @@ extern void bs_remap_earlyboot(void);
 #define PARTTAB_HR		(1UL << 63) /* host uses radix */
 #define PARTTAB_GR		(1UL << 63) /* guest uses radix must match host */
 
-/* TLB flush actions. Used as argument to tlbiel_all() */
+/* TLB flush actions. Used as argument to tlbiel_flush() */
 enum {
-	TLB_INVAL_SCOPE_LPID = 0,	/* invalidate TLBs for current LPID */
-	TLB_INVAL_SCOPE_GLOBAL = 1,	/* invalidate all TLBs */
+	TLB_INVAL_SCOPE_LPID = 2,	/* invalidate TLBs for current LPID */
+	TLB_INVAL_SCOPE_GLOBAL = 3,	/* invalidate all TLBs */
 };
 
 #define	NPV_LIST_LOCKS	MAXCPU
@@ -752,9 +758,11 @@ tlbiel_flush_isa3(uint32_t num_sets, uint32_t is)
 	 * and partition table entries. Then flush the remaining sets of the
 	 * TLB.
 	 */
-	tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 0);
-	for (set = 1; set < num_sets; set++)
-		tlbiel_radix_set_isa300(set, is, 0, RIC_FLUSH_TLB, 0);
+	if (is == TLB_INVAL_SCOPE_GLOBAL) {
+		tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 0);
+		for (set = 1; set < num_sets; set++)
+			tlbiel_radix_set_isa300(set, is, 0, RIC_FLUSH_TLB, 0);
+	}
 
 	/* Do the same for process scoped entries. */
 	tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 1);
@@ -767,21 +775,20 @@ tlbiel_flush_isa3(uint32_t num_sets, uint32_t is)
 static void
 mmu_radix_tlbiel_flush(int scope)
 {
-	int is;
-
 	MPASS(scope == TLB_INVAL_SCOPE_LPID ||
 		  scope == TLB_INVAL_SCOPE_GLOBAL);
-	is = scope + 2;
 
-	tlbiel_flush_isa3(POWER9_TLB_SETS_RADIX, is);
+	tlbiel_flush_isa3(POWER9_TLB_SETS_RADIX, scope);
 	__asm __volatile(PPC_INVALIDATE_ERAT "; isync" : : :"memory");
 }
 
 static void
 mmu_radix_tlbie_all()
 {
-	/* TODO: LPID invalidate */
-	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	if (powernv_enabled)
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	else
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_LPID);
 }
 
 static void
@@ -900,7 +907,7 @@ kvtopte(vm_offset_t va)
 	pt_entry_t *l3e;
 
 	l3e = pmap_pml3e(kernel_pmap, va);
-	if ((be64toh(*l3e) & RPTE_VALID) == 0)
+	if (l3e == NULL || (be64toh(*l3e) & RPTE_VALID) == 0)
 		return (NULL);
 	return (pmap_l3e_to_pte(l3e, va));
 }
@@ -2024,11 +2031,14 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	 */
 	if (isa3_pid_bits == 0)
 		isa3_pid_bits = 20;
-	parttab_phys = moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
-	validate_addr(parttab_phys, PARTTAB_SIZE);
-	for (int i = 0; i < PARTTAB_SIZE/PAGE_SIZE; i++)
-		pagezero(PHYS_TO_DMAP(parttab_phys + i * PAGE_SIZE));
+	if (powernv_enabled) {
+		parttab_phys =
+		    moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
+		validate_addr(parttab_phys, PARTTAB_SIZE);
+		for (int i = 0; i < PARTTAB_SIZE/PAGE_SIZE; i++)
+			pagezero(PHYS_TO_DMAP(parttab_phys + i * PAGE_SIZE));
 
+	}
 	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
 	validate_addr(proctab0pa, proctab_size);
@@ -2060,12 +2070,6 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	Maxmem = 0;
 	for (i = 0; phys_avail[i + 2] != 0; i += 2)
 		Maxmem = MAX(Maxmem, powerpc_btop(phys_avail[i + 1]));
-
-	/*
-	 * Set the start and end of kva.
-	 */
-	virtual_avail = VM_MIN_KERNEL_ADDRESS;
-	virtual_end = VM_MAX_SAFE_KERNEL_ADDRESS;
 
 	/*
 	 * Remap any early IO mappings (console framebuffer, etc.)
@@ -2181,12 +2185,26 @@ mmu_radix_proctab_init(void)
 	    htobe64(RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) |
 		RADIX_PGD_INDEX_SHIFT);
 
-	mmu_radix_proctab_register(proctab0pa, PROCTAB_SIZE_SHIFT - 12);
+	if (powernv_enabled) {
+		mmu_radix_proctab_register(proctab0pa, PROCTAB_SIZE_SHIFT - 12);
+		__asm __volatile("ptesync" : : : "memory");
+		__asm __volatile(PPC_TLBIE_5(%0,%1,2,1,1) : :
+			     "r" (TLBIEL_INVAL_SET_LPID), "r" (0));
+		__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
+#ifdef PSERIES
+	} else {
+		int64_t rc;
 
-	__asm __volatile("ptesync" : : : "memory");
-	__asm __volatile(PPC_TLBIE_5(%0,%1,2,1,1) : :
-		     "r" (TLBIEL_INVAL_SET_LPID), "r" (0));
-	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
+		rc = phyp_hcall(H_REGISTER_PROC_TBL,
+		    PROC_TABLE_NEW | PROC_TABLE_RADIX | PROC_TABLE_GTSE,
+		    proctab0pa, 0, PROCTAB_SIZE_SHIFT - 12);
+		if (rc != H_SUCCESS)
+			panic("mmu_radix_proctab_init: "
+				"failed to register process table: rc=%jd",
+				(intmax_t)rc);
+#endif
+	}
+
 	if (bootverbose)
 		printf("process table %p and kernel radix PDE: %p\n",
 			   isa3_proctab, kernel_pmap->pm_pml1);
@@ -2326,6 +2344,7 @@ mmu_radix_bootstrap(vm_offset_t start, vm_offset_t end)
 	if (bootverbose)
 		printf("%s\n", __func__);
 	hw_direct_map = 1;
+	powernv_enabled = (mfmsr() & PSL_HV) ? 1 : 0;
 	mmu_radix_early_bootstrap(start, end);
 	if (bootverbose)
 		printf("early bootstrap complete\n");
@@ -2340,8 +2359,10 @@ mmu_radix_bootstrap(vm_offset_t start, vm_offset_t end)
 	mmu_radix_init_iamr();
 	mmu_radix_proctab_init();
 	mmu_radix_pid_set(kernel_pmap);
-	/* XXX assume CPU_FTR_HVMODE */
-	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	if (powernv_enabled)
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	else
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_LPID);
 
 	mmu_radix_late_bootstrap(start, end);
 	numa_mem_regions(&numa_pregions, &numa_pregions_sz);
@@ -2368,7 +2389,10 @@ mmu_radix_cpu_bootstrap(int ap)
 	}
 	mmu_radix_init_iamr();
 	mmu_radix_pid_set(kernel_pmap);
-	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	if (powernv_enabled)
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	else
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_LPID);
 }
 
 static SYSCTL_NODE(_vm_pmap, OID_AUTO, l3e, CTLFLAG_RD, 0,
@@ -4248,8 +4272,9 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 		/* Wire up a new PDPE page */
 		pml1index = ptepindex - (NUPDE + NUPDPE);
 		l1e = &pmap->pm_pml1[pml1index];
+		KASSERT((be64toh(*l1e) & PG_V) == 0,
+		    ("%s: L1 entry %#lx is valid", __func__, *l1e));
 		pde_store(l1e, VM_PAGE_TO_PHYS(m));
-
 	} else if (ptepindex >= NUPDE) {
 		vm_pindex_t pml1index;
 		vm_pindex_t pdpindex;
@@ -4278,8 +4303,9 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 
 		/* Now find the pdp page */
 		l2e = &l2e[pdpindex & RPTE_MASK];
+		KASSERT((be64toh(*l2e) & PG_V) == 0,
+		    ("%s: L2 entry %#lx is valid", __func__, *l2e));
 		pde_store(l2e, VM_PAGE_TO_PHYS(m));
-
 	} else {
 		vm_pindex_t pml1index;
 		vm_pindex_t pdpindex;
@@ -4324,6 +4350,8 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 
 		/* Now we know where the page directory page is */
 		l3e = &l3e[ptepindex & RPTE_MASK];
+		KASSERT((be64toh(*l3e) & PG_V) == 0,
+		    ("%s: L3 entry %#lx is valid", __func__, *l3e));
 		pde_store(l3e, VM_PAGE_TO_PHYS(m));
 	}
 

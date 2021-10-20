@@ -275,10 +275,10 @@ struct linux_getsockopt_args {
 };
 struct linux_clone_args {
 	char flags_l_[PADL_(l_ulong)]; l_ulong flags; char flags_r_[PADR_(l_ulong)];
-	char stack_l_[PADL_(void *)]; void * stack; char stack_r_[PADR_(void *)];
-	char parent_tidptr_l_[PADL_(void *)]; void * parent_tidptr; char parent_tidptr_r_[PADR_(void *)];
-	char child_tidptr_l_[PADL_(void *)]; void * child_tidptr; char child_tidptr_r_[PADR_(void *)];
-	char tls_l_[PADL_(void *)]; void * tls; char tls_r_[PADR_(void *)];
+	char stack_l_[PADL_(l_ulong)]; l_ulong stack; char stack_r_[PADR_(l_ulong)];
+	char parent_tidptr_l_[PADL_(l_int *)]; l_int * parent_tidptr; char parent_tidptr_r_[PADR_(l_int *)];
+	char child_tidptr_l_[PADL_(l_int *)]; l_int * child_tidptr; char child_tidptr_r_[PADR_(l_int *)];
+	char tls_l_[PADL_(l_ulong)]; l_ulong tls; char tls_r_[PADR_(l_ulong)];
 };
 struct linux_fork_args {
 	register_t dummy;
@@ -1358,7 +1358,8 @@ struct linux_pidfd_open_args {
 	register_t dummy;
 };
 struct linux_clone3_args {
-	register_t dummy;
+	char uargs_l_[PADL_(struct l_user_clone_args *)]; struct l_user_clone_args * uargs; char uargs_r_[PADR_(struct l_user_clone_args *)];
+	char usize_l_[PADL_(l_size_t)]; l_size_t usize; char usize_r_[PADR_(l_size_t)];
 };
 struct linux_close_range_args {
 	register_t dummy;
@@ -1370,7 +1371,10 @@ struct linux_pidfd_getfd_args {
 	register_t dummy;
 };
 struct linux_faccessat2_args {
-	register_t dummy;
+	char dfd_l_[PADL_(l_int)]; l_int dfd; char dfd_r_[PADR_(l_int)];
+	char filename_l_[PADL_(const char *)]; const char * filename; char filename_r_[PADR_(const char *)];
+	char amode_l_[PADL_(l_int)]; l_int amode; char amode_r_[PADR_(l_int)];
+	char flags_l_[PADL_(l_int)]; l_int flags; char flags_r_[PADR_(l_int)];
 };
 struct linux_process_madvise_args {
 	register_t dummy;

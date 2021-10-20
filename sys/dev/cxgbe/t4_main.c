@@ -253,11 +253,6 @@ static void cxgbe_qflush(struct ifnet *);
 #if defined(KERN_TLS) || defined(RATELIMIT)
 static int cxgbe_snd_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
     struct m_snd_tag **);
-static int cxgbe_snd_tag_modify(struct m_snd_tag *,
-    union if_snd_tag_modify_params *);
-static int cxgbe_snd_tag_query(struct m_snd_tag *,
-    union if_snd_tag_query_params *);
-static void cxgbe_snd_tag_free(struct m_snd_tag *);
 #endif
 
 MALLOC_DEFINE(M_CXGBE, "cxgbe", "Chelsio T4/T5 Ethernet driver and services");
@@ -2453,9 +2448,6 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 		ifp->if_get_counter = cxgbe_get_counter;
 #if defined(KERN_TLS) || defined(RATELIMIT)
 	ifp->if_snd_tag_alloc = cxgbe_snd_tag_alloc;
-	ifp->if_snd_tag_modify = cxgbe_snd_tag_modify;
-	ifp->if_snd_tag_query = cxgbe_snd_tag_query;
-	ifp->if_snd_tag_free = cxgbe_snd_tag_free;
 #endif
 #ifdef RATELIMIT
 	ifp->if_ratelimit_query = cxgbe_ratelimit_query;
@@ -2926,7 +2918,7 @@ cxgbe_transmit(struct ifnet *ifp, struct mbuf *m)
 	}
 #ifdef RATELIMIT
 	if (m->m_pkthdr.csum_flags & CSUM_SND_TAG) {
-		if (m->m_pkthdr.snd_tag->type == IF_SND_TAG_TYPE_RATE_LIMIT)
+		if (m->m_pkthdr.snd_tag->sw->type == IF_SND_TAG_TYPE_RATE_LIMIT)
 			return (ethofld_transmit(ifp, m));
 	}
 #endif
@@ -3108,56 +3100,6 @@ cxgbe_snd_tag_alloc(struct ifnet *ifp, union if_snd_tag_alloc_params *params,
 		error = EOPNOTSUPP;
 	}
 	return (error);
-}
-
-static int
-cxgbe_snd_tag_modify(struct m_snd_tag *mst,
-    union if_snd_tag_modify_params *params)
-{
-
-	switch (mst->type) {
-#ifdef RATELIMIT
-	case IF_SND_TAG_TYPE_RATE_LIMIT:
-		return (cxgbe_rate_tag_modify(mst, params));
-#endif
-	default:
-		return (EOPNOTSUPP);
-	}
-}
-
-static int
-cxgbe_snd_tag_query(struct m_snd_tag *mst,
-    union if_snd_tag_query_params *params)
-{
-
-	switch (mst->type) {
-#ifdef RATELIMIT
-	case IF_SND_TAG_TYPE_RATE_LIMIT:
-		return (cxgbe_rate_tag_query(mst, params));
-#endif
-	default:
-		return (EOPNOTSUPP);
-	}
-}
-
-static void
-cxgbe_snd_tag_free(struct m_snd_tag *mst)
-{
-
-	switch (mst->type) {
-#ifdef RATELIMIT
-	case IF_SND_TAG_TYPE_RATE_LIMIT:
-		cxgbe_rate_tag_free(mst);
-		return;
-#endif
-#ifdef KERN_TLS
-	case IF_SND_TAG_TYPE_TLS:
-		cxgbe_tls_tag_free(mst);
-		return;
-#endif
-	default:
-		panic("shouldn't get here");
-	}
 }
 #endif
 
@@ -5236,6 +5178,14 @@ get_params__post_init(struct adapter *sc)
 	else
 		sc->params.max_pkts_per_eth_tx_pkts_wr = 15;
 
+	param[0] = FW_PARAM_DEV(NUM_TM_CLASS);
+	rc = -t4_query_params(sc, sc->mbox, sc->pf, 0, 1, param, val);
+	if (rc == 0) {
+		MPASS(val[0] > 0 && val[0] < 256);	/* nsched_cls is 8b */
+		sc->params.nsched_cls = val[0];
+	} else
+		sc->params.nsched_cls = sc->chip_params->nsched_cls;
+
 	/* get capabilites */
 	bzero(&caps, sizeof(caps));
 	caps.op_to_write = htobe32(V_FW_CMD_OP(FW_CAPS_CONFIG_CMD) |
@@ -5443,11 +5393,9 @@ ktls_tick(void *arg)
 	uint32_t tstamp;
 
 	sc = arg;
-	if (sc->flags & KERN_TLS_ON) {
-		tstamp = tcp_ts_getticks();
-		t4_write_reg(sc, A_TP_SYNC_TIME_HI, tstamp >> 1);
-		t4_write_reg(sc, A_TP_SYNC_TIME_LO, tstamp << 31);
-	}
+	tstamp = tcp_ts_getticks();
+	t4_write_reg(sc, A_TP_SYNC_TIME_HI, tstamp >> 1);
+	t4_write_reg(sc, A_TP_SYNC_TIME_LO, tstamp << 31);
 	callout_schedule_sbt(&sc->ktls_tick, SBT_1MS, 0, C_HARDCLOCK);
 }
 
@@ -5467,10 +5415,14 @@ t4_config_kern_tls(struct adapter *sc, bool enable)
 		return (rc);
 	}
 
-	if (enable)
+	if (enable) {
 		sc->flags |= KERN_TLS_ON;
-	else
+		callout_reset_sbt(&sc->ktls_tick, SBT_1MS, 0, ktls_tick, sc,
+		    C_HARDCLOCK);
+	} else {
 		sc->flags &= ~KERN_TLS_ON;
+		callout_stop(&sc->ktls_tick);
+	}
 
 	return (rc);
 }
@@ -6518,11 +6470,6 @@ adapter_full_init(struct adapter *sc)
 		write_global_rss_key(sc);
 		t4_intr_enable(sc);
 	}
-#ifdef KERN_TLS
-	if (is_ktls(sc))
-		callout_reset_sbt(&sc->ktls_tick, SBT_1MS, 0, ktls_tick, sc,
-		    C_HARDCLOCK);
-#endif
 	return (0);
 }
 
@@ -7582,6 +7529,10 @@ t4_sysctls(struct adapter *sc)
 		    &sc->tt.update_hc_on_pmtu_change, 0,
 		    "Update hostcache entry if the PMTU changes");
 
+		sc->tt.iso = 1;
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "iso", CTLFLAG_RW,
+		    &sc->tt.iso, 0, "Enable iSCSI segmentation offload");
+
 		SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "timer_tick",
 		    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
 		    sysctl_tp_tick, "A", "TP timer tick (us)");
@@ -7781,7 +7732,7 @@ cxgbe_sysctls(struct port_info *pi)
 	struct adapter *sc = pi->adapter;
 	int i;
 	char name[16];
-	static char *tc_flags = {"\20\1USER\2SYNC\3ASYNC\4ERR"};
+	static char *tc_flags = {"\20\1USER"};
 
 	ctx = device_get_sysctl_ctx(pi->dev);
 
@@ -7851,13 +7802,15 @@ cxgbe_sysctls(struct port_info *pi)
 	SYSCTL_ADD_UINT(ctx, children2, OID_AUTO, "burstsize",
 	    CTLFLAG_RW, &pi->sched_params->burstsize, 0,
 	    "burstsize for per-flow cl-rl (0 means up to the driver)");
-	for (i = 0; i < sc->chip_params->nsched_cls; i++) {
+	for (i = 0; i < sc->params.nsched_cls; i++) {
 		struct tx_cl_rl_params *tc = &pi->sched_params->cl_rl[i];
 
 		snprintf(name, sizeof(name), "%d", i);
 		children2 = SYSCTL_CHILDREN(SYSCTL_ADD_NODE(ctx,
 		    SYSCTL_CHILDREN(oid), OID_AUTO, name,
 		    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "traffic class"));
+		SYSCTL_ADD_UINT(ctx, children2, OID_AUTO, "state",
+		    CTLFLAG_RD, &tc->state, 0, "current state");
 		SYSCTL_ADD_PROC(ctx, children2, OID_AUTO, "flags",
 		    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, tc_flags,
 		    (uintptr_t)&tc->flags, sysctl_bitfield_8b, "A", "flags");
@@ -9586,7 +9539,9 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 	struct sbuf *sb;
 	int rc, i, n;
 	uint32_t lo, hi, used, alloc;
-	static const char *memory[] = {"EDC0:", "EDC1:", "MC:", "MC0:", "MC1:"};
+	static const char *memory[] = {
+		"EDC0:", "EDC1:", "MC:", "MC0:", "MC1:", "HMA:"
+	};
 	static const char *region[] = {
 		"DBQ contexts:", "IMSG contexts:", "FLM cache:", "TCBs:",
 		"Pstructs:", "Timers:", "Rx FL:", "Tx FL:", "Pstruct FL:",
@@ -9639,19 +9594,25 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 	if (lo & F_EXT_MEM_ENABLE) {
 		hi = t4_read_reg(sc, A_MA_EXT_MEMORY_BAR);
 		avail[i].base = G_EXT_MEM_BASE(hi) << 20;
-		avail[i].limit = avail[i].base +
-		    (G_EXT_MEM_SIZE(hi) << 20);
+		avail[i].limit = avail[i].base + (G_EXT_MEM_SIZE(hi) << 20);
 		avail[i].idx = is_t5(sc) ? 3 : 2;	/* Call it MC0 for T5 */
 		i++;
 	}
 	if (is_t5(sc) && lo & F_EXT_MEM1_ENABLE) {
 		hi = t4_read_reg(sc, A_MA_EXT_MEMORY1_BAR);
 		avail[i].base = G_EXT_MEM1_BASE(hi) << 20;
-		avail[i].limit = avail[i].base +
-		    (G_EXT_MEM1_SIZE(hi) << 20);
+		avail[i].limit = avail[i].base + (G_EXT_MEM1_SIZE(hi) << 20);
 		avail[i].idx = 4;
 		i++;
 	}
+	if (is_t6(sc) && lo & F_HMA_MUX) {
+		hi = t4_read_reg(sc, A_MA_EXT_MEMORY1_BAR);
+		avail[i].base = G_EXT_MEM1_BASE(hi) << 20;
+		avail[i].limit = avail[i].base + (G_EXT_MEM1_SIZE(hi) << 20);
+		avail[i].idx = 5;
+		i++;
+	}
+	MPASS(i <= nitems(avail));
 	if (!i)                                    /* no memory available */
 		goto done;
 	qsort(avail, i, sizeof(struct mem_desc), mem_desc_cmp);
@@ -9706,23 +9667,24 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 #undef ulp_region
 
 	md->base = 0;
-	md->idx = nitems(region);
-	if (!is_t4(sc)) {
+	if (is_t4(sc))
+		md->idx = nitems(region);
+	else {
 		uint32_t size = 0;
 		uint32_t sge_ctrl = t4_read_reg(sc, A_SGE_CONTROL2);
 		uint32_t fifo_size = t4_read_reg(sc, A_SGE_DBVFIFO_SIZE);
 
 		if (is_t5(sc)) {
 			if (sge_ctrl & F_VFIFO_ENABLE)
-				size = G_DBVFIFO_SIZE(fifo_size);
+				size = fifo_size << 2;
 		} else
-			size = G_T6_DBVFIFO_SIZE(fifo_size);
+			size = G_T6_DBVFIFO_SIZE(fifo_size) << 6;
 
 		if (size) {
-			md->base = G_BASEADDR(t4_read_reg(sc,
-			    A_SGE_DBVFIFO_BADDR));
-			md->limit = md->base + (size << 2) - 1;
-		}
+			md->base = t4_read_reg(sc, A_SGE_DBVFIFO_BADDR);
+			md->limit = md->base + size - 1;
+		} else
+			md->idx = nitems(region);
 	}
 	md++;
 
@@ -11675,7 +11637,7 @@ error:
 		if ((s->offload != 0 && s->offload != 1) ||
 		    s->cong_algo < -1 || s->cong_algo > CONG_ALG_HIGHSPEED ||
 		    s->sched_class < -1 ||
-		    s->sched_class >= sc->chip_params->nsched_cls) {
+		    s->sched_class >= sc->params.nsched_cls) {
 			rc = EINVAL;
 			goto error;
 		}
@@ -11886,6 +11848,7 @@ clear_stats(struct adapter *sc, u_int port_id)
 				ofld_txq->wrq.tx_wrs_copied = 0;
 				counter_u64_zero(ofld_txq->tx_iscsi_pdus);
 				counter_u64_zero(ofld_txq->tx_iscsi_octets);
+				counter_u64_zero(ofld_txq->tx_iscsi_iso_wrs);
 				counter_u64_zero(ofld_txq->tx_toe_tls_records);
 				counter_u64_zero(ofld_txq->tx_toe_tls_octets);
 			}

@@ -69,8 +69,7 @@
 
 #include "zutil_import.h"
 
-/*PRINTFLIKE2*/
-static void
+static __attribute__((format(printf, 2, 3))) void
 zutil_error_aux(libpc_handle_t *hdl, const char *fmt, ...)
 {
 	va_list ap;
@@ -104,8 +103,7 @@ zutil_verror(libpc_handle_t *hdl, const char *error, const char *fmt,
 	}
 }
 
-/*PRINTFLIKE3*/
-static int
+static __attribute__((format(printf, 3, 4))) int
 zutil_error_fmt(libpc_handle_t *hdl, const char *error, const char *fmt, ...)
 {
 	va_list ap;
@@ -1034,9 +1032,11 @@ zpool_read_label(int fd, nvlist_t **config, int *num_labels)
 					// This shouldn't be possible to
 					// encounter, die if we do.
 					ASSERT(B_FALSE);
+					fallthrough;
 				case EOPNOTSUPP:
 				case ENOSYS:
 					do_slow = B_TRUE;
+					fallthrough;
 				case 0:
 				default:
 					(void) aio_return(&aiocbs[l]);
@@ -1237,7 +1237,7 @@ zpool_find_import_scan_dir(libpc_handle_t *hdl, pthread_mutex_t *lock,
 		if (error == ENOENT)
 			return (0);
 
-		zutil_error_aux(hdl, strerror(error));
+		zutil_error_aux(hdl, "%s", strerror(error));
 		(void) zutil_error_fmt(hdl, EZFS_BADPATH, dgettext(
 		    TEXT_DOMAIN, "cannot resolve path '%s'"), dir);
 		return (error);
@@ -1246,7 +1246,7 @@ zpool_find_import_scan_dir(libpc_handle_t *hdl, pthread_mutex_t *lock,
 	dirp = opendir(path);
 	if (dirp == NULL) {
 		error = errno;
-		zutil_error_aux(hdl, strerror(error));
+		zutil_error_aux(hdl, "%s", strerror(error));
 		(void) zutil_error_fmt(hdl, EZFS_BADPATH,
 		    dgettext(TEXT_DOMAIN, "cannot open '%s'"), path);
 		return (error);
@@ -1308,7 +1308,7 @@ zpool_find_import_scan_path(libpc_handle_t *hdl, pthread_mutex_t *lock,
 			goto out;
 		}
 
-		zutil_error_aux(hdl, strerror(error));
+		zutil_error_aux(hdl, "%s", strerror(error));
 		(void) zutil_error_fmt(hdl, EZFS_BADPATH, dgettext(
 		    TEXT_DOMAIN, "cannot resolve path '%s'"), dir);
 		goto out;
@@ -1346,7 +1346,7 @@ zpool_find_import_scan(libpc_handle_t *hdl, pthread_mutex_t *lock,
 			if (error == ENOENT)
 				continue;
 
-			zutil_error_aux(hdl, strerror(error));
+			zutil_error_aux(hdl, "%s", strerror(error));
 			(void) zutil_error_fmt(hdl, EZFS_BADPATH, dgettext(
 			    TEXT_DOMAIN, "cannot resolve path '%s'"), dir[i]);
 			goto error;

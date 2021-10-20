@@ -85,7 +85,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/timex.h>
 #include <sys/unistd.h>
 #include <sys/ucontext.h>
-#include <sys/umtx.h>
 #include <sys/vnode.h>
 #include <sys/wait.h>
 #include <sys/ipc.h>
@@ -403,7 +402,7 @@ freebsd32_exec_copyin_args(struct image_args *args, const char *fname,
 		if (error != 0)
 			goto err_exit;
 	}
-			
+
 	/*
 	 * extract environment strings
 	 */
@@ -1412,28 +1411,18 @@ exit:
 }
 
 int
-freebsd32_recvmsg(td, uap)
-	struct thread *td;
-	struct freebsd32_recvmsg_args /* {
-		int	s;
-		struct	msghdr32 *msg;
-		int	flags;
-	} */ *uap;
+freebsd32_recvmsg(struct thread *td, struct freebsd32_recvmsg_args *uap)
 {
 	struct msghdr msg;
-	struct msghdr32 m32;
 	struct iovec *uiov, *iov;
 	struct mbuf *control = NULL;
 	struct mbuf **controlp;
-
 	int error;
-	error = copyin(uap->msg, &m32, sizeof(m32));
-	if (error)
-		return (error);
+
 	error = freebsd32_copyinmsghdr(uap->msg, &msg);
 	if (error)
 		return (error);
-	error = freebsd32_copyiniov(PTRIN(m32.msg_iov), m32.msg_iovlen, &iov,
+	error = freebsd32_copyiniov((void *)msg.msg_iov, msg.msg_iovlen, &iov,
 	    EMSGSIZE);
 	if (error)
 		return (error);
@@ -1563,23 +1552,18 @@ out:
 }
 
 int
-freebsd32_sendmsg(struct thread *td,
-		  struct freebsd32_sendmsg_args *uap)
+freebsd32_sendmsg(struct thread *td, struct freebsd32_sendmsg_args *uap)
 {
 	struct msghdr msg;
-	struct msghdr32 m32;
 	struct iovec *iov;
 	struct mbuf *control = NULL;
 	struct sockaddr *to = NULL;
 	int error;
 
-	error = copyin(uap->msg, &m32, sizeof(m32));
-	if (error)
-		return (error);
 	error = freebsd32_copyinmsghdr(uap->msg, &msg);
 	if (error)
 		return (error);
-	error = freebsd32_copyiniov(PTRIN(m32.msg_iov), m32.msg_iovlen, &iov,
+	error = freebsd32_copyiniov((void *)msg.msg_iov, msg.msg_iovlen, &iov,
 	    EMSGSIZE);
 	if (error)
 		return (error);
@@ -3643,6 +3627,8 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 	case PROC_STACKGAP_CTL:
 	case PROC_TRACE_CTL:
 	case PROC_TRAPCAP_CTL:
+	case PROC_NO_NEW_PRIVS_CTL:
+	case PROC_WXMAP_CTL:
 		error = copyin(PTRIN(uap->data), &flags, sizeof(flags));
 		if (error != 0)
 			return (error);
@@ -3676,6 +3662,8 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 	case PROC_STACKGAP_STATUS:
 	case PROC_TRACE_STATUS:
 	case PROC_TRAPCAP_STATUS:
+	case PROC_NO_NEW_PRIVS_STATUS:
+	case PROC_WXMAP_STATUS:
 		data = &flags;
 		break;
 	case PROC_PDEATHSIG_CTL:
@@ -3707,6 +3695,8 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 	case PROC_STACKGAP_STATUS:
 	case PROC_TRACE_STATUS:
 	case PROC_TRAPCAP_STATUS:
+	case PROC_NO_NEW_PRIVS_STATUS:
+	case PROC_WXMAP_STATUS:
 		if (error == 0)
 			error = copyout(&flags, uap->data, sizeof(flags));
 		break;
@@ -3852,6 +3842,40 @@ freebsd32_ntp_adjtime(struct thread *td, struct freebsd32_ntp_adjtime_args *uap)
 			if (error == 0)
 				td->td_retval[0] = retval;
 		}
+	}
+	return (error);
+}
+
+int
+freebsd32_fspacectl(struct thread *td, struct freebsd32_fspacectl_args *uap)
+{
+	struct spacectl_range rqsr, rmsr;
+	struct spacectl_range32 rqsr32, rmsr32;
+	int error, cerror;
+
+	error = copyin(uap->rqsr, &rqsr32, sizeof(rqsr32));
+	if (error != 0)
+		return (error);
+	rqsr.r_offset = PAIR32TO64(off_t, rqsr32.r_offset);
+	rqsr.r_len = PAIR32TO64(off_t, rqsr32.r_len);
+
+	error = kern_fspacectl(td, uap->fd, uap->cmd, &rqsr, uap->flags,
+	    &rmsr);
+	if (uap->rmsr != NULL) {
+#if BYTE_ORDER == LITTLE_ENDIAN
+		rmsr32.r_offset1 = rmsr.r_offset;
+		rmsr32.r_offset2 = rmsr.r_offset >> 32;
+		rmsr32.r_len1 = rmsr.r_len;
+		rmsr32.r_len2 = rmsr.r_len >> 32;
+#else
+		rmsr32.r_offset1 = rmsr.r_offset >> 32;
+		rmsr32.r_offset2 = rmsr.r_offset;
+		rmsr32.r_len1 = rmsr.r_len >> 32;
+		rmsr32.r_len2 = rmsr.r_len;
+#endif
+		cerror = copyout(&rmsr32, uap->rmsr, sizeof(rmsr32));
+		if (error == 0)
+			error = cerror;
 	}
 	return (error);
 }

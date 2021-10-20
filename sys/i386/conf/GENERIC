@@ -204,7 +204,6 @@ device		agp			# support several AGP chipsets
 # PCCARD (PCMCIA) support
 # PCMCIA and cardbus bridge support
 device		cbb			# cardbus (yenta) bridge
-device		pccard			# PC Card (16-bit) bus
 device		cardbus			# CardBus (32-bit) bus
 
 # Serial (COM) ports
@@ -221,6 +220,7 @@ device		puc			# Multi I/O cards and multi-channel UARTs
 
 # PCI/PCI-X/PCIe Ethernet NICs that use iflib infrastructure
 device		iflib
+device		igc			# Intel I225 2.5G Ethernet
 device		em			# Intel PRO/1000 Gigabit Ethernet Family
 device		vmx			# VMware VMXNET3 Ethernet
 
@@ -337,15 +337,20 @@ device		virtio_blk		# VirtIO Block device
 device		virtio_scsi		# VirtIO SCSI device
 device		virtio_balloon		# VirtIO Memory Balloon device
 
+# Linux KVM paravirtualization support
+device		kvm_clock		# KVM paravirtual clock driver
+
 # HyperV drivers and enhancement support
 # NOTE: HYPERV depends on hyperv.  They must be added or removed together.
 options 	HYPERV			# Kernel support for HyperV drivers
 device		hyperv			# HyperV drivers
 
 # Xen HVM Guest Optimizations
-# NOTE: XENHVM depends on xenpci.  They must be added or removed together.
+# NOTE: XENHVM and xenpci interdepend.  They must be added or removed
+# together.  xentimer depends on XENHVM and isn't required.
 options 	XENHVM			# Xen HVM kernel infrastructure
 device		xenpci			# Xen HVM Hypervisor services driver
+device		xentimer		# Xen x86 PV timer device
 
 # evdev interface
 options 	EVDEV_SUPPORT		# evdev support in legacy drivers

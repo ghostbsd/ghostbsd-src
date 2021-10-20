@@ -10,10 +10,52 @@ newline.  Entries should be separated by a newline.
 
 Changes to this file should not be MFCed.
 
-d575e81fbcfa
+422084abbda:
+	LLVM's MemorySanitizer can now be used in amd64 kernels.  See the
+	kmsan(9) manual page for more information.
+
+38da497a4dfc:
+	LLVM's AddressSanitizer can now be used in amd64 kernels.  See the
+	kasan(9) manual page for more information.
+
+f39dd6a97844,23f24377b1a9,628bd30ab5a4:
+	One True Awk has been updated to the latest from upstream
+	(20210727). All the FreeBSD patches, but one, have now been
+	either up streamed or discarded.  Notable changes include:
+		o Locale is no longer used for ranges
+		o Various bugs fixed
+		o Better compatibility with gawk and mawk
+
+	The one FreeBSD change, likely to be removed in FreeBSD 14, is that
+	we still allow hex numbers, prefixed with 0x, to be parsed and
+	interpreted as hex numbers while all other awks (including one
+	true awk now) interpret them as 0 in line with awk's historic
+	behavior.
+
+	A second change, less likely to be noticed, is the historic wart
+	if -Ft meaning to use hard tab characters as the field separator
+	is deprecated and will likely be removed in FreeBSD 14.
+
+ee29e6f31111:
+	Commit ee29e6f31111 added a new sysctl called vfs.nfsd.srvmaxio
+	that can be used to increase the maximum I/O size for the NFS
+	server to any power of 2 up to 1Mbyte while the nfsd(8) is not running.
+	The FreeBSD NFS client can now be set to use a 1Mbyte I/O size
+	via the vfs.maxbcachebuf tunable and the Linux NFS client
+	can also do 1Mbyte I/O.
+	kern.ipc.maxsockbuf will need to be increased.  A console
+	message will suggest a setting for it.
+
+d575e81fbcfa:
 	gconcat(8) has added support for appending devices to the device
 	not present at creation time.
 
-76681661be28
+76681661be28:
 	Remove support for asymmetric cryptographic operations from
 	the kernel open cryptographic framework (OCF).
+
+a145cf3f73c7:
+	The NFSv4 client now uses the highest minor version of NFSv4
+	supported by the NFSv4 server by default instead of minor version 0,
+	for NFSv4 mounts.
+	The "minorversion" mount option may be used to override this default.

@@ -5,12 +5,14 @@
 
 .include "../Makefile.crypto"
 
-.PATH.c:${HOSTAPD_DISTDIR}
+.PATH.c:${HOSTAPD_DISTDIR} \
+	${WPA_DISTDIR}/src/drivers
 
 PACKAGE=	hostapd
 PROG=	hostapd
 SRCS=	config_file.c \
 	ctrl_iface.c \
+	driver_bsd.c \
 	eap_register.c \
 	main.c
 
@@ -24,8 +26,6 @@ FILES=	hostapd.conf hostapd.eap_user hostapd.wpa_psk
 
 CFLAGS+=-I${.CURDIR:H}/wpa_supplicant \
 	-I${WPA_DISTDIR}/src/eap_peer \
-	-DCONFIG_MBO \
-	-DCONFIG_RSN_PREAUTH \
 	-DHOSTAPD
 .if ${MK_INET6} != "no"
 CFLAGS+= -DCONFIG_IPV6

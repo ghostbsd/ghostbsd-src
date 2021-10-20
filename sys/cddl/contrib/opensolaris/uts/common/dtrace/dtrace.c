@@ -14830,7 +14830,7 @@ static int
 dtrace_state_buffer(dtrace_state_t *state, dtrace_buffer_t *buf, int which)
 {
 	dtrace_optval_t *opt = state->dts_options, size;
-	processorid_t cpu = 0;;
+	processorid_t cpu = 0;
 	int flags = 0, rval, factor, divisor = 1;
 
 	ASSERT(MUTEX_HELD(&dtrace_lock));
@@ -17106,7 +17106,7 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    offsetof(dtrace_probe_t, dtpr_prevname));
 
 	if (dtrace_retain_max < 1) {
-		cmn_err(CE_WARN, "illegal value (%lu) for dtrace_retain_max; "
+		cmn_err(CE_WARN, "illegal value (%zu) for dtrace_retain_max; "
 		    "setting to 1", dtrace_retain_max);
 		dtrace_retain_max = 1;
 	}

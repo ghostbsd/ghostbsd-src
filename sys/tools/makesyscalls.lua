@@ -95,26 +95,30 @@ local files = {}
 
 local function cleanup()
 	for _, v in pairs(files) do
-		v:close()
+		assert(v:close())
 	end
 	if cleantmp then
 		if lfs.dir(tmpspace) then
 			for fname in lfs.dir(tmpspace) do
-				os.remove(tmpspace .. "/" .. fname)
+				if fname ~= "." and fname ~= ".." then
+					assert(os.remove(tmpspace .. "/" ..
+					    fname))
+				end
 			end
 		end
 
 		if lfs.attributes(tmpspace) and not lfs.rmdir(tmpspace) then
-			io.stderr:write("Failed to clean up tmpdir: " ..
-			    tmpspace .. "\n")
+			assert(io.stderr:write("Failed to clean up tmpdir: " ..
+			    tmpspace .. "\n"))
 		end
 	else
-		io.stderr:write("Temp files left in " .. tmpspace .. "\n")
+		assert(io.stderr:write("Temp files left in " .. tmpspace ..
+		    "\n"))
 	end
 end
 
 local function abort(status, msg)
-	io.stderr:write(msg .. "\n")
+	assert(io.stderr:write(msg .. "\n"))
 	cleanup()
 	os.exit(status)
 end
@@ -151,6 +155,7 @@ local known_flags = {
 	NOPROTO		= 0x00000040,
 	NOSTD		= 0x00000080,
 	NOTSTATIC	= 0x00000100,
+	CAPENABLED	= 0x00000200,
 
 	-- Compat flags start from here.  We have plenty of space.
 }
@@ -192,19 +197,6 @@ local function trim(s, char)
 	return s:gsub("^" .. char .. "+", ""):gsub(char .. "+$", "")
 end
 
--- We have to io.popen it, making sure it's properly escaped, and grab the
--- output from the handle returned.
-local function exec(cmd)
-	cmd = cmd:gsub('"', '\\"')
-
-	local shcmd = "/bin/sh -c \"" .. cmd .. "\""
-	local fh = io.popen(shcmd)
-	local output = fh:read("a")
-
-	fh:close()
-	return output
-end
-
 -- config looks like a shell script; in fact, the previous makesyscalls.sh
 -- script actually sourced it in.  It had a pretty common format, so we should
 -- be fine to make various assumptions
@@ -218,14 +210,11 @@ local function process_config(file)
 	-- would need to sanitize the line for potentially special characters.
 	local line_expr = "^([%w%p]+%s*)=(%s*[`\"]?[^\"`]+[`\"]?)"
 
-	if file == nil then
+	if not file then
 		return nil, "No file given"
 	end
 
-	local fh = io.open(file)
-	if fh == nil then
-		return nil, "Could not open file"
-	end
+	local fh = assert(io.open(file))
 
 	for nextline in fh:lines() do
 		-- Strip any whole-line comments
@@ -237,8 +226,9 @@ local function process_config(file)
 			key = trim(key)
 			value = trim(value)
 			local delim = value:sub(1,1)
-			if delim == '`' or delim == '"' then
+			if delim == '"' then
 				local trailing_context
+
 				-- Strip off the key/value part
 				trailing_context = nextline:sub(kvp:len() + 1)
 				-- Strip off any trailing comment
@@ -250,26 +240,7 @@ local function process_config(file)
 					print(trailing_context)
 					abort(1, "Malformed line: " .. nextline)
 				end
-			end
-			if delim == '`' then
-				-- Command substition may use $1 and $2 to mean
-				-- the syscall definition file and itself
-				-- respectively.  We'll go ahead and replace
-				-- $[0-9] with respective arg in case we want to
-				-- expand this in the future easily...
-				value = trim(value, delim)
-				for capture in value:gmatch("$([0-9]+)") do
-					capture = tonumber(capture)
-					if capture > #arg then
-						abort(1, "Not enough args: " ..
-						    value)
-					end
-					value = value:gsub("$" .. capture,
-					    arg[capture])
-				end
 
-				value = exec(value)
-			elseif delim == '"' then
 				value = trim(value, delim)
 			else
 				-- Strip off potential comments
@@ -290,7 +261,7 @@ local function process_config(file)
 		end
 	end
 
-	io.close(fh)
+	assert(io.close(fh))
 	return cfg
 end
 
@@ -319,7 +290,7 @@ local function grab_capenabled(file, open_fail_ok)
 		end
 	end
 
-	io.close(fh)
+	assert(io.close(fh))
 	return capentries
 end
 
@@ -397,8 +368,8 @@ local function read_file(tmpfile)
 	end
 
 	local fh = files[tmpfile]
-	fh:seek("set")
-	return fh:read("a")
+	assert(fh:seek("set"))
+	return assert(fh:read("a"))
 end
 
 local function write_line(tmpfile, line)
@@ -406,13 +377,13 @@ local function write_line(tmpfile, line)
 		print("Not found: " .. tmpfile)
 		return
 	end
-	files[tmpfile]:write(line)
+	assert(files[tmpfile]:write(line))
 end
 
 local function write_line_pfile(tmppat, line)
 	for k in pairs(files) do
 		if k:match(tmppat) ~= nil then
-			files[k]:write(line)
+			assert(files[k]:write(line))
 		end
 	end
 end
@@ -533,7 +504,7 @@ local function process_sysfile(file)
 		process_syscall_def(prevline)
 	end
 
-	io.close(fh)
+	assert(io.close(fh))
 	return capentries
 end
 
@@ -726,8 +697,7 @@ local function handle_noncompat(sysnum, thr_flag, flags, sysflags, rettype,
 	if flags & protoflags == 0 then
 		if funcname == "nosys" or funcname == "lkmnosys" or
 		    funcname == "sysarch" or funcname:find("^freebsd") or
-		    funcname:find("^linux") or
-		    funcname:find("^cloudabi") then
+		    funcname:find("^linux") then
 			write_line("sysdcl", string.format(
 			    "%s\t%s(struct thread *, struct %s *)",
 			    rettype, funcname, argalias))
@@ -754,8 +724,7 @@ local function handle_noncompat(sysnum, thr_flag, flags, sysflags, rettype,
 	else
 		if funcname == "nosys" or funcname == "lkmnosys" or
 		    funcname == "sysarch" or funcname:find("^freebsd") or
-		    funcname:find("^linux") or
-		    funcname:find("^cloudabi") then
+		    funcname:find("^linux") then
 			write_line("sysent", string.format(
 			    "%s, .sy_auevent = %s, .sy_flags = %s, .sy_thrcnt = %s },",
 			    funcname, auditev, sysflags, thr_flag))
@@ -1059,7 +1028,8 @@ process_syscall_def = function(line)
 	-- If applicable; strip the ABI prefix from the name
 	local stripped_name = strip_abi_prefix(funcname)
 
-	if config["capenabled"][funcname] ~= nil or
+	if flags & known_flags['CAPENABLED'] ~= 0 or
+	    config["capenabled"][funcname] ~= nil or
 	    config["capenabled"][stripped_name] ~= nil then
 		sysflags = "SYF_CAPENABLED"
 	end
@@ -1137,7 +1107,7 @@ end
 -- Entry point
 
 if #arg < 1 or #arg > 2 then
-	abort(1, "usage: " .. arg[0] .. " input-file <config-file>")
+	error("usage: " .. arg[0] .. " input-file <config-file>")
 end
 
 local sysfile, configfile = arg[1], arg[2]
@@ -1145,13 +1115,7 @@ local sysfile, configfile = arg[1], arg[2]
 -- process_config either returns nil and a message, or a
 -- table that we should merge into the global config
 if configfile ~= nil then
-	local res, msg = process_config(configfile)
-
-	if res == nil then
-		-- Error... handle?
-		print(msg)
-		os.exit(1)
-	end
+	local res = assert(process_config(configfile))
 
 	for k, v in pairs(res) do
 		if v ~= config[k] then
@@ -1179,17 +1143,28 @@ process_compat()
 process_abi_flags()
 
 if not lfs.mkdir(tmpspace) then
-	abort(1, "Failed to create tempdir " .. tmpspace)
+	error("Failed to create tempdir " .. tmpspace)
 end
 
+-- XXX Revisit the error handling here, we should probably move the rest of this
+-- into a function that we pcall() so we can catch the errors and clean up
+-- gracefully.
 for _, v in ipairs(temp_files) do
 	local tmpname = tmpspace .. v
 	files[v] = io.open(tmpname, "w+")
+	-- XXX Revisit these with a pcall() + error handler
+	if not files[v] then
+		abort(1, "Failed to open temp file: " .. tmpname)
+	end
 end
 
 for _, v in ipairs(output_files) do
 	local tmpname = tmpspace .. v
 	files[v] = io.open(tmpname, "w+")
+	-- XXX Revisit these with a pcall() + error handler
+	if not files[v] then
+		abort(1, "Failed to open temp output file: " .. tmpname)
+	end
 end
 
 -- Write out all of the preamble bits
@@ -1387,12 +1362,12 @@ write_line("systrace", read_file("systraceret"))
 for _, v in ipairs(output_files) do
 	local target = config[v]
 	if target ~= "/dev/null" then
-		local fh = io.open(target, "w+")
+		local fh = assert(io.open(target, "w+"))
 		if fh == nil then
 			abort(1, "Failed to open '" .. target .. "'")
 		end
-		fh:write(read_file(v))
-		fh:close()
+		assert(fh:write(read_file(v)))
+		assert(fh:close())
 	end
 end
 

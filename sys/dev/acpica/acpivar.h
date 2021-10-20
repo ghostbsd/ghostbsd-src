@@ -90,6 +90,9 @@ struct acpi_device {
     int				ad_flags;
     int				ad_cls_class;
 
+    ACPI_BUFFER			dsd;	/* Device Specific Data */
+    const ACPI_OBJECT	*dsd_pkg;
+
     /* Resources */
     struct resource_list	ad_rl;
 };
@@ -350,6 +353,8 @@ BOOLEAN		acpi_DeviceIsPresent(device_t dev);
 BOOLEAN		acpi_BatteryIsPresent(device_t dev);
 ACPI_STATUS	acpi_GetHandleInScope(ACPI_HANDLE parent, char *path,
 		    ACPI_HANDLE *result);
+ACPI_STATUS	acpi_GetProperty(device_t dev, ACPI_STRING propname,
+		    const ACPI_OBJECT **value);
 ACPI_BUFFER	*acpi_AllocBuffer(int size);
 ACPI_STATUS	acpi_ConvertBufferToInteger(ACPI_BUFFER *bufp,
 		    UINT32 *number);
@@ -395,6 +400,13 @@ int		acpi_MatchHid(ACPI_HANDLE h, const char *hid);
 #define ACPI_MATCHHID_NOMATCH 0
 #define ACPI_MATCHHID_HID 1
 #define ACPI_MATCHHID_CID 2
+
+static __inline bool
+acpi_HasProperty(device_t dev, ACPI_STRING propname)
+{
+
+	return ACPI_SUCCESS(acpi_GetProperty(dev, propname, NULL));
+}
 
 struct acpi_parse_resource_set {
     void	(*set_init)(device_t dev, void *arg, void **context);
@@ -578,6 +590,10 @@ int		acpi_get_domain(device_t dev, device_t child, int *domain);
 int	acpi_iort_map_pci_msi(u_int seg, u_int rid, u_int *xref, u_int *devid);
 int	acpi_iort_map_pci_smmuv3(u_int seg, u_int rid, u_int *xref, u_int *devid);
 int	acpi_iort_its_lookup(u_int its_id, u_int *xref, int *pxm);
+int	acpi_iort_map_named_msi(const char *devname, u_int rid, u_int *xref,
+	    u_int *devid);
+int	acpi_iort_map_named_smmuv3(const char *devname, u_int rid, u_int *xref,
+	    u_int *devid);
 #endif
 #endif /* _KERNEL */
 #endif /* !_ACPIVAR_H_ */

@@ -50,6 +50,12 @@
 
 #include "libpfctl.h"
 
+const char* PFCTL_SYNCOOKIES_MODE_NAMES[] = {
+	"never",
+	"always",
+	"adaptive"
+};
+
 static int	_pfctl_clear_states(int , const struct pfctl_kill *,
 		    unsigned int *, uint64_t);
 
@@ -119,6 +125,121 @@ pf_nvuint_64_array(const nvlist_t *nvl, const char *name, size_t maxelems,
 
 	if (nelems)
 		*nelems = elems;
+}
+
+static void
+_pfctl_get_status_counters(const nvlist_t *nvl,
+    struct pfctl_status_counters *counters)
+{
+	const uint64_t		*ids, *counts;
+	const char *const	*names;
+	size_t id_len, counter_len, names_len;
+
+	ids = nvlist_get_number_array(nvl, "ids", &id_len);
+	counts = nvlist_get_number_array(nvl, "counters", &counter_len);
+	names = nvlist_get_string_array(nvl, "names", &names_len);
+	assert(id_len == counter_len);
+	assert(counter_len == names_len);
+
+	TAILQ_INIT(counters);
+
+	for (size_t i = 0; i < id_len; i++) {
+		struct pfctl_status_counter *c;
+
+		c = malloc(sizeof(*c));
+
+		c->id = ids[i];
+		c->counter = counts[i];
+		c->name = strdup(names[i]);
+
+		TAILQ_INSERT_TAIL(counters, c, entry);
+	}
+}
+
+struct pfctl_status *
+pfctl_get_status(int dev)
+{
+	struct pfioc_nv	 nv;
+	struct pfctl_status	*status;
+	nvlist_t	*nvl;
+	size_t		 len;
+	const void	*chksum;
+
+	status = calloc(1, sizeof(*status));
+	if (status == NULL)
+		return (NULL);
+
+	nv.data = malloc(4096);
+	nv.len = nv.size = 4096;
+
+	if (ioctl(dev, DIOCGETSTATUSNV, &nv)) {
+		free(nv.data);
+		free(status);
+		return (NULL);
+	}
+
+	nvl = nvlist_unpack(nv.data, nv.len, 0);
+	free(nv.data);
+	if (nvl == NULL) {
+		free(status);
+		return (NULL);
+	}
+
+	status->running = nvlist_get_bool(nvl, "running");
+	status->since = nvlist_get_number(nvl, "since");
+	status->debug = nvlist_get_number(nvl, "debug");
+	status->hostid = nvlist_get_number(nvl, "hostid");
+	status->states = nvlist_get_number(nvl, "states");
+	status->src_nodes = nvlist_get_number(nvl, "src_nodes");
+
+	strlcpy(status->ifname, nvlist_get_string(nvl, "ifname"),
+	    IFNAMSIZ);
+	chksum = nvlist_get_binary(nvl, "chksum", &len);
+	assert(len == PF_MD5_DIGEST_LENGTH);
+	memcpy(status->pf_chksum, chksum, len);
+
+	_pfctl_get_status_counters(nvlist_get_nvlist(nvl, "counters"),
+	    &status->counters);
+	_pfctl_get_status_counters(nvlist_get_nvlist(nvl, "lcounters"),
+	    &status->lcounters);
+	_pfctl_get_status_counters(nvlist_get_nvlist(nvl, "fcounters"),
+	    &status->fcounters);
+	_pfctl_get_status_counters(nvlist_get_nvlist(nvl, "scounters"),
+	    &status->scounters);
+
+	pf_nvuint_64_array(nvl, "pcounters", 2 * 2 * 3,
+	    (uint64_t *)status->pcounters, NULL);
+	pf_nvuint_64_array(nvl, "bcounters", 2 * 2,
+	    (uint64_t *)status->bcounters, NULL);
+
+	nvlist_destroy(nvl);
+
+	return (status);
+}
+
+void
+pfctl_free_status(struct pfctl_status *status)
+{
+	struct pfctl_status_counter *c, *tmp;
+
+	TAILQ_FOREACH_SAFE(c, &status->counters, entry, tmp) {
+		free(c->name);
+		free(c);
+	}
+	TAILQ_FOREACH_SAFE(c, &status->lcounters, entry, tmp) {
+		free(c->name);
+		free(c);
+	}
+	TAILQ_FOREACH_SAFE(c, &status->fcounters, entry, tmp) {
+		free(c->name);
+		free(c);
+	}
+	TAILQ_FOREACH_SAFE(c, &status->scounters, entry, tmp) {
+		free(c->name);
+		free(c);
+	}
+
+	free(status);
 }
 
 static void
@@ -365,6 +486,9 @@ pf_nvrule_to_rule(const nvlist_t *nvl, struct pfctl_rule *rule)
 	    nvlist_get_number(nvl, "max_src_conn_rate.seconds");
 	rule->qid = nvlist_get_number(nvl, "qid");
 	rule->pqid = nvlist_get_number(nvl, "pqid");
+	rule->dnpipe = nvlist_get_number(nvl, "dnpipe");
+	rule->dnrpipe = nvlist_get_number(nvl, "dnrpipe");
+	rule->free_flags = nvlist_get_number(nvl, "dnflags");
 	rule->prob = nvlist_get_number(nvl, "prob");
 	rule->cuid = nvlist_get_number(nvl, "cuid");
 	rule->cpid = nvlist_get_number(nvl, "cpid");
@@ -469,6 +593,9 @@ pfctl_add_rule(int dev, const struct pfctl_rule *r, const char *anchor,
 	    r->max_src_conn_rate.limit);
 	nvlist_add_number(nvlr, "max_src_conn_rate.seconds",
 	    r->max_src_conn_rate.seconds);
+	nvlist_add_number(nvlr, "dnpipe", r->dnpipe);
+	nvlist_add_number(nvlr, "dnrpipe", r->dnrpipe);
+	nvlist_add_number(nvlr, "dnflags", r->free_flags);
 	nvlist_add_number(nvlr, "prob", r->prob);
 	nvlist_add_number(nvlr, "cuid", r->cuid);
 	nvlist_add_number(nvlr, "cpid", r->cpid);
@@ -637,171 +764,112 @@ pfctl_nv_add_state_cmp(nvlist_t *nvl, const char *name,
 }
 
 static void
-pf_nvstate_scrub_to_state_scrub(const nvlist_t *nvl,
-    struct pfctl_state_scrub *scrub)
+pf_state_key_export_to_state_key(struct pfctl_state_key *ps,
+    const struct pf_state_key_export *s)
 {
-	bzero(scrub, sizeof(*scrub));
-
-	scrub->timestamp = nvlist_get_bool(nvl, "timestamp");
-	scrub->ttl = nvlist_get_number(nvl, "ttl");
-	scrub->ts_mod = nvlist_get_number(nvl, "ts_mod");
+	bcopy(s->addr, ps->addr, sizeof(ps->addr[0]) * 2);
+	ps->port[0] = s->port[0];
+	ps->port[1] = s->port[1];
 }
 
 static void
-pf_nvstate_peer_to_state_peer(const nvlist_t *nvl,
-    struct pfctl_state_peer *peer)
+pf_state_peer_export_to_state_peer(struct pfctl_state_peer *ps,
+    const struct pf_state_peer_export *s)
 {
-	bzero(peer, sizeof(*peer));
-
-	if (nvlist_exists_nvlist(nvl, "scrub")) {
-		peer->scrub = malloc(sizeof(*peer->scrub));
-		pf_nvstate_scrub_to_state_scrub(
-		    nvlist_get_nvlist(nvl, "scrub"),
-		    peer->scrub);
-	}
-
-	peer->seqlo = nvlist_get_number(nvl, "seqlo");
-	peer->seqhi = nvlist_get_number(nvl, "seqhi");
-	peer->seqdiff = nvlist_get_number(nvl, "seqdiff");
-	peer->max_win = nvlist_get_number(nvl, "max_win");
-	peer->mss = nvlist_get_number(nvl, "mss");
-	peer->state = nvlist_get_number(nvl, "state");
-	peer->wscale = nvlist_get_number(nvl, "wscale");
+	/* Ignore scrub. */
+	ps->seqlo = s->seqlo;
+	ps->seqhi = s->seqhi;
+	ps->seqdiff = s->seqdiff;
+	/* Ignore max_win & mss */
+	ps->state = s->state;
+	ps->wscale = s->wscale;
 }
 
 static void
-pf_nvstate_key_to_state_key(const nvlist_t *nvl, struct pfctl_state_key *key)
+pf_state_export_to_state(struct pfctl_state *ps, const struct pf_state_export *s)
 {
-	const nvlist_t * const *tmp;
-	size_t count;
+	assert(s->version >= PF_STATE_VERSION);
 
-	bzero(key, sizeof(*key));
-
-	tmp = nvlist_get_nvlist_array(nvl, "addr", &count);
-	assert(count == 2);
-
-	for (int i = 0; i < 2; i++)
-		pf_nvaddr_to_addr(tmp[i], &key->addr[i]);
-
-	pf_nvuint_16_array(nvl, "port", 2, key->port, NULL);
-
-	key->af = nvlist_get_number(nvl, "af");
-	key->proto = nvlist_get_number(nvl, "proto");
-}
-
-static void
-pf_nvstate_to_state(const nvlist_t *nvl, struct pfctl_state *s)
-{
-	bzero(s, sizeof(*s));
-
-	s->id = nvlist_get_number(nvl, "id");
-	s->creatorid = nvlist_get_number(nvl, "creatorid");
-	s->direction = nvlist_get_number(nvl, "direction");
-
-	pf_nvstate_peer_to_state_peer(nvlist_get_nvlist(nvl, "src"), &s->src);
-	pf_nvstate_peer_to_state_peer(nvlist_get_nvlist(nvl, "dst"), &s->dst);
-
-	pf_nvstate_key_to_state_key(nvlist_get_nvlist(nvl, "stack_key"),
-	    &s->key[0]);
-	pf_nvstate_key_to_state_key(nvlist_get_nvlist(nvl, "wire_key"),
-	    &s->key[1]);
-
-	strlcpy(s->ifname, nvlist_get_string(nvl, "ifname"),
-	    sizeof(s->ifname));
-	strlcpy(s->orig_ifname, nvlist_get_string(nvl, "orig_ifname"),
-	    sizeof(s->orig_ifname));
-
-	pf_nvaddr_to_addr(nvlist_get_nvlist(nvl, "rt_addr"), &s->rt_addr);
-	s->rule = nvlist_get_number(nvl, "rule");
-	s->anchor = nvlist_get_number(nvl, "anchor");
-	s->nat_rule = nvlist_get_number(nvl, "nat_rule");
-	s->creation = nvlist_get_number(nvl, "creation");
-	s->expire = nvlist_get_number(nvl, "expire");
-
-	pf_nvuint_64_array(nvl, "packets", 2, s->packets, NULL);
-	pf_nvuint_64_array(nvl, "bytes", 2, s->bytes, NULL);
-
-	s->log = nvlist_get_number(nvl, "log");
-	s->state_flags = nvlist_get_number(nvl, "state_flags");
-	s->timeout = nvlist_get_number(nvl, "timeout");
-	s->sync_flags = nvlist_get_number(nvl, "sync_flags");
+	ps->id = s->id;
+	strlcpy(ps->ifname, s->ifname, sizeof(ps->ifname));
+	strlcpy(ps->orig_ifname, s->orig_ifname, sizeof(ps->orig_ifname));
+	pf_state_key_export_to_state_key(&ps->key[0], &s->key[0]);
+	pf_state_key_export_to_state_key(&ps->key[1], &s->key[1]);
+	pf_state_peer_export_to_state_peer(&ps->src, &s->src);
+	pf_state_peer_export_to_state_peer(&ps->dst, &s->dst);
+	bcopy(&s->rt_addr, &ps->rt_addr, sizeof(ps->rt_addr));
+	ps->rule = ntohl(s->rule);
+	ps->anchor = ntohl(s->anchor);
+	ps->nat_rule = ntohl(s->nat_rule);
+	ps->creation = ntohl(s->creation);
+	ps->expire = ntohl(s->expire);
+	ps->packets[0] = s->packets[0];
+	ps->packets[1] = s->packets[1];
+	ps->bytes[0] = s->bytes[0];
+	ps->bytes[1] = s->bytes[1];
+	ps->creatorid = s->creatorid;
+	ps->key[0].proto = s->proto;
+	ps->key[1].proto = s->proto;
+	ps->key[0].af = s->af;
+	ps->key[1].af = s->af;
+	ps->direction = s->direction;
+	ps->state_flags = s->state_flags;
+	ps->sync_flags = s->sync_flags;
 }
 
 int
 pfctl_get_states(int dev, struct pfctl_states *states)
 {
-	struct pfioc_nv		 nv;
-	nvlist_t		*nvl = NULL;
-	const nvlist_t * const	*slist;
-	size_t			 found_count;
-	int			 error = 0;
+	struct pfioc_states_v2 ps;
+	struct pf_state_export *p;
+	char *inbuf = NULL, *newinbuf = NULL;
+	unsigned int len = 0;
+	int i, error;
+
+	bzero(&ps, sizeof(ps));
+	ps.ps_req_version = PF_STATE_VERSION;
 
 	bzero(states, sizeof(*states));
 	TAILQ_INIT(&states->states);
 
-	/* Just enough to get a number, and we'll grow from there. */
-	nv.data = malloc(64);
-	nv.len = nv.size = 64;
-
 	for (;;) {
-		if (ioctl(dev, DIOCGETSTATESNV, &nv)) {
-			error = errno;
-			goto out;
+		ps.ps_len = len;
+		if (len) {
+			newinbuf = realloc(inbuf, len);
+			if (newinbuf == NULL)
+				return (ENOMEM);
+			ps.ps_buf = inbuf = newinbuf;
 		}
-
-		nvl = nvlist_unpack(nv.data, nv.len, 0);
-		if (nvl == NULL) {
-			error = EIO;
-			goto out;
+		if ((error = ioctl(dev, DIOCGETSTATESV2, &ps)) < 0) {
+			free(inbuf);
+			return (error);
 		}
-
-		states->count = nvlist_get_number(nvl, "count");
-
-		/* Are there any states? */
-		if (states->count == 0)
+		if (ps.ps_len + sizeof(struct pfioc_states_v2) < len)
 			break;
+		if (len == 0 && ps.ps_len == 0)
+			goto out;
+		if (len == 0 && ps.ps_len != 0)
+			len = ps.ps_len;
+		if (ps.ps_len == 0)
+			goto out;      /* no states */
+		len *= 2;
+	}
+	p = ps.ps_states;
 
-		if (nvlist_exists_nvlist_array(nvl, "states"))
-			slist = nvlist_get_nvlist_array(nvl, "states", &found_count);
-		else
-			found_count = 0;
-
-		if (found_count < states->count) {
-			size_t new_size = nv.size +
-			    (nv.size * states->count / (found_count + 1) * 2);
-
-			/* Our buffer is too small. Estimate what we need based
-			 * on how many states fit in the previous allocation
-			 * and how many states there are. Doubled for margin.
-			 * */
-			nv.data = realloc(nv.data, new_size);
-			nv.size = new_size;
-
-			if (nv.data == NULL) {
-				error = ENOMEM;
-				goto out;
-			}
-			continue;
+	for (i = 0; i < ps.ps_len; i += sizeof(*p), p++) {
+		struct pfctl_state *s = malloc(sizeof(*s));
+		if (s == NULL) {
+			pfctl_free_states(states);
+			error = ENOMEM;
+			goto out;
 		}
 
-		for (size_t i = 0; i < found_count; i++) {
-			struct pfctl_state *s = malloc(sizeof(*s));
-			if (s == NULL) {
-				pfctl_free_states(states);
-				error = ENOMEM;
-				goto out;
-			}
-
-			pf_nvstate_to_state(slist[i], s);
-			TAILQ_INSERT_TAIL(&states->states, s, entry);
-		}
-		break;
+		pf_state_export_to_state(s, p);
+		TAILQ_INSERT_TAIL(&states->states, s, entry);
 	}
 
 out:
-	nvlist_destroy(nvl);
-	free(nv.data);
-
+	free(inbuf);
 	return (error);
 }
 
@@ -874,4 +942,99 @@ int
 pfctl_kill_states(int dev, const struct pfctl_kill *kill, unsigned int *killed)
 {
 	return (_pfctl_clear_states(dev, kill, killed, DIOCKILLSTATESNV));
+}
+
+static int
+pfctl_get_limit(int dev, const int index, u_int *limit)
+{
+	struct pfioc_limit pl;
+
+	bzero(&pl, sizeof(pl));
+	pl.index = index;
+
+	if (ioctl(dev, DIOCGETLIMIT, &pl) == -1)
+		return (errno);
+
+	*limit = pl.limit;
+
+	return (0);
+}
+
+int
+pfctl_set_syncookies(int dev, const struct pfctl_syncookies *s)
+{
+	struct pfioc_nv	 nv;
+	nvlist_t	*nvl;
+	int		 ret;
+	u_int		 state_limit;
+
+	ret = pfctl_get_limit(dev, PF_LIMIT_STATES, &state_limit);
+	if (ret != 0)
+		return (ret);
+
+	nvl = nvlist_create(0);
+
+	nvlist_add_bool(nvl, "enabled", s->mode != PFCTL_SYNCOOKIES_NEVER);
+	nvlist_add_bool(nvl, "adaptive", s->mode == PFCTL_SYNCOOKIES_ADAPTIVE);
+	nvlist_add_number(nvl, "highwater", state_limit * s->highwater / 100);
+	nvlist_add_number(nvl, "lowwater", state_limit * s->lowwater / 100);
+
+	nv.data = nvlist_pack(nvl, &nv.len);
+	nv.size = nv.len;
+	nvlist_destroy(nvl);
+	nvl = NULL;
+
+	ret = ioctl(dev, DIOCSETSYNCOOKIES, &nv);
+
+	free(nv.data);
+	return (ret);
+}
+
+int
+pfctl_get_syncookies(int dev, struct pfctl_syncookies *s)
+{
+	struct pfioc_nv	 nv;
+	nvlist_t	*nvl;
+	int		 ret;
+	u_int		 state_limit;
+	bool		 enabled, adaptive;
+
+	ret = pfctl_get_limit(dev, PF_LIMIT_STATES, &state_limit);
+	if (ret != 0)
+		return (ret);
+
+	bzero(s, sizeof(*s));
+
+	nv.data = malloc(256);
+	nv.len = nv.size = 256;
+
+	if (ioctl(dev, DIOCGETSYNCOOKIES, &nv)) {
+		free(nv.data);
+		return (errno);
+	}
+
+	nvl = nvlist_unpack(nv.data, nv.len, 0);
+	free(nv.data);
+	if (nvl == NULL) {
+		return (EIO);
+	}
+
+	enabled = nvlist_get_bool(nvl, "enabled");
+	adaptive = nvlist_get_bool(nvl, "adaptive");
+
+	if (enabled) {
+		if (adaptive)
+			s->mode = PFCTL_SYNCOOKIES_ADAPTIVE;
+		else
+			s->mode = PFCTL_SYNCOOKIES_ALWAYS;
+	} else {
+		s->mode = PFCTL_SYNCOOKIES_NEVER;
+	}
+
+	s->highwater = nvlist_get_number(nvl, "highwater") * 100 / state_limit;
+	s->lowwater = nvlist_get_number(nvl, "lowwater") * 100 / state_limit;
+
+	nvlist_destroy(nvl);
+
+	return (0);
 }

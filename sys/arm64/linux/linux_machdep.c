@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/imgact.h>
 #include <sys/ktr.h>
 #include <sys/proc.h>
+#include <sys/reg.h>
 #include <sys/sdt.h>
 
 #include <security/audit/audit.h>
@@ -44,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <arm64/linux/linux_proto.h>
 #include <compat/linux/linux_dtrace.h>
 #include <compat/linux/linux_emul.h>
+#include <compat/linux/linux_fork.h>
 #include <compat/linux/linux_misc.h>
 #include <compat/linux/linux_mmap.h>
 #include <compat/linux/linux_util.h>
@@ -53,8 +55,6 @@ LIN_SDT_PROVIDER_DECLARE(LINUX_DTRACE);
 
 /* DTrace probes */
 LIN_SDT_PROBE_DEFINE0(machdep, linux_mmap2, todo);
-LIN_SDT_PROBE_DEFINE0(machdep, linux_rt_sigsuspend, todo);
-LIN_SDT_PROBE_DEFINE0(machdep, linux_sigaltstack, todo);
 
 /*
  * LINUXTODO: deduplicate; linux_execve is common across archs, except that on
@@ -122,24 +122,6 @@ linux_madvise(struct thread *td, struct linux_madvise_args *uap)
 	return (linux_madvise_common(td, PTROUT(uap->addr), uap->len, uap->behav));
 }
 
-/* LINUXTODO: implement arm64 linux_rt_sigsuspend */
-int
-linux_rt_sigsuspend(struct thread *td, struct linux_rt_sigsuspend_args *uap)
-{
-
-	LIN_SDT_PROBE0(machdep, linux_rt_sigsuspend, todo);
-	return (EDOOFUS);
-}
-
-/* LINUXTODO: implement arm64 linux_sigaltstack */
-int
-linux_sigaltstack(struct thread *td, struct linux_sigaltstack_args *uap)
-{
-
-	LIN_SDT_PROBE0(machdep, linux_sigaltstack, todo);
-	return (EDOOFUS);
-}
-
 int
 linux_set_cloned_tls(struct thread *td, void *desc)
 {
@@ -148,4 +130,18 @@ linux_set_cloned_tls(struct thread *td, void *desc)
 		return (EPERM);
 
 	return (cpu_set_user_tls(td, desc));
+}
+
+void
+bsd_to_linux_regset(struct reg *b_reg, struct linux_pt_regset *l_regset)
+{
+
+	KASSERT(sizeof(l_regset->x) == sizeof(b_reg->x) + sizeof(l_ulong),
+	    ("%s: size mismatch\n", __func__));
+	memcpy(l_regset->x, b_reg->x, sizeof(b_reg->x));
+
+	l_regset->x[30] = b_reg->lr;
+	l_regset->sp = b_reg->sp;
+	l_regset->pc = b_reg->elr;
+	l_regset->cpsr = b_reg->spsr;
 }

@@ -572,8 +572,8 @@ extern void zio_shrink(zio_t *zio, uint64_t size);
 
 extern int zio_wait(zio_t *zio);
 extern void zio_nowait(zio_t *zio);
-extern void zio_execute(zio_t *zio);
-extern void zio_interrupt(zio_t *zio);
+extern void zio_execute(void *zio);
+extern void zio_interrupt(void *zio);
 extern void zio_delay_init(zio_t *zio);
 extern void zio_delay_interrupt(zio_t *zio);
 extern void zio_deadman(zio_t *zio, char *tag);
@@ -673,6 +673,8 @@ extern int zfs_ereport_post_checksum(spa_t *spa, vdev_t *vd,
     struct zio_bad_cksum *info);
 
 void zio_vsd_default_cksum_report(zio_t *zio, zio_cksum_report_t *zcr);
+extern void zfs_ereport_snapshot_post(const char *subclass, spa_t *spa,
+    const char *name);
 
 /* Called from spa_sync(), but primarily an injection handler */
 extern void spa_handle_ignored_writes(spa_t *spa);

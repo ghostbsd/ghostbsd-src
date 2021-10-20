@@ -135,7 +135,6 @@ static vop_listextattr_t	ext2_listextattr;
 static vop_setextattr_t	ext2_setextattr;
 static vop_vptofh_t	ext2_vptofh;
 static vop_close_t	ext2fifo_close;
-static vop_kqfilter_t	ext2fifo_kqfilter;
 
 /* Global vfs data structures for ext2. */
 struct vop_vector ext2_vnodeops = {
@@ -191,7 +190,6 @@ struct vop_vector ext2_fifoops = {
 	.vop_fsync =		ext2_fsync,
 	.vop_getattr =		ext2_getattr,
 	.vop_inactive =		ext2_inactive,
-	.vop_kqfilter =		ext2fifo_kqfilter,
 	.vop_pathconf =		ext2_pathconf,
 	.vop_print =		ext2_print,
 	.vop_read =		VOP_PANIC,
@@ -908,7 +906,7 @@ abortit:
 	 * to namei, as the parent directory is unlocked by the
 	 * call to checkpath().
 	 */
-	error = VOP_ACCESS(fvp, VWRITE, tcnp->cn_cred, tcnp->cn_thread);
+	error = VOP_ACCESS(fvp, VWRITE, tcnp->cn_cred, curthread);
 	VOP_UNLOCK(fvp);
 	if (oldparent != dp->i_number)
 		newparent = dp->i_number;
@@ -1033,7 +1031,7 @@ abortit:
 			if (xp->i_nlink > 2)
 				panic("ext2_rename: linked directory");
 			error = ext2_truncate(tvp, (off_t)0, IO_SYNC,
-			    tcnp->cn_cred, tcnp->cn_thread);
+			    tcnp->cn_cred, curthread);
 			xp->i_nlink = 0;
 		}
 		xp->i_flag |= IN_CHANGE;
@@ -1426,7 +1424,7 @@ ext2_mkdir(struct vop_mkdir_args *ap)
 #ifdef UFS_ACL
 	if (dvp->v_mount->mnt_flag & MNT_ACLS) {
 		error = ext2_do_posix1e_acl_inheritance_dir(dvp, tvp, dmode,
-		    cnp->cn_cred, cnp->cn_thread);
+		    cnp->cn_cred, curthread);
 		if (error)
 			goto bad;
 	}
@@ -1506,7 +1504,7 @@ ext2_rmdir(struct vop_rmdir_args *ap)
 	 */
 	ip->i_nlink = 0;
 	error = ext2_truncate(vp, (off_t)0, IO_SYNC, cnp->cn_cred,
-	    cnp->cn_thread);
+	    curthread);
 	cache_purge(ITOV(ip));
 	if (vn_lock(dvp, LK_EXCLUSIVE | LK_NOWAIT) != 0) {
 		VOP_UNLOCK(vp);
@@ -1640,22 +1638,6 @@ ext2fifo_close(struct vop_close_args *ap)
 		ext2_itimes_locked(vp);
 	VI_UNLOCK(vp);
 	return (fifo_specops.vop_close(ap));
-}
-
-/*
- * Kqfilter wrapper for fifos.
- *
- * Fall through to ext2 kqfilter routines if needed
- */
-static int
-ext2fifo_kqfilter(struct vop_kqfilter_args *ap)
-{
-	int error;
-
-	error = fifo_specops.vop_kqfilter(ap);
-	if (error)
-		error = vfs_kqfilter(ap);
-	return (error);
 }
 
 /*
@@ -2022,7 +2004,7 @@ ext2_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
 #ifdef UFS_ACL
 	if (dvp->v_mount->mnt_flag & MNT_ACLS) {
 		error = ext2_do_posix1e_acl_inheritance_file(dvp, tvp, mode,
-		    cnp->cn_cred, cnp->cn_thread);
+		    cnp->cn_cred, curthread);
 		if (error)
 			goto bad;
 	}

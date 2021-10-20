@@ -64,8 +64,9 @@ CCACHE_BUILD_TYPE?=	command
 # PATH since it is more clear that ccache is used and avoids wasting time
 # for mkdep/linking/asm builds.
 LOCALBASE?=		/usr/local
-CCACHE_WRAPPER_PATH?=	${LOCALBASE}/libexec/ccache
-CCACHE_BIN?=		${LOCALBASE}/bin/ccache
+CCACHE_PKG_PREFIX?=	${LOCALBASE}
+CCACHE_WRAPPER_PATH?=	${CCACHE_PKG_PREFIX}/libexec/ccache
+CCACHE_BIN?=		${CCACHE_PKG_PREFIX}/bin/ccache
 .if exists(${CCACHE_BIN})
 # Export to ensure sub-makes can filter it out for mkdep/linking and
 # to chain down into kernel build which won't include this file.
@@ -235,6 +236,19 @@ ${X_}COMPILER_FEATURES+=	c++17
 .endif
 .if ${${X_}COMPILER_TYPE} == "clang"
 ${X_}COMPILER_FEATURES+=	retpoline init-all
+# PR257638 lld fails with BE compressed debug.  Fixed in main but external tool
+# chains will initially not have the fix.  For now limit the feature to LE
+# targets.
+# When compiling bootstrap tools on non-FreeBSD, the various MACHINE variables
+# for the host can be missing or not match FreeBSD's naming (e.g. Linux/amd64
+# reports as MACHINE=x86_64 MACHINE_ARCH=x86_64), causing TARGET_ENDIANNESS to
+# be undefined; be conservative and default to off until we turn this on by
+# default everywhere.
+.include <bsd.endian.mk>
+.if (${.MAKE.OS} == "FreeBSD" || defined(TARGET_ENDIANNESS)) && \
+    ${TARGET_ENDIANNESS} == "1234"
+${X_}COMPILER_FEATURES+=	compressed-debug
+.endif
 .endif
 .if ${${X_}COMPILER_TYPE} == "clang" && ${${X_}COMPILER_VERSION} >= 100000 || \
 	(${${X_}COMPILER_TYPE} == "gcc" && ${${X_}COMPILER_VERSION} >= 80100)

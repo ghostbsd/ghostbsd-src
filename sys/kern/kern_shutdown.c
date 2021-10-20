@@ -421,7 +421,8 @@ doadump(boolean_t textdump)
 }
 
 /*
- * Shutdown the system cleanly to prepare for reboot, halt, or power off.
+ * kern_reboot(9): Shut down the system cleanly to prepare for reboot, halt, or
+ * power off.
  */
 void
 kern_reboot(int howto)
@@ -450,7 +451,7 @@ kern_reboot(int howto)
 		sched_bind(curthread, CPU_FIRST());
 		thread_unlock(curthread);
 		KASSERT(PCPU_GET(cpuid) == CPU_FIRST(),
-		    ("boot: not running on cpu 0"));
+		    ("%s: not running on cpu 0", __func__));
 	}
 #endif
 	/* We're in the process of rebooting. */
@@ -740,7 +741,7 @@ SYSCTL_INT(_debug_kassert, OID_AUTO, suppress_in_panic, KASSERT_RWTUN,
 static int kassert_sysctl_kassert(SYSCTL_HANDLER_ARGS);
 
 SYSCTL_PROC(_debug_kassert, OID_AUTO, kassert,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_NEEDGIANT, NULL, 0,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_MPSAFE, NULL, 0,
     kassert_sysctl_kassert, "I",
     "set to trigger a test kassert");
 
@@ -1021,7 +1022,7 @@ dumpdevname_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 SYSCTL_PROC(_kern_shutdown, OID_AUTO, dumpdevname,
-    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT, &dumper_configs, 0,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, &dumper_configs, 0,
     dumpdevname_sysctl_handler, "A",
     "Device(s) for kernel dumps");
 
@@ -1488,7 +1489,7 @@ dump_write_headers(struct dumperinfo *di, struct kerneldumpheader *kdh)
 #ifdef EKCD
 	struct kerneldumpcrypto *kdc;
 #endif
-	void *buf, *key;
+	void *buf;
 	size_t hdrsz;
 	uint64_t extent;
 	uint32_t keysize;
@@ -1500,10 +1501,8 @@ dump_write_headers(struct dumperinfo *di, struct kerneldumpheader *kdh)
 
 #ifdef EKCD
 	kdc = di->kdcrypto;
-	key = kdc->kdc_dumpkey;
 	keysize = kerneldumpcrypto_dumpkeysize(kdc);
 #else
-	key = NULL;
 	keysize = 0;
 #endif
 
@@ -1512,7 +1511,7 @@ dump_write_headers(struct dumperinfo *di, struct kerneldumpheader *kdh)
 	 * of writing them out.
 	 */
 	if (di->dumper_hdr != NULL)
-		return (di->dumper_hdr(di, kdh, key, keysize));
+		return (di->dumper_hdr(di, kdh));
 
 	if (hdrsz == di->blocksize)
 		buf = kdh;
@@ -1571,22 +1570,30 @@ dump_write_headers(struct dumperinfo *di, struct kerneldumpheader *kdh)
 int
 dump_start(struct dumperinfo *di, struct kerneldumpheader *kdh)
 {
+#ifdef EKCD
+	struct kerneldumpcrypto *kdc;
+#endif
+	void *key;
 	uint64_t dumpextent, span;
 	uint32_t keysize;
 	int error;
 
 #ifdef EKCD
-	error = kerneldumpcrypto_init(di->kdcrypto);
+	/* Send the key before the dump so a partial dump is still usable. */
+	kdc = di->kdcrypto;
+	error = kerneldumpcrypto_init(kdc);
 	if (error != 0)
 		return (error);
-	keysize = kerneldumpcrypto_dumpkeysize(di->kdcrypto);
+	keysize = kerneldumpcrypto_dumpkeysize(kdc);
+	key = keysize > 0 ? kdc->kdc_dumpkey : NULL;
 #else
 	error = 0;
 	keysize = 0;
+	key = NULL;
 #endif
 
 	if (di->dumper_start != NULL) {
-		error = di->dumper_start(di);
+		error = di->dumper_start(di, key, keysize);
 	} else {
 		dumpextent = dtoh64(kdh->dumpextent);
 		span = SIZEOF_METADATA + dumpextent + 2 * di->blocksize +

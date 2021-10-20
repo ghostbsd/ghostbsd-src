@@ -1169,7 +1169,7 @@ linprocfs_doproccwd(PFS_FILL_ARGS)
 	char *fullpath = "unknown";
 	char *freepath = NULL;
 
-	pwd = pwd_hold(td);
+	pwd = pwd_hold_proc(p);
 	vn_fullpath(pwd->pwd_cdir, &fullpath, &freepath);
 	sbuf_printf(sb, "%s", fullpath);
 	if (freepath)
@@ -1189,7 +1189,7 @@ linprocfs_doprocroot(PFS_FILL_ARGS)
 	char *fullpath = "unknown";
 	char *freepath = NULL;
 
-	pwd = pwd_hold(td);
+	pwd = pwd_hold_proc(p);
 	vp = jailed(p->p_ucred) ? pwd->pwd_jdir : pwd->pwd_rdir;
 	vn_fullpath(vp, &fullpath, &freepath);
 	sbuf_printf(sb, "%s", fullpath);
@@ -1342,7 +1342,13 @@ linprocfs_doprocmaps(PFS_FILL_ARGS)
 				ino = vat.va_fileid;
 				vput(vp);
 			} else if (SV_PROC_ABI(p) == SV_ABI_LINUX) {
-				if (e_start == p->p_sysent->sv_shared_page_base)
+				/*
+				 * sv_shared_page_base pointed out to the
+				 * FreeBSD sharedpage, PAGE_SIZE is a size
+				 * of it. The vDSO page is above.
+				 */
+				if (e_start == p->p_sysent->sv_shared_page_base +
+				    PAGE_SIZE)
 					name = vdso_str;
 				if (e_end == p->p_sysent->sv_usrstack)
 					name = stack_str;

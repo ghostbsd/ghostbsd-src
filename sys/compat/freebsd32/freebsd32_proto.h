@@ -751,6 +751,13 @@ struct freebsd32_aio_writev_args {
 struct freebsd32_aio_readv_args {
 	char aiocbp_l_[PADL_(struct aiocb32 *)]; struct aiocb32 * aiocbp; char aiocbp_r_[PADR_(struct aiocb32 *)];
 };
+struct freebsd32_fspacectl_args {
+	char fd_l_[PADL_(int)]; int fd; char fd_r_[PADR_(int)];
+	char cmd_l_[PADL_(int)]; int cmd; char cmd_r_[PADR_(int)];
+	char rqsr_l_[PADL_(const struct spacectl_range32 *)]; const struct spacectl_range32 * rqsr; char rqsr_r_[PADR_(const struct spacectl_range32 *)];
+	char flags_l_[PADL_(int)]; int flags; char flags_r_[PADR_(int)];
+	char rmsr_l_[PADL_(struct spacectl_range32 *)]; struct spacectl_range32 * rmsr; char rmsr_r_[PADR_(struct spacectl_range32 *)];
+};
 #if !defined(PAD64_REQUIRED) && !defined(__amd64__)
 #define PAD64_REQUIRED
 #endif
@@ -893,6 +900,7 @@ int	freebsd32_cpuset_setdomain(struct thread *, struct freebsd32_cpuset_setdomai
 int	freebsd32___sysctlbyname(struct thread *, struct freebsd32___sysctlbyname_args *);
 int	freebsd32_aio_writev(struct thread *, struct freebsd32_aio_writev_args *);
 int	freebsd32_aio_readv(struct thread *, struct freebsd32_aio_readv_args *);
+int	freebsd32_fspacectl(struct thread *, struct freebsd32_fspacectl_args *);
 
 #ifdef COMPAT_43
 
@@ -1193,6 +1201,12 @@ int	freebsd7_freebsd32_shmctl(struct thread *, struct freebsd7_freebsd32_shmctl_
 #if !defined(PAD64_REQUIRED) && !defined(__amd64__)
 #define PAD64_REQUIRED
 #endif
+struct freebsd10_freebsd32_umtx_lock_args {
+	char umtx_l_[PADL_(struct umtx *)]; struct umtx * umtx; char umtx_r_[PADR_(struct umtx *)];
+};
+struct freebsd10_freebsd32_umtx_unlock_args {
+	char umtx_l_[PADL_(struct umtx *)]; struct umtx * umtx; char umtx_r_[PADR_(struct umtx *)];
+};
 #ifdef PAD64_REQUIRED
 #else
 #endif
@@ -1209,6 +1223,8 @@ int	freebsd7_freebsd32_shmctl(struct thread *, struct freebsd7_freebsd32_shmctl_
 #else
 #endif
 int	freebsd10_freebsd32_pipe(struct thread *, struct freebsd10_freebsd32_pipe_args *);
+int	freebsd10_freebsd32_umtx_lock(struct thread *, struct freebsd10_freebsd32_umtx_lock_args *);
+int	freebsd10_freebsd32_umtx_unlock(struct thread *, struct freebsd10_freebsd32_umtx_unlock_args *);
 
 #endif /* COMPAT_FREEBSD10 */
 
@@ -1414,6 +1430,8 @@ int	freebsd11_freebsd32_fstatat(struct thread *, struct freebsd11_freebsd32_fsta
 #define	FREEBSD32_SYS_AUE_freebsd32_getcontext	AUE_NULL
 #define	FREEBSD32_SYS_AUE_freebsd32_setcontext	AUE_NULL
 #define	FREEBSD32_SYS_AUE_freebsd32_swapcontext	AUE_NULL
+#define	FREEBSD32_SYS_AUE_freebsd10_freebsd32_umtx_lock	AUE_NULL
+#define	FREEBSD32_SYS_AUE_freebsd10_freebsd32_umtx_unlock	AUE_NULL
 #define	FREEBSD32_SYS_AUE_freebsd32_ksem_timedwait	AUE_SEMWAIT
 #define	FREEBSD32_SYS_AUE_freebsd32_thr_suspend	AUE_NULL
 #define	FREEBSD32_SYS_AUE_freebsd32__umtx_op	AUE_NULL
@@ -1476,6 +1494,7 @@ int	freebsd11_freebsd32_fstatat(struct thread *, struct freebsd11_freebsd32_fsta
 #define	FREEBSD32_SYS_AUE_freebsd32___sysctlbyname	AUE_SYSCTL
 #define	FREEBSD32_SYS_AUE_freebsd32_aio_writev	AUE_AIO_WRITEV
 #define	FREEBSD32_SYS_AUE_freebsd32_aio_readv	AUE_AIO_READV
+#define	FREEBSD32_SYS_AUE_freebsd32_fspacectl	AUE_FSPACECTL
 
 #undef PAD_
 #undef PADL_

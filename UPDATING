@@ -27,6 +27,85 @@ NOTE TO PEOPLE WHO THINK THAT FreeBSD 14.x IS SLOW:
 	world, or to merely disable the most expensive debugging functionality
 	at runtime, run "ln -s 'abort:false,junk:false' /etc/malloc.conf".)
 
+20211004:
+	Ncurses distribution has been split between libtinfow and libncurses
+	with libncurses.so becoming a linker (ld) script to seamlessly link
+	to libtinfow as needed. Bump _FreeBSD_version to 1400035 to reflect
+	this change.
+
+20210923:
+	As of commit 8160a0f62be6, the dummynet module no longer depends on the
+	ipfw module. Dummynet can now be used by pf as well as ipfw. As such
+	users who relied on this dependency may need to include ipfw in the
+	list of modules to load on their systems.
+
+20210922:
+	As of commit 903873ce1560, the mixer(8) utility has got a slightly
+	new syntax. Please refer to the mixer(8) manual page for more
+	information. The old mixer utility can be installed from ports:
+	audio/freebsd-13-mixer
+
+20210911:
+	As of commit 55089ef4f8bb, the global variable nfs_maxcopyrange has
+	been deleted from the nfscommon.ko.  As such, nfsd.ko must be built
+	from up to date sources to avoid an undefined reference when
+	being loaded.
+
+20210817:
+	As of commit 62ca9fc1ad56 OpenSSL no longer enables kernel TLS
+	by default.  Users can enable kernel TLS via the "KTLS" SSL
+	option.  This can be enabled globally by using a custom
+	OpenSSL config file via OPENSSL_CONF or via an
+	application-specific configuration option for applications
+	which permit setting SSL options via SSL_CONF_cmd(3).
+
+20210811:
+	Commit 3ad1e1c1ce20 changed the internal KAPI between the NFS
+	modules. Therefore, all need to be rebuilt from sources.
+
+20210730:
+	Commit b69019c14cd8 removes pf's DIOCGETSTATESNV ioctl.
+	As of be70c7a50d32 it is no longer used by userspace, but it does mean
+	users may not be able to enumerate pf states if they update the kernel
+	past b69019c14cd8 without first updating userspace past be70c7a50d32.
+
+20210729:
+	As of commit 01ad0c007964 if_bridge member interfaces can no longer
+	change their MTU. Changing the MTU of the bridge itself will change the
+	MTU on all member interfaces instead.
+
+20210716:
+	Commit ee29e6f31111 changed the internal KAPI between the nfscommon
+	and nfsd modules. Therefore, both need to be rebuilt from sources.
+	Bump __FreeBSD_version to 1400026 for this KAPI change.
+
+20210715:
+	The 20210707 awk update brought in a change in behavior. This has
+	been corrected as of d4d252c49976. Between these dates, if you
+	installed a new awk binary, you may not be able to build a new
+	kernel because the change in behavior affected the genoffset
+	script used to build the kernel. If you did update, the fix is
+	to update your sources past the above hash and do
+		% cd usr.bin/awk
+		% make clean all
+		% sudo -E make install
+	to enable building kernels again.
+
+20210708:
+	Commit 1e0a518d6548 changed the internal KAPI between the NFS
+	modules. They all need to be rebuilt from sources.  I did not
+	bump __FreeBSD_version, since it was bumped recently.
+
+20210707:
+	awk has been updated to the latest one-true-awk version 20210215.
+	This contains a number of minor bug fixes.
+
+20210624:
+	The NFSv4 client now uses the highest minor version of NFSv4
+	supported by the NFSv4 server by default instead of minor version 0,
+	for NFSv4 mounts.
+	The "minorversion" mount option may be used to override this default.
+
 20210618:
 	Bump __FreeBSD_version to 1400024 for LinuxKPI changes.
 	Most notably netdev.h can change now as the (last) dependencies
@@ -587,8 +666,8 @@ https://lists.freebsd.org/archives/freebsd-current/2021-June/000153.html
 	r342286 modifies the NFSv4 server so that it obeys vfs.nfsd.nfs_privport
 	in the same as it is applied to NFSv2 and 3.  This implies that NFSv4
 	servers that have vfs.nfsd.nfs_privport set will only allow mounts
-	from clients using a reserved port#. Since both the FreeBSD and Linux
-	NFSv4 clients use reserved port#s by default, this should not affect
+	from clients using a reserved port. Since both the FreeBSD and Linux
+	NFSv4 clients use reserved ports by default, this should not affect
 	most NFSv4 mounts.
 
 20181219:
@@ -1030,7 +1109,7 @@ https://lists.freebsd.org/archives/freebsd-current/2021-June/000153.html
 	Newer versions of loader can boot old kernels without issue.
 
 20171110:
-	The LOADER_FIREWIRE_SUPPORT build variable as been renamed to
+	The LOADER_FIREWIRE_SUPPORT build variable has been renamed to
 	WITH/OUT_LOADER_FIREWIRE. LOADER_{NO_,}GELI_SUPPORT has been renamed
 	to WITH/OUT_LOADER_GELI.
 
@@ -1214,7 +1293,7 @@ https://lists.freebsd.org/archives/freebsd-current/2021-June/000153.html
 	If you have if_ath_pci in /boot/loader.conf, ensure it is after
 	if_ath or it will not load any HAL chipset support.
 
-	If you want to selectively load things (eg on ye cheape ARM/MIPS
+	If you want to selectively load things (eg on cheaper ARM/MIPS
 	platforms where RAM is at a premium) you should:
 
 	* load ath_hal
@@ -1438,7 +1517,7 @@ https://lists.freebsd.org/archives/freebsd-current/2021-June/000153.html
 	kernel.
 
 20160527:
-	CAM will now strip leading spaces from SCSI disks' serial numbers.
+	CAM now strips the leading spaces from each SCSI disk's serial number.
 	This will affect users who create UFS filesystems on SCSI disks using
 	those disk's diskid device nodes.  For example, if /etc/fstab
 	previously contained a line like

@@ -617,6 +617,9 @@ typedef struct {
 #define	DT_PREINIT_ARRAYSZ 33	/* Size in bytes of the array of
 				   pre-initialization functions. */
 #define	DT_MAXPOSTAGS	34	/* number of positive tags */
+#define	DT_RELRSZ	35	/* Total size of ElfNN_Relr relocations. */
+#define	DT_RELR		36	/* Address of ElfNN_Relr relocations. */
+#define	DT_RELRENT	37	/* Size of each ElfNN_Relr relocation. */
 #define	DT_LOOS		0x6000000d	/* First OS-specific */
 #define	DT_SUNW_AUXILIARY	0x6000000d	/* symbol auxiliary name */
 #define	DT_SUNW_RTLDINF		0x6000000e	/* ld.so.1 info (private) */
@@ -677,6 +680,10 @@ typedef struct {
 #define	DT_VERNEEDNUM	0x6fffffff	/* Number of elems in verneed section */
 
 #define	DT_LOPROC	0x70000000	/* First processor-specific type. */
+
+#define	DT_AARCH64_BTI_PLT		0x70000001
+#define	DT_AARCH64_PAC_PLT		0x70000003
+#define	DT_AARCH64_VARIANT_PCS		0x70000005
 
 #define	DT_ARM_SYMTABSZ			0x70000001
 #define	DT_ARM_PREEMPTMAP		0x70000002
@@ -828,6 +835,11 @@ typedef struct {
 
 #define	GNU_PROPERTY_LOPROC			0xc0000000
 #define	GNU_PROPERTY_HIPROC			0xdfffffff
+
+#define	GNU_PROPERTY_AARCH64_FEATURE_1_AND	0xc0000000
+
+#define	GNU_PROPERTY_AARCH64_FEATURE_1_BTI	0x00000001
+#define	GNU_PROPERTY_AARCH64_FEATURE_1_PAC	0x00000002
 
 #define	GNU_PROPERTY_X86_FEATURE_1_AND		0xc0000002
 
@@ -1350,10 +1362,6 @@ typedef struct {
 #define	R_RISCV_RVC_BRANCH	44
 #define	R_RISCV_RVC_JUMP	45
 #define	R_RISCV_RVC_LUI		46
-#define	R_RISCV_GPREL_I		47
-#define	R_RISCV_GPREL_S		48
-#define	R_RISCV_TPREL_I		49
-#define	R_RISCV_TPREL_S		50
 #define	R_RISCV_RELAX		51
 #define	R_RISCV_SUB6		52
 #define	R_RISCV_SET6		53

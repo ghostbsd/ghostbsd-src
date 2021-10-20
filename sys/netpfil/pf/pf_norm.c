@@ -157,7 +157,7 @@ static int	pf_reassemble(struct mbuf **, struct ip *, int, u_short *);
 #ifdef INET6
 static int	pf_reassemble6(struct mbuf **, struct ip6_hdr *,
 		    struct ip6_frag *, uint16_t, uint16_t, u_short *);
-static void	pf_scrub_ip6(struct mbuf **, uint8_t);
+static void	pf_scrub_ip6(struct mbuf **, uint32_t, uint8_t, uint8_t);
 #endif	/* INET6 */
 
 #define	DPFPRINTF(x) do {				\
@@ -1002,7 +1002,7 @@ pf_refragment6(struct ifnet *ifp, struct mbuf **m0, struct m_tag *mtag)
 		DPFPRINTF(("refragment error %d\n", error));
 		action = PF_DROP;
 	}
-	for (t = m; m; m = t) {
+	for (; m; m = t) {
 		t = m->m_nextpkt;
 		m->m_nextpkt = NULL;
 		m->m_flags |= M_SKIP_FIREWALL;
@@ -1039,7 +1039,7 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kkif *kif, u_short *reason
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_SCRUB].active.ptr);
 	while (r != NULL) {
-		counter_u64_add(r->evaluations, 1);
+		pf_counter_u64_add(&r->evaluations, 1);
 		if (pfi_kkif_match(r->kif, kif) == r->ifnot)
 			r = r->skip[PF_SKIP_IFP].ptr;
 		else if (r->direction && r->direction != dir)
@@ -1065,10 +1065,11 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kkif *kif, u_short *reason
 
 	if (r == NULL || r->action == PF_NOSCRUB)
 		return (PF_PASS);
-	else {
-		counter_u64_add(r->packets[dir == PF_OUT], 1);
-		counter_u64_add(r->bytes[dir == PF_OUT], pd->tot_len);
-	}
+
+	pf_counter_u64_critical_enter();
+	pf_counter_u64_add_protected(&r->packets[dir == PF_OUT], 1);
+	pf_counter_u64_add_protected(&r->bytes[dir == PF_OUT], pd->tot_len);
+	pf_counter_u64_critical_exit();
 
 	/* Check for illegal packets */
 	if (hlen < (int)sizeof(struct ip)) {
@@ -1182,7 +1183,7 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kkif *kif,
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_SCRUB].active.ptr);
 	while (r != NULL) {
-		counter_u64_add(r->evaluations, 1);
+		pf_counter_u64_add(&r->evaluations, 1);
 		if (pfi_kkif_match(r->kif, kif) == r->ifnot)
 			r = r->skip[PF_SKIP_IFP].ptr;
 		else if (r->direction && r->direction != dir)
@@ -1207,10 +1208,11 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kkif *kif,
 
 	if (r == NULL || r->action == PF_NOSCRUB)
 		return (PF_PASS);
-	else {
-		counter_u64_add(r->packets[dir == PF_OUT], 1);
-		counter_u64_add(r->bytes[dir == PF_OUT], pd->tot_len);
-	}
+
+	pf_counter_u64_critical_enter();
+	pf_counter_u64_add_protected(&r->packets[dir == PF_OUT], 1);
+	pf_counter_u64_add_protected(&r->bytes[dir == PF_OUT], pd->tot_len);
+	pf_counter_u64_critical_exit();
 
 	/* Check for illegal packets */
 	if (sizeof(struct ip6_hdr) + IPV6_MAXPACKET < m->m_pkthdr.len)
@@ -1281,7 +1283,7 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kkif *kif,
 	if (sizeof(struct ip6_hdr) + plen > m->m_pkthdr.len)
 		goto shortpkt;
 
-	pf_scrub_ip6(&m, r->min_ttl);
+	pf_scrub_ip6(&m, r->rule_flag, r->min_ttl, r->set_tos);
 
 	return (PF_PASS);
 
@@ -1336,7 +1338,7 @@ pf_normalize_tcp(int dir, struct pfi_kkif *kif, struct mbuf *m, int ipoff,
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_SCRUB].active.ptr);
 	while (r != NULL) {
-		counter_u64_add(r->evaluations, 1);
+		pf_counter_u64_add(&r->evaluations, 1);
 		if (pfi_kkif_match(r->kif, kif) == r->ifnot)
 			r = r->skip[PF_SKIP_IFP].ptr;
 		else if (r->direction && r->direction != dir)
@@ -1369,10 +1371,11 @@ pf_normalize_tcp(int dir, struct pfi_kkif *kif, struct mbuf *m, int ipoff,
 
 	if (rm == NULL || rm->action == PF_NOSCRUB)
 		return (PF_PASS);
-	else {
-		counter_u64_add(r->packets[dir == PF_OUT], 1);
-		counter_u64_add(r->bytes[dir == PF_OUT], pd->tot_len);
-	}
+
+	pf_counter_u64_critical_enter();
+	pf_counter_u64_add_protected(&r->packets[dir == PF_OUT], 1);
+	pf_counter_u64_add_protected(&r->bytes[dir == PF_OUT], pd->tot_len);
+	pf_counter_u64_critical_exit();
 
 	if (rm->rule_flag & PFRULE_REASSEMBLE_TCP)
 		pd->flags |= PFDESC_TCP_NORM;
@@ -1522,7 +1525,7 @@ pf_normalize_tcp_init(struct mbuf *m, int off, struct pf_pdesc *pd,
 }
 
 void
-pf_normalize_tcp_cleanup(struct pf_state *state)
+pf_normalize_tcp_cleanup(struct pf_kstate *state)
 {
 	if (state->src.scrub)
 		uma_zfree(V_pf_state_scrub_z, state->src.scrub);
@@ -1534,7 +1537,7 @@ pf_normalize_tcp_cleanup(struct pf_state *state)
 
 int
 pf_normalize_tcp_stateful(struct mbuf *m, int off, struct pf_pdesc *pd,
-    u_short *reason, struct tcphdr *th, struct pf_state *state,
+    u_short *reason, struct tcphdr *th, struct pf_kstate *state,
     struct pf_state_peer *src, struct pf_state_peer *dst, int *writeback)
 {
 	struct timeval uptime;
@@ -2029,7 +2032,7 @@ pf_scrub_ip(struct mbuf **m0, u_int32_t flags, u_int8_t min_ttl, u_int8_t tos)
 
 #ifdef INET6
 static void
-pf_scrub_ip6(struct mbuf **m0, u_int8_t min_ttl)
+pf_scrub_ip6(struct mbuf **m0, u_int32_t flags, u_int8_t min_ttl, u_int8_t tos)
 {
 	struct mbuf		*m = *m0;
 	struct ip6_hdr		*h = mtod(m, struct ip6_hdr *);
@@ -2037,5 +2040,11 @@ pf_scrub_ip6(struct mbuf **m0, u_int8_t min_ttl)
 	/* Enforce a minimum ttl, may cause endless packet loops */
 	if (min_ttl && h->ip6_hlim < min_ttl)
 		h->ip6_hlim = min_ttl;
+
+	/* Enforce tos. Set traffic class bits */
+	if (flags & PFRULE_SET_TOS) {
+		h->ip6_flow &= IPV6_FLOWLABEL_MASK | IPV6_VERSION_MASK;
+		h->ip6_flow |= htonl((tos | IPV6_ECN(h)) << 20);
+	}
 }
 #endif

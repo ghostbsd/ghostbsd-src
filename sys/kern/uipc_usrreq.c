@@ -890,13 +890,17 @@ uipc_listen(struct socket *so, int backlog, struct thread *td)
 	if (so->so_type != SOCK_STREAM && so->so_type != SOCK_SEQPACKET)
 		return (EOPNOTSUPP);
 
+	/*
+	 * Synchronize with concurrent connection attempts.
+	 */
+	error = 0;
 	unp = sotounpcb(so);
-	KASSERT(unp != NULL, ("uipc_listen: unp == NULL"));
-
 	UNP_PCB_LOCK(unp);
-	if (unp->unp_vnode == NULL) {
-		/* Already connected or not bound to an address. */
-		error = unp->unp_conn != NULL ? EINVAL : EDESTADDRREQ;
+	if (unp->unp_conn != NULL || (unp->unp_flags & UNP_CONNECTING) != 0)
+		error = EINVAL;
+	else if (unp->unp_vnode == NULL)
+		error = EDESTADDRREQ;
+	if (error != 0) {
 		UNP_PCB_UNLOCK(unp);
 		return (error);
 	}
@@ -1060,7 +1064,7 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 			m = NULL;
 			control = NULL;
 		} else {
-			SOCKBUF_UNLOCK(&so2->so_rcv);
+			soroverflow_locked(so2);
 			error = ENOBUFS;
 		}
 		if (nam != NULL)
@@ -1523,6 +1527,7 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 	bcopy(soun->sun_path, buf, len);
 	buf[len] = 0;
 
+	error = 0;
 	unp = sotounpcb(so);
 	UNP_PCB_LOCK(unp);
 	for (;;) {
@@ -1538,13 +1543,16 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 		 * lock the peer socket, to ensure that unp_conn cannot
 		 * transition between two valid sockets while locks are dropped.
 		 */
-		if (unp->unp_conn != NULL) {
-			UNP_PCB_UNLOCK(unp);
-			return (EISCONN);
+		if (SOLISTENING(so))
+			error = EOPNOTSUPP;
+		else if (unp->unp_conn != NULL)
+			error = EISCONN;
+		else if ((unp->unp_flags & UNP_CONNECTING) != 0) {
+			error = EALREADY;
 		}
-		if ((unp->unp_flags & UNP_CONNECTING) != 0) {
+		if (error != 0) {
 			UNP_PCB_UNLOCK(unp);
-			return (EALREADY);
+			return (error);
 		}
 		if (unp->unp_pairbusy > 0) {
 			unp->unp_flags |= UNP_WAITING;
@@ -1963,7 +1971,7 @@ unp_shutdown(struct unpcb *unp)
 static void
 unp_drop(struct unpcb *unp)
 {
-	struct socket *so = unp->unp_socket;
+	struct socket *so;
 	struct unpcb *unp2;
 
 	/*
@@ -1973,6 +1981,7 @@ unp_drop(struct unpcb *unp)
 	 */
 
 	UNP_PCB_LOCK(unp);
+	so = unp->unp_socket;
 	if (so)
 		so->so_error = ECONNRESET;
 	if ((unp2 = unp_pcb_lock_peer(unp)) != NULL) {

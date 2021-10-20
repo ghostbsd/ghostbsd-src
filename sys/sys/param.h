@@ -76,7 +76,7 @@
  * cannot include sys/param.h and should only be updated here.
  */
 #undef __FreeBSD_version
-#define __FreeBSD_version 1400024
+#define __FreeBSD_version 1400038
 
 /*
  * __FreeBSD_kernel__ indicates that this system uses the kernel of FreeBSD,
@@ -246,7 +246,8 @@
 #define	PRIMASK		0x0ff
 #define	PCATCH		0x100	/* OR'd with pri for tsleep to check signals */
 #define	PDROP		0x200	/* OR'd with pri to stop re-entry of interlock mutex */
-#define	PRILASTFLAG	0x200	/* Last flag defined above */
+#define	PNOLOCK		0x400	/* OR'd with pri to allow sleeping w/o a lock */
+#define	PRILASTFLAG	0x400	/* Last flag defined above */
 
 #define	NZERO	0		/* default "nice" */
 

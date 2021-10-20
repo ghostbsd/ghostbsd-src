@@ -38,6 +38,16 @@ static void mlx5e_rl_sysctl_add_stats_u64_oid(struct mlx5e_rl_priv_data *rl, uns
       struct sysctl_oid *node, const char *name, const char *desc);
 static int mlx5e_rl_tx_limit_add(struct mlx5e_rl_priv_data *, uint64_t value);
 static int mlx5e_rl_tx_limit_clr(struct mlx5e_rl_priv_data *, uint64_t value);
+static if_snd_tag_modify_t mlx5e_rl_snd_tag_modify;
+static if_snd_tag_query_t mlx5e_rl_snd_tag_query;
+static if_snd_tag_free_t mlx5e_rl_snd_tag_free;
+
+static const struct if_snd_tag_sw mlx5e_rl_snd_tag_sw = {
+	.snd_tag_modify = mlx5e_rl_snd_tag_modify,
+	.snd_tag_query = mlx5e_rl_snd_tag_query,
+	.snd_tag_free = mlx5e_rl_snd_tag_free,
+	.type = IF_SND_TAG_TYPE_RATE_LIMIT
+};
 
 static void
 mlx5e_rl_build_sq_param(struct mlx5e_rl_priv_data *rl,
@@ -51,8 +61,6 @@ mlx5e_rl_build_sq_param(struct mlx5e_rl_priv_data *rl,
 	MLX5_SET(wq, wq, log_wq_stride, ilog2(MLX5_SEND_WQE_BB));
 	MLX5_SET(wq, wq, pd, rl->priv->pdn);
 
-	param->wq.buf_numa_node = 0;
-	param->wq.db_numa_node = 0;
 	param->wq.linear = 1;
 }
 
@@ -116,8 +124,9 @@ mlx5e_rl_create_sq(struct mlx5e_priv *priv, struct mlx5e_sq *sq,
 	    &sq->dma_tag)))
 		goto done;
 
-	/* use shared UAR */
-	sq->uar_map = priv->bfreg.map;
+	sq->mkey_be = cpu_to_be32(priv->mr.key);
+	sq->ifp = priv->ifp;
+	sq->priv = priv;
 
 	err = mlx5_wq_cyc_create(mdev, &param->wq, sqc_wq, &sq->wq,
 	    &sq->wq_ctrl);
@@ -129,10 +138,6 @@ mlx5e_rl_create_sq(struct mlx5e_priv *priv, struct mlx5e_sq *sq,
 	err = mlx5e_alloc_sq_db(sq);
 	if (err)
 		goto err_sq_wq_destroy;
-
-	sq->mkey_be = cpu_to_be32(priv->mr.key);
-	sq->ifp = priv->ifp;
-	sq->priv = priv;
 
 	mlx5e_update_sq_inline(sq);
 
@@ -165,7 +170,7 @@ mlx5e_rl_open_sq(struct mlx5e_priv *priv, struct mlx5e_sq *sq,
 	if (err)
 		return (err);
 
-	err = mlx5e_enable_sq(sq, param, priv->rl.tisn);
+	err = mlx5e_enable_sq(sq, param, &priv->channel[ix].bfreg, priv->rl.tisn);
 	if (err)
 		goto err_destroy_sq;
 
@@ -639,7 +644,7 @@ mlx5e_rl_open_tis(struct mlx5e_priv *priv)
 static void
 mlx5e_rl_close_tis(struct mlx5e_priv *priv)
 {
-	mlx5_core_destroy_tis(priv->mdev, priv->rl.tisn);
+	mlx5_core_destroy_tis(priv->mdev, priv->rl.tisn, 0);
 }
 
 static void
@@ -835,7 +840,6 @@ mlx5e_rl_init(struct mlx5e_priv *priv)
 		for (i = 0; i < rl->param.tx_channels_per_worker_def; i++) {
 			struct mlx5e_rl_channel *channel = rlw->channels + i;
 			channel->worker = rlw;
-			channel->tag.type = IF_SND_TAG_TYPE_RATE_LIMIT;
 			STAILQ_INSERT_TAIL(&rlw->index_list_head, channel, entry);
 		}
 		MLX5E_RL_WORKER_UNLOCK(rlw);
@@ -1115,14 +1119,14 @@ mlx5e_rl_snd_tag_alloc(struct ifnet *ifp,
 
 	/* store pointer to mbuf tag */
 	MPASS(channel->tag.refcount == 0);
-	m_snd_tag_init(&channel->tag, ifp, IF_SND_TAG_TYPE_RATE_LIMIT);
+	m_snd_tag_init(&channel->tag, ifp, &mlx5e_rl_snd_tag_sw);
 	*ppmt = &channel->tag;
 done:
 	return (error);
 }
 
 
-int
+static int
 mlx5e_rl_snd_tag_modify(struct m_snd_tag *pmt, union if_snd_tag_modify_params *params)
 {
 	struct mlx5e_rl_channel *channel =
@@ -1131,7 +1135,7 @@ mlx5e_rl_snd_tag_modify(struct m_snd_tag *pmt, union if_snd_tag_modify_params *p
 	return (mlx5e_rl_modify(channel->worker, channel, params->rate_limit.max_rate));
 }
 
-int
+static int
 mlx5e_rl_snd_tag_query(struct m_snd_tag *pmt, union if_snd_tag_query_params *params)
 {
 	struct mlx5e_rl_channel *channel =
@@ -1140,7 +1144,7 @@ mlx5e_rl_snd_tag_query(struct m_snd_tag *pmt, union if_snd_tag_query_params *par
 	return (mlx5e_rl_query(channel->worker, channel, params));
 }
 
-void
+static void
 mlx5e_rl_snd_tag_free(struct m_snd_tag *pmt)
 {
 	struct mlx5e_rl_channel *channel =

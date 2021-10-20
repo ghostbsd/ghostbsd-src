@@ -48,6 +48,7 @@
 #include <sys/fcntl.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
+#include <sys/reg.h>
 #include <sys/syscall.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysproto.h>
@@ -60,7 +61,6 @@
 
 #include <machine/cpuinfo.h>
 #include <machine/md_var.h>
-#include <machine/reg.h>
 #include <machine/sigframe.h>
 #include <machine/sysarch.h>
 #include <machine/tls.h>
@@ -85,6 +85,9 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_szsigcode	= &szsigcode32,
 	.sv_name	= "FreeBSD ELF32",
 	.sv_coredump	= __elfN(coredump),
+	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
+	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,

@@ -373,7 +373,6 @@ struct da_softc {
 	int			p_type;
 	struct	 disk_params params;
 	struct	 disk *disk;
-	union	 ccb saved_ccb;
 	struct task		sysctl_task;
 	struct sysctl_ctx_list	sysctl_ctx;
 	struct sysctl_oid	*sysctl_tree;
@@ -1559,7 +1558,7 @@ static sbintime_t da_default_softtimeout = DA_DEFAULT_SOFTTIMEOUT;
 static int da_send_ordered = DA_DEFAULT_SEND_ORDERED;
 static int da_disable_wp_detection = 0;
 static int da_enable_biospeedup = 1;
-static int da_enable_uma_ccbs = 0;
+static int da_enable_uma_ccbs = 1;
 
 static SYSCTL_NODE(_kern_cam, OID_AUTO, da, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "CAM Direct Access Disk driver");
@@ -1580,7 +1579,7 @@ SYSCTL_INT(_kern_cam_da, OID_AUTO, enable_uma_ccbs, CTLFLAG_RWTUN,
 	    &da_enable_uma_ccbs, 0, "Use UMA for CCBs");
 
 SYSCTL_PROC(_kern_cam_da, OID_AUTO, default_softtimeout,
-    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, NULL, 0,
+    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
     dasysctlsofttimeout, "I",
     "Soft I/O timeout (ms)");
 TUNABLE_INT64("kern.cam.da.default_softtimeout", &da_default_softtimeout);
@@ -2281,17 +2280,17 @@ dasysctlinit(void *context, int pending)
 	 */
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
 		OID_AUTO, "delete_method",
-		CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT,
+		CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
 		softc, 0, dadeletemethodsysctl, "A",
 		"BIO_DELETE execution method");
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
 		OID_AUTO, "delete_max",
-		CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+		CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_MPSAFE,
 		softc, 0, dadeletemaxsysctl, "Q",
 		"Maximum BIO_DELETE size");
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
 		OID_AUTO, "minimum_cmd_size",
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
 		&softc->minimum_cmd_size, 0, dacmdsizesysctl, "I",
 		"Minimum CDB size");
 	SYSCTL_ADD_UQUAD(&softc->sysctl_ctx,
@@ -2309,12 +2308,12 @@ dasysctlinit(void *context, int pending)
 
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
 		OID_AUTO, "zone_mode",
-		CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+		CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 		softc, 0, dazonemodesysctl, "A",
 		"Zone Mode");
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
 		OID_AUTO, "zone_support",
-		CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+		CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 		softc, 0, dazonesupsysctl, "A",
 		"Zone Support");
 	SYSCTL_ADD_UQUAD(&softc->sysctl_ctx,
@@ -4487,7 +4486,7 @@ dazonedone(struct cam_periph *periph, union ccb *ccb)
 			/*
 			 * NOTE: we're mapping the values here directly
 			 * from the SCSI/ATA bit definitions to the bio.h
-			 * definitons.  There is also a warning in
+			 * definitions. There is also a warning in
 			 * disk_zone.h, but the impact is that if
 			 * additional values are added in the SCSI/ATA
 			 * specs these will be visible to consumers of

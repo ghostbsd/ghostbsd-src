@@ -6,7 +6,12 @@
 PACKAGE=rescue
 MAN=
 MK_SSP=	no
+# Static-PIE is not supported so we should not be linking against _pie.a libs.
+# This is also needed to avoid linking against sanitizer-instrumented libraries
+# since MK_ASAN/MK_UBSAN will instrument the .pieo object files.
+MK_PIE=	no
 NO_SHARED=	yes
+CRUNCH_BUILDOPTS+=	MK_PIE=no NO_SHARED=yes
 
 PROG=	rescue
 BINDIR?=/rescue
@@ -126,7 +131,7 @@ CRUNCH_PROGS_usr.sbin+= zdb
 # crunchgen does not like C++ programs; this should be fixed someday
 # CRUNCH_PROGS+= devd
 
-CRUNCH_LIBS+= -l80211 -lalias -lcam -lncursesw -ldevstat -lipsec -llzma
+CRUNCH_LIBS+= -l80211 -lalias -lcam -lncursesw_real -ldevstat -lipsec -llzma
 .if ${MK_ZFS} != "no"
 CRUNCH_LIBS+= -lavl -lzpool -lzfs_core -lzfs -lnvpair -lpthread -luutil -lumem
 CRUNCH_LIBS+= -lbe -lzfsbootenv -lzutil -ltpool -lspl -licp_rescue

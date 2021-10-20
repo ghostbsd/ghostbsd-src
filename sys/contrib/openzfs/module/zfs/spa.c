@@ -2578,8 +2578,9 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 			    .to_free = &to_free
 			};
 			zfs_dbgmsg("deleting sublist (id %llu) from"
-			    " livelist %llu, %d remaining",
-			    dle->dle_bpobj.bpo_object, ll_obj, count - 1);
+			    " livelist %llu, %lld remaining",
+			    (u_longlong_t)dle->dle_bpobj.bpo_object,
+			    (u_longlong_t)ll_obj, (longlong_t)count - 1);
 			VERIFY0(dsl_sync_task(spa_name(spa), NULL,
 			    sublist_delete_sync, &sync_arg, 0,
 			    ZFS_SPACE_CHECK_DESTROY));
@@ -2596,7 +2597,8 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 		    .ll_obj = ll_obj,
 		    .zap_obj = zap_obj
 		};
-		zfs_dbgmsg("deletion of livelist %llu completed", ll_obj);
+		zfs_dbgmsg("deletion of livelist %llu completed",
+		    (u_longlong_t)ll_obj);
 		VERIFY0(dsl_sync_task(spa_name(spa), NULL, livelist_delete_sync,
 		    &sync_arg, 0, ZFS_SPACE_CHECK_DESTROY));
 	}
@@ -2608,7 +2610,8 @@ spa_start_livelist_destroy_thread(spa_t *spa)
 	ASSERT3P(spa->spa_livelist_delete_zthr, ==, NULL);
 	spa->spa_livelist_delete_zthr =
 	    zthr_create("z_livelist_destroy",
-	    spa_livelist_delete_cb_check, spa_livelist_delete_cb, spa);
+	    spa_livelist_delete_cb_check, spa_livelist_delete_cb, spa,
+	    minclsyspri);
 }
 
 typedef struct livelist_new_arg {
@@ -2696,10 +2699,12 @@ spa_livelist_condense_sync(void *arg, dmu_tx_t *tx)
 	dsl_dataset_name(ds, dsname);
 	zfs_dbgmsg("txg %llu condensing livelist of %s (id %llu), bpobj %llu "
 	    "(%llu blkptrs) and bpobj %llu (%llu blkptrs) -> bpobj %llu "
-	    "(%llu blkptrs)", tx->tx_txg, dsname, ds->ds_object, first_obj,
-	    cur_first_size, next_obj, cur_next_size,
-	    first->dle_bpobj.bpo_object,
-	    first->dle_bpobj.bpo_phys->bpo_num_blkptrs);
+	    "(%llu blkptrs)", (u_longlong_t)tx->tx_txg, dsname,
+	    (u_longlong_t)ds->ds_object, (u_longlong_t)first_obj,
+	    (u_longlong_t)cur_first_size, (u_longlong_t)next_obj,
+	    (u_longlong_t)cur_next_size,
+	    (u_longlong_t)first->dle_bpobj.bpo_object,
+	    (u_longlong_t)first->dle_bpobj.bpo_phys->bpo_num_blkptrs);
 out:
 	dmu_buf_rele(ds->ds_dbuf, spa);
 	spa->spa_to_condense.ds = NULL;
@@ -2816,7 +2821,7 @@ spa_start_livelist_condensing_thread(spa_t *spa)
 	spa->spa_livelist_condense_zthr =
 	    zthr_create("z_livelist_condense",
 	    spa_livelist_condense_cb_check,
-	    spa_livelist_condense_cb, spa);
+	    spa_livelist_condense_cb, spa, minclsyspri);
 }
 
 static void
@@ -2834,7 +2839,7 @@ spa_spawn_aux_threads(spa_t *spa)
 	spa->spa_checkpoint_discard_zthr =
 	    zthr_create("z_checkpoint_discard",
 	    spa_checkpoint_discard_thread_check,
-	    spa_checkpoint_discard_thread, spa);
+	    spa_checkpoint_discard_thread, spa, minclsyspri);
 }
 
 /*
@@ -3091,8 +3096,10 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 
 		zfs_dbgmsg("fail_intvals>0 import_delay=%llu ub_mmp "
 		    "mmp_fails=%llu ub_mmp mmp_interval=%llu "
-		    "import_intervals=%u", import_delay, MMP_FAIL_INT(ub),
-		    MMP_INTERVAL(ub), import_intervals);
+		    "import_intervals=%llu", (u_longlong_t)import_delay,
+		    (u_longlong_t)MMP_FAIL_INT(ub),
+		    (u_longlong_t)MMP_INTERVAL(ub),
+		    (u_longlong_t)import_intervals);
 
 	} else if (MMP_INTERVAL_VALID(ub) && MMP_FAIL_INT_VALID(ub) &&
 	    MMP_FAIL_INT(ub) == 0) {
@@ -3103,8 +3110,10 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 
 		zfs_dbgmsg("fail_intvals=0 import_delay=%llu ub_mmp "
 		    "mmp_interval=%llu ub_mmp_delay=%llu "
-		    "import_intervals=%u", import_delay, MMP_INTERVAL(ub),
-		    ub->ub_mmp_delay, import_intervals);
+		    "import_intervals=%llu", (u_longlong_t)import_delay,
+		    (u_longlong_t)MMP_INTERVAL(ub),
+		    (u_longlong_t)ub->ub_mmp_delay,
+		    (u_longlong_t)import_intervals);
 
 	} else if (MMP_VALID(ub)) {
 		/*
@@ -3115,15 +3124,18 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 		    ub->ub_mmp_delay) * import_intervals);
 
 		zfs_dbgmsg("import_delay=%llu ub_mmp_delay=%llu "
-		    "import_intervals=%u leaves=%u", import_delay,
-		    ub->ub_mmp_delay, import_intervals,
+		    "import_intervals=%llu leaves=%u",
+		    (u_longlong_t)import_delay,
+		    (u_longlong_t)ub->ub_mmp_delay,
+		    (u_longlong_t)import_intervals,
 		    vdev_count_leaves(spa));
 	} else {
 		/* Using local tunings is the only reasonable option */
 		zfs_dbgmsg("pool last imported on non-MMP aware "
 		    "host using import_delay=%llu multihost_interval=%llu "
-		    "import_intervals=%u", import_delay, multihost_interval,
-		    import_intervals);
+		    "import_intervals=%llu", (u_longlong_t)import_delay,
+		    (u_longlong_t)multihost_interval,
+		    (u_longlong_t)import_intervals);
 	}
 
 	return (import_delay);
@@ -3175,7 +3187,7 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config)
 	import_delay = spa_activity_check_duration(spa, ub);
 
 	/* Add a small random factor in case of simultaneous imports (0-25%) */
-	import_delay += import_delay * spa_get_random(250) / 1000;
+	import_delay += import_delay * random_in_range(250) / 1000;
 
 	import_expire = gethrtime() + import_delay;
 
@@ -3191,8 +3203,11 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config)
 			    "txg %llu ub_txg  %llu "
 			    "timestamp %llu ub_timestamp  %llu "
 			    "mmp_config %#llx ub_mmp_config %#llx",
-			    txg, ub->ub_txg, timestamp, ub->ub_timestamp,
-			    mmp_config, ub->ub_mmp_config);
+			    (u_longlong_t)txg, (u_longlong_t)ub->ub_txg,
+			    (u_longlong_t)timestamp,
+			    (u_longlong_t)ub->ub_timestamp,
+			    (u_longlong_t)mmp_config,
+			    (u_longlong_t)ub->ub_mmp_config);
 
 			error = SET_ERROR(EREMOTEIO);
 			break;
@@ -4169,7 +4184,7 @@ spa_ld_get_props(spa_t *spa)
 		return (spa_vdev_err(rvd, VDEV_AUX_CORRUPT_DATA, EIO));
 
 	if (error == 0) {
-		uint64_t autoreplace;
+		uint64_t autoreplace = 0;
 
 		spa_prop_find(spa, ZPOOL_PROP_BOOTFS, &spa->spa_bootfs);
 		spa_prop_find(spa, ZPOOL_PROP_AUTOREPLACE, &autoreplace);
@@ -4619,7 +4634,7 @@ spa_ld_checkpoint_rewind(spa_t *spa)
 		vdev_t *svd[SPA_SYNC_MIN_VDEVS] = { NULL };
 		int svdcount = 0;
 		int children = rvd->vdev_children;
-		int c0 = spa_get_random(children);
+		int c0 = random_in_range(children);
 
 		for (int c = 0; c < children; c++) {
 			vdev_t *vd = rvd->vdev_child[(c0 + c) % children];
@@ -8716,12 +8731,16 @@ spa_sync_props(void *arg, dmu_tx_t *tx)
 			spa->spa_comment = spa_strdup(strval);
 			/*
 			 * We need to dirty the configuration on all the vdevs
-			 * so that their labels get updated.  It's unnecessary
-			 * to do this for pool creation since the vdev's
-			 * configuration has already been dirtied.
+			 * so that their labels get updated.  We also need to
+			 * update the cache file to keep it in sync with the
+			 * MOS version. It's unnecessary to do this for pool
+			 * creation since the vdev's configuration has already
+			 * been dirtied.
 			 */
-			if (tx->tx_txg != TXG_INITIAL)
+			if (tx->tx_txg != TXG_INITIAL) {
 				vdev_config_dirty(spa->spa_root_vdev);
+				spa_async_request(spa, SPA_ASYNC_CONFIG_UPDATE);
+			}
 			spa_history_log_internal(spa, "set", tx,
 			    "%s=%s", nvpair_name(elem), strval);
 			break;
@@ -8733,8 +8752,11 @@ spa_sync_props(void *arg, dmu_tx_t *tx)
 			/*
 			 * Dirty the configuration on vdevs as above.
 			 */
-			if (tx->tx_txg != TXG_INITIAL)
+			if (tx->tx_txg != TXG_INITIAL) {
 				vdev_config_dirty(spa->spa_root_vdev);
+				spa_async_request(spa, SPA_ASYNC_CONFIG_UPDATE);
+			}
+
 			spa_history_log_internal(spa, "set", tx,
 			    "%s=%s", nvpair_name(elem), strval);
 			break;
@@ -9111,7 +9133,7 @@ spa_sync_rewrite_vdev_config(spa_t *spa, dmu_tx_t *tx)
 			vdev_t *svd[SPA_SYNC_MIN_VDEVS] = { NULL };
 			int svdcount = 0;
 			int children = rvd->vdev_children;
-			int c0 = spa_get_random(children);
+			int c0 = random_in_range(children);
 
 			for (int c = 0; c < children; c++) {
 				vdev_t *vd =
@@ -9176,9 +9198,9 @@ spa_sync(spa_t *spa, uint64_t txg)
 	spa->spa_sync_pass = 0;
 
 	for (int i = 0; i < spa->spa_alloc_count; i++) {
-		mutex_enter(&spa->spa_alloc_locks[i]);
-		VERIFY0(avl_numnodes(&spa->spa_alloc_trees[i]));
-		mutex_exit(&spa->spa_alloc_locks[i]);
+		mutex_enter(&spa->spa_allocs[i].spaa_lock);
+		VERIFY0(avl_numnodes(&spa->spa_allocs[i].spaa_tree));
+		mutex_exit(&spa->spa_allocs[i].spaa_lock);
 	}
 
 	/*
@@ -9288,9 +9310,9 @@ spa_sync(spa_t *spa, uint64_t txg)
 	dsl_pool_sync_done(dp, txg);
 
 	for (int i = 0; i < spa->spa_alloc_count; i++) {
-		mutex_enter(&spa->spa_alloc_locks[i]);
-		VERIFY0(avl_numnodes(&spa->spa_alloc_trees[i]));
-		mutex_exit(&spa->spa_alloc_locks[i]);
+		mutex_enter(&spa->spa_allocs[i].spaa_lock);
+		VERIFY0(avl_numnodes(&spa->spa_allocs[i].spaa_tree));
+		mutex_exit(&spa->spa_allocs[i].spaa_lock);
 	}
 
 	/*
@@ -9688,7 +9710,7 @@ spa_activity_in_progress(spa_t *spa, zpool_wait_activity_t activity,
 	case ZPOOL_WAIT_RESILVER:
 		if ((*in_progress = vdev_rebuild_active(spa->spa_root_vdev)))
 			break;
-		/* fall through */
+		fallthrough;
 	case ZPOOL_WAIT_SCRUB:
 	{
 		boolean_t scanning, paused, is_scrub;

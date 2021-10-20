@@ -9,9 +9,14 @@ RTLD_ELF_DIR:=	${.PARSEDIR}
 .include <src.opts.mk>
 PACKAGE=	clibs
 MK_PIE=		no # Always position independent using local rules
+# Not compatible with sanitizer instrumentation or SSP.
+MK_ASAN=	no
 MK_SSP=		no
+MK_UBSAN=	no
 
+.if !defined(NEED_COMPAT)
 CONFS=		libmap.conf
+.endif
 PROG?=		ld-elf.so.1
 .if (${PROG:M*ld-elf32*} != "")
 TAGS+=		lib32

@@ -30,9 +30,7 @@
 #ifndef _XEN_XEN_OS_H_
 #define _XEN_XEN_OS_H_
 
-#if !defined(__XEN_INTERFACE_VERSION__)  
 #define  __XEN_INTERFACE_VERSION__ 0x00030208
-#endif  
 
 #define GRANT_REF_INVALID   0xffffffff
 
@@ -73,17 +71,8 @@ xen_get_console_evtchn(void)
 
 	return (hvm_get_parameter(HVM_PARAM_CONSOLE_EVTCHN));
 }
-#endif
-
-#include <machine/xen/xen-os.h>
-
-/* Everything below this point is not included by assembler (.S) files. */
-#ifndef __ASSEMBLY__
 
 extern shared_info_t *HYPERVISOR_shared_info;
-
-extern int xen_disable_pv_disks;
-extern int xen_disable_pv_nics;
 
 extern bool xen_suspend_cancelled;
 
@@ -119,6 +108,12 @@ xen_initial_domain(void)
 
 	return (xen_domain() && (hvm_start_flags & SIF_INITDOMAIN) != 0);
 }
+#endif
+
+#include <machine/xen/xen-os.h>
+
+/* Everything below this point is not included by assembler (.S) files. */
+#ifndef __ASSEMBLY__
 
 /*
  * Based on ofed/include/linux/bitops.h

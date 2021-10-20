@@ -248,6 +248,9 @@ static struct filter_opts {
 	char			*tag;
 	char			*match_tag;
 	u_int8_t		 match_tag_not;
+	u_int16_t		 dnpipe;
+	u_int16_t		 dnrpipe;
+	u_int32_t		 free_flags;
 	u_int			 rtableid;
 	u_int8_t		 prio;
 	u_int8_t		 set_prio[2];
@@ -317,6 +320,7 @@ static struct codel_opts	 codel_opts;
 static struct node_hfsc_opts	 hfsc_opts;
 static struct node_fairq_opts	 fairq_opts;
 static struct node_state_opt	*keep_state_defaults = NULL;
+static struct pfctl_watermarks	 syncookie_opts;
 
 int		 disallow_table(struct node_host *, const char *);
 int		 disallow_urpf_failed(struct node_host *, const char *);
@@ -329,14 +333,12 @@ int		 process_tabledef(char *, struct table_opts *);
 void		 expand_label_str(char *, size_t, const char *, const char *);
 void		 expand_label_if(const char *, char *, size_t, const char *);
 void		 expand_label_addr(const char *, char *, size_t, u_int8_t,
-		    struct node_host *);
+		    struct pf_rule_addr *);
 void		 expand_label_port(const char *, char *, size_t,
-		    struct node_port *);
+		    struct pf_rule_addr *);
 void		 expand_label_proto(const char *, char *, size_t, u_int8_t);
-void		 expand_label_nr(const char *, char *, size_t);
-void		 expand_label(char *, size_t, const char *, u_int8_t,
-		    struct node_host *, struct node_port *, struct node_host *,
-		    struct node_port *, u_int8_t);
+void		 expand_label_nr(const char *, char *, size_t,
+		    struct pfctl_rule *);
 void		 expand_rule(struct pfctl_rule *, struct node_if *,
 		    struct node_host *, struct node_proto *, struct node_os *,
 		    struct node_host *, struct node_port *, struct node_host *,
@@ -442,6 +444,7 @@ typedef struct {
 		struct node_hfsc_opts	 hfsc_opts;
 		struct node_fairq_opts	 fairq_opts;
 		struct codel_opts	 codel_opts;
+		struct pfctl_watermarks	*watermarks;
 	} v;
 	int lineno;
 } YYSTYPE;
@@ -456,7 +459,7 @@ int	parseport(char *, struct range *r, int);
 
 %}
 
-%token	PASS BLOCK SCRUB RETURN IN OS OUT LOG QUICK ON FROM TO FLAGS
+%token	PASS BLOCK MATCH SCRUB RETURN IN OS OUT LOG QUICK ON FROM TO FLAGS
 %token	RETURNRST RETURNICMP RETURNICMP6 PROTO INET INET6 ALL ANY ICMPTYPE
 %token	ICMP6TYPE CODE KEEP MODULATE STATE PORT RDR NAT BINAT ARROW NODF
 %token	MINTTL ERROR ALLOWOPTS FASTROUTE FILENAME ROUTETO DUPTO REPLYTO NO LABEL
@@ -464,10 +467,11 @@ int	parseport(char *, struct range *r, int);
 %token	REASSEMBLE FRAGDROP FRAGCROP ANCHOR NATANCHOR RDRANCHOR BINATANCHOR
 %token	SET OPTIMIZATION TIMEOUT LIMIT LOGINTERFACE BLOCKPOLICY FAILPOLICY
 %token	RANDOMID REQUIREORDER SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
-%token	ANTISPOOF FOR INCLUDE KEEPCOUNTERS
+%token	ANTISPOOF FOR INCLUDE KEEPCOUNTERS SYNCOOKIES
 %token	BITMASK RANDOM SOURCEHASH ROUNDROBIN STATICPORT PROBABILITY MAPEPORTSET
 %token	ALTQ CBQ CODEL PRIQ HFSC FAIRQ BANDWIDTH TBRSIZE LINKSHARE REALTIME
 %token	UPPERLIMIT QUEUE PRIORITY QLIMIT HOGS BUCKETS RTABLE TARGET INTERVAL
+%token	DNPIPE DNQUEUE
 %token	LOAD RULESET_OPTIMIZATION PRIO
 %token	STICKYADDRESS MAXSRCSTATES MAXSRCNODES SOURCETRACK GLOBAL RULE
 %token	MAXSRCCONN MAXSRCCONNRATE OVERLOAD FLUSH SLOPPY
@@ -480,7 +484,7 @@ int	parseport(char *, struct range *r, int);
 %type	<v.number>		number icmptype icmp6type uid gid
 %type	<v.number>		tos not yesno
 %type	<v.probability>		probability
-%type	<v.i>			no dir af fragcache optimizer
+%type	<v.i>			no dir af fragcache optimizer syncookie_val
 %type	<v.i>			sourcetrack flush unaryop statelock
 %type	<v.b>			action nataction natpasslog scrubaction
 %type	<v.b>			flags flag blockspec prio
@@ -527,6 +531,7 @@ int	parseport(char *, struct range *r, int);
 %type	<v.pool_opts>		pool_opts pool_opt pool_opts_l
 %type	<v.tagged>		tagged
 %type	<v.rtableid>		rtable
+%type	<v.watermarks>		syncookie_opts
 %%
 
 ruleset		: /* empty */
@@ -725,6 +730,57 @@ option		: SET OPTIMIZATION STRING		{
 		| SET KEEPCOUNTERS {
 			pf->keep_counters = true;
 		}
+		| SET SYNCOOKIES syncookie_val syncookie_opts {
+			if (pfctl_cfg_syncookies(pf, $3, $4)) {
+				yyerror("error setting syncookies");
+				YYERROR;
+			}
+		}
+		;
+
+syncookie_val  : STRING        {
+			if (!strcmp($1, "never"))
+				$$ = PFCTL_SYNCOOKIES_NEVER;
+			else if (!strcmp($1, "adaptive"))
+				$$ = PFCTL_SYNCOOKIES_ADAPTIVE;
+			else if (!strcmp($1, "always"))
+				$$ = PFCTL_SYNCOOKIES_ALWAYS;
+			else {
+				yyerror("illegal value for syncookies");
+				YYERROR;
+			}
+		}
+		;
+syncookie_opts  : /* empty */                   { $$ = NULL; }
+		| {
+			memset(&syncookie_opts, 0, sizeof(syncookie_opts));
+		  } '(' syncookie_opt_l ')'     { $$ = &syncookie_opts; }
+		;
+
+syncookie_opt_l : syncookie_opt_l comma syncookie_opt
+		| syncookie_opt
+		;
+
+syncookie_opt   : STRING STRING {
+			double   val;
+			char    *cp;
+
+			val = strtod($2, &cp);
+			if (cp == NULL || strcmp(cp, "%"))
+				YYERROR;
+			if (val <= 0 || val > 100) {
+				yyerror("illegal percentage value");
+				YYERROR;
+			}
+			if (!strcmp($1, "start")) {
+				syncookie_opts.hi = val;
+			} else if (!strcmp($1, "end")) {
+				syncookie_opts.lo = val;
+			} else {
+				yyerror("illegal syncookie option");
+				YYERROR;
+			}
+		}
 		;
 
 stringall	: STRING	{ $$ = $1; }
@@ -800,7 +856,6 @@ pfa_anchor	: '{'
 			/* steping into a brace anchor */
 			pf->asd++;
 			pf->bn++;
-			pf->brace = 1;
 
 			/* create a holding ruleset in the root */
 			snprintf(ta, PF_ANCHOR_NAME_SIZE, "_%d", pf->bn);
@@ -2449,6 +2504,15 @@ pfrule		: action dir logquick interface route af proto fromto
 			}
 #endif
 
+			if ($9.dnpipe || $9.dnrpipe) {
+				r.dnpipe = $9.dnpipe;
+				r.dnrpipe = $9.dnrpipe;
+				if ($9.free_flags & PFRULE_DN_IS_PIPE)
+					r.free_flags |= PFRULE_DN_IS_PIPE;
+				else
+					r.free_flags |= PFRULE_DN_IS_QUEUE;
+			}
+
 			expand_rule(&r, $4, $5.host, $7, $8.src_os,
 			    $8.src.host, $8.src.port, $8.dst.host, $8.dst.port,
 			    $9.uid, $9.gid, $9.icmpspec, "");
@@ -2549,6 +2613,32 @@ filter_opt	: USER uids {
 				YYERROR;
 			}
 			filter_opts.queues = $1;
+		}
+		| DNPIPE number {
+			filter_opts.dnpipe = $2;
+			filter_opts.free_flags |= PFRULE_DN_IS_PIPE;
+		}
+		| DNPIPE '(' number ')' {
+			filter_opts.dnpipe = $3;
+			filter_opts.free_flags |= PFRULE_DN_IS_PIPE;
+		}
+		| DNPIPE '(' number comma number ')' {
+			filter_opts.dnrpipe = $5;
+			filter_opts.dnpipe = $3;
+			filter_opts.free_flags |= PFRULE_DN_IS_PIPE;
+		}
+		| DNQUEUE number {
+			filter_opts.dnpipe = $2;
+			filter_opts.free_flags |= PFRULE_DN_IS_QUEUE;
+		}
+		| DNQUEUE '(' number comma number ')' {
+			filter_opts.dnrpipe = $5;
+			filter_opts.dnpipe = $3;
+			filter_opts.free_flags |= PFRULE_DN_IS_QUEUE;
+		}
+		| DNQUEUE '(' number ')' {
+			filter_opts.dnpipe = $3;
+			filter_opts.free_flags |= PFRULE_DN_IS_QUEUE;
 		}
 		| TAG string				{
 			filter_opts.tag = $2;
@@ -2677,6 +2767,7 @@ action		: PASS 			{
 			$$.w = returnicmpdefault;
 			$$.w2 = returnicmp6default;
 		}
+		| MATCH			{ $$.b1 = PF_MATCH; $$.b2 = $$.w = 0; }
 		| BLOCK blockspec	{ $$ = $2; $$.b1 = PF_DROP; }
 		;
 
@@ -4929,17 +5020,17 @@ expand_label_if(const char *name, char *label, size_t len, const char *ifname)
 
 void
 expand_label_addr(const char *name, char *label, size_t len, sa_family_t af,
-    struct node_host *h)
+    struct pf_rule_addr *addr)
 {
 	char tmp[64], tmp_not[66];
 
 	if (strstr(label, name) != NULL) {
-		switch (h->addr.type) {
+		switch (addr->addr.type) {
 		case PF_ADDR_DYNIFTL:
-			snprintf(tmp, sizeof(tmp), "(%s)", h->addr.v.ifname);
+			snprintf(tmp, sizeof(tmp), "(%s)", addr->addr.v.ifname);
 			break;
 		case PF_ADDR_TABLE:
-			snprintf(tmp, sizeof(tmp), "<%s>", h->addr.v.tblname);
+			snprintf(tmp, sizeof(tmp), "<%s>", addr->addr.v.tblname);
 			break;
 		case PF_ADDR_NOROUTE:
 			snprintf(tmp, sizeof(tmp), "no-route");
@@ -4948,18 +5039,18 @@ expand_label_addr(const char *name, char *label, size_t len, sa_family_t af,
 			snprintf(tmp, sizeof(tmp), "urpf-failed");
 			break;
 		case PF_ADDR_ADDRMASK:
-			if (!af || (PF_AZERO(&h->addr.v.a.addr, af) &&
-			    PF_AZERO(&h->addr.v.a.mask, af)))
+			if (!af || (PF_AZERO(&addr->addr.v.a.addr, af) &&
+			    PF_AZERO(&addr->addr.v.a.mask, af)))
 				snprintf(tmp, sizeof(tmp), "any");
 			else {
 				char	a[48];
 				int	bits;
 
-				if (inet_ntop(af, &h->addr.v.a.addr, a,
+				if (inet_ntop(af, &addr->addr.v.a.addr, a,
 				    sizeof(a)) == NULL)
 					snprintf(tmp, sizeof(tmp), "?");
 				else {
-					bits = unmask(&h->addr.v.a.mask, af);
+					bits = unmask(&addr->addr.v.a.mask, af);
 					if ((af == AF_INET && bits < 32) ||
 					    (af == AF_INET6 && bits < 128))
 						snprintf(tmp, sizeof(tmp),
@@ -4975,7 +5066,7 @@ expand_label_addr(const char *name, char *label, size_t len, sa_family_t af,
 			break;
 		}
 
-		if (h->not) {
+		if (addr->neg) {
 			snprintf(tmp_not, sizeof(tmp_not), "! %s", tmp);
 			expand_label_str(label, len, name, tmp_not);
 		} else
@@ -4985,30 +5076,30 @@ expand_label_addr(const char *name, char *label, size_t len, sa_family_t af,
 
 void
 expand_label_port(const char *name, char *label, size_t len,
-    struct node_port *port)
+    struct pf_rule_addr *addr)
 {
 	char	 a1[6], a2[6], op[13] = "";
 
 	if (strstr(label, name) != NULL) {
-		snprintf(a1, sizeof(a1), "%u", ntohs(port->port[0]));
-		snprintf(a2, sizeof(a2), "%u", ntohs(port->port[1]));
-		if (!port->op)
+		snprintf(a1, sizeof(a1), "%u", ntohs(addr->port[0]));
+		snprintf(a2, sizeof(a2), "%u", ntohs(addr->port[1]));
+		if (!addr->port_op)
 			;
-		else if (port->op == PF_OP_IRG)
+		else if (addr->port_op == PF_OP_IRG)
 			snprintf(op, sizeof(op), "%s><%s", a1, a2);
-		else if (port->op == PF_OP_XRG)
+		else if (addr->port_op == PF_OP_XRG)
 			snprintf(op, sizeof(op), "%s<>%s", a1, a2);
-		else if (port->op == PF_OP_EQ)
+		else if (addr->port_op == PF_OP_EQ)
 			snprintf(op, sizeof(op), "%s", a1);
-		else if (port->op == PF_OP_NE)
+		else if (addr->port_op == PF_OP_NE)
 			snprintf(op, sizeof(op), "!=%s", a1);
-		else if (port->op == PF_OP_LT)
+		else if (addr->port_op == PF_OP_LT)
 			snprintf(op, sizeof(op), "<%s", a1);
-		else if (port->op == PF_OP_LE)
+		else if (addr->port_op == PF_OP_LE)
 			snprintf(op, sizeof(op), "<=%s", a1);
-		else if (port->op == PF_OP_GT)
+		else if (addr->port_op == PF_OP_GT)
 			snprintf(op, sizeof(op), ">%s", a1);
-		else if (port->op == PF_OP_GE)
+		else if (addr->port_op == PF_OP_GE)
 			snprintf(op, sizeof(op), ">=%s", a1);
 		expand_label_str(label, len, name, op);
 	}
@@ -5017,13 +5108,13 @@ expand_label_port(const char *name, char *label, size_t len,
 void
 expand_label_proto(const char *name, char *label, size_t len, u_int8_t proto)
 {
-	struct protoent *pe;
+	const char *protoname;
 	char n[4];
 
 	if (strstr(label, name) != NULL) {
-		pe = getprotobynumber(proto);
-		if (pe != NULL)
-			expand_label_str(label, len, name, pe->p_name);
+		protoname = pfctl_proto2name(proto);
+		if (protoname != NULL)
+			expand_label_str(label, len, name, protoname);
 		else {
 			snprintf(n, sizeof(n), "%u", proto);
 			expand_label_str(label, len, name, n);
@@ -5032,29 +5123,27 @@ expand_label_proto(const char *name, char *label, size_t len, u_int8_t proto)
 }
 
 void
-expand_label_nr(const char *name, char *label, size_t len)
+expand_label_nr(const char *name, char *label, size_t len,
+    struct pfctl_rule *r)
 {
 	char n[11];
 
 	if (strstr(label, name) != NULL) {
-		snprintf(n, sizeof(n), "%u", pf->anchor->match);
+		snprintf(n, sizeof(n), "%u", r->nr);
 		expand_label_str(label, len, name, n);
 	}
 }
 
 void
-expand_label(char *label, size_t len, const char *ifname, sa_family_t af,
-    struct node_host *src_host, struct node_port *src_port,
-    struct node_host *dst_host, struct node_port *dst_port,
-    u_int8_t proto)
+expand_label(char *label, size_t len, struct pfctl_rule *r)
 {
-	expand_label_if("$if", label, len, ifname);
-	expand_label_addr("$srcaddr", label, len, af, src_host);
-	expand_label_addr("$dstaddr", label, len, af, dst_host);
-	expand_label_port("$srcport", label, len, src_port);
-	expand_label_port("$dstport", label, len, dst_port);
-	expand_label_proto("$proto", label, len, proto);
-	expand_label_nr("$nr", label, len);
+	expand_label_if("$if", label, len, r->ifname);
+	expand_label_addr("$srcaddr", label, len, r->af, &r->src);
+	expand_label_addr("$dstaddr", label, len, r->af, &r->dst);
+	expand_label_port("$srcport", label, len, &r->src);
+	expand_label_port("$dstport", label, len, &r->dst);
+	expand_label_proto("$proto", label, len, r->proto);
+	expand_label_nr("$nr", label, len, r);
 }
 
 int
@@ -5388,15 +5477,6 @@ expand_rule(struct pfctl_rule *r,
 		if (strlcpy(r->match_tagname, match_tagname,
 		    sizeof(r->match_tagname)) >= sizeof(r->match_tagname))
 			errx(1, "expand_rule: strlcpy");
-		for (int i = 0; i < PF_RULE_MAX_LABEL_COUNT; i++)
-			expand_label(r->label[i], PF_RULE_LABEL_SIZE,
-			    r->ifname, r->af, src_host, src_port, dst_host,
-			    dst_port, proto->proto);
-		expand_label(r->tagname, PF_TAG_NAME_SIZE, r->ifname, r->af,
-		    src_host, src_port, dst_host, dst_port, proto->proto);
-		expand_label(r->match_tagname, PF_TAG_NAME_SIZE, r->ifname,
-		    r->af, src_host, src_port, dst_host, dst_port,
-		    proto->proto);
 
 		error += check_netmask(src_host, r->af);
 		error += check_netmask(dst_host, r->af);
@@ -5576,6 +5656,8 @@ lookup(char *s)
 		{ "debug",		DEBUG},
 		{ "divert-reply",	DIVERTREPLY},
 		{ "divert-to",		DIVERTTO},
+		{ "dnpipe",		DNPIPE},
+		{ "dnqueue",		DNQUEUE},
 		{ "drop",		DROP},
 		{ "drop-ovl",		FRAGDROP},
 		{ "dup-to",		DUPTO},
@@ -5612,6 +5694,7 @@ lookup(char *s)
 		{ "log",		LOG},
 		{ "loginterface",	LOGINTERFACE},
 		{ "map-e-portset",	MAPEPORTSET},
+		{ "match",		MATCH},
 		{ "max",		MAXIMUM},
 		{ "max-mss",		MAXMSS},
 		{ "max-src-conn",	MAXSRCCONN},
@@ -5671,6 +5754,7 @@ lookup(char *s)
 		{ "state-policy",	STATEPOLICY},
 		{ "static-port",	STATICPORT},
 		{ "sticky-address",	STICKYADDRESS},
+		{ "syncookies",         SYNCOOKIES},
 		{ "synproxy",		SYNPROXY},
 		{ "table",		TABLE},
 		{ "tag",		TAG},

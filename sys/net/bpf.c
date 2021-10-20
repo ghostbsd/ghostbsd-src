@@ -78,6 +78,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_vlan_var.h>
 #include <net/if_dl.h>
 #include <net/bpf.h>
 #include <net/bpf_buffer.h>
@@ -130,6 +131,7 @@ struct bpf_program_buffer {
 #if defined(DEV_BPF) || defined(NETGRAPH_BPF)
 
 #define PRINET  26			/* interruptible */
+#define BPF_PRIO_MAX	7
 
 #define	SIZEOF_BPF_HDR(type)	\
     (offsetof(type, bh_hdrlen) + sizeof(((type *)0)->bh_hdrlen))
@@ -211,6 +213,7 @@ static int	bpf_getdltlist(struct bpf_d *, struct bpf_dltlist *);
 static int	bpf_setdlt(struct bpf_d *, u_int);
 static void	filt_bpfdetach(struct knote *);
 static int	filt_bpfread(struct knote *, long);
+static int	filt_bpfwrite(struct knote *, long);
 static void	bpf_drvinit(void *);
 static int	bpf_stats_sysctl(SYSCTL_HANDLER_ARGS);
 
@@ -253,6 +256,12 @@ static struct filterops bpfread_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_bpfdetach,
 	.f_event = filt_bpfread,
+};
+
+static struct filterops bpfwrite_filtops = {
+	.f_isfd = 1,
+	.f_detach = filt_bpfdetach,
+	.f_event = filt_bpfwrite,
 };
 
 /*
@@ -642,14 +651,7 @@ bpf_movein(struct uio *uio, int linktype, struct ifnet *ifp, struct mbuf **mp,
 		return (EMSGSIZE);
 
 	/* Allocate a mbuf for our write, since m_get2 fails if len >= to MJUMPAGESIZE, use m_getjcl for bigger buffers */
-	if (len < MJUMPAGESIZE)
-		m = m_get2(len, M_WAITOK, MT_DATA, M_PKTHDR);
-	else if (len <= MJUM9BYTES)
-		m = m_getjcl(M_WAITOK, MT_DATA, M_PKTHDR, MJUM9BYTES);
-	else if (len <= MJUM16BYTES)
-		m = m_getjcl(M_WAITOK, MT_DATA, M_PKTHDR, MJUM16BYTES);
-	else
-		m = NULL;
+	m = m_get3(len, M_WAITOK, MT_DATA, M_PKTHDR);
 	if (m == NULL)
 		return (EIO);
 	m->m_pkthdr.len = m->m_len = len;
@@ -977,6 +979,9 @@ bpfopen(struct cdev *dev, int flags, int fmt, struct thread *td)
 	callout_init_mtx(&d->bd_callout, &d->bd_lock, 0);
 	knlist_init_mtx(&d->bd_sel.si_note, &d->bd_lock);
 
+	/* Disable VLAN pcp tagging. */
+	d->bd_pcp = 0;
+
 	return (0);
 }
 
@@ -1267,6 +1272,9 @@ bpfwrite(struct cdev *dev, struct uio *uio, int ioflag)
 		ro.ro_flags = RT_HAS_HEADER;
 	}
 
+	if (d->bd_pcp != 0)
+		vlan_set_pcp(m, d->bd_pcp);
+
 	/* Avoid possible recursion on BPFD_LOCK(). */
 	NET_EPOCH_ENTER(et);
 	BPFD_UNLOCK(d);
@@ -1356,6 +1364,7 @@ reset_d(struct bpf_d *d)
  *  BIOCROTZBUF		Force rotation of zero-copy buffer
  *  BIOCSETBUFMODE	Set buffer mode.
  *  BIOCGETBUFMODE	Get current buffer mode.
+ *  BIOCSETVLANPCP	Set VLAN PCP tag.
  */
 /* ARGSUSED */
 static	int
@@ -1906,6 +1915,19 @@ bpfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags,
 	case BIOCROTZBUF:
 		error = bpf_ioctl_rotzbuf(td, d, (struct bpf_zbuf *)addr);
 		break;
+
+	case BIOCSETVLANPCP:
+		{
+			u_int pcp;
+
+			pcp = *(u_int *)addr;
+			if (pcp > BPF_PRIO_MAX || pcp < 0) {
+				error = EINVAL;
+				break;
+			}
+			d->bd_pcp = pcp;
+			break;
+		}
 	}
 	CURVNET_RESTORE();
 	return (error);
@@ -2143,16 +2165,27 @@ bpfkqfilter(struct cdev *dev, struct knote *kn)
 {
 	struct bpf_d *d;
 
-	if (devfs_get_cdevpriv((void **)&d) != 0 ||
-	    kn->kn_filter != EVFILT_READ)
+	if (devfs_get_cdevpriv((void **)&d) != 0)
 		return (1);
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		kn->kn_fop = &bpfread_filtops;
+		break;
+
+	case EVFILT_WRITE:
+		kn->kn_fop = &bpfwrite_filtops;
+		break;
+
+	default:
+		return (1);
+	}
 
 	/*
 	 * Refresh PID associated with this descriptor.
 	 */
 	BPFD_LOCK(d);
 	BPF_PID_REFRESH_CUR(d);
-	kn->kn_fop = &bpfread_filtops;
 	kn->kn_hook = d;
 	knlist_add(&d->bd_sel.si_note, kn, 1);
 	BPFD_UNLOCK(d);
@@ -2190,6 +2223,17 @@ filt_bpfread(struct knote *kn, long hint)
 	}
 
 	return (ready);
+}
+
+static int
+filt_bpfwrite(struct knote *kn, long hint)
+{
+	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
+	BPFD_LOCK_ASSERT(d);
+
+	kn->kn_data = d->bd_bif->bif_ifp->if_mtu;
+
+	return (1);
 }
 
 #define	BPF_TSTAMP_NONE		0

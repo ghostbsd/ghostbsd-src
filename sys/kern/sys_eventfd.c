@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (c) 2014 Dmitry Chagin
+ * Copyright (c) 2014 Dmitry Chagin <dchagin@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -325,8 +325,7 @@ eventfd_ioctl(struct file *fp, u_long cmd, void *data,
 }
 
 static int
-eventfd_stat(struct file *fp, struct stat *st, struct ucred *active_cred,
-    struct thread *td)
+eventfd_stat(struct file *fp, struct stat *st, struct ucred *active_cred)
 {
 	bzero((void *)st, sizeof *st);
 	st->st_mode = S_IFIFO;

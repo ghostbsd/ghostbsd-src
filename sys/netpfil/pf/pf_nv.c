@@ -100,6 +100,17 @@ __FBSDID("$FreeBSD$");
 	}
 
 int
+pf_nvbool(const nvlist_t *nvl, const char *name, bool *val)
+{
+	if (! nvlist_exists_bool(nvl, name))
+		return (EINVAL);
+
+	*val = nvlist_get_bool(nvl, name);
+
+	return (0);
+}
+
+int
 pf_nvbinary(const nvlist_t *nvl, const char *name, void *data,
     size_t expected_size)
 {
@@ -527,6 +538,9 @@ pf_nvrule_to_krule(const nvlist_t *nvl, struct pf_krule *rule)
 	    sizeof(rule->pqname)));
 	PFNV_CHK(pf_nvstring(nvl, "tagname", rule->tagname,
 	    sizeof(rule->tagname)));
+	PFNV_CHK(pf_nvuint16_opt(nvl, "dnpipe", &rule->dnpipe, 0));
+	PFNV_CHK(pf_nvuint16_opt(nvl, "dnrpipe", &rule->dnrpipe, 0));
+	PFNV_CHK(pf_nvuint32_opt(nvl, "dnflags", &rule->free_flags, 0));
 	PFNV_CHK(pf_nvstring(nvl, "match_tagname", rule->match_tagname,
 	    sizeof(rule->match_tagname)));
 	PFNV_CHK(pf_nvstring(nvl, "overload_tblname", rule->overload_tblname,
@@ -592,8 +606,6 @@ pf_nvrule_to_krule(const nvlist_t *nvl, struct pf_krule *rule)
 	PFNV_CHK(pf_nvuint8(nvl, "return_ttl", &rule->return_ttl));
 	PFNV_CHK(pf_nvuint8(nvl, "tos", &rule->tos));
 	PFNV_CHK(pf_nvuint8(nvl, "set_tos", &rule->set_tos));
-	PFNV_CHK(pf_nvuint8(nvl, "anchor_relative", &rule->anchor_relative));
-	PFNV_CHK(pf_nvuint8(nvl, "anchor_wildcard", &rule->anchor_wildcard));
 
 	PFNV_CHK(pf_nvuint8(nvl, "flush", &rule->flush));
 	PFNV_CHK(pf_nvuint8(nvl, "prio", &rule->prio));
@@ -655,7 +667,7 @@ error:
 }
 
 nvlist_t *
-pf_krule_to_nvrule(const struct pf_krule *rule)
+pf_krule_to_nvrule(struct pf_krule *rule)
 {
 	nvlist_t *nvl, *tmp;
 
@@ -687,6 +699,9 @@ pf_krule_to_nvrule(const struct pf_krule *rule)
 	nvlist_add_string(nvl, "ifname", rule->ifname);
 	nvlist_add_string(nvl, "qname", rule->qname);
 	nvlist_add_string(nvl, "pqname", rule->pqname);
+	nvlist_add_number(nvl, "dnpipe", rule->dnpipe);
+	nvlist_add_number(nvl, "dnrpipe", rule->dnrpipe);
+	nvlist_add_number(nvl, "dnflags", rule->free_flags);
 	nvlist_add_string(nvl, "tagname", rule->tagname);
 	nvlist_add_string(nvl, "match_tagname", rule->match_tagname);
 	nvlist_add_string(nvl, "overload_tblname", rule->overload_tblname);
@@ -698,12 +713,12 @@ pf_krule_to_nvrule(const struct pf_krule *rule)
 	nvlist_destroy(tmp);
 
 	nvlist_add_number(nvl, "evaluations",
-	    counter_u64_fetch(rule->evaluations));
+	    pf_counter_u64_fetch(&rule->evaluations));
 	for (int i = 0; i < 2; i++) {
 		nvlist_append_number_array(nvl, "packets",
-		    counter_u64_fetch(rule->packets[i]));
+		    pf_counter_u64_fetch(&rule->packets[i]));
 		nvlist_append_number_array(nvl, "bytes",
-		    counter_u64_fetch(rule->bytes[i]));
+		    pf_counter_u64_fetch(&rule->bytes[i]));
 	}
 
 	nvlist_add_number(nvl, "os_fingerprint", rule->os_fingerprint);
@@ -840,8 +855,7 @@ pf_nvstate_kill_to_kstate_kill(const nvlist_t *nvl,
 	    sizeof(kill->psk_ifname)));
 	PFNV_CHK(pf_nvstring(nvl, "label", kill->psk_label,
 	    sizeof(kill->psk_label)));
-	if (nvlist_exists_bool(nvl, "kill_match"))
-		kill->psk_kill_match = nvlist_get_bool(nvl, "kill_match");
+	PFNV_CHK(pf_nvbool(nvl, "kill_match", &kill->psk_kill_match));
 
 errout:
 	return (error);
@@ -875,7 +889,7 @@ errout:
 }
 
 static nvlist_t *
-pf_state_scrub_to_nvstate_scrub(const struct pf_state_scrub *scrub)
+pf_state_peer_to_nvstate_peer(const struct pf_state_peer *peer)
 {
 	nvlist_t *nvl;
 
@@ -883,47 +897,17 @@ pf_state_scrub_to_nvstate_scrub(const struct pf_state_scrub *scrub)
 	if (nvl == NULL)
 		return (NULL);
 
-	nvlist_add_bool(nvl, "timestamp", scrub->pfss_flags & PFSS_TIMESTAMP);
-	nvlist_add_number(nvl, "ttl", scrub->pfss_ttl);
-	nvlist_add_number(nvl, "ts_mod", scrub->pfss_ts_mod);
-
-	return (nvl);
-}
-
-static nvlist_t *
-pf_state_peer_to_nvstate_peer(const struct pf_state_peer *peer)
-{
-	nvlist_t *nvl, *tmp;
-
-	nvl = nvlist_create(0);
-	if (nvl == NULL)
-		return (NULL);
-
-	if (peer->scrub) {
-		tmp = pf_state_scrub_to_nvstate_scrub(peer->scrub);
-		if (tmp == NULL)
-			goto errout;
-		nvlist_add_nvlist(nvl, "scrub", tmp);
-		nvlist_destroy(tmp);
-	}
-
 	nvlist_add_number(nvl, "seqlo", peer->seqlo);
 	nvlist_add_number(nvl, "seqhi", peer->seqhi);
 	nvlist_add_number(nvl, "seqdiff", peer->seqdiff);
-	nvlist_add_number(nvl, "max_win", peer->max_win);
-	nvlist_add_number(nvl, "mss", peer->mss);
 	nvlist_add_number(nvl, "state", peer->state);
 	nvlist_add_number(nvl, "wscale", peer->wscale);
 
 	return (nvl);
-
-errout:
-	nvlist_destroy(nvl);
-	return (NULL);
 }
 
 nvlist_t *
-pf_state_to_nvstate(const struct pf_state *s)
+pf_state_to_nvstate(const struct pf_kstate *s)
 {
 	nvlist_t	*nvl, *tmp;
 	uint32_t	 expire, flags = 0;
@@ -982,16 +966,14 @@ pf_state_to_nvstate(const struct pf_state *s)
 
 	for (int i = 0; i < 2; i++) {
 		nvlist_append_number_array(nvl, "packets",
-		    counter_u64_fetch(s->packets[i]));
+		    s->packets[i]);
 		nvlist_append_number_array(nvl, "bytes",
-		    counter_u64_fetch(s->bytes[i]));
+		    s->bytes[i]);
 	}
 
 	nvlist_add_number(nvl, "creatorid", s->creatorid);
 	nvlist_add_number(nvl, "direction", s->direction);
-	nvlist_add_number(nvl, "log", s->log);
 	nvlist_add_number(nvl, "state_flags", s->state_flags);
-	nvlist_add_number(nvl, "timeout", s->timeout);
 	if (s->src_node)
 		flags |= PFSYNC_FLAG_SRCNODE;
 	if (s->nat_src_node)

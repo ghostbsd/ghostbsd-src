@@ -11,18 +11,6 @@ include 	"conf/files.x86"
 # limitations in config: backslash-newline doesn't work in strings, and
 # dependency lines other than the first are silently ignored.
 #
-cloudabi32_vdso.o		optional	compat_cloudabi32	\
-	dependency	"$S/contrib/cloudabi/cloudabi_vdso_i686.S" \
-	compile-with	"${CC} -x assembler-with-cpp -shared -nostdinc -nostdlib -Wl,-T$S/compat/cloudabi/cloudabi_vdso.lds $S/contrib/cloudabi/cloudabi_vdso_i686.S -o ${.TARGET}" \
-	no-obj no-implicit-rule						\
-	clean		"cloudabi32_vdso.o"
-#
-cloudabi32_vdso_blob.o		optional	compat_cloudabi32	\
-	dependency 	"cloudabi32_vdso.o"				\
-	compile-with	"${OBJCOPY} --input-target binary --output-target elf32-i386-freebsd --binary-architecture i386 cloudabi32_vdso.o ${.TARGET}" \
-	no-implicit-rule						\
-	clean		"cloudabi32_vdso_blob.o"
-cddl/contrib/opensolaris/common/atomic/i386/opensolaris_atomic.S	optional zfs | dtrace compile-with "${ZFS_S}"
 cddl/dev/dtrace/i386/dtrace_asm.S			optional dtrace compile-with "${DTRACE_S}"
 cddl/dev/dtrace/i386/dtrace_subr.c			optional dtrace compile-with "${DTRACE_C}"
 crypto/aesni/aeskeys_i386.S	optional aesni
@@ -80,9 +68,11 @@ dev/tpm/tpm_acpi.c		optional tpm acpi
 dev/tpm/tpm_isa.c		optional tpm isa
 dev/uart/uart_cpu_x86.c		optional uart
 dev/viawd/viawd.c		optional viawd
+dev/vmd/vmd.c			optional vmd
 dev/acpi_support/acpi_wmi_if.m	standard
 dev/wbwd/wbwd.c			optional wbwd
 i386/acpica/acpi_machdep.c	optional acpi
+i386/acpica/acpi_wakeup.c	optional acpi
 acpi_wakecode.o			optional acpi				\
 	dependency	"$S/i386/acpica/acpi_wakecode.S assym.inc"	\
 	compile-with	"${NORMAL_S}"					\
@@ -106,7 +96,6 @@ acpi_wakedata.h			optional acpi				\
 #
 i386/bios/smapi.c		optional smapi
 i386/bios/smapi_bios.S		optional smapi
-i386/cloudabi32/cloudabi32_sysvec.c	optional compat_cloudabi32
 #i386/i386/apic_vector.s		optional apic
 i386/i386/bios.c		standard
 i386/i386/bioscall.s		standard
@@ -115,6 +104,7 @@ i386/i386/copyout.c		standard
 i386/i386/db_disasm.c		optional ddb
 i386/i386/db_interface.c	optional ddb
 i386/i386/db_trace.c		optional ddb
+i386/i386/exec_machdep.c	standard
 i386/i386/elan-mmcr.c		optional cpu_elan | cpu_soekris
 i386/i386/elf_machdep.c		standard
 i386/i386/exception.s		standard
@@ -183,6 +173,3 @@ x86/x86/local_apic.c		optional apic
 x86/x86/mptable.c		optional apic
 x86/x86/mptable_pci.c		optional apic pci
 x86/x86/msi.c			optional apic pci
-
-compat/linuxkpi/common/src/linux_fpu.c		optional compat_linuxkpi \
-	compile-with "${LINUXKPI_C}"

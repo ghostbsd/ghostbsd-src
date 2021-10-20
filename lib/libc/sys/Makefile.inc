@@ -49,6 +49,7 @@ SRCS+= closefrom.c
 SRCS+= pipe.c
 SRCS+= shm_open.c
 SRCS+= vadvise.c
+SRCS+= POSIX2x_Fork.c
 
 SRCS+=	compat-stub.c
 
@@ -189,6 +190,7 @@ MAN+=	abort2.2 \
 	fhreadlink.2 \
 	flock.2 \
 	fork.2 \
+	fspacectl.2 \
 	fsync.2 \
 	getdirentries.2 \
 	getdtablesize.2 \

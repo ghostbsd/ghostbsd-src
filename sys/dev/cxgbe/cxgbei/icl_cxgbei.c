@@ -95,6 +95,7 @@ __FBSDID("$FreeBSD$");
 #include <cam/scsi/scsi_message.h>
 
 #include "common/common.h"
+#include "common/t4_regs.h"
 #include "common/t4_tcb.h"
 #include "tom/t4_tom.h"
 #include "cxgbei.h"
@@ -335,13 +336,14 @@ finalize_pdu(struct icl_cxgbei_conn *icc, struct icl_cxgbei_pdu *icp)
 	uint8_t ulp_submode, padding;
 	struct mbuf *m, *last;
 	struct iscsi_bhs *bhs;
+	int data_len;
 
 	/*
 	 * Fix up the data segment mbuf first.
 	 */
 	m = ip->ip_data_mbuf;
 	ulp_submode = icc->ulp_submode;
-	if (m) {
+	if (m != NULL) {
 		last = m_last(m);
 
 		/*
@@ -349,7 +351,8 @@ finalize_pdu(struct icl_cxgbei_conn *icc, struct icl_cxgbei_pdu *icp)
 		 * necessary.  There will definitely be room in the mbuf.
 		 */
 		padding = roundup2(ip->ip_data_len, 4) - ip->ip_data_len;
-		if (padding) {
+		if (padding != 0) {
+			MPASS(padding <= M_TRAILINGSPACE(last));
 			bzero(mtod(last, uint8_t *) + last->m_len, padding);
 			last->m_len += padding;
 		}
@@ -367,9 +370,41 @@ finalize_pdu(struct icl_cxgbei_conn *icc, struct icl_cxgbei_pdu *icp)
 	MPASS(m->m_len == sizeof(struct iscsi_bhs));
 
 	bhs = ip->ip_bhs;
-	bhs->bhs_data_segment_len[2] = ip->ip_data_len;
-	bhs->bhs_data_segment_len[1] = ip->ip_data_len >> 8;
-	bhs->bhs_data_segment_len[0] = ip->ip_data_len >> 16;
+	data_len = ip->ip_data_len;
+	if (data_len > icc->ic.ic_max_send_data_segment_length) {
+		struct iscsi_bhs_data_in *bhsdi;
+		int flags;
+
+		KASSERT(padding == 0, ("%s: ISO with padding %d for icp %p",
+		    __func__, padding, icp));
+		switch (bhs->bhs_opcode) {
+		case ISCSI_BHS_OPCODE_SCSI_DATA_OUT:
+			flags = 1;
+			break;
+		case ISCSI_BHS_OPCODE_SCSI_DATA_IN:
+			flags = 2;
+			break;
+		default:
+			panic("invalid opcode %#x for ISO", bhs->bhs_opcode);
+		}
+		data_len = icc->ic.ic_max_send_data_segment_length;
+		bhsdi = (struct iscsi_bhs_data_in *)bhs;
+		if (bhsdi->bhsdi_flags & BHSDI_FLAGS_F) {
+			/*
+			 * Firmware will set F on the final PDU in the
+			 * burst.
+			 */
+			flags |= CXGBE_ISO_F;
+			bhsdi->bhsdi_flags &= ~BHSDI_FLAGS_F;
+		}
+		set_mbuf_iscsi_iso(m, true);
+		set_mbuf_iscsi_iso_flags(m, flags);
+		set_mbuf_iscsi_iso_mss(m, data_len);
+	}
+
+	bhs->bhs_data_segment_len[2] = data_len;
+	bhs->bhs_data_segment_len[1] = data_len >> 8;
+	bhs->bhs_data_segment_len[0] = data_len >> 16;
 
 	/*
 	 * Extract mbuf chain from PDU.
@@ -477,7 +512,8 @@ icl_cxgbei_conn_pdu_append_data(struct icl_conn *ic, struct icl_pdu *ip,
 		}
 		MPASS(len == 0);
 	}
-	MPASS(ip->ip_data_len <= ic->ic_max_send_data_segment_length);
+	MPASS(ip->ip_data_len <= max(ic->ic_max_send_data_segment_length,
+	    ic->ic_hw_isomax));
 
 	return (0);
 }
@@ -569,10 +605,6 @@ icl_cxgbei_new_conn(const char *name, struct mtx *lock)
 	ic = &icc->ic;
 	ic->ic_lock = lock;
 
-	/* XXXNP: review.  Most of these icl_conn fields aren't really used */
-	STAILQ_INIT(&ic->ic_to_send);
-	cv_init(&ic->ic_send_cv, "icl_cxgbei_tx");
-	cv_init(&ic->ic_receive_cv, "icl_cxgbei_rx");
 #ifdef DIAGNOSTIC
 	refcount_init(&ic->ic_outstanding_pdus, 0);
 #endif
@@ -593,9 +625,6 @@ icl_cxgbei_conn_free(struct icl_conn *ic)
 	MPASS(icc->icc_signature == CXGBEI_CONN_SIGNATURE);
 
 	CTR2(KTR_CXGBE, "%s: icc %p", __func__, icc);
-
-	cv_destroy(&ic->ic_send_cv);
-	cv_destroy(&ic->ic_receive_cv);
 
 	mtx_destroy(&icc->cmp_lock);
 	hashdestroy(icc->cmp_table, M_CXGBEI, icc->cmp_hash_mask);
@@ -679,6 +708,19 @@ find_offload_adapter(struct adapter *sc, void *arg)
 	INP_WUNLOCK(inp);
 }
 
+static bool
+is_memfree(struct adapter *sc)
+{
+	uint32_t em;
+
+	em = t4_read_reg(sc, A_MA_TARGET_MEM_ENABLE);
+	if ((em & F_EXT_MEM_ENABLE) != 0)
+		return (false);
+	if (is_t5(sc) && (em & F_EXT_MEM1_ENABLE) != 0)
+		return (false);
+	return (true);
+}
+
 /* XXXNP: move this to t4_tom. */
 static void
 send_iscsi_flowc_wr(struct adapter *sc, struct toepcb *toep, int maxlen)
@@ -755,7 +797,8 @@ icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 	struct tcpcb *tp;
 	struct toepcb *toep;
 	cap_rights_t rights;
-	int error;
+	u_int max_rx_pdu_len, max_tx_pdu_len;
+	int error, max_iso_pdus;
 
 	MPASS(icc->icc_signature == CXGBEI_CONN_SIGNATURE);
 	ICL_CONN_LOCK_ASSERT_NOT(ic);
@@ -800,44 +843,65 @@ icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 	icc->sc = fa.sc;
 	ci = icc->sc->iscsi_ulp_softc;
 
+	max_rx_pdu_len = ISCSI_BHS_SIZE + ic->ic_max_recv_data_segment_length;
+	max_tx_pdu_len = ISCSI_BHS_SIZE + ic->ic_max_send_data_segment_length;
+	if (ic->ic_header_crc32c) {
+		max_rx_pdu_len += ISCSI_HEADER_DIGEST_SIZE;
+		max_tx_pdu_len += ISCSI_HEADER_DIGEST_SIZE;
+	}
+	if (ic->ic_data_crc32c) {
+		max_rx_pdu_len += ISCSI_DATA_DIGEST_SIZE;
+		max_tx_pdu_len += ISCSI_DATA_DIGEST_SIZE;
+	}
+
 	inp = sotoinpcb(so);
 	INP_WLOCK(inp);
 	tp = intotcpcb(inp);
-	if (inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT))
-		error = EBUSY;
-	else {
-		/*
-		 * socket could not have been "unoffloaded" if here.
-		 */
-		MPASS(tp->t_flags & TF_TOE);
-		MPASS(tp->tod != NULL);
-		MPASS(tp->t_toe != NULL);
-		toep = tp->t_toe;
-		MPASS(toep->vi->adapter == icc->sc);
-		icc->toep = toep;
-		icc->cwt = cxgbei_select_worker_thread(icc);
-
-		icc->ulp_submode = 0;
-		if (ic->ic_header_crc32c)
-			icc->ulp_submode |= ULP_CRC_HEADER;
-		if (ic->ic_data_crc32c)
-			icc->ulp_submode |= ULP_CRC_DATA;
-		so->so_options |= SO_NO_DDP;
-		toep->params.ulp_mode = ULP_MODE_ISCSI;
-		toep->ulpcb = icc;
-
-		send_iscsi_flowc_wr(icc->sc, toep, ci->max_tx_pdu_len);
-		set_ulp_mode_iscsi(icc->sc, toep, icc->ulp_submode);
-		error = 0;
+	if (inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT)) {
+		INP_WUNLOCK(inp);
+		return (EBUSY);
 	}
+
+	/*
+	 * socket could not have been "unoffloaded" if here.
+	 */
+	MPASS(tp->t_flags & TF_TOE);
+	MPASS(tp->tod != NULL);
+	MPASS(tp->t_toe != NULL);
+	toep = tp->t_toe;
+	MPASS(toep->vi->adapter == icc->sc);
+
+	if (ulp_mode(toep) != ULP_MODE_NONE) {
+		INP_WUNLOCK(inp);
+		return (EINVAL);
+	}
+
+	icc->toep = toep;
+	icc->cwt = cxgbei_select_worker_thread(icc);
+
+	icc->ulp_submode = 0;
+	if (ic->ic_header_crc32c)
+		icc->ulp_submode |= ULP_CRC_HEADER;
+	if (ic->ic_data_crc32c)
+		icc->ulp_submode |= ULP_CRC_DATA;
+
+	if (icc->sc->tt.iso && chip_id(icc->sc) >= CHELSIO_T5 &&
+	    !is_memfree(icc->sc)) {
+		max_iso_pdus = CXGBEI_MAX_ISO_PAYLOAD / max_tx_pdu_len;
+		ic->ic_hw_isomax = max_iso_pdus *
+		    ic->ic_max_send_data_segment_length;
+	} else
+		max_iso_pdus = 1;
+
+	toep->params.ulp_mode = ULP_MODE_ISCSI;
+	toep->ulpcb = icc;
+
+	send_iscsi_flowc_wr(icc->sc, toep,
+	    roundup(max_iso_pdus * max_tx_pdu_len, tp->t_maxseg));
+	set_ulp_mode_iscsi(icc->sc, toep, icc->ulp_submode);
 	INP_WUNLOCK(inp);
 
-	if (error == 0) {
-		error = icl_cxgbei_setsockopt(ic, so, ci->max_tx_pdu_len,
-		    ci->max_rx_pdu_len);
-	}
-
-	return (error);
+	return (icl_cxgbei_setsockopt(ic, so, max_tx_pdu_len, max_rx_pdu_len));
 }
 
 void
@@ -863,10 +927,6 @@ icl_cxgbei_conn_close(struct icl_conn *ic)
 	}
 	ic->ic_disconnecting = true;
 
-	/* These are unused in this driver right now. */
-	MPASS(STAILQ_EMPTY(&ic->ic_to_send));
-	MPASS(ic->ic_receive_pdu == NULL);
-
 #ifdef DIAGNOSTIC
 	KASSERT(ic->ic_outstanding_pdus == 0,
 	    ("destroying session with %d outstanding PDUs",
@@ -881,7 +941,14 @@ icl_cxgbei_conn_close(struct icl_conn *ic)
 	INP_WLOCK(inp);
 	if (toep != NULL) {	/* NULL if connection was never offloaded. */
 		toep->ulpcb = NULL;
+
+		/* Discard PDUs queued for TX. */
 		mbufq_drain(&toep->ulp_pduq);
+
+		/*
+		 * Wait for the cwt threads to stop processing this
+		 * connection.
+		 */
 		SOCKBUF_LOCK(sb);
 		if (icc->rx_flags & RXF_ACTIVE) {
 			volatile u_int *p = &icc->rx_flags;
@@ -896,12 +963,28 @@ icl_cxgbei_conn_close(struct icl_conn *ic)
 			SOCKBUF_LOCK(sb);
 		}
 
+		/*
+		 * Discard received PDUs not passed to the iSCSI
+		 * layer.
+		 */
 		while (!STAILQ_EMPTY(&icc->rcvd_pdus)) {
 			ip = STAILQ_FIRST(&icc->rcvd_pdus);
 			STAILQ_REMOVE_HEAD(&icc->rcvd_pdus, ip_next);
 			icl_cxgbei_pdu_done(ip, ENOTCONN);
 		}
 		SOCKBUF_UNLOCK(sb);
+
+		/*
+		 * Grab a reference to use when waiting for the final
+		 * CPL to be received.  If toep->inp is NULL, then
+		 * final_cpl_received() has already been called (e.g.
+		 * due to the peer sending a RST).
+		 */
+		if (toep->inp != NULL) {
+			toep = hold_toepcb(toep);
+			toep->flags |= TPF_WAITING_FOR_FINAL;
+		} else
+			toep = NULL;
 	}
 	INP_WUNLOCK(inp);
 
@@ -915,6 +998,23 @@ icl_cxgbei_conn_close(struct icl_conn *ic)
 	 * really general purpose and wouldn't do the right thing here.
 	 */
 	soclose(so);
+
+	/*
+	 * Wait for the socket to fully close.  This ensures any
+	 * pending received data has been received (and in particular,
+	 * any data that would be received by DDP has been handled).
+	 * Callers assume that it is safe to free buffers for tasks
+	 * and transfers after this function returns.
+	 */
+	if (toep != NULL) {
+		struct mtx *lock = mtx_pool_find(mtxpool_sleep, toep);
+
+		mtx_lock(lock);
+		while ((toep->flags & TPF_WAITING_FOR_FINAL) != 0)
+			mtx_sleep(toep, lock, PSOCK, "conclo2", 0);
+		mtx_unlock(lock);
+		free_toepcb(toep);
+	}
 }
 
 static void
@@ -1260,7 +1360,6 @@ no_ddp:
 	prsv->prsv_tag &= ~pr->pr_alias_mask;
 	prsv->prsv_tag |= alias << pr->pr_alias_shift & pr->pr_alias_mask;
 
-	ddp->cmp.next_datasn = 0;
 	ddp->cmp.last_datasn = -1;
 	cxgbei_insert_cmp(icc, &ddp->cmp, prsv->prsv_tag);
 	*tttp = htobe32(prsv->prsv_tag);
@@ -1304,18 +1403,12 @@ cxgbei_limits(struct adapter *sc, void *arg)
 		ci = sc->iscsi_ulp_softc;
 		MPASS(ci != NULL);
 
-		/*
-		 * AHS is not supported by the kernel so we'll not account for
-		 * it either in our PDU len -> data segment len conversions.
-		 */
 
-		max_dsl = ci->max_rx_pdu_len - ISCSI_BHS_SIZE -
-		    ISCSI_HEADER_DIGEST_SIZE - ISCSI_DATA_DIGEST_SIZE;
+		max_dsl = ci->max_rx_data_len;
 		if (idl->idl_max_recv_data_segment_length > max_dsl)
 			idl->idl_max_recv_data_segment_length = max_dsl;
 
-		max_dsl = ci->max_tx_pdu_len - ISCSI_BHS_SIZE -
-		    ISCSI_HEADER_DIGEST_SIZE - ISCSI_DATA_DIGEST_SIZE;
+		max_dsl = ci->max_tx_data_len;
 		if (idl->idl_max_send_data_segment_length > max_dsl)
 			idl->idl_max_send_data_segment_length = max_dsl;
 	}

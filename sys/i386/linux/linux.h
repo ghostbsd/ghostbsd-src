@@ -39,9 +39,6 @@
 
 #define	LINUX_DTRACE	linuxulator
 
-#define	LINUX_SHAREDPAGE	(VM_MAXUSER_ADDRESS - PAGE_SIZE)
-#define	LINUX_USRSTACK		LINUX_SHAREDPAGE
-
 /*
  * Provide a separate set of types for the Linux types.
  */
@@ -260,7 +257,7 @@ typedef struct {
 } l_sigaction_t;
 
 typedef struct {
-	void		*ss_sp;
+	l_uintptr_t	ss_sp;
 	l_int		ss_flags;
 	l_size_t	ss_size;
 } l_stack_t;

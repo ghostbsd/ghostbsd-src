@@ -68,6 +68,9 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_szsigcode	= &szsigcode,
 	.sv_name	= "FreeBSD ELF64",
 	.sv_coredump	= __elfN(coredump),
+	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
+	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
@@ -92,6 +95,8 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_trap	= NULL,
 	.sv_hwcap	= &elf_hwcap,
 	.sv_hwcap2	= &elf_hwcap2,
+	.sv_onexec_old	= exec_onexec_old,
+	.sv_onexit	= exit_onexit,
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
 

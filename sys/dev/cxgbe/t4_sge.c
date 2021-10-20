@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/ktls.h>
 #include <sys/malloc.h>
+#include <sys/msan.h>
 #include <sys/queue.h>
 #include <sys/sbuf.h>
 #include <sys/taskqueue.h>
@@ -1754,6 +1755,7 @@ get_scatter_segment(struct adapter *sc, struct sge_fl *fl, int fr_offset,
 			return (NULL);
 	}
 	m->m_len = len;
+	kmsan_mark(payload, len, KMSAN_STATE_INITED);
 
 	if (sc->sc_do_rxcopy && len < RX_COPY_THRESHOLD) {
 		/* copy data to mbuf */
@@ -2369,7 +2371,7 @@ static inline int
 needs_eo(struct m_snd_tag *mst)
 {
 
-	return (mst != NULL && mst->type == IF_SND_TAG_TYPE_RATE_LIMIT);
+	return (mst != NULL && mst->sw->type == IF_SND_TAG_TYPE_RATE_LIMIT);
 }
 #endif
 
@@ -2712,7 +2714,7 @@ restart:
 		mst = NULL;
 #endif
 #ifdef KERN_TLS
-	if (mst != NULL && mst->type == IF_SND_TAG_TYPE_TLS) {
+	if (mst != NULL && mst->sw->type == IF_SND_TAG_TYPE_TLS) {
 		int len16;
 
 		cflags |= MC_TLS;
@@ -4163,6 +4165,15 @@ add_ofld_rxq_sysctls(struct sysctl_ctx_list *ctx, struct sysctl_oid *oid,
 	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "fl_pdus",
 	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_fl_pdus, 0,
 	    "# of PDUs with data delivered in freelist");
+	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "padding_errors",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_padding_errors, 0,
+	    "# of PDUs with invalid padding");
+	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "header_digest_errors",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_header_digest_errors, 0,
+	    "# of PDUs with invalid header digests");
+	SYSCTL_ADD_U64(ctx, children, OID_AUTO, "data_digest_errors",
+	    CTLFLAG_RD, &ofld_rxq->rx_iscsi_data_digest_errors, 0,
+	    "# of PDUs with invalid data digests");
 }
 #endif
 
@@ -4219,6 +4230,7 @@ ctrl_eq_alloc(struct adapter *sc, struct sge_eq *eq)
 	}
 
 	eq->cntxt_id = G_FW_EQ_CTRL_CMD_EQID(be32toh(c.cmpliqid_eqid));
+	eq->abs_id = G_FW_EQ_CTRL_CMD_PHYSEQID(be32toh(c.physeqid_pkd));
 	cntxt_id = eq->cntxt_id - sc->sge.eq_start;
 	if (cntxt_id >= sc->sge.eqmap_sz)
 	    panic("%s: eq->cntxt_id (%d) more than the max (%d)", __func__,
@@ -4308,6 +4320,7 @@ ofld_eq_alloc(struct adapter *sc, struct vi_info *vi, struct sge_eq *eq)
 	}
 
 	eq->cntxt_id = G_FW_EQ_OFLD_CMD_EQID(be32toh(c.eqid_pkd));
+	eq->abs_id = G_FW_EQ_OFLD_CMD_PHYSEQID(be32toh(c.physeqid_pkd));
 	cntxt_id = eq->cntxt_id - sc->sge.eq_start;
 	if (cntxt_id >= sc->sge.eqmap_sz)
 	    panic("%s: eq->cntxt_id (%d) more than the max (%d)", __func__,
@@ -4785,6 +4798,7 @@ alloc_ofld_txq(struct vi_info *vi, struct sge_ofld_txq *ofld_txq, int idx)
 
 		ofld_txq->tx_iscsi_pdus = counter_u64_alloc(M_WAITOK);
 		ofld_txq->tx_iscsi_octets = counter_u64_alloc(M_WAITOK);
+		ofld_txq->tx_iscsi_iso_wrs = counter_u64_alloc(M_WAITOK);
 		ofld_txq->tx_toe_tls_records = counter_u64_alloc(M_WAITOK);
 		ofld_txq->tx_toe_tls_octets = counter_u64_alloc(M_WAITOK);
 		add_ofld_txq_sysctls(&vi->ctx, oid, ofld_txq);
@@ -4822,6 +4836,7 @@ free_ofld_txq(struct vi_info *vi, struct sge_ofld_txq *ofld_txq)
 		MPASS(!(eq->flags & EQ_HW_ALLOCATED));
 		counter_u64_free(ofld_txq->tx_iscsi_pdus);
 		counter_u64_free(ofld_txq->tx_iscsi_octets);
+		counter_u64_free(ofld_txq->tx_iscsi_iso_wrs);
 		counter_u64_free(ofld_txq->tx_toe_tls_records);
 		counter_u64_free(ofld_txq->tx_toe_tls_octets);
 		free_wrq(sc, &ofld_txq->wrq);
@@ -4846,6 +4861,9 @@ add_ofld_txq_sysctls(struct sysctl_ctx_list *ctx, struct sysctl_oid *oid,
 	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "tx_iscsi_octets",
 	    CTLFLAG_RD, &ofld_txq->tx_iscsi_octets,
 	    "# of payload octets in transmitted iSCSI PDUs");
+	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "tx_iscsi_iso_wrs",
+	    CTLFLAG_RD, &ofld_txq->tx_iscsi_iso_wrs,
+	    "# of iSCSI segmentation offload work requests");
 	SYSCTL_ADD_COUNTER_U64(ctx, children, OID_AUTO, "tx_toe_tls_records",
 	    CTLFLAG_RD, &ofld_txq->tx_toe_tls_records,
 	    "# of TOE TLS records transmitted");

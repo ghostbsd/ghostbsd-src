@@ -101,6 +101,9 @@ struct sysentvec aout_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
+	.sv_onexec_old = exec_onexec_old,
+	.sv_onexit =  exit_onexit,
+	.sv_set_fork_retval = x86_set_fork_retval,
 };
 
 #elif defined(__amd64__)
@@ -137,6 +140,9 @@ struct sysentvec aout_sysvec = {
 	.sv_set_syscall_retval = ia32_set_syscall_retval,
 	.sv_fetch_syscall_args = ia32_fetch_syscall_args,
 	.sv_syscallnames = freebsd32_syscallnames,
+	.sv_onexec_old	= exec_onexec_old,
+	.sv_onexit	= exit_onexit,
+	.sv_set_fork_retval = x86_set_fork_retval,
 };
 #else
 #error "Port me"

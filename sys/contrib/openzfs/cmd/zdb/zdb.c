@@ -94,6 +94,13 @@
 	(idx) == DMU_OTN_UINT64_DATA || (idx) == DMU_OTN_UINT64_METADATA ? \
 	DMU_OT_UINT64_OTHER : DMU_OT_NUMTYPES)
 
+/* Some platforms require part of inode IDs to be remapped */
+#ifdef __APPLE__
+#define	ZDB_MAP_OBJECT_ID(obj) INO_XNUTOZFS(obj, 2)
+#else
+#define	ZDB_MAP_OBJECT_ID(obj) (obj)
+#endif
+
 static char *
 zdb_ot_name(dmu_object_type_t type)
 {
@@ -2259,7 +2266,8 @@ snprintf_zstd_header(spa_t *spa, char *blkbuf, size_t buflen,
 		(void) snprintf(blkbuf + strlen(blkbuf),
 		    buflen - strlen(blkbuf),
 		    " ZSTD:size=%u:version=%u:level=%u:EMBEDDED",
-		    zstd_hdr.c_len, zstd_hdr.version, zstd_hdr.level);
+		    zstd_hdr.c_len, zfs_get_hdrversion(&zstd_hdr),
+		    zfs_get_hdrlevel(&zstd_hdr));
 		return;
 	}
 
@@ -2283,7 +2291,8 @@ snprintf_zstd_header(spa_t *spa, char *blkbuf, size_t buflen,
 	(void) snprintf(blkbuf + strlen(blkbuf),
 	    buflen - strlen(blkbuf),
 	    " ZSTD:size=%u:version=%u:level=%u:NORMAL",
-	    zstd_hdr.c_len, zstd_hdr.version, zstd_hdr.level);
+	    zstd_hdr.c_len, zfs_get_hdrversion(&zstd_hdr),
+	    zfs_get_hdrlevel(&zstd_hdr));
 
 	abd_return_buf_copy(pabd, buf, BP_GET_LSIZE(bp));
 }
@@ -3629,6 +3638,7 @@ parse_object_range(char *range, zopt_object_range_t *zor, char **msg)
 			*msg = "Invalid characters in object ID";
 			rc = 1;
 		}
+		zor->zor_obj_start = ZDB_MAP_OBJECT_ID(zor->zor_obj_start);
 		zor->zor_obj_end = zor->zor_obj_start;
 		return (rc);
 	}
@@ -3706,6 +3716,9 @@ parse_object_range(char *range, zopt_object_range_t *zor, char **msg)
 			flags |= bit;
 	}
 	zor->zor_flags = flags;
+
+	zor->zor_obj_start = ZDB_MAP_OBJECT_ID(zor->zor_obj_start);
+	zor->zor_obj_end = ZDB_MAP_OBJECT_ID(zor->zor_obj_end);
 
 out:
 	free(dup);
@@ -4612,7 +4625,7 @@ dump_path_impl(objset_t *os, uint64_t obj, char *name, uint64_t *retobj)
 	case DMU_OT_DIRECTORY_CONTENTS:
 		if (s != NULL && *(s + 1) != '\0')
 			return (dump_path_impl(os, child_obj, s + 1, retobj));
-		/*FALLTHROUGH*/
+		fallthrough;
 	case DMU_OT_PLAIN_FILE_CONTENTS:
 		if (retobj != NULL) {
 			*retobj = child_obj;

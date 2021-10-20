@@ -87,9 +87,6 @@ SUBDIR=	\
 	${_cfi} \
 	${_chromebook_platform} \
 	${_ciss} \
-	cloudabi \
-	${_cloudabi32} \
-	${_cloudabi64} \
 	${_coretemp} \
 	${_cp} \
 	${_cpsw} \
@@ -108,9 +105,12 @@ SUBDIR=	\
 	${_dpms} \
 	dummynet \
 	${_dwwdt} \
+	${_e6000sw} \
 	${_efirt} \
 	${_em} \
 	${_ena} \
+	${_enetc} \
+	${_enetc_mdio} \
 	esp \
 	${_et} \
 	evdev \
@@ -118,6 +118,7 @@ SUBDIR=	\
 	ext2fs \
 	fdc \
 	fdescfs \
+	${_felix} \
 	${_ffec} \
 	${_fib_dxr} \
 	filemon \
@@ -164,6 +165,7 @@ SUBDIR=	\
 	if_vlan \
 	if_vxlan \
 	iflib \
+	${_igc} \
 	${_iir} \
 	imgact_binmisc \
 	${_intelspi} \
@@ -227,8 +229,10 @@ SUBDIR=	\
 	mac_stub \
 	mac_test \
 	${_malo} \
+	${_mana} \
 	md \
 	mdio \
+	${_mgb} \
 	mem \
 	mfi \
 	mii \
@@ -258,6 +262,7 @@ SUBDIR=	\
 	mxge \
 	my \
 	${_nctgpio} \
+	${_neta} \
 	${_netgraph} \
 	${_nfe} \
 	nfscl \
@@ -281,7 +286,6 @@ SUBDIR=	\
 	ow \
 	${_padlock} \
 	${_padlock_rng} \
-	${_pccard} \
 	${_pchtherm} \
 	${_pcfclock} \
 	${_pf} \
@@ -354,6 +358,7 @@ SUBDIR=	\
 	stge \
 	${_sume} \
 	${_superio} \
+	${_p2sb} \
 	${_sym} \
 	${_syscons} \
 	sysvipc \
@@ -611,11 +616,16 @@ _allwinner=	allwinner
 _armv8crypto=	armv8crypto
 _dwwdt=		dwwdt
 _em=		em
+_enetc=		enetc
+_enetc_mdio=	enetc_mdio
+_felix=		felix
 _rockchip=	rockchip
 .endif
 
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm"
 _sdhci_fdt=	sdhci_fdt
+_e6000sw=	e6000sw
+_neta=		neta
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
@@ -634,6 +644,7 @@ _em=		em
 _et=		et
 _ftwd=		ftwd
 _exca=		exca
+_igc=		igc
 _io=		io
 _itwd=		itwd
 _ix=		ix
@@ -641,10 +652,11 @@ _ixv=		ixv
 .if ${MK_SOURCELESS_UCODE} != "no"
 _lio=		lio
 .endif
+_mana=		mana
+_mgb=		mgb
 _nctgpio=	nctgpio
 _ntb=		ntb
 _ocs_fc=	ocs_fc
-_pccard=	pccard
 _qat=		qat
 _qatfw=		qatfw
 .if ${MK_OFED} != "no" || defined(ALL_MODULES)
@@ -654,6 +666,7 @@ _safe=		safe
 _speaker=	speaker
 _splash=	splash
 _sppp=		sppp
+_p2sb=		p2sb
 _wbwd=		wbwd
 
 _aac=		aac
@@ -720,6 +733,7 @@ _tpm=		tpm
 _twa=		twa
 _vesa=		vesa
 _viawd=		viawd
+_vmd=		vmd
 _wpi=		wpi
 .if ${MK_SOURCELESS_UCODE} != "no"
 _wpifw=		wpifw
@@ -738,7 +752,6 @@ _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
 _sume=		sume
-_vmd=		vmd
 .if ${MK_SOURCELESS_UCODE} != "no"
 _qlxgbe=	qlxgbe
 _qlnx=		qlnx
@@ -747,6 +760,7 @@ _sfxge=		sfxge
 _sgx=		sgx
 _sgx_linux=	sgx_linux
 _smartpqi=	smartpqi
+_p2sb=		p2sb
 
 .if ${MK_BHYVE} != "no" || defined(ALL_MODULES)
 .if ${KERN_OPTS:MSMP}
@@ -790,7 +804,6 @@ _exca=		exca
 _ffec=		ffec
 _nvd=		nvd
 _nvme=		nvme
-_pccard=	pccard
 .endif
 
 .if ${MACHINE_ARCH:Mpowerpc64*} != ""
@@ -801,14 +814,6 @@ _nvram=		opal_nvram
 .if ${MACHINE_CPUARCH} == "powerpc" && ${MACHINE_ARCH} != "powerpcspe"
 # Don't build powermac_nvram for powerpcspe, it's never supported.
 _nvram+=	powermac_nvram
-.endif
-
-.if (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
-     ${MACHINE_ARCH:Marmv[67]*} != "" || ${MACHINE_CPUARCH} == "i386")
-_cloudabi32=	cloudabi32
-.endif
-.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64"
-_cloudabi64=	cloudabi64
 .endif
 
 .endif

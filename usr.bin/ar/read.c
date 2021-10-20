@@ -34,42 +34,20 @@ __FBSDID("$FreeBSD$");
 #include <sys/stat.h>
 #include <archive.h>
 #include <archive_entry.h>
+#include <assert.h>
 #include <errno.h>
 #include <libgen.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sysexits.h>
 
 #include "ar.h"
-
-static void read_archive(struct bsdar *bsdar, char mode);
-
-void
-ar_mode_p(struct bsdar *bsdar)
-{
-
-	read_archive(bsdar, 'p');
-}
-
-void
-ar_mode_t(struct bsdar *bsdar)
-{
-
-	read_archive(bsdar, 't');
-}
-
-void
-ar_mode_x(struct bsdar *bsdar)
-{
-
-	read_archive(bsdar, 'x');
-}
 
 /*
  * Handle read modes: 'x', 't' and 'p'.
  */
-static void
-read_archive(struct bsdar *bsdar, char mode)
+int
+ar_read_archive(struct bsdar *bsdar, int mode)
 {
 	struct archive		 *a;
 	struct archive_entry	 *entry;
@@ -85,12 +63,16 @@ read_archive(struct bsdar *bsdar, char mode)
 	char			**av;
 	char			  buf[25];
 	char			  find;
-	int			  flags, r, i;
+	int			  exitcode, flags, r, i;
+
+	assert(mode == 'p' || mode == 't' || mode == 'x');
 
 	if ((a = archive_read_new()) == NULL)
-		bsdar_errc(bsdar, EX_SOFTWARE, 0, "archive_read_new failed");
+		bsdar_errc(bsdar, 0, "archive_read_new failed");
 	archive_read_support_format_ar(a);
 	AC(archive_read_open_filename(a, bsdar->filename, DEF_BLKSZ));
+
+	exitcode = EXIT_SUCCESS;
 
 	for (;;) {
 		r = archive_read_next_header(a, &entry);
@@ -120,7 +102,7 @@ read_archive(struct bsdar *bsdar, char mode)
 				if (*av == NULL)
 					continue;
 				if ((bname = basename(*av)) == NULL)
-					bsdar_errc(bsdar, EX_SOFTWARE, errno,
+					bsdar_errc(bsdar, errno,
 					    "basename failed");
 				if (strcmp(bname, name) != 0)
 					continue;
@@ -206,11 +188,19 @@ read_archive(struct bsdar *bsdar, char mode)
 				r = archive_read_extract(a, entry, flags);
 			}
 
-			if (r)
+			if (r) {
 				bsdar_warnc(bsdar, archive_errno(a), "%s",
 				    archive_error_string(a));
+				exitcode = EXIT_FAILURE;
+			}
 		}
 	}
+
+	if (r == ARCHIVE_FATAL)
+		exitcode = EXIT_FAILURE;
+
 	AC(archive_read_close(a));
 	AC(archive_read_free(a));
+
+	return (exitcode);
 }

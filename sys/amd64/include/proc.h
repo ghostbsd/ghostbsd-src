@@ -75,6 +75,7 @@ struct mdthread {
 	int	md_efirt_dis_pf;	/* (k) */
 	struct pcb md_pcb;
 	vm_offset_t md_stack_base;
+	void *md_usr_fpu_save;
 };
 
 struct mdproc {
@@ -92,6 +93,7 @@ struct mdproc {
 
 struct syscall_args {
 	u_int code;
+	u_int original_code;
 	struct sysent *callp;
 	register_t args[8];
 };

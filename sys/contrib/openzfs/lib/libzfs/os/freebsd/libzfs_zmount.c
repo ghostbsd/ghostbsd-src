@@ -121,7 +121,7 @@ do_mount(zfs_handle_t *zhp, const char *mntpt, char *opts, int flags)
 }
 
 int
-do_unmount(const char *mntpt, int flags)
+do_unmount(zfs_handle_t *zhp, const char *mntpt, int flags)
 {
 	if (unmount(mntpt, flags) < 0)
 		return (errno);
@@ -132,4 +132,16 @@ int
 zfs_mount_delegation_check(void)
 {
 	return (0);
+}
+
+/* Called from the tail end of zpool_disable_datasets() */
+void
+zpool_disable_datasets_os(zpool_handle_t *zhp, boolean_t force)
+{
+}
+
+/* Called from the tail end of zfs_unmount() */
+void
+zpool_disable_volume_os(const char *name)
+{
 }

@@ -443,8 +443,8 @@ const char *freebsd32_syscallnames[] = {
 	"thr_exit",			/* 431 = thr_exit */
 	"thr_self",			/* 432 = thr_self */
 	"thr_kill",			/* 433 = thr_kill */
-	"#434",			/* 434 = nosys */
-	"#435",			/* 435 = nosys */
+	"compat10.freebsd32_umtx_lock",		/* 434 = freebsd10 freebsd32_umtx_lock */
+	"compat10.freebsd32_umtx_unlock",		/* 435 = freebsd10 freebsd32_umtx_unlock */
 	"jail_attach",			/* 436 = jail_attach */
 	"extattr_list_fd",			/* 437 = extattr_list_fd */
 	"extattr_list_file",			/* 438 = extattr_list_file */
@@ -616,4 +616,5 @@ const char *freebsd32_syscallnames[] = {
 	"__specialfd",			/* 577 = __specialfd */
 	"freebsd32_aio_writev",			/* 578 = freebsd32_aio_writev */
 	"freebsd32_aio_readv",			/* 579 = freebsd32_aio_readv */
+	"freebsd32_fspacectl",			/* 580 = freebsd32_fspacectl */
 };

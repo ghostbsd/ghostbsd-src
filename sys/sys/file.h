@@ -108,7 +108,7 @@ typedef	int fo_poll_t(struct file *fp, int events,
 		    struct ucred *active_cred, struct thread *td);
 typedef	int fo_kqfilter_t(struct file *fp, struct knote *kn);
 typedef	int fo_stat_t(struct file *fp, struct stat *sb,
-		    struct ucred *active_cred, struct thread *td);
+		    struct ucred *active_cred);
 typedef	int fo_close_t(struct file *fp, struct thread *td);
 typedef	int fo_chmod_t(struct file *fp, mode_t mode,
 		    struct ucred *active_cred, struct thread *td);
@@ -129,6 +129,9 @@ typedef int fo_add_seals_t(struct file *fp, int flags);
 typedef int fo_get_seals_t(struct file *fp, int *flags);
 typedef int fo_fallocate_t(struct file *fp, off_t offset, off_t len,
 		    struct thread *td);
+typedef int fo_fspacectl_t(struct file *fp, int cmd,
+		    off_t *offset, off_t *length, int flags,
+		    struct ucred *active_cred, struct thread *td);
 typedef	int fo_flags_t;
 
 struct fileops {
@@ -150,6 +153,7 @@ struct fileops {
 	fo_add_seals_t	*fo_add_seals;
 	fo_get_seals_t	*fo_get_seals;
 	fo_fallocate_t	*fo_fallocate;
+	fo_fspacectl_t	*fo_fspacectl;
 	fo_flags_t	fo_flags;	/* DFLAG_* below */
 };
 
@@ -365,11 +369,10 @@ fo_poll(struct file *fp, int events, struct ucred *active_cred,
 }
 
 static __inline int
-fo_stat(struct file *fp, struct stat *sb, struct ucred *active_cred,
-    struct thread *td)
+fo_stat(struct file *fp, struct stat *sb, struct ucred *active_cred)
 {
 
-	return ((*fp->f_ops->fo_stat)(fp, sb, active_cred, td));
+	return ((*fp->f_ops->fo_stat)(fp, sb, active_cred));
 }
 
 static __inline int
@@ -471,6 +474,17 @@ fo_fallocate(struct file *fp, off_t offset, off_t len, struct thread *td)
 		return (ENODEV);
 	return ((*fp->f_ops->fo_fallocate)(fp, offset, len, td));
 }
+
+static __inline int fo_fspacectl(struct file *fp, int cmd, off_t *offset,
+    off_t *length, int flags, struct ucred *active_cred, struct thread *td)
+{
+
+	if (fp->f_ops->fo_fspacectl == NULL)
+		return (ENODEV);
+	return ((*fp->f_ops->fo_fspacectl)(fp, cmd, offset, length, flags,
+	    active_cred, td));
+}
+
 
 #endif /* _KERNEL */
 

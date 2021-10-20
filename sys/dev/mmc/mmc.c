@@ -271,6 +271,7 @@ mmc_detach(device_t dev)
 	struct mmc_softc *sc = device_get_softc(dev);
 	int err;
 
+	config_intrhook_drain(&sc->config_intrhook);
 	err = mmc_delete_cards(sc, true);
 	if (err != 0)
 		return (err);
@@ -411,7 +412,6 @@ static int
 mmc_release_bus(device_t busdev, device_t dev)
 {
 	struct mmc_softc *sc;
-	int err;
 
 	sc = device_get_softc(busdev);
 
@@ -420,14 +420,9 @@ mmc_release_bus(device_t busdev, device_t dev)
 		panic("mmc: releasing unowned bus.");
 	if (sc->owner != dev)
 		panic("mmc: you don't own the bus.  game over.");
-	MMC_UNLOCK(sc);
-	err = MMCBR_RELEASE_HOST(device_get_parent(busdev), busdev);
-	if (err)
-		return (err);
-	MMC_LOCK(sc);
 	sc->owner = NULL;
 	MMC_UNLOCK(sc);
-	return (0);
+	return (MMCBR_RELEASE_HOST(device_get_parent(busdev), busdev));
 }
 
 static uint32_t
@@ -1925,7 +1920,7 @@ child_common:
 			if (child != NULL) {
 				device_set_ivars(child, ivar);
 				sc->child_list = realloc(sc->child_list,
-				    sizeof(device_t) * sc->child_count + 1,
+				    sizeof(device_t) * (sc->child_count + 1),
 				    M_DEVBUF, M_WAITOK);
 				sc->child_list[sc->child_count++] = child;
 			} else

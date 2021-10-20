@@ -96,16 +96,12 @@
 #define	__GNUCLIKE_BUILTIN_VAALIST 1
 #endif
 
-#if defined(__GNUC__)
 #define	__GNUC_VA_LIST_COMPATIBILITY 1
-#endif
 
 /*
  * Compiler memory barriers, specific to gcc and clang.
  */
-#if defined(__GNUC__)
 #define	__compiler_membar()	__asm __volatile(" " : : : "memory")
-#endif
 
 #define	__GNUCLIKE_BUILTIN_NEXT_ARG 1
 #define	__GNUCLIKE_MATH_BUILTIN_RELOPS
@@ -888,6 +884,7 @@
 #define __nosanitizethread	__attribute__((no_sanitize("thread")))
 #else
 #define __nosanitizeaddress
+#define __nosanitizememory
 #define __nosanitizethread
 #endif
 

@@ -68,7 +68,8 @@ struct rack_sendmap {
 	uint8_t r_just_ret : 1, /* After sending, the next pkt was just returned, i.e. limited  */
 		r_one_out_nr : 1,	/* Special case 1 outstanding and not in recovery */
 		r_no_rtt_allowed : 1, /* No rtt measurement allowed */
-		r_avail : 5;
+		r_hw_tls : 1,
+		r_avail : 4;
 	uint64_t r_tim_lastsent[RACK_NUM_OF_RETRANS];
 	uint64_t r_ack_arrival;	/* This is the time of ack-arrival (if SACK'd) */
 	RB_ENTRY(rack_sendmap) r_next;		/* RB Tree next */
@@ -246,6 +247,7 @@ struct rack_opts_stats {
 	uint64_t tcp_rack_beta;
 	uint64_t tcp_rack_beta_ecn;
 	uint64_t tcp_rack_timer_slop;
+	uint64_t tcp_rack_dsack_opt;
 };
 
 /* RTT shrink reasons */
@@ -266,6 +268,15 @@ struct rack_opts_stats {
 #define TLP_USE_TWO_ONE 2	/* Use 2.1 behavior */
 #define TLP_USE_TWO_TWO 3	/* Use 2.2 behavior */
 #define RACK_MIN_BW 8000	/* 64kbps in Bps */
+
+/* Rack quality indicators for GPUT measurements */
+#define RACK_QUALITY_NONE	0	/* No quality stated */
+#define RACK_QUALITY_HIGH 	1	/* A normal measurement of a GP RTT */
+#define RACK_QUALITY_APPLIMITED	2 	/* An app limited case that may be of lower quality */
+#define RACK_QUALITY_PERSIST	3	/* A measurement where we went into persists */
+#define RACK_QUALITY_PROBERTT	4	/* A measurement where we went into or exited probe RTT */
+#define RACK_QUALITY_ALLACKED	5	/* All data is now acknowledged */
+
 
 #define MIN_GP_WIN 6	/* We need at least 6 MSS in a GP measurement */
 #ifdef _KERNEL
@@ -317,6 +328,7 @@ extern counter_u64_t rack_opts_arry[RACK_OPTS_SIZE];
 #define RACK_GP_HIST 4	/* How much goodput history do we maintain? */
 
 #define RACK_NUM_FSB_DEBUG 16
+#ifdef _KERNEL
 struct rack_fast_send_blk {
 	uint32_t left_to_send;
 	uint16_t tcp_ip_hdr_len;
@@ -330,7 +342,8 @@ struct rack_fast_send_blk {
 	struct mbuf *m;
 	uint32_t o_m_len;
 	uint32_t rfo_apply_push : 1,
-		unused : 31;
+		hw_tls : 1,
+		unused : 30;
 };
 
 struct rack_control {
@@ -372,12 +385,11 @@ struct rack_control {
 	uint32_t rc_prr_sndcnt;	/* Prr sndcnt Lock(a) */
 
 	uint32_t rc_sacked;	/* Tot sacked on scoreboard Lock(a) */
-	uint32_t xxx_rc_last_tlp_seq;	/* Last tlp sequence Lock(a) */
+	uint32_t last_sent_tlp_seq;	/* Last tlp sequence that was retransmitted Lock(a) */
 
 	uint32_t rc_prr_delivered;	/* during recovery prr var Lock(a) */
 	uint16_t rc_tlp_cnt_out;	/* count of times we have sent a TLP without new data */
-	uint16_t xxx_rc_tlp_seg_send_cnt;	/* Number of times we have TLP sent
-					 * rc_last_tlp_seq Lock(a) */
+	uint16_t last_sent_tlp_len;	/* Number of bytes in the last sent tlp */
 
 	uint32_t rc_loss_count;	/* How many bytes have been retransmitted
 				 * Lock(a) */
@@ -452,6 +464,8 @@ struct rack_control {
 	uint32_t rc_entry_gp_rtt;	/* Entry to PRTT gp-rtt */
 	uint32_t rc_loss_at_start;	/* At measurement window where was our lost value */
 
+	uint32_t dsack_round_end;	/* In a round of seeing a DSACK */
+	uint32_t num_dsack;		/* Count of dsack's seen  (1 per window)*/
 	uint32_t forced_ack_ts;
 	uint32_t rc_lower_rtt_us_cts;	/* Time our GP rtt was last lowered */
 	uint32_t rc_time_probertt_entered;
@@ -473,6 +487,8 @@ struct rack_control {
 	int32_t rc_scw_index;
 	uint32_t rc_tlp_threshold;	/* Socket option value Lock(a) */
 	uint32_t rc_last_timeout_snduna;
+	uint32_t last_tlp_acked_start;
+	uint32_t last_tlp_acked_end;
 	uint32_t challenge_ack_ts;
 	uint32_t challenge_ack_cnt;
 	uint32_t rc_min_to;	/* Socket option value Lock(a) */
@@ -491,6 +507,7 @@ struct rack_control {
 					 */
 	uint16_t rc_early_recovery_segs;	/* Socket option value Lock(a) */
 	uint16_t rc_reorder_shift;	/* Socket option value Lock(a) */
+	uint8_t dsack_persist;
 	uint8_t rc_no_push_at_mrtt;	/* No push when we exceed max rtt */
 	uint8_t num_measurements;	/* Number of measurements (up to 0xff, we freeze at 0xff)  */
 	uint8_t req_measurements;	/* How many measurements are required? */
@@ -499,6 +516,7 @@ struct rack_control {
 	uint8_t rc_rate_sample_method;
 	uint8_t rc_gp_hist_idx;
 };
+#endif
 
 #define RACK_TIMELY_CNT_BOOST 5	/* At 5th increase boost */
 #define RACK_MINRTT_FILTER_TIM 10 /* Seconds */
@@ -539,8 +557,14 @@ struct tcp_rack {
 					      * Note this only happens if the cc name is newreno (CCALGONAME_NEWRENO).
 					      */
 
-		avail :2;
-	uint8_t avail_bytes;
+		rc_rack_tmr_std_based :1,
+		rc_rack_use_dsack: 1;
+	uint8_t rc_dsack_round_seen: 1,
+		rc_last_tlp_acked_set: 1,
+		rc_last_tlp_past_cumack: 1,
+		rc_last_sent_tlp_seq_valid: 1,
+		rc_last_sent_tlp_past_cumack: 1,
+		avail_bytes : 3;
 	uint32_t rc_rack_rtt;	/* RACK-RTT Lock(a) */
 	uint16_t r_mbuf_queue : 1,	/* Do we do mbuf queue for non-paced */
 		 rtt_limit_mul : 4,	/* muliply this by low rtt */

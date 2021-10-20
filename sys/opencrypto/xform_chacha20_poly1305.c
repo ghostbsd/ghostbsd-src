@@ -34,6 +34,7 @@
 struct chacha20_poly1305_cipher_ctx {
 	const void *key;
 	uint32_t ic;
+	bool ietf;
 	char nonce[CHACHA20_POLY1305_IV_LEN];
 };
 
@@ -50,12 +51,16 @@ chacha20_poly1305_setkey(void *vctx, const uint8_t *key, int len)
 }
 
 static void
-chacha20_poly1305_reinit(void *vctx, const uint8_t *iv)
+chacha20_poly1305_reinit(void *vctx, const uint8_t *iv, size_t ivlen)
 {
 	struct chacha20_poly1305_cipher_ctx *ctx = vctx;
 
+	KASSERT(ivlen == sizeof(ctx->nonce),
+	    ("%s: invalid nonce length", __func__));
+
 	/* Block 0 is used for the poly1305 key. */
-	memcpy(ctx->nonce, iv, sizeof(ctx->nonce));
+	memcpy(ctx->nonce, iv, ivlen);
+	ctx->ietf = (ivlen == CHACHA20_POLY1305_IV_LEN);
 	ctx->ic = 1;
 }
 
@@ -65,8 +70,12 @@ chacha20_poly1305_crypt(void *vctx, const uint8_t *in, uint8_t *out)
 	struct chacha20_poly1305_cipher_ctx *ctx = vctx;
 	int error;
 
-	error = crypto_stream_chacha20_ietf_xor_ic(out, in,
-	    CHACHA20_NATIVE_BLOCK_LEN, ctx->nonce, ctx->ic, ctx->key);
+	if (ctx->ietf)
+		error = crypto_stream_chacha20_ietf_xor_ic(out, in,
+		    CHACHA20_NATIVE_BLOCK_LEN, ctx->nonce, ctx->ic, ctx->key);
+	else
+		error = crypto_stream_chacha20_xor_ic(out, in,
+		    CHACHA20_NATIVE_BLOCK_LEN, ctx->nonce, ctx->ic, ctx->key);
 	KASSERT(error == 0, ("%s failed: %d", __func__, error));
 	ctx->ic++;
 }
@@ -79,12 +88,16 @@ chacha20_poly1305_crypt_last(void *vctx, const uint8_t *in, uint8_t *out,
 
 	int error;
 
-	error = crypto_stream_chacha20_ietf_xor_ic(out, in, len, ctx->nonce,
-	    ctx->ic, ctx->key);
+	if (ctx->ietf)
+		error = crypto_stream_chacha20_ietf_xor_ic(out, in, len,
+		    ctx->nonce, ctx->ic, ctx->key);
+	else
+		error = crypto_stream_chacha20_xor_ic(out, in, len, ctx->nonce,
+		    ctx->ic, ctx->key);
 	KASSERT(error == 0, ("%s failed: %d", __func__, error));
 }
 
-struct enc_xform enc_xform_chacha20_poly1305 = {
+const struct enc_xform enc_xform_chacha20_poly1305 = {
 	.type = CRYPTO_CHACHA20_POLY1305,
 	.name = "ChaCha20-Poly1305",
 	.ctxsize = sizeof(struct chacha20_poly1305_cipher_ctx),
@@ -126,7 +139,16 @@ chacha20_poly1305_Reinit(void *vctx, const uint8_t *nonce, u_int noncelen)
 	struct chacha20_poly1305_auth_ctx *ctx = vctx;
 	char block[CHACHA20_NATIVE_BLOCK_LEN];
 
-	crypto_stream_chacha20_ietf(block, sizeof(block), nonce, ctx->key);
+	switch (noncelen) {
+	case 8:
+		crypto_stream_chacha20(block, sizeof(block), nonce, ctx->key);
+		break;
+	case CHACHA20_POLY1305_IV_LEN:
+		crypto_stream_chacha20_ietf(block, sizeof(block), nonce, ctx->key);
+		break;
+	default:
+		__assert_unreachable();
+	}
 	crypto_onetimeauth_poly1305_init(&ctx->state, block);
 	explicit_bzero(block, sizeof(block));
 }
@@ -148,7 +170,7 @@ chacha20_poly1305_Final(uint8_t *digest, void *vctx)
 	crypto_onetimeauth_poly1305_final(&ctx->state, digest);
 }
 
-struct auth_hash auth_hash_chacha20_poly1305 = {
+const struct auth_hash auth_hash_chacha20_poly1305 = {
 	.type = CRYPTO_POLY1305,
 	.name = "ChaCha20-Poly1305",
 	.keysize = POLY1305_KEY_LEN,

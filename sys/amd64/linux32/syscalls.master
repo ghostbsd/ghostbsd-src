@@ -642,11 +642,11 @@
 	}
 120	AUE_RFORK	STD {
 		int linux_clone(
-		    l_int flags,
-		    void *stack,
-		    void *parent_tidptr,
-		    void *tls,
-		    void *child_tidptr
+		    l_ulong flags,
+		    l_ulong stack,
+		    l_int *parent_tidptr,
+		    l_ulong tls,
+		    l_int *child_tidptr
 		);
 	}
 121	AUE_SYSCTL	STD {
@@ -2484,7 +2484,10 @@
 		int linux_pidfd_open(void);
 	}
 435    AUE_NULL		STD {
-		int linux_clone3(void);
+		int linux_clone3(
+		    struct l_user_clone_args *uargs,
+		    l_size_t usize
+		);
 	}
 436    AUE_NULL		STD {
 		int linux_close_range(void);
@@ -2496,7 +2499,12 @@
 		int linux_pidfd_getfd(void);
 	}
 439    AUE_NULL		STD {
-		int linux_faccessat2(void);
+		int linux_faccessat2(
+		    l_int dfd,
+		    const char *filename,
+		    l_int amode,
+		    l_int flags
+		);
 	}
 440    AUE_NULL		STD {
 		int linux_process_madvise(void);

@@ -695,6 +695,12 @@ tcp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/window probe%s}\n");
 	p(tcps_rcvwinupd, "\t\t{:receive-window-update-packets/%ju} "
 	    "{N:/window update packet%s}\n");
+	p(tcps_dsack_count, "\t\t{:received-with-dsack-packets/%ju} "
+	    "{N:/packet%s received with dsack}\n");
+	p(tcps_dsack_bytes, "\t\t{:received-with-dsack-bytes/%ju} "
+	    "{N:/dsack byte%s received (no TLP involved)}\n");
+	p(tcps_dsack_tlp_bytes, "\t\t{:received-with-dsack-bytes-tlp/%ju} "
+	    "{N:/dsack byte%s received (TLP responsible)}\n");
 	p(tcps_rcvafterclose, "\t\t{:received-after-close-packets/%ju} "
 	    "{N:/packet%s received after close}\n");
 	p(tcps_rcvbadsum, "\t\t{:discard-bad-checksum/%ju} "
@@ -1115,7 +1121,7 @@ arp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/ARP request%s received}\n");
 	p2(rxreplies, "{:received-replies/%ju} "
 	    "{N:/ARP repl%s received}\n");
-	p(received, "{:received-packers/%ju} "
+	p(received, "{:received-packets/%ju} "
 	    "{N:/ARP packet%s received}\n");
 	p(dropped, "{:dropped-no-entry/%ju} "
 	    "{N:/total packet%s dropped due to no ARP entry}\n");

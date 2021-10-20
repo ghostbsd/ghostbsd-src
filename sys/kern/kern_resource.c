@@ -59,7 +59,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
 #include <sys/time.h>
-#include <sys/umtx.h>
+#include <sys/umtxvar.h>
 
 #include <vm/vm.h>
 #include <vm/vm_param.h>
@@ -670,6 +670,9 @@ kern_proc_setrlimit(struct thread *td, struct proc *p, u_int which,
 		limp->rlim_cur = RLIM_INFINITY;
 	if (limp->rlim_max < 0)
 		limp->rlim_max = RLIM_INFINITY;
+
+	if (which == RLIMIT_STACK && limp->rlim_cur != RLIM_INFINITY)
+		limp->rlim_cur += p->p_vmspace->vm_stkgap;
 
 	oldssiz.rlim_cur = 0;
 	newlim = lim_alloc();

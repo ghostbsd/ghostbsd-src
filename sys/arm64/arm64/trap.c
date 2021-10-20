@@ -25,6 +25,8 @@
  *
  */
 
+#include "opt_ddb.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -68,7 +70,8 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #ifdef DDB
-#include <ddb/db_output.h>
+#include <ddb/ddb.h>
+#include <ddb/db_sym.h>
 #endif
 
 /* Called from exception.S */
@@ -78,6 +81,7 @@ void do_el0_error(struct trapframe *);
 void do_serror(struct trapframe *);
 void unhandled_exception(struct trapframe *);
 
+static void print_gp_register(const char *name, uint64_t value);
 static void print_registers(struct trapframe *frame);
 
 int (*dtrace_invop_jump_addr)(struct trapframe *);
@@ -102,6 +106,15 @@ static abort_handler *abort_handlers[] = {
 	[ISS_DATA_DFSC_PF_L3] = data_abort,
 	[ISS_DATA_DFSC_ALIGN] = align_abort,
 	[ISS_DATA_DFSC_EXT] =  external_abort,
+	[ISS_DATA_DFSC_EXT_L0] =  external_abort,
+	[ISS_DATA_DFSC_EXT_L1] =  external_abort,
+	[ISS_DATA_DFSC_EXT_L2] =  external_abort,
+	[ISS_DATA_DFSC_EXT_L3] =  external_abort,
+	[ISS_DATA_DFSC_ECC] =  external_abort,
+	[ISS_DATA_DFSC_ECC_L0] =  external_abort,
+	[ISS_DATA_DFSC_ECC_L1] =  external_abort,
+	[ISS_DATA_DFSC_ECC_L2] =  external_abort,
+	[ISS_DATA_DFSC_ECC_L3] =  external_abort,
 };
 
 static __inline void
@@ -130,6 +143,7 @@ cpu_fetch_syscall_args(struct thread *td)
 	dst_ap = &sa->args[0];
 
 	sa->code = td->td_frame->tf_x[8];
+	sa->original_code = sa->code;
 
 	if (__predict_false(sa->code == SYS_syscall || sa->code == SYS___syscall)) {
 		sa->code = *ap++;
@@ -197,7 +211,7 @@ align_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 {
 	if (!lower) {
 		print_registers(frame);
-		printf(" far: %16lx\n", far);
+		print_gp_register("far", far);
 		printf(" esr:         %.8lx\n", esr);
 		panic("Misaligned access from kernel space!");
 	}
@@ -223,7 +237,7 @@ external_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	}
 
 	print_registers(frame);
-	printf(" far: %16lx\n", far);
+	print_gp_register("far", far);
 	panic("Unhandled EL%d external data abort", lower ? 0: 1);
 }
 
@@ -261,8 +275,14 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	else {
 		intr_enable();
 
+		/* We received a TBI/PAC/etc. fault from the kernel */
+		if (!ADDR_IS_CANONICAL(far)) {
+			error = KERN_INVALID_ADDRESS;
+			goto bad_far;
+		}
+
 		/* The top bit tells us which range to use */
-		if (far >= VM_MAXUSER_ADDRESS) {
+		if (ADDR_IS_KERNEL(far)) {
 			map = kernel_map;
 		} else {
 			map = &p->p_vmspace->vm_map;
@@ -287,7 +307,7 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	if (td->td_critnest != 0 || WITNESS_CHECK(WARN_SLEEPOK |
 	    WARN_GIANTOK, NULL, "Kernel page fault") != 0) {
 		print_registers(frame);
-		printf(" far: %16lx\n", far);
+		print_gp_register("far", far);
 		printf(" esr:         %.8lx\n", esr);
 		panic("data abort in critical section or under mutex");
 	}
@@ -306,6 +326,7 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	/* Fault in the page. */
 	error = vm_fault_trap(map, far, ftype, VM_FAULT_NORMAL, &sig, &ucode);
 	if (error != KERN_SUCCESS) {
+bad_far:
 		if (lower) {
 			call_trapsignal(td, sig, ucode, (void *)far,
 			    ESR_ELx_EXCEPTION(esr));
@@ -319,7 +340,7 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 
 			printf("Fatal data abort:\n");
 			print_registers(frame);
-			printf(" far: %16lx\n", far);
+			print_gp_register("far", far);
 			printf(" esr:         %.8lx\n", esr);
 
 #ifdef KDB
@@ -342,17 +363,43 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 }
 
 static void
+print_gp_register(const char *name, uint64_t value)
+{
+#if defined(DDB)
+	c_db_sym_t sym;
+	const char *sym_name;
+	db_expr_t sym_value;
+	db_expr_t offset;
+#endif
+
+	printf(" %s: %16lx", name, value);
+#if defined(DDB)
+	/* If this looks like a kernel address try to find the symbol */
+	if (value >= VM_MIN_KERNEL_ADDRESS) {
+		sym = db_search_symbol(value, DB_STGY_ANY, &offset);
+		if (sym != C_DB_SYM_NULL) {
+			db_symbol_values(sym, &sym_name, &sym_value);
+			printf(" (%s + %lx)", sym_name, offset);
+		}
+	}
+#endif
+	printf("\n");
+}
+
+static void
 print_registers(struct trapframe *frame)
 {
+	char name[4];
 	u_int reg;
 
 	for (reg = 0; reg < nitems(frame->tf_x); reg++) {
-		printf(" %sx%d: %16lx\n", (reg < 10) ? " " : "", reg,
-		    frame->tf_x[reg]);
+		snprintf(name, sizeof(name), "%sx%d", (reg < 10) ? " " : "",
+		    reg);
+		print_gp_register(name, frame->tf_x[reg]);
 	}
 	printf("  sp: %16lx\n", frame->tf_sp);
-	printf("  lr: %16lx\n", frame->tf_lr);
-	printf(" elr: %16lx\n", frame->tf_elr);
+	print_gp_register(" lr", frame->tf_lr);
+	print_gp_register("elr", frame->tf_lr);
 	printf("spsr:         %8x\n", frame->tf_spsr);
 }
 
@@ -407,7 +454,7 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 			abort_handlers[dfsc](td, frame, esr, far, 0);
 		} else {
 			print_registers(frame);
-			printf(" far: %16lx\n", far);
+			print_gp_register("far", far);
 			printf(" esr:         %.8lx\n", esr);
 			panic("Unhandled EL1 %s abort: %x",
 			    exception == EXCP_INSN_ABORT ? "instruction" :
@@ -425,7 +472,7 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 #ifdef KDB
 		kdb_trap(exception, 0, frame);
 #else
-		panic("No debugger in kernel.\n");
+		panic("No debugger in kernel.");
 #endif
 		break;
 	case EXCP_WATCHPT_EL1:
@@ -433,7 +480,7 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 #ifdef KDB
 		kdb_trap(exception, 0, frame);
 #else
-		panic("No debugger in kernel.\n");
+		panic("No debugger in kernel.");
 #endif
 		break;
 	case EXCP_UNKNOWN:
@@ -442,8 +489,8 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 		/* FALLTHROUGH */
 	default:
 		print_registers(frame);
-		printf(" far: %16lx\n", READ_SPECIALREG(far_el1));
-		panic("Unknown kernel exception %x esr_el1 %lx\n", exception,
+		print_gp_register("far", READ_SPECIALREG(far_el1));
+		panic("Unknown kernel exception %x esr_el1 %lx", exception,
 		    esr);
 	}
 }
@@ -513,7 +560,7 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 			abort_handlers[dfsc](td, frame, esr, far, 1);
 		else {
 			print_registers(frame);
-			printf(" far: %16lx\n", far);
+			print_gp_register("far", far);
 			printf(" esr:         %.8lx\n", esr);
 			panic("Unhandled EL0 %s abort: %x",
 			    exception == EXCP_INSN_ABORT_L ? "instruction" :
@@ -538,6 +585,9 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		break;
 	case EXCP_BRKPT_EL0:
 	case EXCP_BRK:
+#ifdef COMPAT_FREEBSD32
+	case EXCP_BRKPT_32:
+#endif /* COMPAT_FREEBSD32 */
 		call_trapsignal(td, SIGTRAP, TRAP_BRKPT, (void *)frame->tf_elr,
 		    exception);
 		userret(td, frame);
@@ -593,7 +643,7 @@ do_serror(struct trapframe *frame)
 	esr = frame->tf_esr;
 
 	print_registers(frame);
-	printf(" far: %16lx\n", far);
+	print_gp_register("far", far);
 	printf(" esr:         %.8lx\n", esr);
 	panic("Unhandled System Error");
 }
@@ -607,7 +657,7 @@ unhandled_exception(struct trapframe *frame)
 	esr = frame->tf_esr;
 
 	print_registers(frame);
-	printf(" far: %16lx\n", far);
+	print_gp_register("far", far);
 	printf(" esr:         %.8lx\n", esr);
 	panic("Unhandled exception");
 }

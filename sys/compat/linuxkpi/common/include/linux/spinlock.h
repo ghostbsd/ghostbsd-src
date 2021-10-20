@@ -104,6 +104,11 @@ typedef struct {
 #define	spin_trylock_irq(_l)			\
 	spin_trylock(_l)
 
+#define	spin_trylock_irqsave(_l, flags) ({	\
+	(flags) = 0;				\
+	spin_trylock(_l);			\
+})
+
 #define	spin_lock_nested(_l, _n) do {		\
 	if (SPIN_SKIP())			\
 		break;				\
@@ -163,15 +168,20 @@ spin_lock_destroy(spinlock_t *lock)
 	mtx_assert(&(_l)->m, MA_OWNED);		\
 } while (0)
 
+#define	atomic_dec_and_lock_irqsave(cnt, lock, flags) \
+	_atomic_dec_and_lock_irqsave(cnt, lock, &(flags))
 static inline int
-atomic_dec_and_lock_irqsave(atomic_t *cnt, spinlock_t *lock,
-    unsigned long flags)
+_atomic_dec_and_lock_irqsave(atomic_t *cnt, spinlock_t *lock,
+    unsigned long *flags)
 {
-	spin_lock_irqsave(lock, flags);
+	if (atomic_add_unless(cnt, -1, 1))
+		return (0);
+
+	spin_lock_irqsave(lock, *flags);
 	if (atomic_dec_and_test(cnt))
-		return 1;
-	spin_unlock_irqrestore(lock, flags);
-	return 0;
+		return (1);
+	spin_unlock_irqrestore(lock, *flags);
+	return (0);
 }
 
 #endif					/* _LINUX_SPINLOCK_H_ */

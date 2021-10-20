@@ -168,7 +168,7 @@ END(_start)
  */
 ENTRY(mpentry)
 	/* Disable interrupts */
-	msr	daifset, #2
+	msr	daifset, #DAIF_INTR
 
 	/* Drop to EL1 */
 	bl	drop_to_el1
@@ -552,6 +552,7 @@ LENTRY(link_l0_pagetable)
 
 	/* Build the L0 block entry */
 	mov	x12, #L0_TABLE
+	orr	x12, x12, #(TATTR_UXN_TABLE | TATTR_AP_TABLE_NO_EL0)
 
 	/* Only use the output address bits */
 	lsr	x9, x9, #PAGE_SHIFT
@@ -727,7 +728,7 @@ sctlr_set:
 	    SCTLR_M | SCTLR_CP15BEN)
 sctlr_clear:
 	/* Bits to clear */
-	.quad (SCTLR_EE | SCTLR_EOE | SCTLR_IESB | SCTLR_WXN | SCTLR_UMA | \
+	.quad (SCTLR_EE | SCTLR_E0E | SCTLR_IESB | SCTLR_WXN | SCTLR_UMA | \
 	    SCTLR_ITD | SCTLR_A)
 LEND(start_mmu)
 

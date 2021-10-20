@@ -23,7 +23,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd April 20, 2021
+.Dd September 25, 2021
 .Dt BHYVE_CONFIG 5
 .Os
 .Sh NAME
@@ -124,6 +124,8 @@ Wire guest memory.
 Generate ACPI tables.
 .It Va destroy_on_poweroff Ta bool Ta false Ta
 Destroy the VM on guest-initiated power-off.
+.It Va gdb.address Ta string Ta localhost Ta
+Hostname, IP address, or IPv6 address for the debug server.
 .It Va gdb.port Ta integer Ta 0 Ta
 TCP port number for the debug server.
 If this is set to a non-zero value, a debug server
@@ -180,7 +182,7 @@ Device settings are stored under a device node.
 The device node's name is set by the parent bus of the device.
 .Ss PCI Device Settings
 PCI devices are described by a device node named
-.Dq pci Ns Ar bus . Ns Ar slot . Ns Ar function
+.Dq pci . Ns Ar bus . Ns Ar slot . Ns Ar function
 where each of
 .Ar bus ,
 .Ar slot ,
@@ -513,6 +515,16 @@ The share name exposed to the guest.
 The path of a directory on the host to export to the guest.
 .It Va ro Ta bool Ta false Ta
 If true, the guest filesystem is read-only.
+.El
+.Ss VirtIO Block Device Settings
+In addition to the block device settings described above, each
+VirtIO block device supports the following settings:
+.Bl -column "model" "integer" "generated"
+.It Sy Name Ta Sy Format Ta Sy Default Ta Sy Description
+.It Va ser Ta string Ta generated Ta
+Serial number of up to twenty characters.
+A default serial number is generated using a hash of the backing
+store's pathname.
 .El
 .Ss VirtIO Console Device Settings
 Each VirtIO Console device contains one or more console ports.

@@ -138,6 +138,12 @@ options		PCI_IOV			# PCI SR-IOV support
 
 options 	COMPAT_LINUXKPI
 
+# Enable support for the kernel PLL to use an external PPS signal,
+# under supervision of [x]ntpd(8)
+# More info in ntpd documentation: http://www.eecis.udel.edu/~ntp
+
+options 	PPS_SYNC
+
 # Floppy drives
 device		fdc
 
@@ -201,8 +207,7 @@ device		nvme			# base NVMe driver
 device		nvd			# expose NVMe namespaces as disks, depends on nvme
 
 # Intel Volume Management Device (VMD) support
-device		vmd			# base VMD device
-device		vmd_bus			# bus for VMD children
+device		vmd
 
 # atkbdc0 controls both the keyboard and the PS/2 mouse
 device		atkbdc			# AT keyboard controller
@@ -231,7 +236,6 @@ device		agp			# support several AGP chipsets
 # PCCARD (PCMCIA) support
 # PCMCIA and cardbus bridge support
 device		cbb			# cardbus (yenta) bridge
-device		pccard			# PC Card (16-bit) bus
 device		cardbus			# CardBus (32-bit) bus
 
 # Serial (COM) ports
@@ -249,6 +253,7 @@ device		puc			# Multi I/O cards and multi-channel UARTs
 # PCI/PCI-X/PCIe Ethernet NICs that use iflib infrastructure
 device		iflib
 device		em			# Intel PRO/1000 Gigabit Ethernet Family
+device		igc			# Intel I225 2.5G Ethernet
 device		ix			# Intel PRO/10GbE PCIE PF Ethernet
 device		ixv			# Intel PRO/10GbE PCIE VF Ethernet
 device		ixl			# Intel 700 Series Physical Function
@@ -399,13 +404,18 @@ device		virtio_blk		# VirtIO Block device
 device		virtio_scsi		# VirtIO SCSI device
 device		virtio_balloon	# VirtIO Memory Balloon device
 
+# Linux KVM paravirtualization support
+device		kvm_clock		# KVM paravirtual clock driver
+
 # HyperV drivers and enhancement support
 device		hyperv			# HyperV drivers
 
 # Xen HVM Guest Optimizations
-# NOTE: XENHVM depends on xenpci.  They must be added or removed together.
+# NOTE: XENHVM depends on xenpci and xentimer.
+# They must be added or removed together.
 options 	XENHVM			# Xen HVM kernel infrastructure
 device		xenpci			# Xen HVM Hypervisor services driver
+device		xentimer		# Xen x86 PV timer device
 
 # Netmap provides direct access to TX/RX rings on supported NICs
 device		netmap			# netmap(4) support

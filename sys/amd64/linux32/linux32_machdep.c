@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/reg.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
 #include <sys/syscallsubr.h>
@@ -61,7 +62,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/md_var.h>
 #include <machine/pcb.h>
 #include <machine/psl.h>
-#include <machine/reg.h>
 #include <machine/segments.h>
 #include <machine/specialreg.h>
 #include <x86/ifunc.h>
@@ -76,6 +76,7 @@ __FBSDID("$FreeBSD$");
 #include <amd64/linux32/linux.h>
 #include <amd64/linux32/linux32_proto.h>
 #include <compat/linux/linux_emul.h>
+#include <compat/linux/linux_fork.h>
 #include <compat/linux/linux_ipc.h>
 #include <compat/linux/linux_misc.h>
 #include <compat/linux/linux_mmap.h>
@@ -538,24 +539,6 @@ linux_sigsuspend(struct thread *td, struct linux_sigsuspend_args *args)
 }
 
 int
-linux_rt_sigsuspend(struct thread *td, struct linux_rt_sigsuspend_args *uap)
-{
-	l_sigset_t lmask;
-	sigset_t sigmask;
-	int error;
-
-	if (uap->sigsetsize != sizeof(l_sigset_t))
-		return (EINVAL);
-
-	error = copyin(uap->newset, &lmask, sizeof(l_sigset_t));
-	if (error)
-		return (error);
-
-	linux_to_bsd_sigset(&lmask, &sigmask);
-	return (kern_sigsuspend(td, sigmask));
-}
-
-int
 linux_pause(struct thread *td, struct linux_pause_args *args)
 {
 	struct proc *p = td->td_proc;
@@ -565,34 +548,6 @@ linux_pause(struct thread *td, struct linux_pause_args *args)
 	sigmask = td->td_sigmask;
 	PROC_UNLOCK(p);
 	return (kern_sigsuspend(td, sigmask));
-}
-
-int
-linux_sigaltstack(struct thread *td, struct linux_sigaltstack_args *uap)
-{
-	stack_t ss, oss;
-	l_stack_t lss;
-	int error;
-
-	if (uap->uss != NULL) {
-		error = copyin(uap->uss, &lss, sizeof(l_stack_t));
-		if (error)
-			return (error);
-
-		ss.ss_sp = PTRIN(lss.ss_sp);
-		ss.ss_size = lss.ss_size;
-		ss.ss_flags = linux_to_bsd_sigaltstack(lss.ss_flags);
-	}
-	error = kern_sigaltstack(td, (uap->uss != NULL) ? &ss : NULL,
-	    (uap->uoss != NULL) ? &oss : NULL);
-	if (!error && uap->uoss != NULL) {
-		lss.ss_sp = PTROUT(oss.ss_sp);
-		lss.ss_size = oss.ss_size;
-		lss.ss_flags = bsd_to_linux_sigaltstack(oss.ss_flags);
-		error = copyout(&lss, uap->uoss, sizeof(l_stack_t));
-	}
-
-	return (error);
 }
 
 int

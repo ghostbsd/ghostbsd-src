@@ -40,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/proc.h>
 #include <sys/memdesc.h>
+#include <sys/msan.h>
 #include <sys/mutex.h>
 #include <sys/sysctl.h>
 #include <sys/uio.h>
@@ -66,6 +67,7 @@ enum {
 	BUS_DMA_COULD_BOUNCE	= 0x01,
 	BUS_DMA_MIN_ALLOC_COMP	= 0x02,
 	BUS_DMA_KMEM_ALLOC	= 0x04,
+	BUS_DMA_FORCE_MAP	= 0x08,
 };
 
 struct bounce_zone;
@@ -128,6 +130,9 @@ struct bus_dmamap {
 	bus_dmamap_callback_t *callback;
 	void		      *callback_arg;
 	STAILQ_ENTRY(bus_dmamap) links;
+#ifdef KMSAN
+	struct memdesc	       kmsan_mem;
+#endif
 };
 
 static STAILQ_HEAD(, bus_dmamap) bounce_map_waitinglist;
@@ -201,6 +206,14 @@ bounce_bus_dma_tag_create(bus_dma_tag_t parent, bus_size_t alignment,
 	newtag->common.impl = &bus_dma_bounce_impl;
 	newtag->map_count = 0;
 	newtag->segments = NULL;
+
+#ifdef KMSAN
+	/*
+	 * When KMSAN is configured, we need a map to store a memory descriptor
+	 * which can be used for validation.
+	 */
+	newtag->bounce_flags |= BUS_DMA_FORCE_MAP;
+#endif
 
 	if (parent != NULL && (newtag->common.filter != NULL ||
 	    (parent->bounce_flags & BUS_DMA_COULD_BOUNCE) != 0))
@@ -301,7 +314,7 @@ bounce_bus_dmamap_create(bus_dma_tag_t dmat, int flags, bus_dmamap_t *mapp)
 	error = 0;
 
 	if (dmat->segments == NULL) {
-		dmat->segments = (bus_dma_segment_t *)malloc_domainset(
+		dmat->segments = malloc_domainset(
 		    sizeof(bus_dma_segment_t) * dmat->common.nsegments,
 		    M_DEVBUF, DOMAINSET_PREF(dmat->common.domain), M_NOWAIT);
 		if (dmat->segments == NULL) {
@@ -311,6 +324,19 @@ bounce_bus_dmamap_create(bus_dma_tag_t dmat, int flags, bus_dmamap_t *mapp)
 		}
 	}
 
+	if (dmat->bounce_flags & (BUS_DMA_COULD_BOUNCE | BUS_DMA_FORCE_MAP)) {
+		*mapp = malloc_domainset(sizeof(**mapp), M_DEVBUF,
+		    DOMAINSET_PREF(dmat->common.domain), M_NOWAIT | M_ZERO);
+		if (*mapp == NULL) {
+			CTR3(KTR_BUSDMA, "%s: tag %p error %d",
+			    __func__, dmat, ENOMEM);
+			return (ENOMEM);
+		}
+		STAILQ_INIT(&(*mapp)->bpages);
+	} else {
+		*mapp = NULL;
+	}
+
 	/*
 	 * Bouncing might be required if the driver asks for an active
 	 * exclusion region, a data alignment that is stricter than 1, and/or
@@ -318,22 +344,10 @@ bounce_bus_dmamap_create(bus_dma_tag_t dmat, int flags, bus_dmamap_t *mapp)
 	 */
 	if ((dmat->bounce_flags & BUS_DMA_COULD_BOUNCE) != 0) {
 		/* Must bounce */
-		if (dmat->bounce_zone == NULL) {
-			if ((error = alloc_bounce_zone(dmat)) != 0)
-				return (error);
-		}
+		if (dmat->bounce_zone == NULL &&
+		    (error = alloc_bounce_zone(dmat)) != 0)
+			goto out;
 		bz = dmat->bounce_zone;
-
-		*mapp = (bus_dmamap_t)malloc_domainset(sizeof(**mapp), M_DEVBUF,
-		    DOMAINSET_PREF(dmat->common.domain), M_NOWAIT | M_ZERO);
-		if (*mapp == NULL) {
-			CTR3(KTR_BUSDMA, "%s: tag %p error %d",
-			    __func__, dmat, ENOMEM);
-			return (ENOMEM);
-		}
-
-		/* Initialize the new map */
-		STAILQ_INIT(&((*mapp)->bpages));
 
 		/*
 		 * Attempt to add pages to our pool on a per-instance
@@ -361,11 +375,16 @@ bounce_bus_dmamap_create(bus_dma_tag_t dmat, int flags, bus_dmamap_t *mapp)
 				error = 0;
 		}
 		bz->map_count++;
+	}
+
+out:
+	if (error == 0) {
+		dmat->map_count++;
 	} else {
+		free(*mapp, M_DEVBUF);
 		*mapp = NULL;
 	}
-	if (error == 0)
-		dmat->map_count++;
+
 	CTR4(KTR_BUSDMA, "%s: tag %p tag flags 0x%x error %d",
 	    __func__, dmat, dmat->common.flags, error);
 	return (error);
@@ -434,6 +453,7 @@ bounce_bus_dmamem_alloc(bus_dma_tag_t dmat, void **vaddr, int flags,
 	/*
 	 * Allocate the buffer from the malloc(9) allocator if...
 	 *  - It's small enough to fit into a single page.
+	 *  - Its alignment requirement is also smaller than the page size.
 	 *  - The low address requirement is fulfilled.
 	 *  - Default cache attributes are requested (WB).
 	 * else allocate non-contiguous pages if...
@@ -448,6 +468,7 @@ bounce_bus_dmamem_alloc(bus_dma_tag_t dmat, void **vaddr, int flags,
 	 * Warn the user if malloc gets it wrong.
 	 */
 	if (dmat->common.maxsize <= PAGE_SIZE &&
+	    dmat->common.alignment <= PAGE_SIZE &&
 	    dmat->common.lowaddr >= ptoa((vm_paddr_t)Maxmem) &&
 	    attr == VM_MEMATTR_DEFAULT) {
 		*vaddr = malloc_domainset_aligned(dmat->common.maxsize,
@@ -968,7 +989,10 @@ bounce_bus_dmamap_sync(bus_dma_tag_t dmat, bus_dmamap_t map,
 	vm_offset_t datavaddr, tempvaddr;
 	bus_size_t datacount1, datacount2;
 
-	if (map == NULL || (bpage = STAILQ_FIRST(&map->bpages)) == NULL)
+	if (map == NULL)
+		goto out;
+	kmsan_bus_dmamap_sync(&map->kmsan_mem, op);
+	if ((bpage = STAILQ_FIRST(&map->bpages)) == NULL)
 		goto out;
 
 	/*
@@ -1062,6 +1086,16 @@ next_r:
 out:
 	atomic_thread_fence_rel();
 }
+
+#ifdef KMSAN
+static void
+bounce_bus_dmamap_load_kmsan(bus_dmamap_t map, struct memdesc *mem)
+{
+	if (map == NULL)
+		return;
+	memcpy(&map->kmsan_mem, mem, sizeof(map->kmsan_mem));
+}
+#endif
 
 static void
 init_bounce_pages(void *dummy __unused)
@@ -1344,4 +1378,7 @@ struct bus_dma_impl bus_dma_bounce_impl = {
 	.map_complete = bounce_bus_dmamap_complete,
 	.map_unload = bounce_bus_dmamap_unload,
 	.map_sync = bounce_bus_dmamap_sync,
+#ifdef KMSAN
+	.load_kmsan = bounce_bus_dmamap_load_kmsan,
+#endif
 };

@@ -1,6 +1,5 @@
 /*-
  * Copyright (c) 2015-2016 The FreeBSD Foundation
- * All rights reserved.
  *
  * This software was developed by Andrew Turner under
  * the sponsorship of the FreeBSD Foundation.
@@ -711,7 +710,7 @@ its_init_cpu(device_t dev, struct gicv3_its_softc *sc)
 		return (0);
 
 	/* Check if the ITS is enabled on this CPU */
-	if ((gic_r_read_4(gicv3, GICR_TYPER) & GICR_TYPER_PLPIS) == 0)
+	if ((gic_r_read_8(gicv3, GICR_TYPER) & GICR_TYPER_PLPIS) == 0)
 		return (ENXIO);
 
 	rpcpu = gicv3_get_redist(dev);

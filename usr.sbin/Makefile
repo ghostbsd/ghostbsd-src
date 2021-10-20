@@ -127,7 +127,7 @@ SUBDIR.${MK_OPENSSL}+=	certctl
 .endif
 SUBDIR.${MK_CXGBETOOL}+=	cxgbetool
 SUBDIR.${MK_DIALOG}+=	bsdconfig
-SUBDIR.${MK_EFI}+=	efivar efidp efibootmgr
+SUBDIR.${MK_EFI}+=	efivar efidp efibootmgr efitable
 .if ${MK_OPENSSL} != "no"
 SUBDIR.${MK_EFI}+=	uefisign
 .endif
@@ -214,5 +214,12 @@ SUBDIR.${MK_TESTS}+=	tests
 .include <bsd.arch.inc.mk>
 
 SUBDIR_PARALLEL=
+
+# Add architecture-specific manpages
+# to be included anyway
+MAN=   apmd/apmd.8 \
+       nvram/nvram.8
+
+.include <bsd.prog.mk>
 
 .include <bsd.subdir.mk>

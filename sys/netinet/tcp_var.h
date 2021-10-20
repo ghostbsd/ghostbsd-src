@@ -39,8 +39,10 @@
 #include <netinet/tcp_fsm.h>
 
 #ifdef _KERNEL
+#include "opt_kern_tls.h"
 #include <net/vnet.h>
 #include <sys/mbuf.h>
+#include <sys/ktls.h>
 #endif
 
 #define TCP_END_BYTE_INFO 8	/* Bytes that makeup the "end information array" */
@@ -263,6 +265,9 @@ struct tcpcb {
 	uint64_t t_sndtlpbyte;		/* total tail loss probe bytes sent */
 	uint64_t t_sndbytes;		/* total bytes sent */
 	uint64_t t_snd_rxt_bytes;	/* total bytes retransmitted */
+	uint32_t t_dsack_bytes;		/* Total number of dsack bytes we have received */
+	uint32_t t_dsack_tlp_bytes;	/* Total number of dsack bytes we have received for TLPs sent */
+	uint32_t t_dsack_pack;		/* Total dsack packets we have recieved */
 
 	uint8_t t_tfo_client_cookie_len; /* TCP Fast Open client cookie length */
 	uint32_t t_end_info_status;	/* Status flag of end info */
@@ -367,6 +372,7 @@ struct tcp_function_block {
 	int	(*tfb_tcp_handoff_ok)(struct tcpcb *);
 	void	(*tfb_tcp_mtu_chg)(struct tcpcb *);
 	int	(*tfb_pru_options)(struct tcpcb *, int);
+	void	(*tfb_hwtls_change)(struct tcpcb *, int);
 	volatile uint32_t tfb_refcnt;
 	uint32_t  tfb_flags;
 	uint8_t	tfb_id;
@@ -700,7 +706,12 @@ struct	tcpstat {
 	uint64_t tcps_tunneled_pkts;	/* Packets encap's in UDP received */
 	uint64_t tcps_tunneled_errs;	/* Packets that had errors that were UDP encaped */
 
-	uint64_t _pad[9];		/* 6 UTO, 3 TBD */
+	/* Dsack related stats */
+	uint64_t tcps_dsack_count;	/* Number of ACKs arriving with DSACKs */
+	uint64_t tcps_dsack_bytes;	/* Number of bytes DSACK'ed no TLP */
+	uint64_t tcps_dsack_tlp_bytes;	/* Number of bytes DSACK'ed due to TLPs */
+
+	uint64_t _pad[6];		/* 3 UTO, 3 TBD */
 };
 
 #define	tcps_rcvmemdrop	tcps_rcvreassfull	/* compat */
@@ -798,9 +809,12 @@ struct xtcpcb {
 	uint32_t	t_rcv_wnd;		/* (s) */
 	uint32_t	t_snd_wnd;		/* (s) */
 	uint32_t	xt_ecn;			/* (s) */
+	uint32_t	t_dsack_bytes;		/* (n) */
+	uint32_t	t_dsack_tlp_bytes;	/* (n) */
+	uint32_t	t_dsack_pack;		/* (n) */
 	uint16_t	xt_encaps_port;		/* (s) */
 	int16_t		spare16;
-	int32_t		spare32[25];
+	int32_t		spare32[22];
 } __aligned(8);
 
 #ifdef _KERNEL
@@ -1019,6 +1033,7 @@ extern counter_u64_t tcp_extra_mbuf;
 extern counter_u64_t tcp_would_have_but;
 extern counter_u64_t tcp_comp_total;
 extern counter_u64_t tcp_uncomp_total;
+extern counter_u64_t tcp_bad_csums;
 
 #ifdef NETFLIX_EXP_DETECTION
 /* Various SACK attack thresholds */
@@ -1060,6 +1075,7 @@ int	 tcp_twcheck(struct inpcb *, struct tcpopt *, struct tcphdr *,
 	    struct mbuf *, int);
 void	 tcp_setpersist(struct tcpcb *);
 void	 tcp_slowtimo(void);
+void	 tcp_record_dsack(struct tcpcb *tp, tcp_seq start, tcp_seq end, int tlp);
 struct tcptemp *
 	 tcpip_maketemplate(struct inpcb *);
 void	 tcpip_fillheaders(struct inpcb *, uint16_t, void *, void *);
@@ -1137,7 +1153,8 @@ tcp_fields_to_net(struct tcphdr *th)
 }
 
 static inline void
-tcp_account_for_send(struct tcpcb *tp, uint32_t len, uint8_t is_rxt, uint8_t is_tlp)
+tcp_account_for_send(struct tcpcb *tp, uint32_t len, uint8_t is_rxt,
+    uint8_t is_tlp, int hw_tls)
 {
 	if (is_tlp) {
 		tp->t_sndtlppack++;
@@ -1149,8 +1166,15 @@ tcp_account_for_send(struct tcpcb *tp, uint32_t len, uint8_t is_rxt, uint8_t is_
 	else
 		tp->t_sndbytes += len;
 
-}
+#ifdef KERN_TLS
+	if (hw_tls && is_rxt && len != 0) {
+		uint64_t rexmit_percent = (1000ULL * tp->t_snd_rxt_bytes) / (10ULL * (tp->t_snd_rxt_bytes + tp->t_sndbytes));
+		if (rexmit_percent > ktls_ifnet_max_rexmit_pct)
+			ktls_disable_ifnet(tp);
+	}
+#endif
 
+}
 #endif /* _KERNEL */
 
 #endif /* _NETINET_TCP_VAR_H_ */

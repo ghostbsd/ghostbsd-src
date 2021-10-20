@@ -123,7 +123,7 @@ static void linkmap_delete(Obj_Entry *);
 static void load_filtees(Obj_Entry *, int flags, RtldLockState *);
 static void unload_filtees(Obj_Entry *, RtldLockState *);
 static int load_needed_objects(Obj_Entry *, int);
-static int load_preload_objects(char *, bool);
+static int load_preload_objects(const char *, bool);
 static Obj_Entry *load_object(const char *, int fd, const Obj_Entry *, int);
 static void map_stacks_exec(RtldLockState *);
 static int obj_disable_relro(Obj_Entry *);
@@ -140,7 +140,7 @@ static void objlist_remove(Objlist *, Obj_Entry *);
 static int open_binary_fd(const char *argv0, bool search_in_path,
     const char **binpath_res);
 static int parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
-    const char **argv0);
+    const char **argv0, bool *dir_ignore);
 static int parse_integer(const char *);
 static void *path_enumerate(const char *, path_enum_proc, const char *, void *);
 static void print_usage(const char *argv0);
@@ -202,22 +202,24 @@ int __sys_openat(int, const char *, int, ...);
 struct r_debug r_debug __exported;	/* for GDB; */
 static bool libmap_disable;	/* Disable libmap */
 static bool ld_loadfltr;	/* Immediate filters processing */
-static char *libmap_override;	/* Maps to use in addition to libmap.conf */
+static const char *libmap_override;/* Maps to use in addition to libmap.conf */
 static bool trust;		/* False for setuid and setgid programs */
 static bool dangerous_ld_env;	/* True if environment variables have been
 				   used to affect the libraries loaded */
 bool ld_bind_not;		/* Disable PLT update */
-static char *ld_bind_now;	/* Environment variable for immediate binding */
-static char *ld_debug;		/* Environment variable for debugging */
-static char *ld_library_path;	/* Environment variable for search path */
-static char *ld_library_dirs;	/* Environment variable for library descriptors */
-static char *ld_preload;	/* Environment variable for libraries to
+static const char *ld_bind_now;	/* Environment variable for immediate binding */
+static const char *ld_debug;	/* Environment variable for debugging */
+static bool ld_dynamic_weak = true; /* True if non-weak definition overrides
+				       weak definition */
+static const char *ld_library_path;/* Environment variable for search path */
+static const char *ld_library_dirs;/* Environment variable for library descriptors */
+static const char *ld_preload;	/* Environment variable for libraries to
 				   load first */
-static char *ld_preload_fds;	/* Environment variable for libraries represented by
+static const char *ld_preload_fds;/* Environment variable for libraries represented by
 				   descriptors */
 static const char *ld_elf_hints_path;	/* Environment variable for alternative hints path */
 static const char *ld_tracing;	/* Called from ldd to print libs */
-static char *ld_utrace;		/* Use utrace() to log events. */
+static const char *ld_utrace;	/* Use utrace() to log events. */
 static struct obj_entry_q obj_list;	/* Queue of all loaded objects */
 static Obj_Entry *obj_main;	/* The main program shared object */
 static Obj_Entry obj_rtld;	/* The dynamic linker shared object */
@@ -340,23 +342,129 @@ ld_utrace_log(int event, void *handle, void *mapbase, size_t mapsize,
 	utrace(&ut, sizeof(ut));
 }
 
-#ifdef RTLD_VARIANT_ENV_NAMES
-/*
- * construct the env variable based on the type of binary that's
- * running.
- */
-static inline const char *
-_LD(const char *var)
-{
-	static char buffer[128];
+enum {
+	LD_BIND_NOW = 0,
+	LD_PRELOAD,
+	LD_LIBMAP,
+	LD_LIBRARY_PATH,
+	LD_LIBRARY_PATH_FDS,
+	LD_LIBMAP_DISABLE,
+	LD_BIND_NOT,
+	LD_DEBUG,
+	LD_ELF_HINTS_PATH,
+	LD_LOADFLTR,
+	LD_LIBRARY_PATH_RPATH,
+	LD_PRELOAD_FDS,
+	LD_DYNAMIC_WEAK,
+	LD_TRACE_LOADED_OBJECTS,
+	LD_UTRACE,
+	LD_DUMP_REL_PRE,
+	LD_DUMP_REL_POST,
+	LD_TRACE_LOADED_OBJECTS_PROGNAME,
+	LD_TRACE_LOADED_OBJECTS_FMT1,
+	LD_TRACE_LOADED_OBJECTS_FMT2,
+	LD_TRACE_LOADED_OBJECTS_ALL,
+};
 
-	strlcpy(buffer, ld_env_prefix, sizeof(buffer));
-	strlcat(buffer, var, sizeof(buffer));
-	return (buffer);
+struct ld_env_var_desc {
+	const char * const n;
+	const char *val;
+	const bool unsecure;
+};
+#define LD_ENV_DESC(var, unsec) \
+    [LD_##var] = { .n = #var, .unsecure = unsec }
+
+static struct ld_env_var_desc ld_env_vars[] = {
+	LD_ENV_DESC(BIND_NOW, false),
+	LD_ENV_DESC(PRELOAD, true),
+	LD_ENV_DESC(LIBMAP, true),
+	LD_ENV_DESC(LIBRARY_PATH, true),
+	LD_ENV_DESC(LIBRARY_PATH_FDS, true),
+	LD_ENV_DESC(LIBMAP_DISABLE, true),
+	LD_ENV_DESC(BIND_NOT, true),
+	LD_ENV_DESC(DEBUG, true),
+	LD_ENV_DESC(ELF_HINTS_PATH, true),
+	LD_ENV_DESC(LOADFLTR, true),
+	LD_ENV_DESC(LIBRARY_PATH_RPATH, true),
+	LD_ENV_DESC(PRELOAD_FDS, true),
+	LD_ENV_DESC(DYNAMIC_WEAK, true),
+	LD_ENV_DESC(TRACE_LOADED_OBJECTS, false),
+	LD_ENV_DESC(UTRACE, false),
+	LD_ENV_DESC(DUMP_REL_PRE, false),
+	LD_ENV_DESC(DUMP_REL_POST, false),
+	LD_ENV_DESC(TRACE_LOADED_OBJECTS_PROGNAME, false),
+	LD_ENV_DESC(TRACE_LOADED_OBJECTS_FMT1, false),
+	LD_ENV_DESC(TRACE_LOADED_OBJECTS_FMT2, false),
+	LD_ENV_DESC(TRACE_LOADED_OBJECTS_ALL, false),
+};
+
+static const char *
+ld_get_env_var(int idx)
+{
+	return (ld_env_vars[idx].val);
 }
-#else
-#define _LD(x)	LD_ x
-#endif
+
+static const char *
+rtld_get_env_val(char **env, const char *name, size_t name_len)
+{
+	char **m, *n, *v;
+
+	for (m = env; *m != NULL; m++) {
+		n = *m;
+		v = strchr(n, '=');
+		if (v == NULL) {
+			/* corrupt environment? */
+			continue;
+		}
+		if (v - n == (ptrdiff_t)name_len &&
+		    strncmp(name, n, name_len) == 0)
+			return (v + 1);
+	}
+	return (NULL);
+}
+
+static void
+rtld_init_env_vars_for_prefix(char **env, const char *env_prefix)
+{
+	struct ld_env_var_desc *lvd;
+	size_t prefix_len, nlen;
+	char **m, *n, *v;
+	int i;
+
+	prefix_len = strlen(env_prefix);
+	for (m = env; *m != NULL; m++) {
+		n = *m;
+		if (strncmp(env_prefix, n, prefix_len) != 0) {
+			/* Not a rtld environment variable. */
+			continue;
+		}
+		n += prefix_len;
+		v = strchr(n, '=');
+		if (v == NULL) {
+			/* corrupt environment? */
+			continue;
+		}
+		for (i = 0; i < (int)nitems(ld_env_vars); i++) {
+			lvd = &ld_env_vars[i];
+			if (lvd->val != NULL) {
+				/* Saw higher-priority variable name already. */
+				continue;
+			}
+			nlen = strlen(lvd->n);
+			if (v - n == (ptrdiff_t)nlen &&
+			    strncmp(lvd->n, n, nlen) == 0) {
+				lvd->val = v + 1;
+				break;
+			}
+		}
+	}
+}
+
+static void
+rtld_init_env_vars(char **env)
+{
+	rtld_init_env_vars_for_prefix(env, ld_env_prefix);
+}
 
 /*
  * Main entry point for dynamic linking.  The first argument is the
@@ -385,8 +493,9 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     RtldLockState lockstate;
     struct stat st;
     Elf_Addr *argcp;
-    char **argv, **env, **envp, *kexecpath, *library_path_rpath;
-    const char *argv0, *binpath;
+    char **argv, **env, **envp, *kexecpath;
+    const char *argv0, *binpath, *library_path_rpath;
+    struct ld_env_var_desc *lvd;
     caddr_t imgentry;
     char buf[MAXPATHLEN];
     int argc, fd, i, mib[4], old_osrel, osrel, phnum, rtld_argc;
@@ -394,7 +503,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 #ifdef __powerpc__
     int old_auxv_format = 1;
 #endif
-    bool dir_enable, direct_exec, explicit_fd, search_in_path;
+    bool dir_enable, dir_ignore, direct_exec, explicit_fd, search_in_path;
 
     /*
      * On entry, the dynamic linker itself has not been relocated yet.
@@ -462,6 +571,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     direct_exec = false;
 
     md_abi_variant_hook(aux_info);
+    rtld_init_env_vars(env);
 
     fd = -1;
     if (aux_info[AT_EXECFD] != NULL) {
@@ -479,7 +589,8 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 
 	    dbg("opening main program in direct exec mode");
 	    if (argc >= 2) {
-		rtld_argc = parse_args(argv, argc, &search_in_path, &fd, &argv0);
+		rtld_argc = parse_args(argv, argc, &search_in_path, &fd,
+		  &argv0, &dir_ignore);
 		explicit_fd = (fd != -1);
 		binpath = NULL;
 		if (!explicit_fd)
@@ -511,7 +622,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 		} else if ((st.st_mode & S_IXOTH) != 0) {
 		    dir_enable = true;
 		}
-		if (!dir_enable) {
+		if (!dir_enable && !dir_ignore) {
 		    _rtld_error("No execute permission for binary %s",
 		        argv0);
 		    rtld_die();
@@ -569,7 +680,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	}
     }
 
-    ld_bind_now = getenv(_LD("BIND_NOW"));
+    ld_bind_now = ld_get_env_var(LD_BIND_NOW);
 
     /*
      * If the process is tainted, then we un-set the dangerous environment
@@ -578,28 +689,26 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
      * future processes to honor the potentially un-safe variables.
      */
     if (!trust) {
-	if (unsetenv(_LD("PRELOAD")) || unsetenv(_LD("LIBMAP")) ||
-	    unsetenv(_LD("LIBRARY_PATH")) || unsetenv(_LD("LIBRARY_PATH_FDS")) ||
-	    unsetenv(_LD("LIBMAP_DISABLE")) || unsetenv(_LD("BIND_NOT")) ||
-	    unsetenv(_LD("DEBUG")) || unsetenv(_LD("ELF_HINTS_PATH")) ||
-	    unsetenv(_LD("LOADFLTR")) || unsetenv(_LD("LIBRARY_PATH_RPATH")) ||
-	    unsetenv(_LD("PRELOAD_FDS"))) {
-		_rtld_error("environment corrupt; aborting");
-		rtld_die();
-	}
+	    for (i = 0; i < (int)nitems(ld_env_vars); i++) {
+		    lvd = &ld_env_vars[i];
+		    if (lvd->unsecure)
+			    lvd->val = NULL;
+	    }
     }
-    ld_debug = getenv(_LD("DEBUG"));
+
+    ld_debug = ld_get_env_var(LD_DEBUG);
     if (ld_bind_now == NULL)
-	    ld_bind_not = getenv(_LD("BIND_NOT")) != NULL;
-    libmap_disable = getenv(_LD("LIBMAP_DISABLE")) != NULL;
-    libmap_override = getenv(_LD("LIBMAP"));
-    ld_library_path = getenv(_LD("LIBRARY_PATH"));
-    ld_library_dirs = getenv(_LD("LIBRARY_PATH_FDS"));
-    ld_preload = getenv(_LD("PRELOAD"));
-    ld_preload_fds = getenv(_LD("PRELOAD_FDS"));
-    ld_elf_hints_path = getenv(_LD("ELF_HINTS_PATH"));
-    ld_loadfltr = getenv(_LD("LOADFLTR")) != NULL;
-    library_path_rpath = getenv(_LD("LIBRARY_PATH_RPATH"));
+	    ld_bind_not = ld_get_env_var(LD_BIND_NOT) != NULL;
+    ld_dynamic_weak = ld_get_env_var(LD_DYNAMIC_WEAK) == NULL;
+    libmap_disable = ld_get_env_var(LD_LIBMAP_DISABLE) != NULL;
+    libmap_override = ld_get_env_var(LD_LIBMAP);
+    ld_library_path = ld_get_env_var(LD_LIBRARY_PATH);
+    ld_library_dirs = ld_get_env_var(LD_LIBRARY_PATH_FDS);
+    ld_preload = ld_get_env_var(LD_PRELOAD);
+    ld_preload_fds = ld_get_env_var(LD_PRELOAD_FDS);
+    ld_elf_hints_path = ld_get_env_var(LD_ELF_HINTS_PATH);
+    ld_loadfltr = ld_get_env_var(LD_LOADFLTR) != NULL;
+    library_path_rpath = ld_get_env_var(LD_LIBRARY_PATH_RPATH);
     if (library_path_rpath != NULL) {
 	    if (library_path_rpath[0] == 'y' ||
 		library_path_rpath[0] == 'Y' ||
@@ -608,11 +717,11 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	    else
 		    ld_library_path_rpath = false;
     }
-    dangerous_ld_env = libmap_disable || (libmap_override != NULL) ||
-	(ld_library_path != NULL) || (ld_preload != NULL) ||
-	(ld_elf_hints_path != NULL) || ld_loadfltr;
-    ld_tracing = getenv(_LD("TRACE_LOADED_OBJECTS"));
-    ld_utrace = getenv(_LD("UTRACE"));
+    dangerous_ld_env = libmap_disable || libmap_override != NULL ||
+	ld_library_path != NULL || ld_preload != NULL ||
+	ld_elf_hints_path != NULL || ld_loadfltr || ld_dynamic_weak;
+    ld_tracing = ld_get_env_var(LD_TRACE_LOADED_OBJECTS);
+    ld_utrace = ld_get_env_var(LD_UTRACE);
 
     if ((ld_elf_hints_path == NULL) || strlen(ld_elf_hints_path) == 0)
 	ld_elf_hints_path = ld_elf_hints_default;
@@ -748,7 +857,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	exit(0);
     }
 
-    if (getenv(_LD("DUMP_REL_PRE")) != NULL) {
+    if (ld_get_env_var(LD_DUMP_REL_PRE) != NULL) {
        dump_relocations(obj_main);
        exit (0);
     }
@@ -776,7 +885,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     if (do_copy_relocations(obj_main) == -1)
 	rtld_die();
 
-    if (getenv(_LD("DUMP_REL_POST")) != NULL) {
+    if (ld_get_env_var(LD_DUMP_REL_POST) != NULL) {
        dump_relocations(obj_main);
        exit (0);
     }
@@ -1144,6 +1253,18 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 
 	case DT_RELAENT:
 	    assert(dynp->d_un.d_val == sizeof(Elf_Rela));
+	    break;
+
+	case DT_RELR:
+	    obj->relr = (const Elf_Relr *)(obj->relocbase + dynp->d_un.d_ptr);
+	    break;
+
+	case DT_RELRSZ:
+	    obj->relrsize = dynp->d_un.d_val;
+	    break;
+
+	case DT_RELRENT:
+	    assert(dynp->d_un.d_val == sizeof(Elf_Relr));
 	    break;
 
 	case DT_PLTREL:
@@ -1557,7 +1678,8 @@ digest_phdr(const Elf_Phdr *phdr, int phnum, caddr_t entry, const char *path)
 
 	case PT_GNU_RELRO:
 	    obj->relro_page = obj->relocbase + trunc_page(ph->p_vaddr);
-	    obj->relro_size = round_page(ph->p_memsz);
+	    obj->relro_size = trunc_page(ph->p_vaddr + ph->p_memsz) -
+	      trunc_page(ph->p_vaddr);
 	    break;
 
 	case PT_NOTE:
@@ -2491,36 +2613,42 @@ load_needed_objects(Obj_Entry *first, int flags)
 }
 
 static int
-load_preload_objects(char *p, bool isfd)
+load_preload_objects(const char *penv, bool isfd)
 {
 	Obj_Entry *obj;
+	const char *name;
+	size_t len;
+	char savech, *p, *psave;
+	int fd;
 	static const char delim[] = " \t:;";
 
-	if (p == NULL)
+	if (penv == NULL)
 		return (0);
 
+	p = psave = xstrdup(penv);
 	p += strspn(p, delim);
 	while (*p != '\0') {
-		const char *name;
-		size_t len = strcspn(p, delim);
-		char savech;
-		int fd;
+		len = strcspn(p, delim);
 
 		savech = p[len];
 		p[len] = '\0';
 		if (isfd) {
 			name = NULL;
 			fd = parse_integer(p);
-			if (fd == -1)
+			if (fd == -1) {
+				free(psave);
 				return (-1);
+			}
 		} else {
 			name = p;
 			fd = -1;
 		}
 
 		obj = load_object(name, fd, NULL, 0);
-		if (obj == NULL)
+		if (obj == NULL) {
+			free(psave);
 			return (-1);	/* XXX - cleanup */
+		}
 		obj->z_interpose = true;
 		p[len] = savech;
 		p += len;
@@ -2528,6 +2656,7 @@ load_preload_objects(char *p, bool isfd)
 	}
 	LD_UTRACE(UTRACE_PRELOAD_FINISHED, NULL, NULL, 0, 0, NULL);
 
+	free(psave);
 	return (0);
 }
 
@@ -3031,6 +3160,29 @@ reloc_textrel_prot(Obj_Entry *obj, bool before)
 	return (0);
 }
 
+/* Process RELR relative relocations. */
+static void
+reloc_relr(Obj_Entry *obj)
+{
+	const Elf_Relr *relr, *relrlim;
+	Elf_Addr *where;
+
+	relrlim = (const Elf_Relr *)((const char *)obj->relr + obj->relrsize);
+	for (relr = obj->relr; relr < relrlim; relr++) {
+	    Elf_Relr entry = *relr;
+
+	    if ((entry & 1) == 0) {
+		where = (Elf_Addr *)(obj->relocbase + entry);
+		*where++ += (Elf_Addr)obj->relocbase;
+	    } else {
+		for (long i = 0; (entry >>= 1) != 0; i++)
+		    if ((entry & 1) != 0)
+			where[i] += (Elf_Addr)obj->relocbase;
+		where += CHAR_BIT * sizeof(Elf_Relr) - 1;
+	    }
+	}
+}
+
 /*
  * Relocate single object.
  * Returns 0 on success, or -1 on failure.
@@ -3057,6 +3209,7 @@ relocate_object(Obj_Entry *obj, bool bind_now, Obj_Entry *rtldobj,
 	/* Process the non-PLT non-IFUNC relocations. */
 	if (reloc_non_plt(obj, rtldobj, flags, lockstate))
 		return (-1);
+	reloc_relr(obj);
 
 	/* Re-protected the text segment. */
 	if (obj->textrel && reloc_textrel_prot(obj, false) != 0)
@@ -3672,11 +3825,12 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 		    continue;
 		res = symlook_obj(&req, obj);
 		if (res == 0) {
-		    if (def == NULL ||
-		      ELF_ST_BIND(req.sym_out->st_info) != STB_WEAK) {
+		    if (def == NULL || (ld_dynamic_weak &&
+                      ELF_ST_BIND(req.sym_out->st_info) != STB_WEAK)) {
 			def = req.sym_out;
 			defobj = req.defobj_out;
-			if (ELF_ST_BIND(def->st_info) != STB_WEAK)
+			if (!ld_dynamic_weak ||
+			  ELF_ST_BIND(def->st_info) != STB_WEAK)
 			    break;
 		    }
 		}
@@ -3685,6 +3839,8 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 	     * Search the dynamic linker itself, and possibly resolve the
 	     * symbol from there.  This is how the application links to
 	     * dynamic linker services such as dlopen.
+	     * Note that we ignore ld_dynamic_weak == false case,
+	     * always overriding weak symbols by rtld definitions.
 	     */
 	    if (def == NULL || ELF_ST_BIND(def->st_info) == STB_WEAK) {
 		res = symlook_obj(&req, &obj_rtld);
@@ -4287,10 +4443,10 @@ symlook_global(SymLook *req, DoneList *donelist)
     symlook_init_from_req(&req1, req);
 
     /* Search all objects loaded at program start up. */
-    if (req->defobj_out == NULL ||
-      ELF_ST_BIND(req->sym_out->st_info) == STB_WEAK) {
+    if (req->defobj_out == NULL || (ld_dynamic_weak &&
+      ELF_ST_BIND(req->sym_out->st_info) == STB_WEAK)) {
 	res = symlook_list(&req1, &list_main, donelist);
-	if (res == 0 && (req->defobj_out == NULL ||
+	if (res == 0 && (!ld_dynamic_weak || req->defobj_out == NULL ||
 	  ELF_ST_BIND(req1.sym_out->st_info) != STB_WEAK)) {
 	    req->sym_out = req1.sym_out;
 	    req->defobj_out = req1.defobj_out;
@@ -4300,8 +4456,8 @@ symlook_global(SymLook *req, DoneList *donelist)
 
     /* Search all DAGs whose roots are RTLD_GLOBAL objects. */
     STAILQ_FOREACH(elm, &list_global, link) {
-	if (req->defobj_out != NULL &&
-	  ELF_ST_BIND(req->sym_out->st_info) != STB_WEAK)
+	if (req->defobj_out != NULL && (!ld_dynamic_weak ||
+          ELF_ST_BIND(req->sym_out->st_info) != STB_WEAK))
 	    break;
 	res = symlook_list(&req1, &elm->obj->dagmembers, donelist);
 	if (res == 0 && (req->defobj_out == NULL ||
@@ -4350,8 +4506,8 @@ symlook_default(SymLook *req, const Obj_Entry *refobj)
 
     /* Search all dlopened DAGs containing the referencing object. */
     STAILQ_FOREACH(elm, &refobj->dldags, link) {
-	if (req->sym_out != NULL &&
-	  ELF_ST_BIND(req->sym_out->st_info) != STB_WEAK)
+	if (req->sym_out != NULL && (!ld_dynamic_weak ||
+          ELF_ST_BIND(req->sym_out->st_info) != STB_WEAK))
 	    break;
 	res = symlook_list(&req1, &elm->obj->dagmembers, &donelist);
 	if (res == 0 && (req->sym_out == NULL ||
@@ -4396,10 +4552,11 @@ symlook_list(SymLook *req, const Objlist *objlist, DoneList *dlp)
 	    continue;
 	symlook_init_from_req(&req1, req);
 	if ((res = symlook_obj(&req1, elm->obj)) == 0) {
-	    if (def == NULL || ELF_ST_BIND(req1.sym_out->st_info) != STB_WEAK) {
+	    if (def == NULL || (ld_dynamic_weak &&
+              ELF_ST_BIND(req1.sym_out->st_info) != STB_WEAK)) {
 		def = req1.sym_out;
 		defobj = req1.defobj_out;
-		if (ELF_ST_BIND(def->st_info) != STB_WEAK)
+		if (!ld_dynamic_weak || ELF_ST_BIND(def->st_info) != STB_WEAK)
 		    break;
 	    }
 	}
@@ -4434,10 +4591,11 @@ symlook_needed(SymLook *req, const Needed_Entry *needed, DoneList *dlp)
 	if (n->obj == NULL ||
 	    (res = symlook_list(&req1, &n->obj->dagmembers, dlp)) != 0)
 	    continue;
-	if (def == NULL || ELF_ST_BIND(req1.sym_out->st_info) != STB_WEAK) {
+	if (def == NULL || (ld_dynamic_weak &&
+          ELF_ST_BIND(req1.sym_out->st_info) != STB_WEAK)) {
 	    def = req1.sym_out;
 	    defobj = req1.defobj_out;
-	    if (ELF_ST_BIND(def->st_info) != STB_WEAK)
+	    if (!ld_dynamic_weak || ELF_ST_BIND(def->st_info) != STB_WEAK)
 		break;
 	}
     }
@@ -4706,16 +4864,17 @@ trace_loaded_objects(Obj_Entry *obj)
     const char *fmt1, *fmt2, *fmt, *main_local, *list_containers;
     int c;
 
-    if ((main_local = getenv(_LD("TRACE_LOADED_OBJECTS_PROGNAME"))) == NULL)
+    if ((main_local = ld_get_env_var(LD_TRACE_LOADED_OBJECTS_PROGNAME)) ==
+      NULL)
 	main_local = "";
 
-    if ((fmt1 = getenv(_LD("TRACE_LOADED_OBJECTS_FMT1"))) == NULL)
+    if ((fmt1 = ld_get_env_var(LD_TRACE_LOADED_OBJECTS_FMT1)) == NULL)
 	fmt1 = "\t%o => %p (%x)\n";
 
-    if ((fmt2 = getenv(_LD("TRACE_LOADED_OBJECTS_FMT2"))) == NULL)
+    if ((fmt2 = ld_get_env_var(LD_TRACE_LOADED_OBJECTS_FMT2)) == NULL)
 	fmt2 = "\t%o (%x)\n";
 
-    list_containers = getenv(_LD("TRACE_LOADED_OBJECTS_ALL"));
+    list_containers = ld_get_env_var(LD_TRACE_LOADED_OBJECTS_ALL);
 
     for (; obj != NULL; obj = TAILQ_NEXT(obj, next)) {
 	Needed_Entry *needed;
@@ -4938,8 +5097,7 @@ tls_get_addr_common(Elf_Addr **dtvp, int index, size_t offset)
 	return (tls_get_addr_slow(dtvp, index, offset, false));
 }
 
-#if defined(__aarch64__) || defined(__arm__) || defined(__mips__) || \
-    defined(__powerpc__) || defined(__riscv)
+#ifdef TLS_VARIANT_I
 
 /*
  * Return pointer to allocated TLS block
@@ -5070,9 +5228,9 @@ free_tls(void *tcb, size_t tcbsize, size_t tcbalign __unused)
     free_aligned(get_tls_block_ptr(tcb, tcbsize));
 }
 
-#endif
+#endif	/* TLS_VARIANT_I */
 
-#if defined(__i386__) || defined(__amd64__)
+#ifdef TLS_VARIANT_II
 
 /*
  * Allocate Static TLS using the Variant II method.
@@ -5178,7 +5336,7 @@ free_tls(void *tls, size_t tcbsize  __unused, size_t tcbalign)
     free((void*) dtv);
 }
 
-#endif
+#endif	/* TLS_VARIANT_II */
 
 /*
  * Allocate TLS block for module with given index.
@@ -5226,6 +5384,11 @@ allocate_tls_offset(Obj_Entry *obj)
 	off = calculate_tls_offset(tls_last_offset, tls_last_size,
 	  obj->tlssize, obj->tlsalign, obj->tlspoffset);
 
+    obj->tlsoffset = off;
+#ifdef TLS_VARIANT_I
+    off += obj->tlssize;
+#endif
+
     /*
      * If we have already fixed the size of the static TLS block, we
      * must stay within that size. When allocating the static TLS, we
@@ -5233,13 +5396,13 @@ allocate_tls_offset(Obj_Entry *obj)
      * loading modules which use static TLS.
      */
     if (tls_static_space != 0) {
-	if (calculate_tls_end(off, obj->tlssize) > tls_static_space)
+	if (off > tls_static_space)
 	    return false;
     } else if (obj->tlsalign > tls_static_max_align) {
 	    tls_static_max_align = obj->tlsalign;
     }
 
-    tls_last_offset = obj->tlsoffset = off;
+    tls_last_offset = off;
     tls_last_size = obj->tlssize;
     obj->tls_done = true;
 
@@ -5256,8 +5419,11 @@ free_tls_offset(Obj_Entry *obj)
      * simplistic workaround to allow libGL.so.1 to be loaded and
      * unloaded multiple times.
      */
-    if (calculate_tls_end(obj->tlsoffset, obj->tlssize)
-	== calculate_tls_end(tls_last_offset, tls_last_size)) {
+    size_t off = obj->tlsoffset;
+#ifdef TLS_VARIANT_I
+    off += obj->tlssize;
+#endif
+    if (off == tls_last_offset) {
 	tls_last_offset -= obj->tlssize;
 	tls_last_size = 0;
     }
@@ -5713,7 +5879,7 @@ open_binary_fd(const char *argv0, bool search_in_path,
  */
 static int
 parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
-    const char **argv0)
+    const char **argv0, bool *dir_ignore)
 {
 	const char *arg;
 	char machine[64];
@@ -5725,6 +5891,7 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
 	dbg("Parsing command-line arguments");
 	*use_pathp = false;
 	*fdp = -1;
+	*dir_ignore = false;
 	seen_b = seen_f = false;
 
 	for (i = 1; i < argc; i++ ) {
@@ -5760,6 +5927,9 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
 				i++;
 				*argv0 = argv[i];
 				seen_b = true;
+				break;
+			} else if (opt == 'd') {
+				*dir_ignore = true;
 				break;
 			} else if (opt == 'f') {
 				if (seen_b) {
@@ -5859,11 +6029,12 @@ print_usage(const char *argv0)
 {
 
 	rtld_printf(
-	    "Usage: %s [-h] [-b <exe>] [-f <FD>] [-p] [--] <binary> [<args>]\n"
+	    "Usage: %s [-h] [-b <exe>] [-d] [-f <FD>] [-p] [--] <binary> [<args>]\n"
 	    "\n"
 	    "Options:\n"
 	    "  -h        Display this help message\n"
 	    "  -b <exe>  Execute <exe> instead of <binary>, arg0 is <binary>\n"
+	    "  -d        Ignore lack of exec permissions for the binary\n"
 	    "  -f <FD>   Execute <FD> instead of searching for <binary>\n"
 	    "  -p        Search in PATH for named binary\n"
 	    "  -u        Ignore LD_ environment variables\n"
@@ -5903,6 +6074,13 @@ rtld_strerror(int errnum)
 	if (errnum < 0 || errnum >= sys_nerr)
 		return ("Unknown error");
 	return (sys_errlist[errnum]);
+}
+
+char *
+getenv(const char *name)
+{
+	return (__DECONST(char *, rtld_get_env_val(environ, name,
+	    strlen(name))));
 }
 
 /* malloc */

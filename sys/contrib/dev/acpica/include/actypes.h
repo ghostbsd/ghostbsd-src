@@ -658,8 +658,13 @@ typedef UINT64                          ACPI_INTEGER;
 /* Pointer/Integer type conversions */
 
 #define ACPI_TO_POINTER(i)              ACPI_CAST_PTR (void, (ACPI_SIZE) (i))
+#ifdef __FreeBSD__
+#define ACPI_TO_INTEGER(p)              ((ACPI_SIZE) (p))
+#define ACPI_OFFSET(d, f)               ((ACPI_SIZE) __offsetof(d, f))
+#else
 #define ACPI_TO_INTEGER(p)              ACPI_PTR_DIFF (p, (void *) 0)
 #define ACPI_OFFSET(d, f)               ACPI_PTR_DIFF (&(((d *) 0)->f), (void *) 0)
+#endif
 #define ACPI_PHYSADDR_TO_PTR(i)         ACPI_TO_POINTER(i)
 #define ACPI_PTR_TO_PHYSADDR(i)         ACPI_TO_INTEGER(i)
 
@@ -1531,6 +1536,7 @@ typedef enum
 #define ACPI_OSI_WIN_10_RS4             0x12
 #define ACPI_OSI_WIN_10_RS5             0x13
 #define ACPI_OSI_WIN_10_19H1            0x14
+#define ACPI_OSI_WIN_10_20H1            0x15
 
 
 /* Definitions of getopt */

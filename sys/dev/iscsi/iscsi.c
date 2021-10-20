@@ -892,6 +892,15 @@ iscsi_pdu_handle_scsi_response(struct icl_pdu *response)
 	}
 
 	ccb = io->io_ccb;
+	if (ntohl(bhssr->bhssr_expdatasn) != io->io_datasn) {
+		ISCSI_SESSION_WARN(is,
+		    "ExpDataSN mismatch in SCSI Response (%u vs %u)",
+		    ntohl(bhssr->bhssr_expdatasn), io->io_datasn);
+		icl_pdu_free(response);
+		iscsi_session_reconnect(is);
+		ISCSI_SESSION_UNLOCK(is);
+		return;
+	}
 
 	/*
 	 * With iSER, after getting good response we can be sure
@@ -1047,6 +1056,17 @@ iscsi_pdu_handle_data_in(struct icl_pdu *response)
 		return;
 	}
 
+	if (io->io_datasn != ntohl(bhsdi->bhsdi_datasn)) {
+		ISCSI_SESSION_WARN(is, "received Data-In PDU with "
+		    "DataSN %u, while expected %u; dropping connection",
+		    ntohl(bhsdi->bhsdi_datasn), io->io_datasn);
+		icl_pdu_free(response);
+		iscsi_session_reconnect(is);
+		ISCSI_SESSION_UNLOCK(is);
+		return;
+	}
+	io->io_datasn += response->ip_additional_pdus + 1;
+
 	data_segment_len = icl_pdu_data_segment_length(response);
 	if (data_segment_len == 0) {
 		/*
@@ -1096,7 +1116,6 @@ iscsi_pdu_handle_data_in(struct icl_pdu *response)
 	icl_pdu_get_data(response, 0, csio->data_ptr + oreceived, data_segment_len);
 
 	/*
-	 * XXX: Check DataSN.
 	 * XXX: Check F.
 	 */
 	if ((bhsdi->bhsdi_flags & BHSDI_FLAGS_S) == 0) {
@@ -1154,7 +1173,7 @@ iscsi_pdu_handle_r2t(struct icl_pdu *response)
 	struct iscsi_bhs_data_out *bhsdo;
 	struct iscsi_outstanding *io;
 	struct ccb_scsiio *csio;
-	size_t off, len, total_len;
+	size_t off, len, max_send_data_segment_length, total_len;
 	int error;
 	uint32_t datasn = 0;
 
@@ -1203,11 +1222,16 @@ iscsi_pdu_handle_r2t(struct icl_pdu *response)
 
 	//ISCSI_SESSION_DEBUG(is, "r2t; off %zd, len %zd", off, total_len);
 
+	if (is->is_conn->ic_hw_isomax != 0)
+		max_send_data_segment_length = is->is_conn->ic_hw_isomax;
+	else
+		max_send_data_segment_length =
+		    is->is_conn->ic_max_send_data_segment_length;
 	for (;;) {
 		len = total_len;
 
-		if (len > is->is_conn->ic_max_send_data_segment_length)
-			len = is->is_conn->ic_max_send_data_segment_length;
+		if (len > max_send_data_segment_length)
+			len = max_send_data_segment_length;
 
 		if (off + len > csio->dxfer_len) {
 			ISCSI_SESSION_WARN(is, "target requested invalid "
@@ -1232,7 +1256,7 @@ iscsi_pdu_handle_r2t(struct icl_pdu *response)
 		    bhsr2t->bhsr2t_initiator_task_tag;
 		bhsdo->bhsdo_target_transfer_tag =
 		    bhsr2t->bhsr2t_target_transfer_tag;
-		bhsdo->bhsdo_datasn = htonl(datasn++);
+		bhsdo->bhsdo_datasn = htonl(datasn);
 		bhsdo->bhsdo_buffer_offset = htonl(off);
 		error = icl_pdu_append_data(request, csio->data_ptr + off, len,
 		    M_NOWAIT);
@@ -1245,6 +1269,8 @@ iscsi_pdu_handle_r2t(struct icl_pdu *response)
 			return;
 		}
 
+		datasn += howmany(len,
+		    is->is_conn->ic_max_send_data_segment_length);
 		off += len;
 		total_len -= len;
 
@@ -1506,8 +1532,7 @@ iscsi_ioctl_daemon_handoff(struct iscsi_softc *sc,
 			return (ENOMEM);
 		}
 
-		error = xpt_bus_register(is->is_sim, NULL, 0);
-		if (error != 0) {
+		if (xpt_bus_register(is->is_sim, NULL, 0) != 0) {
 			ISCSI_SESSION_UNLOCK(is);
 			ISCSI_SESSION_WARN(is, "failed to register bus");
 			iscsi_session_terminate(is);

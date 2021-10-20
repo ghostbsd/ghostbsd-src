@@ -59,6 +59,7 @@ _MKSHOWCONFIG=	t
 
 SRCDIR?=	${.CURDIR}
 LOCALBASE?=	/usr/local
+TIME_ENV ?= time env
 
 .include "share/mk/src.tools.mk"
 
@@ -92,6 +93,9 @@ X${COMPILER}?=	${${COMPILER}}
 # a cross compiler.
 .if ${XCC:N${CCACHE_BIN}:M/*}
 MK_CLANG_BOOTSTRAP=	no
+# Make sure sub-makes see the option as disabled so the hack in bsd.sys.mk to
+# work around incompatible headers in Clang's resource directory is enabled.
+.MAKEOVERRIDES+=	MK_CLANG_BOOTSTRAP
 .endif
 
 # Pull in compiler metadata from buildworld/toolchain if possible to avoid
@@ -713,16 +717,28 @@ BSARGS= 	DESTDIR= \
 		MAKEOBJDIRPREFIX= \
 		BOOTSTRAPPING=${BOOTSTRAPPING_OSRELDATE} \
 		BWPHASE=${.TARGET:C,^_,,} \
-		SSP_CFLAGS= \
-		MK_HTML=no NO_LINT=yes MK_MAN=no MK_MAN_UTILS=yes \
-		-DNO_PIC MK_PROFILE=no -DNO_SHARED \
-		-DNO_CPU_CFLAGS MK_WERROR=no MK_CTF=no \
-		MK_CLANG_EXTRAS=no MK_CLANG_FORMAT=no MK_CLANG_FULL=no \
-		MK_LLDB=no MK_RETPOLINE=no MK_TESTS=no \
-		MK_INCLUDES=yes
+		-DNO_CPU_CFLAGS \
+		-DNO_LINT \
+		-DNO_PIC \
+		-DNO_SHARED \
+		MK_ASAN=no \
+		MK_CTF=no \
+		MK_CLANG_EXTRAS=no \
+		MK_CLANG_FORMAT=no \
+		MK_CLANG_FULL=no \
+		MK_HTML=no \
+		MK_MAN=no \
+		MK_PROFILE=no \
+		MK_RETPOLINE=no \
+		MK_SSP=no \
+		MK_TESTS=no \
+		MK_UBSAN=no \
+		MK_WERROR=no \
+		MK_INCLUDES=yes \
+		MK_MAN_UTILS=yes
 
 BMAKE=		\
-		${BMAKEENV} ${MAKE} ${WORLD_FLAGS} -f Makefile.inc1 \
+		${TIME_ENV} ${BMAKEENV} ${MAKE} ${WORLD_FLAGS} -f Makefile.inc1 \
 		${BSARGS}
 .if empty(.MAKEOVERRIDES:MMK_LLVM_TARGET_ALL)
 BMAKE+=		MK_LLVM_TARGET_ALL=no
@@ -730,22 +746,32 @@ BMAKE+=		MK_LLVM_TARGET_ALL=no
 
 # build-tools stage
 TMAKE=		\
-		${BMAKEENV} ${MAKE} ${WORLD_FLAGS} -f Makefile.inc1 \
+		${TIME_ENV} ${BMAKEENV} ${MAKE} ${WORLD_FLAGS} -f Makefile.inc1 \
 		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
 		DESTDIR= \
 		BOOTSTRAPPING=${BOOTSTRAPPING_OSRELDATE} \
 		BWPHASE=${.TARGET:C,^_,,} \
-		SSP_CFLAGS= \
+		-DNO_CPU_CFLAGS \
 		-DNO_LINT \
-		-DNO_CPU_CFLAGS MK_WERROR=no MK_CTF=no \
-		MK_CLANG_EXTRAS=no MK_CLANG_FORMAT=no MK_CLANG_FULL=no \
-		MK_LLDB=no MK_RETPOLINE=no MK_TESTS=no
+		MK_ASAN=no \
+		MK_CTF=no \
+		MK_CLANG_EXTRAS=no \
+		MK_CLANG_FORMAT=no \
+		MK_CLANG_FULL=no \
+		MK_LLDB=no \
+		MK_RETPOLINE=no \
+		MK_SSP=no \
+		MK_TESTS=no \
+		MK_UBSAN=no \
+		MK_WERROR=no
 
 # cross-tools stage
 # TOOLS_PREFIX set in BMAKE
 XMAKE=		${BMAKE} \
 		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
 		MK_CLANG_IS_CC=${MK_CLANG_BOOTSTRAP} \
+		MK_LLDB=no \
+		MK_LLVM_BINUTILS=no \
 		MK_TESTS=no
 
 # kernel-tools stage
@@ -754,7 +780,7 @@ KTMAKEENV=	INSTALL="sh ${.CURDIR}/tools/install.sh" \
 		WORLDTMP=${WORLDTMP} \
 		MAKEFLAGS="-m ${.CURDIR}/tools/build/mk ${.MAKEFLAGS}"
 
-KTMAKE=		\
+KTMAKE=		${TIME_ENV} \
 		TOOLS_PREFIX=${TOOLS_PREFIX_UNDEF:U${WORLDTMP}} \
 		${KTMAKEENV} ${MAKE} ${WORLD_FLAGS} -f Makefile.inc1 \
 		DESTDIR= \
@@ -762,10 +788,17 @@ KTMAKE=		\
 		OBJROOT='$${OBJTOP}/' \
 		MAKEOBJDIRPREFIX= \
 		BOOTSTRAPPING=${BOOTSTRAPPING_OSRELDATE} \
-		SSP_CFLAGS= \
-		MK_HTML=no -DNO_LINT MK_MAN=no \
-		-DNO_PIC MK_PROFILE=no -DNO_SHARED \
-		-DNO_CPU_CFLAGS MK_RETPOLINE=no MK_WERROR=no MK_CTF=no
+		-DNO_CPU_CFLAGS \
+		-DNO_LINT \
+		-DNO_PIC \
+		-DNO_SHARED \
+		MK_CTF=no \
+		MK_HTML=no \
+		MK_MAN=no \
+		MK_PROFILE=no \
+		MK_SSP=no \
+		MK_RETPOLINE=no \
+		MK_WERROR=no
 
 # world stage
 WMAKEENV=	${CROSSENV} \
@@ -882,12 +915,12 @@ host-osreldate.h: # DO NOT ADD /usr/include/osreldate.h here
 	@echo "#endif" >> ${.TARGET}
 .endif
 
-WMAKE=		${WMAKEENV} ${MAKE} ${WORLD_FLAGS} -f Makefile.inc1 \
+WMAKE=		${TIME_ENV} ${WMAKEENV} ${MAKE} ${WORLD_FLAGS} -f Makefile.inc1 \
 		BWPHASE=${.TARGET:C,^_,,} \
 		DESTDIR=${WORLDTMP}
 
 IMAKEENV=	${CROSSENV}
-IMAKE=		${IMAKEENV} ${MAKE} -f Makefile.inc1 \
+IMAKE=		${TIME_ENV} ${IMAKEENV} ${MAKE} -f Makefile.inc1 \
 		${IMAKE_INSTALL} ${IMAKE_MTREE}
 .if empty(.MAKEFLAGS:M-n)
 IMAKEENV+=	PATH=${STRICTTMPPATH}:${INSTALLTMP} \
@@ -951,7 +984,7 @@ DESTDIR_MTREE=	${DISTR_MTREE} ${DESTDIR_MTREEFLAGS}
 
 # kernel stage
 KMAKEENV=	${WMAKEENV:NSYSROOT=*}
-KMAKE=		${KMAKEENV} ${MAKE} ${.MAKEFLAGS} ${KERNEL_FLAGS} KERNEL=${INSTKERNNAME}
+KMAKE=		${TIME_ENV} ${KMAKEENV} ${MAKE} ${.MAKEFLAGS} ${KERNEL_FLAGS} KERNEL=${INSTKERNNAME}
 
 #
 # buildworld
@@ -1017,11 +1050,11 @@ _worldtmp: .PHONY
 	@touch ${WORLDTMP}/${.TARGET}
 # We can't use mtree to create the worldtmp directories since it may not be
 # available on the target system (this happens e.g. when building on non-FreeBSD)
-	cd ${.CURDIR}/tools/build; \
+	${_+_}cd ${.CURDIR}/tools/build; \
 	    ${MAKE} DIRPRFX=tools/build/ DESTDIR=${WORLDTMP}/legacy installdirs
 # In order to build without inheriting $PATH we need to add symlinks to the host
 # tools in $WORLDTMP for the tools that we don't build during bootstrap-tools
-	cd ${.CURDIR}/tools/build; \
+	${_+_}cd ${.CURDIR}/tools/build; \
 	    ${MAKE} DIRPRFX=tools/build/ DESTDIR=${WORLDTMP}/legacy host-symlinks
 
 _legacy:
@@ -1186,7 +1219,7 @@ BUILDENV_DIR?=	${.CURDIR}
 # Note: make will report any errors the shell reports. This can
 # be odd if the last command in an interactive shell generates an
 # error or is terminated by SIGINT. These reported errors look bad,
-# but are harmless. Allowing them also allows BUIDLENV_SHELL to
+# but are harmless. Allowing them also allows BUILDENV_SHELL to
 # be a complex command whose status will be returned to the caller.
 # Some scripts in tools rely on this behavior to report build errors.
 #
@@ -1299,7 +1332,7 @@ _sysctl=sysctl
 ITOOLS=	[ awk cap_mkdb cat chflags chmod chown cmp cp \
 	date echo egrep find grep id install ${_install-info} \
 	ln make mkdir mtree mv pwd_mkdb \
-	rm sed services_mkdb sh sort strip ${_sysctl} test true uname wc \
+	rm sed services_mkdb sh sort strip ${_sysctl} test time true uname wc \
 	${_zoneinfo} ${LOCAL_ITOOLS}
 
 # Needed for share/man
@@ -1486,8 +1519,6 @@ makeman: .PHONY
 _sysent_PATH=	${TMPPATH}:/usr/libexec
 _sysent_dirs=	sys/kern
 _sysent_dirs+=	sys/compat/freebsd32
-_sysent_dirs+=	sys/compat/cloudabi32	\
-		sys/compat/cloudabi64
 _sysent_dirs+=	sys/amd64/linux		\
 		sys/amd64/linux32	\
 		sys/arm/linux		\
@@ -1857,8 +1888,15 @@ _pkgbootstrap: .PHONY
 	@env ASSUME_ALWAYS_YES=YES pkg bootstrap
 .endif
 
-.if make(create-world-packages-jobs) || make(create-kernel-packages*) || make(real-update-packages)
+.if make(create-world-packages-jobs) || make(create-kernel-packages*) || make(real-update-packages) || make(sign-packages)
 PKG_ABI!=${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI
+.endif
+PKG_BIN_VERSION!=${PKG_CMD} --version </dev/null 2>/dev/null |\
+    awk -F. '/^[0-9.]+$$/ {print $$1 * 10000 + $$2 * 100 + $$3}'
+.if ${PKG_BIN_VERSION} < 11700
+PKG_EXT=	${PKG_FORMAT}
+.else
+PKG_EXT=	pkg
 .endif
 
 .if !defined(PKG_VERSION_FROM) && make(real-update-packages)
@@ -1899,14 +1937,14 @@ real-update-packages: stage-packages .PHONY
 	@echo "==> Checking for new packages (comparing ${PKG_VERSION} to ${PKG_VERSION_FROM})"
 	@for pkg in ${PKG_VERSION_FROM_DIR}/${PKG_NAME_PREFIX}-*; do \
 	  pkgname=$$(pkg query -F $${pkg} '%n' | sed 's/${PKG_NAME_PREFIX}-\(.*\)/\1/') ; \
-	  newpkgname=${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION}.${PKG_FORMAT} ; \
+	  newpkgname=${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION}.${PKG_EXT} ; \
 	  oldsum=$$(pkg query -F $${pkg} '%X') ; \
 	  if [ ! -f ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} ]; then \
 	    continue; \
 	  fi ; \
 	  newsum=$$(pkg query -F ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} '%X') ; \
 	  if [ "$${oldsum}" == "$${newsum}" ]; then \
-	   echo "==> Keeping old ${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION_FROM}.${PKG_FORMAT}" ; \
+	   echo "==> Keeping old ${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION_FROM}.${PKG_EXT}" ; \
 	   rm ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} ; \
 	   cp $${pkg} ${REPODIR}/${PKG_ABI}/${PKG_VERSION} ; \
 	  else \
@@ -2063,7 +2101,10 @@ create-kernel-packages-extra-flavor${flavor:C,^""$,${_default_flavor},}-${_kerne
 .endif
 
 sign-packages:	_pkgbootstrap .PHONY
-	printf "version = 2;\npacking_format = \"${PKG_FORMAT}\";\n" > ${WSTAGEDIR}/meta
+	printf "version = 2;\n" > ${WSTAGEDIR}/meta
+.if ${PKG_BIN_VERSION} < 11700
+	printf "packing_format = \"${PKG_FORMAT}\";\n" >> ${WSTAGEDIR}/meta
+.endif
 	@[ -L "${REPODIR}/$$(${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI)/latest" ] && \
 		unlink ${REPODIR}/$$(${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI)/latest ; \
 	${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname repo \
@@ -2297,23 +2338,33 @@ _gensnmptree=	usr.sbin/bsnmpd/gensnmptree
 
 # We need to build tblgen when we're building clang or lld, either as
 # bootstrap tools, or as the part of the normal build.
+# llvm-tblgen is also needed for various llvm binutils (e.g. objcopy).
 .if ${MK_CLANG_BOOTSTRAP} != "no" || ${MK_CLANG} != "no" || \
-    ${MK_LLD_BOOTSTRAP} != "no" || ${MK_LLD} != "no"
+    ${MK_LLD_BOOTSTRAP} != "no" || ${MK_LLD} != "no" || \
+    ${MK_LLDB} != "no" || ${MK_LLVM_BINUTILS} != "no"
 _clang_tblgen= \
 	lib/clang/libllvmminimal \
-	usr.bin/clang/llvm-tblgen \
-	usr.bin/clang/clang-tblgen \
-	usr.bin/clang/lldb-tblgen
-# XXX: lldb-tblgen is not needed, if top-level MK_LLDB=no
-
+	usr.bin/clang/llvm-tblgen
+.if ${MK_CLANG_BOOTSTRAP} != "no" || ${MK_CLANG} != "no"
+_clang_tblgen+=	usr.bin/clang/clang-tblgen
+.endif
+.if ${MK_LLDB} != "no"
+_clang_tblgen+=	usr.bin/clang/lldb-tblgen
+.endif
 ${_bt}-usr.bin/clang/clang-tblgen: ${_bt}-lib/clang/libllvmminimal
 ${_bt}-usr.bin/clang/llvm-tblgen: ${_bt}-lib/clang/libllvmminimal
 ${_bt}-usr.bin/clang/lldb-tblgen: ${_bt}-lib/clang/libllvmminimal
 .endif
 
-.if ${MK_LOCALES} != "no"
+# C.UTF-8 is always built in share/ctypes and we need localedef for that.
 _localedef=	usr.bin/localedef
 ${_bt}-usr.bin/localedef: ${_bt}-usr.bin/yacc ${_bt_lex_depend}
+
+.if ${MK_ICONV} != "no"
+_mkesdb=	usr.bin/mkesdb
+_mkcsmapper=	usr.bin/mkcsmapper
+${_bt}-usr.bin/mkesdb: ${_bt}-usr.bin/yacc ${_bt_lex_depend}
+${_bt}-usr.bin/mkcsmapper: ${_bt}-usr.bin/yacc ${_bt_lex_depend}
 .endif
 
 .if ${MK_KERBEROS} != "no"
@@ -2426,7 +2477,7 @@ _bootstrap_tools_links+=${_links:S/,/ /g}
 ${_bt}-links: .PHONY
 
 .for _tool in ${_bootstrap_tools_links}
-${_bt}-link-${_tool}: .PHONY .MAKE
+${_bt}-link-${_tool}: .PHONY
 	@rm -f "${WORLDTMP}/legacy/bin/${_tool}"; \
 	source_path=`which ${_tool}`; \
 	if [ ! -e "$${source_path}" ] ; then \
@@ -2449,7 +2500,6 @@ bootstrap-tools: ${_bt}-links .PHONY
     ${_cat} \
     ${_kbdcontrol} \
     ${_elftoolchain_libs} \
-    usr.bin/lorder \
     lib/libopenbsd \
     usr.bin/mandoc \
     usr.bin/rpcgen \
@@ -2467,6 +2517,8 @@ bootstrap-tools: ${_bt}-links .PHONY
     ${_nmtree} \
     ${_vtfontcvt} \
     ${_localedef} \
+    ${_mkcsmapper} \
+    ${_mkesdb} \
     ${LOCAL_BSTOOL_DIRS}
 ${_bt}-${_tool}: ${_bt}-links .PHONY .MAKE
 	${_+_}@${ECHODIR} "===> ${_tool} (obj,all,install)"; \
@@ -2523,13 +2575,11 @@ _bt_clean=	${CLEANDIR}
     bin/sh \
     ${LOCAL_TOOL_DIRS} \
     ${_jevents} \
-    lib/ncurses/ncurses \
+    lib/ncurses/tinfo \
     ${_rescue} \
     ${_share} \
     usr.bin/awk \
     ${_libmagic} \
-    usr.bin/mkesdb_static \
-    usr.bin/mkcsmapper_static \
     usr.bin/vi/catalog
 build-tools_${_tool}: .PHONY
 	${_+_}@${ECHODIR} "===> ${_tool} (${_bt_clean:D${_bt_clean},}obj,build-tools)"; \
@@ -2681,7 +2731,6 @@ NXBDIRS+= \
     usr.bin/id \
     usr.bin/lex \
     usr.bin/limits \
-    usr.bin/lorder \
     usr.bin/mandoc \
     usr.bin/mktemp \
     usr.bin/mt \
@@ -2719,11 +2768,9 @@ SUBDIR=	${SUBDIR_OVERRIDE}
 NXBMAKEARGS+= \
 	OBJTOP=${NXBOBJTOP:Q} \
 	OBJROOT=${NXBOBJROOT:Q} \
-	MAKEOBJDIRPREFIX= \
 	-DNO_SHARED \
 	-DNO_CPU_CFLAGS \
 	-DNO_PIC \
-	SSP_CFLAGS= \
 	MK_CASPER=no \
 	MK_CLANG_EXTRAS=no \
 	MK_CLANG_FORMAT=no \
@@ -2739,9 +2786,17 @@ NXBMAKEARGS+= \
 	MK_PROFILE=no \
 	MK_RETPOLINE=no \
 	MK_SENDMAIL=no \
+	MK_SSP=no \
 	MK_TESTS=no \
 	MK_WERROR=no \
 	MK_ZFS=no
+
+NXBMAKEENV+= \
+	MAKEOBJDIRPREFIX=
+
+# This should match all of the knobs in lib/Makefile that it takes to avoid
+# descending into lib/clang!
+NXBTNOTOOLS=	MK_CLANG=no MK_LLD=no MK_LLDB=no MK_LLVM_BINUTILS=no
 
 .if make(native-xtools*) && \
     (!defined(NXB_TARGET) || !defined(NXB_TARGET_ARCH))
@@ -2782,11 +2837,11 @@ native-xtools: .PHONY
 	# Populate includes/libraries sysroot that produce native binaries.
 	# This is split out from 'toolchain' above mostly so that target LLVM
 	# libraries have a proper LLVM_DEFAULT_TARGET_TRIPLE without
-	# polluting the cross-compiler build.  The LLVM/GCC libs are skipped
+	# polluting the cross-compiler build.  The LLVM libs are skipped
 	# here to avoid the problem but are kept in 'toolchain' so that
 	# needed build tools are built.
-	${_+_}cd ${.CURDIR}; ${NXBTMAKE} _includes MK_CLANG=no
-	${_+_}cd ${.CURDIR}; ${NXBTMAKE} _libraries MK_CLANG=no
+	${_+_}cd ${.CURDIR}; ${NXBTMAKE} _includes ${NXBTNOTOOLS}
+	${_+_}cd ${.CURDIR}; ${NXBTMAKE} _libraries ${NXBTNOTOOLS}
 .if !defined(NO_OBJWALK)
 	${_+_}cd ${.CURDIR}; ${NXBMAKE} _obj
 .endif
@@ -2831,6 +2886,16 @@ _prereq_libs= lib/libcompiler_rt
 .if ${MK_SSP} != "no"
 _prereq_libs+= lib/libssp_nonshared
 .endif
+.if ${MK_ASAN} != "no"
+_prereq_libs+=	lib/libclang_rt/asan
+_prereq_libs+=	lib/libclang_rt/asan-preinit
+_prereq_libs+=	lib/libclang_rt/asan_cxx
+.endif
+.if ${MK_UBSAN} != "no"
+_prereq_libs+=	lib/libclang_rt/ubsan_minimal
+_prereq_libs+=	lib/libclang_rt/ubsan_standalone
+_prereq_libs+=	lib/libclang_rt/ubsan_standalone_cxx
+.endif
 
 # These dependencies are not automatically generated:
 #
@@ -2870,6 +2935,7 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 		lib/libkiconv lib/libkvm lib/liblzma lib/libmd lib/libnv \
 		lib/libzstd \
 		${_lib_casper} \
+		lib/ncurses/tinfo \
 		lib/ncurses/ncurses \
 		lib/libopie lib/libpam/libpam lib/libthr \
 		${_lib_libradius} lib/libsbuf lib/libtacplus \
@@ -2891,7 +2957,7 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 
 .if ${MK_DIALOG} != "no"
 _prebuild_libs+= gnu/lib/libdialog
-gnu/lib/libdialog__L: lib/msun__L lib/ncurses/ncurses__L
+gnu/lib/libdialog__L: lib/msun__L lib/ncurses/tinfo__L lib/ncurses/ncurses__L
 .endif
 
 .if ${MK_GOOGLETEST} != "no"
@@ -2908,6 +2974,8 @@ lib/libkvm__L: lib/libelf__L
 .if ${MK_RADIUS_SUPPORT} != "no"
 _lib_libradius=	lib/libradius
 .endif
+
+lib/ncurses/ncurses__L:	lib/ncurses/tinfo__L
 
 .if ${MK_OFED} != "no"
 _prebuild_libs+= \

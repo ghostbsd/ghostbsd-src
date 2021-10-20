@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 1994-1996 Søren Schmidt
- * Copyright (c) 2013 Dmitry Chagin
+ * Copyright (c) 2013 Dmitry Chagin <dchagin@FreeBSD.org>
  * Copyright (c) 2018 Turing Robotic Industries Inc.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -116,6 +116,11 @@ struct l_timespec {
 	l_time_t	tv_sec;
 	l_long		tv_nsec;
 };
+
+#define	LINUX_O_DIRECTORY	000040000	/* Must be a directory */
+#define	LINUX_O_NOFOLLOW	000100000	/* Do not follow links */
+#define	LINUX_O_DIRECT		000200000	/* Direct disk access hint */
+#define	LINUX_O_LARGEFILE	000400000
 
 struct l_newstat {
 	l_dev_t		st_dev;
@@ -243,6 +248,16 @@ typedef struct l_siginfo {
 #define	lsi_band	_sifields._sigpoll._band
 #define	lsi_fd		_sifields._sigpoll._fd
 
+/*
+ * This structure is different from the one used by Linux,
+ * but it doesn't matter - it's not user-accessible.  We need
+ * it instead of the native one because of l_siginfo.
+ */
+struct l_sigframe {
+	struct l_siginfo	sf_si;
+	ucontext_t		sf_uc;
+};
+
 union l_semun {
 	l_int		val;
 	l_uintptr_t	buf;
@@ -297,5 +312,17 @@ struct linux_robust_list_head {
 	l_long				futex_offset;
 	l_uintptr_t			pending_list;
 };
+
+struct linux_pt_regset {
+	l_ulong x[31];
+	l_ulong sp;
+	l_ulong pc;
+	l_ulong cpsr;
+};
+
+struct reg;
+
+void	bsd_to_linux_regset(struct reg *b_reg,
+	    struct linux_pt_regset *l_regset);
 
 #endif /* _ARM64_LINUX_H_ */

@@ -149,7 +149,7 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 			dst = &r->dst;
 		}
 
-		counter_u64_add(r->evaluations, 1);
+		pf_counter_u64_add(&r->evaluations, 1);
 		if (pfi_kkif_match(r->kif, kif) == r->ifnot)
 			r = r->skip[PF_SKIP_IFP].ptr;
 		else if (r->direction && r->direction != direction)
@@ -244,13 +244,13 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_krule *r,
 			 * (traceroute -I through nat)
 			 */
 			key.port[1] = sport;
-			if (pf_find_state_all(&key, PF_IN, NULL) == NULL) {
+			if (!pf_find_state_all_exists(&key, PF_IN)) {
 				*nport = sport;
 				return (0);
 			}
 		} else if (low == high) {
 			key.port[1] = htons(low);
-			if (pf_find_state_all(&key, PF_IN, NULL) == NULL) {
+			if (!pf_find_state_all_exists(&key, PF_IN)) {
 				*nport = htons(low);
 				return (0);
 			}
@@ -268,8 +268,7 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_krule *r,
 			/* low <= cut <= high */
 			for (tmp = cut; tmp <= high && tmp <= 0xffff; ++tmp) {
 				key.port[1] = htons(tmp);
-				if (pf_find_state_all(&key, PF_IN, NULL) ==
-				    NULL) {
+				if (!pf_find_state_all_exists(&key, PF_IN)) {
 					*nport = htons(tmp);
 					return (0);
 				}
@@ -277,8 +276,7 @@ pf_get_sport(sa_family_t af, u_int8_t proto, struct pf_krule *r,
 			tmp = cut;
 			for (tmp -= 1; tmp >= low && tmp <= 0xffff; --tmp) {
 				key.port[1] = htons(tmp);
-				if (pf_find_state_all(&key, PF_IN, NULL) ==
-				    NULL) {
+				if (!pf_find_state_all_exists(&key, PF_IN)) {
 					*nport = htons(tmp);
 					return (0);
 				}
@@ -366,7 +364,7 @@ pf_map_addr(sa_family_t af, struct pf_krule *r, struct pf_addr *saddr,
 			return (1);
 
 		PF_ACPY(naddr, &(*sn)->raddr, af);
-		if (V_pf_status.debug >= PF_DEBUG_MISC) {
+		if (V_pf_status.debug >= PF_DEBUG_NOISY) {
 			printf("pf_map_addr: src tracking maps ");
 			pf_print_host(saddr, 0, af);
 			printf(" to ");
@@ -541,7 +539,7 @@ pf_map_addr(sa_family_t af, struct pf_krule *r, struct pf_addr *saddr,
 	if (*sn != NULL)
 		PF_ACPY(&(*sn)->raddr, naddr, af);
 
-	if (V_pf_status.debug >= PF_DEBUG_MISC &&
+	if (V_pf_status.debug >= PF_DEBUG_NOISY &&
 	    (rpool->opts & PF_POOL_TYPEMASK) != PF_POOL_NONE) {
 		printf("pf_map_addr: selected address ");
 		pf_print_host(naddr, 0, af);

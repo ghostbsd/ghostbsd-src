@@ -82,6 +82,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/disklabel.h>
 #include <sys/eventhandler.h>
 #include <sys/fcntl.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/kernel.h>
 #include <sys/mount.h>
@@ -382,7 +383,7 @@ static int swap_pager_almost_full = 1; /* swap space exhaustion (w/hysteresis)*/
 static struct mtx swbuf_mtx;	/* to sync nsw_wcount_async */
 static int nsw_wcount_async;	/* limit async write buffers */
 static int nsw_wcount_async_max;/* assigned maximum			*/
-static int nsw_cluster_max;	/* maximum VOP I/O allowed		*/
+int nsw_cluster_max; 		/* maximum VOP I/O allowed		*/
 
 static int sysctl_swap_async_max(SYSCTL_HANDLER_ARGS);
 SYSCTL_PROC(_vm, OID_AUTO, swap_async_max, CTLTYPE_INT | CTLFLAG_RW |
@@ -571,6 +572,16 @@ swap_pager_init(void)
 	mtx_init(&sw_dev_mtx, "swapdev", NULL, MTX_DEF);
 	sx_init(&sw_alloc_sx, "swspsx");
 	sx_init(&swdev_syscall_lock, "swsysc");
+
+	/*
+	 * The nsw_cluster_max is constrained by the bp->b_pages[]
+	 * array, which has maxphys / PAGE_SIZE entries, and our locally
+	 * defined MAX_PAGEOUT_CLUSTER.   Also be aware that swap ops are
+	 * constrained by the swap device interleave stripe size.
+	 *
+	 * Initialized early so that GEOM_ELI can see it.
+	 */
+	nsw_cluster_max = min(maxphys / PAGE_SIZE, MAX_PAGEOUT_CLUSTER);
 }
 
 /*
@@ -590,11 +601,6 @@ swap_pager_swap_init(void)
 	 * initialize workable values (0 will work for hysteresis
 	 * but it isn't very efficient).
 	 *
-	 * The nsw_cluster_max is constrained by the bp->b_pages[]
-	 * array, which has maxphys / PAGE_SIZE entries, and our locally
-	 * defined MAX_PAGEOUT_CLUSTER.   Also be aware that swap ops are
-	 * constrained by the swap device interleave stripe size.
-	 *
 	 * Currently we hardwire nsw_wcount_async to 4.  This limit is
 	 * designed to prevent other I/O from having high latencies due to
 	 * our pageout I/O.  The value 4 works well for one or two active swap
@@ -605,8 +611,9 @@ swap_pager_swap_init(void)
 	 * at least 2 per swap devices, and 4 is a pretty good value if you
 	 * have one NFS swap device due to the command/ack latency over NFS.
 	 * So it all works out pretty well.
+	 *
+	 * nsw_cluster_max is initialized in swap_pager_init().
 	 */
-	nsw_cluster_max = min(maxphys / PAGE_SIZE, MAX_PAGEOUT_CLUSTER);
 
 	nsw_wcount_async = 4;
 	nsw_wcount_async_max = nsw_wcount_async;
@@ -977,15 +984,16 @@ swap_pager_freespace(vm_object_t object, vm_pindex_t start, vm_size_t size)
  *	Returns 0 on success, -1 on failure.
  */
 int
-swap_pager_reserve(vm_object_t object, vm_pindex_t start, vm_size_t size)
+swap_pager_reserve(vm_object_t object, vm_pindex_t start, vm_pindex_t size)
 {
 	daddr_t addr, blk, n_free, s_free;
-	int i, j, n;
+	vm_pindex_t i, j;
+	int n;
 
 	swp_pager_init_freerange(&s_free, &n_free);
 	VM_OBJECT_WLOCK(object);
 	for (i = 0; i < size; i += n) {
-		n = size - i;
+		n = MIN(size - i, INT_MAX);
 		blk = swp_pager_getswapspace(&n);
 		if (blk == SWAPBLK_NONE) {
 			swp_pager_meta_free(object, start, i);
@@ -2891,6 +2899,7 @@ swapgeom_strategy(struct buf *bp, struct swdevt *sp)
 	bio->bio_offset = (bp->b_blkno - sp->sw_first) * PAGE_SIZE;
 	bio->bio_length = bp->b_bcount;
 	bio->bio_done = swapgeom_done;
+	bio->bio_flags |= BIO_SWAP;
 	if (!buf_mapped(bp)) {
 		bio->bio_ma = bp->b_pages;
 		bio->bio_data = unmapped_buf;

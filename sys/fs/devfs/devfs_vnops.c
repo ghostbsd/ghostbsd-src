@@ -1044,11 +1044,11 @@ devfs_lookupx(struct vop_lookup_args *ap, int *dm_unlock)
 	int error, flags, nameiop, dvplocked;
 	char specname[SPECNAMELEN + 1], *pname;
 
+	td = curthread;
 	cnp = ap->a_cnp;
 	vpp = ap->a_vpp;
 	dvp = ap->a_dvp;
 	pname = cnp->cn_nameptr;
-	td = cnp->cn_thread;
 	flags = cnp->cn_flags;
 	nameiop = cnp->cn_nameiop;
 	mp = dvp->v_mount;
@@ -1838,10 +1838,10 @@ devfs_setlabel(struct vop_setlabel_args *ap)
 #endif
 
 static int
-devfs_stat_f(struct file *fp, struct stat *sb, struct ucred *cred, struct thread *td)
+devfs_stat_f(struct file *fp, struct stat *sb, struct ucred *cred)
 {
 
-	return (vnops.fo_stat(fp, sb, cred, td));
+	return (vnops.fo_stat(fp, sb, cred));
 }
 
 static int

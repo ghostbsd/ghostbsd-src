@@ -58,7 +58,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/eventhandler.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
-#include <sys/rmlock.h>
 #include <sys/smp.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -88,6 +87,7 @@ __FBSDID("$FreeBSD$");
 #if defined(INET) || defined(INET6)
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
+#include <netinet/in_pcb_var.h>
 #ifdef INET
 #include <netinet/in_var.h>
 #include <netinet/in_fib.h>
@@ -1363,7 +1363,6 @@ in_pcbconnect_setup(struct inpcb *inp, struct sockaddr *nam,
     in_addr_t *laddrp, u_short *lportp, in_addr_t *faddrp, u_short *fportp,
     struct inpcb **oinpp, struct ucred *cred)
 {
-	struct rm_priotracker in_ifa_tracker;
 	struct sockaddr_in *sin = (struct sockaddr_in *)nam;
 	struct in_ifaddr *ia;
 	struct inpcb *oinp;
@@ -1412,20 +1411,16 @@ in_pcbconnect_setup(struct inpcb *inp, struct sockaddr *nam,
 		 * choose the broadcast address for that interface.
 		 */
 		if (faddr.s_addr == INADDR_ANY) {
-			IN_IFADDR_RLOCK(&in_ifa_tracker);
 			faddr =
 			    IA_SIN(CK_STAILQ_FIRST(&V_in_ifaddrhead))->sin_addr;
-			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 			if (cred != NULL &&
 			    (error = prison_get_ip4(cred, &faddr)) != 0)
 				return (error);
 		} else if (faddr.s_addr == (u_long)INADDR_BROADCAST) {
-			IN_IFADDR_RLOCK(&in_ifa_tracker);
 			if (CK_STAILQ_FIRST(&V_in_ifaddrhead)->ia_ifp->if_flags &
 			    IFF_BROADCAST)
 				faddr = satosin(&CK_STAILQ_FIRST(
 				    &V_in_ifaddrhead)->ia_broadaddr)->sin_addr;
-			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 		}
 	}
 	if (laddr.s_addr == INADDR_ANY) {
@@ -1443,7 +1438,6 @@ in_pcbconnect_setup(struct inpcb *inp, struct sockaddr *nam,
 			imo = inp->inp_moptions;
 			if (imo->imo_multicast_ifp != NULL) {
 				ifp = imo->imo_multicast_ifp;
-				IN_IFADDR_RLOCK(&in_ifa_tracker);
 				CK_STAILQ_FOREACH(ia, &V_in_ifaddrhead, ia_link) {
 					if ((ia->ia_ifp == ifp) &&
 					    (cred == NULL ||
@@ -1457,7 +1451,6 @@ in_pcbconnect_setup(struct inpcb *inp, struct sockaddr *nam,
 					laddr = ia->ia_addr.sin_addr;
 					error = 0;
 				}
-				IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 			}
 		}
 		if (error)
@@ -1661,38 +1654,6 @@ in_pcbrele_wlocked(struct inpcb *inp)
 	pcbinfo = inp->inp_pcbinfo;
 	uma_zfree(pcbinfo->ipi_zone, inp);
 	return (1);
-}
-
-/*
- * Temporary wrapper.
- */
-int
-in_pcbrele(struct inpcb *inp)
-{
-
-	return (in_pcbrele_wlocked(inp));
-}
-
-void
-in_pcblist_rele_rlocked(epoch_context_t ctx)
-{
-	struct in_pcblist *il;
-	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
-	int i, n;
-
-	il = __containerof(ctx, struct in_pcblist, il_epoch_ctx);
-	pcbinfo = il->il_pcbinfo;
-	n = il->il_count;
-	INP_INFO_WLOCK(pcbinfo);
-	for (i = 0; i < n; i++) {
-		inp = il->il_inp_list[i];
-		INP_RLOCK(inp);
-		if (!in_pcbrele_rlocked(inp))
-			INP_RUNLOCK(inp);
-	}
-	INP_INFO_WUNLOCK(pcbinfo);
-	free(il, M_TEMP);
 }
 
 static void
@@ -3293,21 +3254,16 @@ in_pcbmodify_txrtlmt(struct inpcb *inp, uint32_t max_pacing_rate)
 		.rate_limit.flags = M_NOWAIT,
 	};
 	struct m_snd_tag *mst;
-	struct ifnet *ifp;
 	int error;
 
 	mst = inp->inp_snd_tag;
 	if (mst == NULL)
 		return (EINVAL);
 
-	ifp = mst->ifp;
-	if (ifp == NULL)
-		return (EINVAL);
-
-	if (ifp->if_snd_tag_modify == NULL) {
+	if (mst->sw->snd_tag_modify == NULL) {
 		error = EOPNOTSUPP;
 	} else {
-		error = ifp->if_snd_tag_modify(mst, &params);
+		error = mst->sw->snd_tag_modify(mst, &params);
 	}
 	return (error);
 }
@@ -3321,22 +3277,17 @@ in_pcbquery_txrtlmt(struct inpcb *inp, uint32_t *p_max_pacing_rate)
 {
 	union if_snd_tag_query_params params = { };
 	struct m_snd_tag *mst;
-	struct ifnet *ifp;
 	int error;
 
 	mst = inp->inp_snd_tag;
 	if (mst == NULL)
 		return (EINVAL);
 
-	ifp = mst->ifp;
-	if (ifp == NULL)
-		return (EINVAL);
-
-	if (ifp->if_snd_tag_query == NULL) {
+	if (mst->sw->snd_tag_query == NULL) {
 		error = EOPNOTSUPP;
 	} else {
-		error = ifp->if_snd_tag_query(mst, &params);
-		if (error == 0 &&  p_max_pacing_rate != NULL)
+		error = mst->sw->snd_tag_query(mst, &params);
+		if (error == 0 && p_max_pacing_rate != NULL)
 			*p_max_pacing_rate = params.rate_limit.max_rate;
 	}
 	return (error);
@@ -3351,22 +3302,17 @@ in_pcbquery_txrlevel(struct inpcb *inp, uint32_t *p_txqueue_level)
 {
 	union if_snd_tag_query_params params = { };
 	struct m_snd_tag *mst;
-	struct ifnet *ifp;
 	int error;
 
 	mst = inp->inp_snd_tag;
 	if (mst == NULL)
 		return (EINVAL);
 
-	ifp = mst->ifp;
-	if (ifp == NULL)
-		return (EINVAL);
-
-	if (ifp->if_snd_tag_query == NULL)
+	if (mst->sw->snd_tag_query == NULL)
 		return (EOPNOTSUPP);
 
-	error = ifp->if_snd_tag_query(mst, &params);
-	if (error == 0 &&  p_txqueue_level != NULL)
+	error = mst->sw->snd_tag_query(mst, &params);
+	if (error == 0 && p_txqueue_level != NULL)
 		*p_txqueue_level = params.rate_limit.queue_level;
 	return (error);
 }

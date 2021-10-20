@@ -440,8 +440,8 @@ const char *syscallnames[] = {
 	"thr_exit",			/* 431 = thr_exit */
 	"thr_self",			/* 432 = thr_self */
 	"thr_kill",			/* 433 = thr_kill */
-	"#434",			/* 434 = reserved for local use */
-	"#435",			/* 435 = reserved for local use */
+	"compat10._umtx_lock",		/* 434 = freebsd10 _umtx_lock */
+	"compat10._umtx_unlock",		/* 435 = freebsd10 _umtx_unlock */
 	"jail_attach",			/* 436 = jail_attach */
 	"extattr_list_fd",			/* 437 = extattr_list_fd */
 	"extattr_list_file",			/* 438 = extattr_list_file */
@@ -586,4 +586,5 @@ const char *syscallnames[] = {
 	"__specialfd",			/* 577 = __specialfd */
 	"aio_writev",			/* 578 = aio_writev */
 	"aio_readv",			/* 579 = aio_readv */
+	"fspacectl",			/* 580 = fspacectl */
 };

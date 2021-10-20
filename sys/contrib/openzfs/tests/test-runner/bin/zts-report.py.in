@@ -76,6 +76,12 @@ python_deps_reason = 'Python modules missing: python-cffi'
 tmpfile_reason = 'Kernel O_TMPFILE support required'
 
 #
+# Some tests require the statx(2) system call on Linux which was first
+# introduced in the 4.11 kernel.
+#
+statx_reason = 'Kernel statx(2) system call required on Linux'
+
+#
 # Some tests require that the NFS client and server utilities be installed.
 #
 share_reason = 'NFS client and server utilities required'
@@ -119,6 +125,13 @@ fio_reason = 'Fio v2.3 or newer required'
 # and they support discard (TRIM/UNMAP).
 #
 trim_reason = 'DISKS must support discard (TRIM/UNMAP)'
+
+#
+# Some tests on FreeBSD require the fspacectl(2) system call and the
+# truncate(1) utility supporting the -d option.  The system call was first
+# introduced in FreeBSD version 1400032.
+#
+fspacectl_reason = 'fspacectl(2) and truncate -d support required'
 
 #
 # Some tests are not applicable to a platform or need to be updated to operate
@@ -193,6 +206,7 @@ elif sys.platform.startswith('linux'):
 #
 maybe = {
     'chattr/setup': ['SKIP', exec_reason],
+    'crtime/crtime_001_pos': ['SKIP', statx_reason],
     'cli_root/zdb/zdb_006_pos': ['FAIL', known_reason],
     'cli_root/zfs_destroy/zfs_destroy_dev_removal_condense':
         ['FAIL', known_reason],
@@ -217,14 +231,13 @@ maybe = {
     'cli_root/zpool_trim/setup': ['SKIP', trim_reason],
     'cli_root/zpool_upgrade/zpool_upgrade_004_pos': ['FAIL', '6141'],
     'delegate/setup': ['SKIP', exec_reason],
+    'fallocate/fallocate_punch-hole': ['SKIP', fspacectl_reason],
     'history/history_004_pos': ['FAIL', '7026'],
     'history/history_005_neg': ['FAIL', '6680'],
     'history/history_006_neg': ['FAIL', '5657'],
     'history/history_008_pos': ['FAIL', known_reason],
     'history/history_010_pos': ['SKIP', exec_reason],
     'io/mmap': ['SKIP', fio_reason],
-    'l2arc/persist_l2arc_005_pos': ['FAIL', known_reason],
-    'l2arc/persist_l2arc_007_pos': ['FAIL', '11887'],
     'largest_pool/largest_pool_001_pos': ['FAIL', known_reason],
     'mmp/mmp_on_uberblocks': ['FAIL', known_reason],
     'pyzfs/pyzfs_unittest': ['SKIP', python_deps_reason],
@@ -261,19 +274,14 @@ if sys.platform.startswith('freebsd'):
     maybe.update({
         'cli_root/zfs_copies/zfs_copies_002_pos': ['FAIL', known_reason],
         'cli_root/zfs_inherit/zfs_inherit_001_neg': ['FAIL', known_reason],
+        'cli_root/zfs_receive/receive-o-x_props_override':
+            ['FAIL', known_reason],
         'cli_root/zfs_share/zfs_share_011_pos': ['FAIL', known_reason],
         'cli_root/zfs_share/zfs_share_concurrent_shares':
             ['FAIL', known_reason],
         'cli_root/zpool_import/zpool_import_012_pos': ['FAIL', known_reason],
-        'cli_root/zpool_import/zpool_import_features_001_pos':
-            ['FAIL', '11854'],
-        'cli_root/zpool_import/zpool_import_features_002_neg':
-            ['FAIL', '11854'],
-        'cli_root/zpool_import/zpool_import_features_003_pos':
-            ['FAIL', '11854'],
         'delegate/zfs_allow_003_pos': ['FAIL', known_reason],
         'inheritance/inherit_001_pos': ['FAIL', '11829'],
-        'pool_checkpoint/checkpoint_zhack_feat': ['FAIL', '11854'],
         'resilver/resilver_restart_001': ['FAIL', known_reason],
         'zvol/zvol_misc/zvol_misc_volmode': ['FAIL', known_reason],
     })
@@ -282,6 +290,7 @@ elif sys.platform.startswith('linux'):
         'alloc_class/alloc_class_009_pos': ['FAIL', known_reason],
         'alloc_class/alloc_class_010_pos': ['FAIL', known_reason],
         'alloc_class/alloc_class_011_neg': ['FAIL', known_reason],
+        'alloc_class/alloc_class_012_pos': ['FAIL', known_reason],
         'alloc_class/alloc_class_013_pos': ['FAIL', '11888'],
         'cli_root/zfs_rename/zfs_rename_002_pos': ['FAIL', known_reason],
         'cli_root/zpool_expand/zpool_expand_001_pos': ['FAIL', known_reason],
@@ -320,6 +329,7 @@ if os.environ.get('CI') == 'true':
         'cli_root/zpool_split/zpool_split_wholedisk': ['SKIP', ci_reason],
         'fault/auto_offline_001_pos': ['SKIP', ci_reason],
         'fault/auto_online_001_pos': ['SKIP', ci_reason],
+        'fault/auto_online_002_pos': ['SKIP', ci_reason],
         'fault/auto_replace_001_pos': ['SKIP', ci_reason],
         'fault/auto_spare_ashift': ['SKIP', ci_reason],
         'fault/auto_spare_shared': ['SKIP', ci_reason],

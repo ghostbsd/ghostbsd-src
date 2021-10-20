@@ -44,6 +44,7 @@
 
 struct buf;
 struct swdevt;
+struct thread;
 typedef void sw_strategy_t(struct buf *, struct swdevt *);
 typedef void sw_close_t(struct thread *, struct swdevt *);
 
@@ -71,6 +72,7 @@ struct swdevt {
 #ifdef _KERNEL
 
 extern int swap_pager_avail;
+extern int nsw_cluster_max;
 
 struct xswdev;
 int swap_dev_info(int name, struct xswdev *xs, char *devname, size_t len);
@@ -78,7 +80,7 @@ void swap_pager_copy(vm_object_t, vm_object_t, vm_pindex_t, int);
 vm_pindex_t swap_pager_find_least(vm_object_t object, vm_pindex_t pindex);
 void swap_pager_swap_init(void);
 int swap_pager_nswapdev(void);
-int swap_pager_reserve(vm_object_t, vm_pindex_t, vm_size_t);
+int swap_pager_reserve(vm_object_t, vm_pindex_t, vm_pindex_t);
 void swap_pager_status(int *total, int *used);
 u_long swap_pager_swapped_pages(vm_object_t object);
 void swapoff_all(void);

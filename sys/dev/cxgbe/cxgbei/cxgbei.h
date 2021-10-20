@@ -58,7 +58,6 @@ struct cxgbei_cmp {
 
 	uint32_t tt;		/* Transfer tag. */
 
-	uint32_t next_datasn;
 	uint32_t next_buffer_offset;
 	uint32_t last_datasn;
 };
@@ -97,9 +96,6 @@ enum {
 	ICPF_RX_FLBUF	= 1 << 1, /* PDU payload received in a freelist. */
 	ICPF_RX_DDP	= 1 << 2, /* PDU payload DDP'd. */
 	ICPF_RX_STATUS	= 1 << 3, /* Rx status received. */
-	ICPF_HCRC_ERR	= 1 << 4, /* Header digest error. */
-	ICPF_DCRC_ERR	= 1 << 5, /* Data digest error. */
-	ICPF_PAD_ERR	= 1 << 6, /* Padding error. */
 
 	CXGBEI_PDU_SIGNATURE = 0x12344321
 };
@@ -125,14 +121,16 @@ ip_to_icp(struct icl_pdu *ip)
 }
 
 struct cxgbei_data {
-	u_int max_tx_pdu_len;
-	u_int max_rx_pdu_len;
+	u_int max_tx_data_len;
+	u_int max_rx_data_len;
 
 	u_int ddp_threshold;
 	struct ppod_region pr;
 
 	struct sysctl_ctx_list ctx;	/* from uld_activate to deactivate */
 };
+
+#define CXGBEI_MAX_ISO_PAYLOAD	65535
 
 /* cxgbei.c */
 u_int cxgbei_select_worker_thread(struct icl_cxgbei_conn *);

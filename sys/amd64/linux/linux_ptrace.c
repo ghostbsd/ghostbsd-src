@@ -40,7 +40,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/syscallsubr.h>
 
 #include <machine/pcb.h>
-#include <machine/reg.h>
 
 #include <amd64/linux/linux.h>
 #include <amd64/linux/linux_proto.h>
@@ -85,7 +84,8 @@ __FBSDID("$FreeBSD$");
 #define	LINUX_PTRACE_O_EXITKILL		1048576
 #define	LINUX_PTRACE_O_SUSPEND_SECCOMP	2097152
 
-#define	LINUX_NT_PRSTATUS		1
+#define	LINUX_NT_PRSTATUS		0x1
+#define	LINUX_NT_X86_XSTATE		0x202
 
 #define	LINUX_PTRACE_O_MASK	(LINUX_PTRACE_O_TRACESYSGOOD |	\
     LINUX_PTRACE_O_TRACEFORK | LINUX_PTRACE_O_TRACEVFORK |	\
@@ -93,6 +93,17 @@ __FBSDID("$FreeBSD$");
     LINUX_PTRACE_O_TRACEVFORKDONE | LINUX_PTRACE_O_TRACEEXIT |	\
     LINUX_PTRACE_O_TRACESECCOMP | LINUX_PTRACE_O_EXITKILL |	\
     LINUX_PTRACE_O_SUSPEND_SECCOMP)
+
+#define	LINUX_PTRACE_SYSCALL_INFO_NONE	0
+#define	LINUX_PTRACE_SYSCALL_INFO_ENTRY	1
+#define	LINUX_PTRACE_SYSCALL_INFO_EXIT	2
+
+#define LINUX_PTRACE_PEEKUSER_ORIG_RAX	120
+#define LINUX_PTRACE_PEEKUSER_RIP	128
+#define LINUX_PTRACE_PEEKUSER_CS	136
+#define LINUX_PTRACE_PEEKUSER_DS	184
+
+#define	LINUX_ARCH_AMD64		0xc000003e
 
 static int
 map_signum(int lsig, int *bsigp)
@@ -173,6 +184,28 @@ struct linux_pt_reg {
 	l_ulong	ss;
 };
 
+struct syscall_info {
+	uint8_t op;
+	uint32_t arch;
+	uint64_t instruction_pointer;
+	uint64_t stack_pointer;
+	union {
+		struct {
+			uint64_t nr;
+			uint64_t args[6];
+		} entry;
+		struct {
+			int64_t rval;
+			uint8_t is_error;
+		} exit;
+		struct {
+			uint64_t nr;
+			uint64_t args[6];
+			uint32_t ret_data;
+		} seccomp;
+	};
+};
+
 /*
  * Translate amd64 ptrace registers between Linux and FreeBSD formats.
  * The translation is pretty straighforward, for all registers but
@@ -203,39 +236,6 @@ map_regs_to_linux(struct reg *b_reg, struct linux_pt_reg *l_reg)
 	l_reg->eflags = b_reg->r_rflags;
 	l_reg->rsp = b_reg->r_rsp;
 	l_reg->ss = b_reg->r_ss;
-}
-
-void
-bsd_to_linux_regset(struct reg *b_reg, struct linux_pt_regset *l_regset)
-{
-
-	l_regset->r15 = b_reg->r_r15;
-	l_regset->r14 = b_reg->r_r14;
-	l_regset->r13 = b_reg->r_r13;
-	l_regset->r12 = b_reg->r_r12;
-	l_regset->rbp = b_reg->r_rbp;
-	l_regset->rbx = b_reg->r_rbx;
-	l_regset->r11 = b_reg->r_r11;
-	l_regset->r10 = b_reg->r_r10;
-	l_regset->r9 = b_reg->r_r9;
-	l_regset->r8 = b_reg->r_r8;
-	l_regset->rax = b_reg->r_rax;
-	l_regset->rcx = b_reg->r_rcx;
-	l_regset->rdx = b_reg->r_rdx;
-	l_regset->rsi = b_reg->r_rsi;
-	l_regset->rdi = b_reg->r_rdi;
-	l_regset->orig_rax = b_reg->r_rax;
-	l_regset->rip = b_reg->r_rip;
-	l_regset->cs = b_reg->r_cs;
-	l_regset->eflags = b_reg->r_rflags;
-	l_regset->rsp = b_reg->r_rsp;
-	l_regset->ss = b_reg->r_ss;
-	l_regset->fs_base = 0;
-	l_regset->gs_base = 0;
-	l_regset->ds = b_reg->r_ds;
-	l_regset->es = b_reg->r_es;
-	l_regset->fs = b_reg->r_fs;
-	l_regset->gs = b_reg->r_gs;
 }
 
 static void
@@ -292,9 +292,37 @@ linux_ptrace_peek(struct thread *td, pid_t pid, void *addr, void *data)
 static int
 linux_ptrace_peekuser(struct thread *td, pid_t pid, void *addr, void *data)
 {
+	struct reg b_reg;
+	uint64_t val;
+	int error;
 
-	linux_msg(td, "PTRACE_PEEKUSER not implemented; returning EINVAL");
-	return (EINVAL);
+	error = kern_ptrace(td, PT_GETREGS, pid, &b_reg, 0);
+	if (error != 0)
+		return (error);
+
+	switch ((uintptr_t)addr) {
+	case LINUX_PTRACE_PEEKUSER_ORIG_RAX:
+		val = b_reg.r_rax;
+		break;
+	case LINUX_PTRACE_PEEKUSER_RIP:
+		val = b_reg.r_rip;
+		break;
+	case LINUX_PTRACE_PEEKUSER_CS:
+		val = b_reg.r_cs;
+		break;
+	case LINUX_PTRACE_PEEKUSER_DS:
+		val = b_reg.r_ds;
+		break;
+	default:
+		linux_msg(td, "PTRACE_PEEKUSER offset %ld not implemented; "
+		    "returning EINVAL", (uintptr_t)addr);
+		return (EINVAL);
+	}
+
+	error = copyout(&val, data, sizeof(val));
+	td->td_retval[0] = error;
+
+	return (error);
 }
 
 static int
@@ -513,8 +541,12 @@ linux_ptrace_getregset(struct thread *td, pid_t pid, l_ulong addr, l_ulong data)
 	switch (addr) {
 	case LINUX_NT_PRSTATUS:
 		return (linux_ptrace_getregset_prstatus(td, pid, data));
+	case LINUX_NT_X86_XSTATE:
+		linux_msg(td, "PTRAGE_GETREGSET NT_X86_XSTATE not implemented; "
+		    "returning EINVAL");
+		return (EINVAL);
 	default:
-		linux_msg(td, "PTRACE_GETREGSET request %ld not implemented; "
+		linux_msg(td, "PTRACE_GETREGSET request %#lx not implemented; "
 		    "returning EINVAL", addr);
 		return (EINVAL);
 	}
@@ -529,11 +561,78 @@ linux_ptrace_seize(struct thread *td, pid_t pid, l_ulong addr, l_ulong data)
 }
 
 static int
-linux_ptrace_get_syscall_info(struct thread *td, pid_t pid, l_ulong addr, l_ulong data)
+linux_ptrace_get_syscall_info(struct thread *td, pid_t pid,
+    l_ulong len, l_ulong data)
 {
+	struct ptrace_lwpinfo lwpinfo;
+	struct ptrace_sc_ret sr;
+	struct reg b_reg;
+	struct syscall_info si;
+	int error;
 
-	linux_msg(td, "PTRACE_GET_SYSCALL_INFO not implemented; returning EINVAL");
-	return (EINVAL);
+	error = kern_ptrace(td, PT_LWPINFO, pid, &lwpinfo, sizeof(lwpinfo));
+	if (error != 0) {
+		linux_msg(td, "PT_LWPINFO failed with error %d", error);
+		return (error);
+	}
+
+	memset(&si, 0, sizeof(si));
+
+	if (lwpinfo.pl_flags & PL_FLAG_SCE) {
+		si.op = LINUX_PTRACE_SYSCALL_INFO_ENTRY;
+		si.entry.nr = lwpinfo.pl_syscall_code;
+		/*
+		 * The use of PT_GET_SC_ARGS there is special,
+		 * implementation of PT_GET_SC_ARGS for Linux-ABI
+		 * callers emulates Linux bug which strace(1) depends
+		 * on: at initialization it tests whether ptrace works
+		 * by calling close(2), or some other single-argument
+		 * syscall, _with six arguments_, and then verifies
+		 * whether it can fetch them all using this API;
+		 * otherwise it bails out.
+		 */
+		error = kern_ptrace(td, PT_GET_SC_ARGS, pid,
+		    &si.entry.args, sizeof(si.entry.args));
+		if (error != 0) {
+			linux_msg(td, "PT_GET_SC_ARGS failed with error %d",
+			    error);
+			return (error);
+		}
+	} else if (lwpinfo.pl_flags & PL_FLAG_SCX) {
+		si.op = LINUX_PTRACE_SYSCALL_INFO_EXIT;
+		error = kern_ptrace(td, PT_GET_SC_RET, pid, &sr, sizeof(sr));
+
+		if (error != 0) {
+			linux_msg(td, "PT_GET_SC_RET failed with error %d",
+			    error);
+			return (error);
+		}
+
+		if (sr.sr_error == 0) {
+			si.exit.rval = sr.sr_retval[0];
+			si.exit.is_error = 0;
+		} else {
+			si.exit.rval = bsd_to_linux_errno(sr.sr_error);
+			si.exit.is_error = 1;
+		}
+	} else {
+		si.op = LINUX_PTRACE_SYSCALL_INFO_NONE;
+	}
+
+	error = kern_ptrace(td, PT_GETREGS, pid, &b_reg, 0);
+	if (error != 0)
+		return (error);
+
+	si.arch = LINUX_ARCH_AMD64;
+	si.instruction_pointer = b_reg.r_rip;
+	si.stack_pointer = b_reg.r_rsp;
+
+	len = MIN(len, sizeof(si));
+	error = copyout(&si, (void *)data, len);
+	if (error == 0)
+		td->td_retval[0] = sizeof(si);
+
+	return (error);
 }
 
 int

@@ -258,6 +258,7 @@ struct inpcb {
 	volatile uint32_t inp_in_input; /* on input hpts (lock b) */
 #endif
 	volatile uint16_t  inp_hpts_cpu; /* Lock (i) */
+	volatile uint16_t  inp_irq_cpu;	/* Set by LRO in behalf of or the driver */
 	u_int	inp_refcount;		/* (i) refcount */
 	int	inp_flags;		/* (i) generic IP/datagram flags */
 	int	inp_flags2;		/* (i) generic IP/datagram flags #2*/
@@ -266,7 +267,8 @@ struct inpcb {
 			 inp_input_cpu_set : 1,	/* on input hpts (i) */
 			 inp_hpts_calls :1,	/* (i) from output hpts */
 			 inp_input_calls :1,	/* (i) from input hpts */
-			 inp_spare_bits2 : 4;
+			 inp_irq_cpu_set :1,	/* (i) from LRO/Driver */
+			 inp_spare_bits2 : 3;
 	uint8_t inp_numa_domain;	/* numa domain */
 	void	*inp_ppcb;		/* (i) pointer to per-protocol pcb */
 	struct	socket *inp_socket;	/* (i) back pointer to socket */
@@ -403,13 +405,6 @@ struct inpcbport {
 	CK_LIST_ENTRY(inpcbport) phd_hash;
 	struct inpcbhead phd_pcblist;
 	u_short phd_port;
-};
-
-struct in_pcblist {
-	int il_count;
-	struct epoch_context il_epoch_ctx;
-	struct inpcbinfo *il_pcbinfo;
-	struct inpcb *il_inp_list[0];
 };
 
 /*-
@@ -831,11 +826,6 @@ void	in_pcbgroup_update_mbuf(struct inpcb *, struct mbuf *);
 void	in_pcbpurgeif0(struct inpcbinfo *, struct ifnet *);
 int	in_pcballoc(struct socket *, struct inpcbinfo *);
 int	in_pcbbind(struct inpcb *, struct sockaddr *, struct ucred *);
-int	in_pcb_lport_dest(struct inpcb *inp, struct sockaddr *lsa,
-	    u_short *lportp, struct sockaddr *fsa, u_short fport,
-	    struct ucred *cred, int lookupflags);
-int	in_pcb_lport(struct inpcb *, struct in_addr *, u_short *,
-	    struct ucred *, int);
 int	in_pcbbind_setup(struct inpcb *, struct sockaddr *, in_addr_t *,
 	    u_short *, struct ucred *);
 int	in_pcbconnect(struct inpcb *, struct sockaddr *, struct ucred *);
@@ -854,9 +844,6 @@ int	in_pcbladdr(struct inpcb *, struct in_addr *, struct in_addr *,
 	    struct ucred *);
 int	in_pcblbgroup_numa(struct inpcb *, int arg);
 struct inpcb *
-	in_pcblookup_local(struct inpcbinfo *,
-	    struct in_addr, u_short, int, struct ucred *);
-struct inpcb *
 	in_pcblookup(struct inpcbinfo *, struct in_addr, u_int,
 	    struct in_addr, u_int, int, struct ifnet *);
 struct inpcb *
@@ -867,10 +854,8 @@ void	in_pcbnotifyall(struct inpcbinfo *pcbinfo, struct in_addr,
 void	in_pcbref(struct inpcb *);
 void	in_pcbrehash(struct inpcb *);
 void	in_pcbrehash_mbuf(struct inpcb *, struct mbuf *);
-int	in_pcbrele(struct inpcb *);
 int	in_pcbrele_rlocked(struct inpcb *);
 int	in_pcbrele_wlocked(struct inpcb *);
-void	in_pcblist_rele_rlocked(epoch_context_t ctx);
 void	in_losing(struct inpcb *);
 void	in_pcbsetsolabel(struct socket *so);
 int	in_getpeeraddr(struct socket *so, struct sockaddr **nam);

@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2009 The FreeBSD Foundation
- * All rights reserved.
  *
  * This software was developed by Rui Paulo under sponsorship from the
  * FreeBSD Foundation.
@@ -1840,7 +1839,7 @@ hwmp_send_rann(struct ieee80211vap *vap,
 	 *     [6] addr3 = sa
 	 *     [1] action
 	 *     [1] category
-	 *     [tlv] root annoucement
+	 *     [tlv] root announcement
 	 */
 	rann->rann_ie = IEEE80211_ELEMID_MESHRANN;
 	rann->rann_len = IEEE80211_MESHRANN_BASE_SZ;

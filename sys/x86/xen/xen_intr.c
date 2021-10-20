@@ -57,7 +57,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/stdarg.h>
 
 #include <machine/xen/synch_bitops.h>
-#include <machine/xen/xen-os.h>
 
 #include <xen/xen-os.h>
 #include <xen/hvm.h>
@@ -168,6 +167,38 @@ static u_int		 xen_intr_auto_vector_count;
 static struct xenisrc	*xen_intr_port_to_isrc[NR_EVENT_CHANNELS];
 
 /*------------------------- Private Functions --------------------------------*/
+
+/**
+ * Retrieve a handle for a Xen interrupt source.
+ *
+ * \param isrc  A valid Xen interrupt source structure.
+ *
+ * \returns  A handle suitable for use with xen_intr_isrc_from_handle()
+ *           to retrieve the original Xen interrupt source structure.
+ */
+
+static inline xen_intr_handle_t
+xen_intr_handle_from_isrc(struct xenisrc *isrc)
+{
+	return (isrc);
+}
+
+/**
+ * Lookup a Xen interrupt source object given an interrupt binding handle.
+ *
+ * \param handle  A handle initialized by a previous call to
+ *                xen_intr_bind_isrc().
+ *
+ * \returns  A pointer to the Xen interrupt source object associated
+ *           with the given interrupt handle.  NULL if no association
+ *           currently exists.
+ */
+static inline struct xenisrc *
+xen_intr_isrc_from_handle(xen_intr_handle_t handle)
+{
+	return ((struct xenisrc *)handle);
+}
+
 /**
  * Disable signal delivery for an event channel port on the
  * specified CPU.
@@ -284,7 +315,7 @@ xen_intr_alloc_isrc(enum evtchn_type type)
 	if (xen_intr_auto_vector_count > NR_EVENT_CHANNELS) {
 		if (!warned) {
 			warned = 1;
-			printf("xen_intr_alloc: Event channels exhausted.\n");
+			printf("%s: Event channels exhausted.\n", __func__);
 		}
 		return (NULL);
 	}
@@ -374,8 +405,7 @@ xen_intr_bind_isrc(struct xenisrc **isrcp, evtchn_port_t local_port,
 
 	*isrcp = NULL;
 	if (port_handlep == NULL) {
-		printf("%s: xen_intr_bind_isrc: Bad event handle\n",
-		    intr_owner);
+		printf("%s: %s: Bad event handle\n", intr_owner, __func__);
 		return (EINVAL);
 	}
 
@@ -393,8 +423,8 @@ xen_intr_bind_isrc(struct xenisrc **isrcp, evtchn_port_t local_port,
 	refcount_init(&isrc->xi_refcount, 1);
 	mtx_unlock(&xen_intr_isrc_lock);
 
-	/* Assign the opaque handler (the event channel port) */
-	*port_handlep = &isrc->xi_vector;
+	/* Assign the opaque handler */
+	*port_handlep = xen_intr_handle_from_isrc(isrc);
 
 #ifdef SMP
 	if (type == EVTCHN_TYPE_PORT) {
@@ -425,32 +455,6 @@ xen_intr_bind_isrc(struct xenisrc **isrcp, evtchn_port_t local_port,
 	}
 	*isrcp = isrc;
 	return (0);
-}
-
-/**
- * Lookup a Xen interrupt source object given an interrupt binding handle.
- * 
- * \param handle  A handle initialized by a previous call to
- *                xen_intr_bind_isrc().
- *
- * \returns  A pointer to the Xen interrupt source object associated
- *           with the given interrupt handle.  NULL if no association
- *           currently exists.
- */
-static struct xenisrc *
-xen_intr_isrc(xen_intr_handle_t handle)
-{
-	int vector;
-
-	if (handle == NULL)
-		return (NULL);
-
-	vector = *(int *)handle;
-	KASSERT(vector >= first_evtchn_irq &&
-	    vector < (first_evtchn_irq + xen_intr_auto_vector_count),
-	    ("Xen interrupt vector is out of range"));
-
-	return ((struct xenisrc *)intr_lookup_source(vector));
 }
 
 /**
@@ -506,7 +510,7 @@ xen_intr_handle_upcall(struct trapframe *trap_frame)
 	s   = HYPERVISOR_shared_info;
 	v   = DPCPU_GET(vcpu_info);
 
-	if (xen_hvm_domain() && !xen_vector_callback_enabled) {
+	if (!xen_has_percpu_evtchn()) {
 		KASSERT((cpu == 0), ("Fired PCI event callback on wrong CPU"));
 	}
 
@@ -855,7 +859,7 @@ xen_intr_assign_cpu(struct intsrc *base_isrc, u_int apic_id)
 	u_int to_cpu, vcpu_id;
 	int error, masked;
 
-	if (xen_vector_callback_enabled == 0)
+	if (!xen_has_percpu_evtchn())
 		return (EOPNOTSUPP);
 
 	to_cpu = apic_cpuid(apic_id);
@@ -1195,7 +1199,7 @@ xen_intr_describe(xen_intr_handle_t port_handle, const char *fmt, ...)
 	struct xenisrc *isrc;
 	va_list ap;
 
-	isrc = xen_intr_isrc(port_handle);
+	isrc = xen_intr_isrc_from_handle(port_handle);
 	if (isrc == NULL)
 		return (EINVAL);
 
@@ -1211,9 +1215,9 @@ xen_intr_unbind(xen_intr_handle_t *port_handlep)
 	struct xenisrc *isrc;
 
 	KASSERT(port_handlep != NULL,
-	    ("NULL xen_intr_handle_t passed to xen_intr_unbind"));
+	    ("NULL xen_intr_handle_t passed to %s", __func__));
 
-	isrc = xen_intr_isrc(*port_handlep);
+	isrc = xen_intr_isrc_from_handle(*port_handlep);
 	*port_handlep = NULL;
 	if (isrc == NULL)
 		return;
@@ -1235,7 +1239,7 @@ xen_intr_signal(xen_intr_handle_t handle)
 {
 	struct xenisrc *isrc;
 
-	isrc = xen_intr_isrc(handle);
+	isrc = xen_intr_isrc_from_handle(handle);
 	if (isrc != NULL) {
 		KASSERT(isrc->xi_type == EVTCHN_TYPE_PORT ||
 			isrc->xi_type == EVTCHN_TYPE_IPI,
@@ -1250,7 +1254,7 @@ xen_intr_port(xen_intr_handle_t handle)
 {
 	struct xenisrc *isrc;
 
-	isrc = xen_intr_isrc(handle);
+	isrc = xen_intr_isrc_from_handle(handle);
 	if (isrc == NULL)
 		return (0);
 
@@ -1265,17 +1269,15 @@ xen_intr_add_handler(const char *name, driver_filter_t filter,
 	struct xenisrc *isrc;
 	int error;
 
-	isrc = xen_intr_isrc(handle);
+	isrc = xen_intr_isrc_from_handle(handle);
 	if (isrc == NULL || isrc->xi_cookie != NULL)
 		return (EINVAL);
 
 	error = intr_add_handler(name, isrc->xi_vector,filter, handler, arg,
 	    flags|INTR_EXCL, &isrc->xi_cookie, 0);
-	if (error != 0) {
-		printf(
-		    "%s: xen_intr_add_handler: intr_add_handler failed: %d\n",
-		    name, error);
-	}
+	if (error != 0)
+		printf("%s: %s: add handler failed: %d\n", name, __func__,
+		    error);
 
 	return (error);
 }
@@ -1299,8 +1301,8 @@ xen_intr_get_evtchn_from_port(evtchn_port_t port, xen_intr_handle_t *handlep)
 	refcount_acquire(&xen_intr_port_to_isrc[port]->xi_refcount);
 	mtx_unlock(&xen_intr_isrc_lock);
 
-	/* Assign the opaque handler (the event channel port) */
-	*handlep = &xen_intr_port_to_isrc[port]->xi_vector;
+	/* Assign the opaque handler */
+	*handlep = xen_intr_handle_from_isrc(xen_intr_port_to_isrc[port]);
 
 	return (0);
 }

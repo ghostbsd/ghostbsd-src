@@ -11,19 +11,23 @@ ATF_TESTS_SH+=	altq \
 		dup \
 		forward \
 		fragmentation \
+		get_state \
 		icmp \
 		killstate \
+		macro \
 		map_e \
 		names \
 		nat \
 		pass_block \
 		pfsync	\
+		proxy \
 		rdr \
 		route_to \
 		rules_counter \
 		set_skip \
 		set_tos \
 		src_track \
+		syncookie \
 		synproxy \
 		table \
 		tos
