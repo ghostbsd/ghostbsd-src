@@ -20,3 +20,4 @@ jobs:
         if: github.event.action == 'opened'
         with:
           project: 'https://github.com/orgs/ghostbsd/projects/4'
+          column_name: 'New'
