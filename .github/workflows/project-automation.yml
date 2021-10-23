@@ -19,5 +19,4 @@ jobs:
         uses: srggrs/assign-one-project-github-action@1.2.1
         if: github.event.action == 'opened'
         with:
-          project: 'https://github.com/orgs/ghostbsd/projects/4'
-          column_name: 'New'
+          project: 'https://github.com/orgs/ghostbsd/projects/1'
