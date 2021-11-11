@@ -1,0 +1,89 @@
+.\"-
+.\" Copyright (c) 2021 GhostBSD
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd November 9, 2021
+.Dt GHOSTBSD-VERSION 1
+.Os
+.Sh NAME
+.Nm ghostbsd-version
+.Nd print the version of the FreeBSD kernel, FreeBSD OS, GhostBSD OS and the
+installed system
+.Sh SYNOPSIS
+.Nm
+.Op Fl fkov
+.Sh DESCRIPTION
+The
+.Nm
+utility determine the version FreeBSD kernel, FreeBSD OS, GhostBSD OS and the
+installed system.
+.Pp
+The following options are available:
+.Bl -tag -width Fl
+.It Fl f
+Print the version FreeBSD OS.
+.It Fl k
+Print the version of the installed kernel.
+.It Fl o
+Print the version of the installed os-generic-userland-base.
+.It Fl v
+Print the version of GhostBSD.
+.El
+.Pp
+If several of the above options are specified,
+.Nm
+will print them in the specified order. If neither is specified, it will print
+the version of GhostBSD only.
+.Sh IMPLEMENTATION NOTES
+The
+.Nm
+utility should provide the correct answer in the vast majority of
+cases, including on systems kept up-to-date using
+pkg upgrade,
+which does not update the kernel version unless the kernel itself was
+affected by the latest patch.
+.El
+.Sh EXAMPLES
+To determine the version of the currently running:
+.Bd -literal -offset indent
+/bin/ghostbsd-version -v
+.Ed
+.Pp
+To inspect a system being repaired using a live CD:
+.Bd -literal -offset indent
+mount -rt ufs /dev/ada0p2 /mnt
+env ROOT=/mnt /mnt/bin/ghostbsd-version -kv
+.Ed
+.Sh SEE ALSO
+.Xr uname 1 ,
+.Xr loader.conf 5
+.Sh HISTORY
+The
+.Nm
+command appeared in GhostBSD 21.11.11.
+.Sh AUTHORS
+The
+.Nm
+utility and this manual page were written by
+.An Eric Turgeon Aq Mt ericturgeon@ghostbsd.org .
