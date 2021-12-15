@@ -27,14 +27,6 @@
 IFCONFIG_CMD="/sbin/ifconfig"
 : ${netif_ipexpand_max:=2048}
 
-# Set which rc system we are using
-if [ -z "$RC_SYSTEM" ] ; then
-	RC_SYSTEM="$(/bin/kenv rc_system 2>/dev/null)"
-	if [ -z "$RC_SYSTEM" ] ; then
-		RC_SYSTEM="rc"
-	fi
-fi
-
 #
 # Subroutines commonly used from network startup scripts.
 # Requires that rc.conf be loaded first.
@@ -226,18 +218,10 @@ ifconfig_up()
 	fi
 
 	if wpaif $1; then
-		if [ "$RC_SYSTEM" = "openrc" ] ; then
-			sh /etc/rc.devd wpa_supplicant.${1} start
-		else
-			/etc/rc.d/wpa_supplicant start $1
-		fi
+		/etc/rc.d/wpa_supplicant start $1
 		_cfg=0		# XXX: not sure this should count
 	elif hostapif $1; then
-		if [ "$RC_SYSTEM" = "openrc" ] ; then
-			sh /etc/rc.devd hostapd.${1} start
-		else
-			/etc/rc.d/hostapd start $1
-		fi
+		/etc/rc.d/hostapd start $1
 		_cfg=0
 	elif [ ${_cfg} -eq 0 ]; then
 		${IFCONFIG_CMD} $1 up
@@ -252,11 +236,7 @@ ifconfig_up()
 			${IFCONFIG_CMD} $1 up
 		fi
 		if syncdhcpif $1; then
-			if [ "$RC_SYSTEM" = "openrc" ] ; then
-				sh /etc/rc.devd dhcpcd.${1} start
-			else
-				/etc/rc.d/dhclient start $1
-			fi
+			/etc/rc.d/dhclient start $1
 		fi
 		_cfg=0
 	fi
@@ -274,27 +254,15 @@ ifconfig_down()
 	_cfg=1
 
 	if wpaif $1; then
-		if [ "$RC_SYSTEM" = "openrc" ] ; then
-			sh /etc/rc.devd wpa_supplicant.${1} stop
-		else
-			/etc/rc.d/wpa_supplicant stop $1
-		fi
+		/etc/rc.d/wpa_supplicant stop $1
 		_cfg=0
 	elif hostapif $1; then
-		if [ "$RC_SYSTEM" = "openrc" ] ; then
-			sh /etc/rc.devd hostapd.${1} stop
-		else
-			/etc/rc.d/hostapd stop $1
-		fi
+		/etc/rc.d/hostapd stop $1
 		_cfg=0
 	fi
 
 	if dhcpif $1; then
-		if [ "$RC_SYSTEM" = "openrc" ] ; then
-			sh /etc/rc.devd dhcpcd.${1} stop
-		else
-			/etc/rc.d/dhclient stop $1
-		fi
+		/etc/rc.d/dhclient stop $1
 		_cfg=0
 	fi
 
