@@ -28,11 +28,6 @@
 # $FreeBSD$
 #
 
-# Do we want to do a dynamic diskless setup?
-if [ -f /etc/dynamicdiskless ]; then
-	sh /etc/rc.dynamicdiskless
-fi
-
 # System startup script run by init on autoboot
 # or after single-user.
 # Output and error are redirected to console by init,
