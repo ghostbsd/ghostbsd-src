@@ -1,9 +1,0 @@
-#!/sbin/openrc-run
-
-name="zfsd"
-command="/usr/sbin/${name}"
-
-depend() {
-	after devd zfsmount
-	keyword -jail -shutdown
-}

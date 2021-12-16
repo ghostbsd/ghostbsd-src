@@ -1,8 +1,0 @@
-# TRAINNAME %%TRAINNAME%%
-
-%%REPONAME%%: {
-  url: "%%URL%%",
-  signature_type: "pubkey",
-  pubkey: "%%PUBKEY%%",
-  enabled: yes
-}
