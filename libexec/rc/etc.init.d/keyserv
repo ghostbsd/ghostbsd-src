@@ -1,9 +1,0 @@
-#!/sbin/openrc-run
-
-name="keyserv"
-command="/usr/sbin/${name}"
-
-depend() {
-	need ypset rpcbind
-	keyword -shutdown
-}
