@@ -51,7 +51,6 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libdl \
 	libdwarf \
 	libedit \
-	libeinfo \
 	libelftc \
 	libevent1 \
 	libexecinfo \
@@ -84,7 +83,6 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libpjdlog \
 	libproc \
 	libprocstat \
-	librc \
 	libregex \
 	librpcsvc \
 	librss \

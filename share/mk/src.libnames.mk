@@ -123,7 +123,6 @@ _LIBRARIES=	\
 		dtrace \
 		dwarf \
 		edit \
-		einfo \
 		efivar \
 		elf \
 		execinfo \
@@ -176,7 +175,6 @@ _LIBRARIES=	\
 		procstat \
 		pthread \
 		radius \
-		rc \
 		regex \
 		roken \
 		rpcsec_gss \
@@ -281,7 +279,6 @@ _DP_edit=	tinfow
 .if ${MK_OPENSSL} != "no"
 _DP_bsnmp=	crypto
 .endif
-_DP_einfo=	kvm
 _DP_geom=	bsdxml sbuf
 _DP_cam=	sbuf
 _DP_kvm=	elf
@@ -297,7 +294,6 @@ _DP_pcap=	ibverbs mlx5
 .endif
 _DP_pjdlog=	util
 _DP_opie=	md
-_DP_rc=		kvm
 _DP_usb=	pthread
 _DP_unbound=	ssl crypto pthread
 _DP_rt=	pthread
@@ -703,7 +699,6 @@ LIBNCURSESWDIR=	${OBJTOP}/lib/ncurses/ncurses
 LIBTINFOWDIR=	${OBJTOP}/lib/ncurses/tinfo
 LIBPANELWDIR=	${OBJTOP}/lib/ncurses/panel
 LIBCRYPTODIR=	${OBJTOP}/secure/lib/libcrypto
-LIBRCDIR=	${OBJTOP}/lib/librc
 LIBSPLDIR=	${OBJTOP}/cddl/lib/libspl
 LIBSSHDIR=	${OBJTOP}/secure/lib/libssh
 LIBSSLDIR=	${OBJTOP}/secure/lib/libssl
