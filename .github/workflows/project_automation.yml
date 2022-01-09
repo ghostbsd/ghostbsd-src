@@ -25,7 +25,7 @@ jobs:
         uses: leonsteinhaeuser/project-beta-automations@v1.0.3
         with:
           gh_token: ${{ secrets.MY_GITHUB_TOKEN }}
-          user: ghostbsd
+          # user: ghostbsd
           organization: ghostbsd
           project_id: 4
           resource_node_id: ${{ github.event.issue.node_id }}
@@ -39,7 +39,7 @@ jobs:
         uses: leonsteinhaeuser/project-beta-automations@v1.0.3
         with:
           gh_token: ${{ secrets.MY_GITHUB_TOKEN }}
-          user: ghostbsd
+          # user: ghostbsd
           organization: ghostbsd
           project_id: 4
           resource_node_id: ${{ github.event.issue.node_id }}
@@ -53,7 +53,7 @@ jobs:
         uses: leonsteinhaeuser/project-beta-automations@v1.0.3
         with:
           gh_token: ${{ secrets.MY_GITHUB_TOKEN }}
-          user: ghostbsd
+          # user: ghostbsd
           organization: ghostbsd
           project_id: 4
           resource_node_id: ${{ github.event.pull_request.node_id }}
