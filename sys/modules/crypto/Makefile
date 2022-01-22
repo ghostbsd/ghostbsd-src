@@ -13,6 +13,7 @@ LIBSODIUM=${SRCTOP}/sys/contrib/libsodium/src/libsodium
 .PATH:	${SRCTOP}/sys/crypto/blake2
 .PATH:	${SRCTOP}/sys/crypto/chacha20
 .PATH:	${SRCTOP}/sys/contrib/libb2
+.PATH:	${LIBSODIUM}/crypto_core/hchacha20
 .PATH:	${LIBSODIUM}/crypto_onetimeauth/poly1305
 .PATH:	${LIBSODIUM}/crypto_onetimeauth/poly1305/donna
 .PATH:	${LIBSODIUM}/crypto_stream/chacha20
@@ -54,6 +55,7 @@ CWARNFLAGS.blake2b-ref.c	+= -Wno-cast-qual -Wno-unused-function
 CWARNFLAGS.blake2s-ref.c	+= -Wno-cast-qual -Wno-unused-function
 SRCS	+= chacha.c
 SRCS	+= chacha-sw.c
+SRCS	+= chacha20_poly1305.c
 
 LIBSODIUM_INC=${LIBSODIUM}/include
 LIBSODIUM_COMPAT=${SRCTOP}/sys/crypto/libsodium
@@ -61,14 +63,16 @@ SRCS	+= xform_chacha20_poly1305.c
 CFLAGS.xform_chacha20_poly1305.c+= -I${LIBSODIUM_INC} -I${LIBSODIUM_COMPAT}
 SRCS	+= xform_poly1305.c
 CFLAGS.xform_poly1305.c		+= -I${LIBSODIUM_INC} -I${LIBSODIUM_COMPAT}
-SRCS	+= stream_chacha20.c
-CFLAGS.stream_chacha20.c	+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
-SRCS	+= chacha20_ref.c
-CFLAGS.chacha20_ref.c		+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
+SRCS	+= core_hchacha20.c
+CFLAGS.core_hchacha20.c		+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
 SRCS	+= onetimeauth_poly1305.c
 CFLAGS.onetimeauth_poly1305.c	+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
 SRCS	+= poly1305_donna.c
 CFLAGS.poly1305_donna.c		+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
+SRCS	+= stream_chacha20.c
+CFLAGS.stream_chacha20.c	+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
+SRCS	+= chacha20_ref.c
+CFLAGS.chacha20_ref.c		+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
 SRCS	+= verify.c
 CFLAGS.verify.c			+= -I${LIBSODIUM_INC}/sodium -I${LIBSODIUM_COMPAT}
 SRCS	+= randombytes.c

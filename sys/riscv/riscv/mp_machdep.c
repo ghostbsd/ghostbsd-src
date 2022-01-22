@@ -248,6 +248,7 @@ init_secondary(uint64_t hart)
 	/* Initialize curthread */
 	KASSERT(PCPU_GET(idlethread) != NULL, ("no idle thread"));
 	pcpup->pc_curthread = pcpup->pc_idlethread;
+	schedinit_ap();
 
 	/*
 	 * Identify current CPU. This is necessary to setup
@@ -290,7 +291,7 @@ init_secondary(uint64_t hart)
 	MPASS(PCPU_GET(curpcb) == NULL);
 
 	/* Enter the scheduler */
-	sched_throw(NULL);
+	sched_ap_entry();
 
 	panic("scheduler returned us to init_secondary");
 	/* NOTREACHED */

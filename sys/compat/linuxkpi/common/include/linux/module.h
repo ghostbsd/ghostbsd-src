@@ -28,11 +28,12 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_MODULE_H_
-#define	_LINUX_MODULE_H_
+#ifndef	_LINUXKPI_LINUX_MODULE_H_
+#define	_LINUXKPI_LINUX_MODULE_H_
 
 #include <sys/cdefs.h>
 #include <sys/types.h>
+#include <sys/param.h>
 #include <sys/module.h>
 
 #include <linux/list.h>
@@ -50,6 +51,7 @@
 #define MODULE_LICENSE(name)
 #define	MODULE_INFO(tag, info)
 #define	MODULE_FIRMWARE(firmware)
+#define	MODULE_SUPPORTED_DEVICE(name)
 
 #define	THIS_MODULE	((struct module *)0)
 
@@ -103,4 +105,4 @@ _module_run(void *arg)
 
 #define	postcore_initcall(fn)	module_init(fn)
 
-#endif	/* _LINUX_MODULE_H_ */
+#endif	/* _LINUXKPI_LINUX_MODULE_H_ */

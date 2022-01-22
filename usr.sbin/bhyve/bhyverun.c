@@ -212,7 +212,7 @@ struct bhyvestats {
 struct mt_vmm_info {
 	pthread_t	mt_thr;
 	struct vmctx	*mt_ctx;
-	int		mt_vcpu;	
+	int		mt_vcpu;
 } mt_vmm_info[VM_MAXCPU];
 
 static cpuset_t *vcpumap[VM_MAXCPU] = { NULL };
@@ -236,6 +236,7 @@ usage(int code)
 		"       -H: vmexit from the guest on HLT\n"
 		"       -h: help\n"
 		"       -k: key=value flat config file\n"
+		"       -K: PS2 keyboard layout\n"
 		"       -l: LPC device configuration\n"
 		"       -m: memory size in MB\n"
 		"       -o: set config 'var' to 'value'\n"
@@ -1066,7 +1067,7 @@ do_open(const char *vmname)
 	bool reinit, romboot;
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_t rights;
-	const cap_ioctl_t *cmds;	
+	const cap_ioctl_t *cmds;
 	size_t ncmds;
 #endif
 
@@ -1109,7 +1110,7 @@ do_open(const char *vmname)
 
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_init(&rights, CAP_IOCTL, CAP_MMAP_RW);
-	if (caph_rights_limit(vm_get_device_fd(ctx), &rights) == -1) 
+	if (caph_rights_limit(vm_get_device_fd(ctx), &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 	vm_get_ioctls(&ncmds);
 	cmds = vm_get_ioctls(NULL);
@@ -1119,7 +1120,7 @@ do_open(const char *vmname)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 	free((cap_ioctl_t *)cmds);
 #endif
- 
+
 	if (reinit) {
 		error = vm_reinit(ctx);
 		if (error) {
@@ -1249,9 +1250,9 @@ main(int argc, char *argv[])
 	progname = basename(argv[0]);
 
 #ifdef BHYVE_SNAPSHOT
-	optstr = "aehuwxACDHIPSWYk:o:p:G:c:s:m:l:U:r:";
+	optstr = "aehuwxACDHIPSWYk:o:p:G:c:s:m:l:K:U:r:";
 #else
-	optstr = "aehuwxACDHIPSWYk:o:p:G:c:s:m:l:U:";
+	optstr = "aehuwxACDHIPSWYk:o:p:G:c:s:m:l:K:U:";
 #endif
 	while ((c = getopt(argc, argv, optstr)) != -1) {
 		switch (c) {
@@ -1284,6 +1285,9 @@ main(int argc, char *argv[])
 			break;
 		case 'k':
 			parse_simple_config_file(optarg);
+			break;
+		case 'K':
+			set_config_value("keyboard.layout", optarg);
 			break;
 		case 'l':
 			if (strncmp(optarg, "help", strlen(optarg)) == 0) {
@@ -1354,7 +1358,7 @@ main(int argc, char *argv[])
 			set_config_bool("x86.mptable", false);
 			break;
 		case 'h':
-			usage(0);			
+			usage(0);
 		default:
 			usage(1);
 		}

@@ -28,8 +28,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_DEVICE_H_
-#define	_LINUX_DEVICE_H_
+#ifndef	_LINUXKPI_LINUX_DEVICE_H_
+#define	_LINUXKPI_LINUX_DEVICE_H_
 
 #include <linux/err.h>
 #include <linux/types.h>
@@ -42,6 +42,9 @@
 #include <linux/workqueue.h>
 #include <linux/kdev_t.h>
 #include <linux/backlight.h>
+#include <linux/pm.h>
+#include <linux/idr.h>
+#include <linux/ratelimit.h>	/* via linux/dev_printk.h */
 #include <asm/atomic.h>
 
 #include <sys/bus.h>
@@ -227,6 +230,21 @@ int lkpi_devres_destroy(struct device *, void(*release)(struct device *, void *)
 void lkpi_devres_release_free_list(struct device *);
 void lkpi_devres_unlink(struct device *, void *);
 void lkpi_devm_kmalloc_release(struct device *, void *);
+
+static inline const char *
+dev_driver_string(const struct device *dev)
+{
+	driver_t *drv;
+	const char *str = "";
+
+	if (dev->bsddev != NULL) {
+		drv = device_get_driver(dev->bsddev);
+		if (drv != NULL)
+			str = drv->name;
+	}
+
+	return (str);
+}
 
 static inline void *
 dev_get_drvdata(const struct device *dev)
@@ -465,9 +483,9 @@ device_unregister(struct device *dev)
 	dev->bsddev = NULL;
 
 	if (bsddev != NULL && dev->bsddev_attached_here) {
-		mtx_lock(&Giant);
+		bus_topo_lock();
 		device_delete_child(device_get_parent(bsddev), bsddev);
-		mtx_unlock(&Giant);
+		bus_topo_unlock();
 	}
 	put_device(dev);
 }
@@ -481,9 +499,9 @@ device_del(struct device *dev)
 	dev->bsddev = NULL;
 
 	if (bsddev != NULL && dev->bsddev_attached_here) {
-		mtx_lock(&Giant);
+		bus_topo_lock();
 		device_delete_child(device_get_parent(bsddev), bsddev);
-		mtx_unlock(&Giant);
+		bus_topo_unlock();
 	}
 }
 
@@ -514,10 +532,10 @@ device_release_driver(struct device *dev)
 	dev_set_drvdata(dev, NULL);
 	/* Do not call dev->release! */
 
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	if (device_is_attached(dev->bsddev))
 		device_detach(dev->bsddev);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 #endif
 }
 
@@ -527,9 +545,9 @@ device_reprobe(struct device *dev)
 	int error;
 
 	device_release_driver(dev);
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	error = device_probe_and_attach(dev->bsddev);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 
 	return (-error);
 }
@@ -635,4 +653,4 @@ devm_kmalloc(struct device *dev, size_t size, gfp_t gfp)
 #define	devm_kcalloc(_dev, _sizen, _size, _gfp)			\
     devm_kmalloc((_dev), ((_sizen) * (_size)), (_gfp) | __GFP_ZERO)
 
-#endif	/* _LINUX_DEVICE_H_ */
+#endif	/* _LINUXKPI_LINUX_DEVICE_H_ */

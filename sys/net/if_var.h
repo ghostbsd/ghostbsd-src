@@ -613,12 +613,12 @@ extern	struct sx ifnet_sxlock;
 #define	IFNET_RUNLOCK()		sx_sunlock(&ifnet_sxlock)
 
 /*
- * Look up an ifnet given its index; the _ref variant also acquires a
- * reference that must be freed using if_rele().  It is almost always a bug
- * to call ifnet_byindex() instead of ifnet_byindex_ref().
+ * Look up an ifnet given its index.  The returned value protected from
+ * being freed by the network epoch.  The _ref variant also acquires a
+ * reference that must be freed using if_rele().
  */
-struct ifnet	*ifnet_byindex(u_short idx);
-struct ifnet	*ifnet_byindex_ref(u_short idx);
+struct ifnet	*ifnet_byindex(u_int);
+struct ifnet	*ifnet_byindex_ref(u_int);
 
 /*
  * Given the index, ifaddr_byindex() returns the one and only
@@ -629,12 +629,10 @@ struct ifaddr	*ifaddr_byindex(u_short idx);
 
 VNET_DECLARE(struct ifnethead, ifnet);
 VNET_DECLARE(struct ifgrouphead, ifg_head);
-VNET_DECLARE(int, if_index);
 VNET_DECLARE(struct ifnet *, loif);	/* first loopback interface */
 
 #define	V_ifnet		VNET(ifnet)
 #define	V_ifg_head	VNET(ifg_head)
-#define	V_if_index	VNET(if_index)
 #define	V_loif		VNET(loif)
 
 #ifdef MCAST_VERBOSE
@@ -649,7 +647,6 @@ int	if_addmulti(struct ifnet *, struct sockaddr *, struct ifmultiaddr **);
 int	if_allmulti(struct ifnet *, int);
 struct	ifnet* if_alloc(u_char);
 struct	ifnet* if_alloc_dev(u_char, device_t dev);
-struct	ifnet* if_alloc_domain(u_char, int numa_domain);
 void	if_attach(struct ifnet *);
 void	if_dead(struct ifnet *);
 int	if_delmulti(struct ifnet *, struct sockaddr *);
@@ -775,12 +772,6 @@ void if_setstartfn(if_t ifp, void (*)(if_t));
 void if_settransmitfn(if_t ifp, if_transmit_fn_t);
 void if_setqflushfn(if_t ifp, if_qflush_fn_t);
 void if_setgetcounterfn(if_t ifp, if_get_counter_t);
-
-/* Revisit the below. These are inline functions originally */
-int drbr_inuse_drv(if_t ifp, struct buf_ring *br);
-struct mbuf* drbr_dequeue_drv(if_t ifp, struct buf_ring *br);
-int drbr_needs_enqueue_drv(if_t ifp, struct buf_ring *br);
-int drbr_enqueue_drv(if_t ifp, struct buf_ring *br, struct mbuf *m);
 
 /* TSO */
 void if_hw_tsomax_common(if_t ifp, struct ifnet_hw_tsomax *);

@@ -957,6 +957,10 @@ void * tls_init(const struct tls_config *conf)
 	const char *ciphers;
 
 	if (tls_openssl_ref_count == 0) {
+		void openssl_load_legacy_provider(void);
+
+		openssl_load_legacy_provider();
+
 		tls_global = context = tls_context_new(conf);
 		if (context == NULL)
 			return NULL;
@@ -3019,13 +3023,23 @@ static int tls_set_conn_flags(struct tls_connection *conn, unsigned int flags,
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
 	!defined(LIBRESSL_VERSION_NUMBER) && \
 	!defined(OPENSSL_IS_BORINGSSL)
-	if ((flags & (TLS_CONN_ENABLE_TLSv1_0 | TLS_CONN_ENABLE_TLSv1_1)) &&
-	    SSL_get_security_level(ssl) >= 2) {
-		/*
-		 * Need to drop to security level 1 to allow TLS versions older
-		 * than 1.2 to be used when explicitly enabled in configuration.
-		 */
-		SSL_set_security_level(conn->ssl, 1);
+	{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+		int need_level = 0;
+#else
+		int need_level = 1;
+#endif
+
+		if ((flags &
+		     (TLS_CONN_ENABLE_TLSv1_0 | TLS_CONN_ENABLE_TLSv1_1)) &&
+		    SSL_get_security_level(ssl) > need_level) {
+			/*
+			 * Need to drop to security level 1 (or 0  with OpenSSL
+			 * 3.0) to allow TLS versions older than 1.2 to be used
+			 * when explicitly enabled in configuration.
+			 */
+			SSL_set_security_level(conn->ssl, need_level);
+		}
 	}
 #endif
 
@@ -3773,6 +3787,7 @@ static int tls_connection_private_key(struct tls_data *data,
 				      const u8 *private_key_blob,
 				      size_t private_key_blob_len)
 {
+	BIO *bio;
 	int ok;
 
 	if (private_key == NULL && private_key_blob == NULL)
@@ -3816,6 +3831,28 @@ static int tls_connection_private_key(struct tls_data *data,
 				   "SSL_use_RSAPrivateKey_ASN1 --> OK");
 			ok = 1;
 			break;
+		}
+
+		bio = BIO_new_mem_buf((u8 *) private_key_blob,
+				      private_key_blob_len);
+		if (bio) {
+			EVP_PKEY *pkey;
+
+			pkey = PEM_read_bio_PrivateKey(
+				bio, NULL, tls_passwd_cb,
+				(void *) private_key_passwd);
+			if (pkey) {
+				if (SSL_use_PrivateKey(conn->ssl, pkey) == 1) {
+					wpa_printf(MSG_DEBUG,
+						   "OpenSSL: SSL_use_PrivateKey --> OK");
+					ok = 1;
+					EVP_PKEY_free(pkey);
+					BIO_free(bio);
+					break;
+				}
+				EVP_PKEY_free(pkey);
+			}
+			BIO_free(bio);
 		}
 
 		if (tls_read_pkcs12_blob(data, conn->ssl, private_key_blob,

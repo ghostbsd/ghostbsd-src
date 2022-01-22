@@ -58,7 +58,6 @@ typedef enum device_state {
 	DS_ALIVE = 20,			/**< @brief probe succeeded */
 	DS_ATTACHING = 25,		/**< @brief currently attaching */
 	DS_ATTACHED = 30,		/**< @brief attach method called */
-	DS_BUSY = 40			/**< @brief device is open */
 } device_state_t;
 
 /**
@@ -515,6 +514,8 @@ void	bus_release_resources(device_t dev, const struct resource_spec *rs,
 
 int	bus_adjust_resource(device_t child, int type, struct resource *r,
 			    rman_res_t start, rman_res_t end);
+int	bus_translate_resource(device_t child, int type, rman_res_t start,
+			       rman_res_t *newstart);
 struct	resource *bus_alloc_resource(device_t dev, int type, int *rid,
 				     rman_res_t start, rman_res_t end,
 				     rman_res_t count, u_int flags);
@@ -738,6 +739,15 @@ extern int bus_current_pass;
 void	bus_set_pass(int pass);
 
 /**
+ * Routines to lock / unlock the newbus lock.
+ * Must be taken out to interact with newbus.
+ */
+void bus_topo_lock(void);
+void bus_topo_unlock(void);
+struct mtx * bus_topo_mtx(void);
+void bus_topo_assert(void);
+
+/**
  * Shorthands for constructing method tables.
  */
 #define	DEVMETHOD	KOBJMETHOD
@@ -767,7 +777,7 @@ struct driver_module_data {
 
 #define	EARLY_DRIVER_MODULE_ORDERED(name, busname, driver, devclass,	\
     evh, arg, order, pass)						\
-									\
+								\
 static struct driver_module_data name##_##busname##_driver_mod = {	\
 	evh, arg,							\
 	#busname,							\
@@ -805,7 +815,7 @@ DECLARE_MODULE(name##_##busname, name##_##busname##_mod,		\
 static __inline type varp ## _get_ ## var(device_t dev)			\
 {									\
 	uintptr_t v;							\
-	int e;								\
+	int e __diagused;						\
 	e = BUS_READ_IVAR(device_get_parent(dev), dev,			\
 	    ivarp ## _IVAR_ ## ivar, &v);				\
 	KASSERT(e == 0, ("%s failed for %s on bus %s, error = %d",	\
@@ -817,7 +827,7 @@ static __inline type varp ## _get_ ## var(device_t dev)			\
 static __inline void varp ## _set_ ## var(device_t dev, type t)		\
 {									\
 	uintptr_t v = (uintptr_t) t;					\
-	int e;								\
+	int e __diagused;						\
 	e = BUS_WRITE_IVAR(device_get_parent(dev), dev,			\
 	    ivarp ## _IVAR_ ## ivar, v);				\
 	KASSERT(e == 0, ("%s failed for %s on bus %s, error = %d",	\

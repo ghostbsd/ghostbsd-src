@@ -96,7 +96,6 @@ CONFS=	DAEMON \
 	savecore \
 	securelevel \
 	serial \
-	sppp \
 	statd \
 	static_arp \
 	static_ndp \
@@ -324,6 +323,7 @@ CONFGROUPS+=	ZFS
 ZFS+=		zfs
 ZFS+=		zfsbe
 ZFS+=		zfsd
+ZFS+=		zfskeys
 ZFS+=		zpool
 ZFS+=		zvol
 ZFSPACKAGE=	rc

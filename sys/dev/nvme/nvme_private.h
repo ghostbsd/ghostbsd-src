@@ -240,6 +240,8 @@ struct nvme_controller {
 	uint32_t		quirks;
 #define	QUIRK_DELAY_B4_CHK_RDY	1		/* Can't touch MMIO on disable */
 #define	QUIRK_DISABLE_TIMEOUT	2		/* Disable broken completion timeout feature */
+#define	QUIRK_INTEL_ALIGNMENT	4		/* Pre NVMe 1.3 performance alignment */
+#define QUIRK_AHCI		8		/* Attached via AHCI redirect */
 
 	bus_space_tag_t		bus_tag;
 	bus_space_handle_t	bus_handle;

@@ -1726,7 +1726,9 @@ lagg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 					(*lp->lp_ioctl)(lp->lp_ifp, cmd, data);
 			}
 		}
+		lagg_capabilities(sc);
 		LAGG_XUNLOCK(sc);
+		VLAN_CAPABILITIES(ifp);
 		break;
 
 	default:
@@ -1832,12 +1834,9 @@ lagg_snd_tag_alloc(struct ifnet *ifp,
 	struct epoch_tracker et;
 	const struct if_snd_tag_sw *sw;
 	struct lagg_snd_tag *lst;
-	struct lagg_softc *sc;
 	struct lagg_port *lp;
 	struct ifnet *lp_ifp;
 	int error;
-
-	sc = ifp->if_softc;
 
 	switch (params->hdr.type) {
 #ifdef RATELIMIT

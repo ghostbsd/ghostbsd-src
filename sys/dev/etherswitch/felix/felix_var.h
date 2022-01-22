@@ -38,6 +38,7 @@
 #define	PCI_VENDOR_FREESCALE	0x1957
 #define	FELIX_DEV_ID		0xEEF0
 
+#define	FELIX_BAR_MDIO		0
 #define	FELIX_BAR_REGS		4
 
 #define	FELIX_LOCK(_sc)			mtx_lock(&(_sc)->mtx)
@@ -92,6 +93,7 @@ struct felix_port {
 typedef struct felix_softc {
 	device_t		dev;
 	struct resource		*regs;
+	struct resource		*mdio;
 
 	etherswitch_info_t	info;
 	struct callout		tick_callout;
@@ -100,6 +102,8 @@ typedef struct felix_softc {
 
 	int			vlan_mode;
 	int                     vlans[FELIX_NUM_VLANS];
+
+	uint32_t		timer_ticks;
 } *felix_softc_t;
 
 #endif

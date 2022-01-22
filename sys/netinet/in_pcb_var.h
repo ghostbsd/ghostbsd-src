@@ -44,6 +44,10 @@
  * Definitions shared between netinet/in_pcb.c and netinet6/in6_pcb.c
  */
 
+VNET_DECLARE(uint32_t, in_pcbhashseed);
+#define	V_in_pcbhashseed	VNET(in_pcbhashseed)
+
+bool	inp_smr_lock(struct inpcb *, const inp_lookup_t);
 int	in_pcb_lport(struct inpcb *, struct in_addr *, u_short *,
 	    struct ucred *, int);
 int	in_pcb_lport_dest(struct inpcb *inp, struct sockaddr *lsa,
@@ -51,5 +55,11 @@ int	in_pcb_lport_dest(struct inpcb *inp, struct sockaddr *lsa,
             struct ucred *cred, int lookupflags);
 struct inpcb *	in_pcblookup_local(struct inpcbinfo *, struct in_addr, u_short,
 	    int, struct ucred *);
+
+struct inpcbport {
+	struct inpcbhead phd_pcblist;
+	CK_LIST_ENTRY(inpcbport) phd_hash;
+	u_short phd_port;
+};
 
 #endif /* !_NETINET_IN_PCB_VAR_H_ */

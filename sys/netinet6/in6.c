@@ -1754,6 +1754,27 @@ in6_localip(struct in6_addr *in6)
 }
 
 /*
+ * Like in6_localip(), but FIB-aware.
+ */
+bool
+in6_localip_fib(struct in6_addr *in6, uint16_t fib)
+{
+	struct rm_priotracker in6_ifa_tracker;
+	struct in6_ifaddr *ia;
+
+	IN6_IFADDR_RLOCK(&in6_ifa_tracker);
+	CK_LIST_FOREACH(ia, IN6ADDR_HASH(in6), ia6_hash) {
+		if (IN6_ARE_ADDR_EQUAL(in6, &ia->ia_addr.sin6_addr) &&
+		    ia->ia_ifa.ifa_ifp->if_fib == fib) {
+			IN6_IFADDR_RUNLOCK(&in6_ifa_tracker);
+			return (true);
+		}
+	}
+	IN6_IFADDR_RUNLOCK(&in6_ifa_tracker);
+	return (false);
+}
+
+/*
  * Return 1 if an internet address is configured on an interface.
  */
 int
@@ -2459,6 +2480,17 @@ in6_lltattach(struct ifnet *ifp)
 	llt->llt_mark_used = llentry_mark_used;
  	lltable_link(llt);
 
+	return (llt);
+}
+
+struct lltable *
+in6_lltable_get(struct ifnet *ifp)
+{
+	struct lltable *llt = NULL;
+
+	void *afdata_ptr = ifp->if_afdata[AF_INET6];
+	if (afdata_ptr != NULL)
+		llt = ((struct in6_ifextra *)afdata_ptr)->lltable;
 	return (llt);
 }
 

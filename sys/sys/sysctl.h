@@ -976,7 +976,6 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	KERN_HOSTUUID		36	/* string: host UUID identifier */
 #define	KERN_ARND		37	/* int: from arc4rand() */
 #define	KERN_MAXPHYS		38	/* int: MAXPHYS value */
-#define	KERN_STACKTOP		39	/* int: USRSTACK - stack gap */
 /*
  * KERN_PROC subtypes
  */
@@ -1014,6 +1013,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	KERN_PROC_CWD		42	/* process current working directory */
 #define	KERN_PROC_NFDS		43	/* number of open file descriptors */
 #define	KERN_PROC_SIGFASTBLK	44	/* address of fastsigblk magic word */
+#define	KERN_PROC_VM_LAYOUT	45	/* virtual address space layout info */
 
 /*
  * KERN_IPC identifiers

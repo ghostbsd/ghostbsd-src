@@ -123,10 +123,6 @@ LIN_SDT_PROBE_DEFINE2(sysvec, linux_translate_traps, todo, "int", "int");
 LIN_SDT_PROBE_DEFINE0(sysvec, linux_exec_setregs, todo);
 LIN_SDT_PROBE_DEFINE0(sysvec, linux_copyout_auxargs, todo);
 LIN_SDT_PROBE_DEFINE0(sysvec, linux_elf_fixup, todo);
-LIN_SDT_PROBE_DEFINE0(sysvec, linux_rt_sigreturn, todo);
-LIN_SDT_PROBE_DEFINE0(sysvec, linux_rt_sendsig, todo);
-LIN_SDT_PROBE_DEFINE0(sysvec, linux_vdso_install, todo);
-LIN_SDT_PROBE_DEFINE0(sysvec, linux_vdso_deinstall, todo);
 
 LINUX_VDSO_SYM_CHAR(linux_platform);
 LINUX_VDSO_SYM_INTPTR(kern_timekeep_base);
@@ -160,9 +156,10 @@ linux_fetch_syscall_args(struct thread *td)
 	else
 		sa->callp = &p->p_sysent->sv_table[sa->code];
 
-	if (sa->callp->sy_narg > MAXARGS)
-		panic("ARM64TODO: Could we have more than %d args?", MAXARGS);
-	memcpy(sa->args, ap, MAXARGS * sizeof(register_t));
+	if (sa->callp->sy_narg > nitems(sa->args))
+		panic("ARM64TODO: Could we have more than %zu args?",
+		    nitems(sa->args));
+	memcpy(sa->args, ap, nitems(sa->args) * sizeof(register_t));
 
 	td->td_retval[0] = 0;
 	return (0);
@@ -258,17 +255,12 @@ linux_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	struct proc *p;
 	int argc, envc, error;
 
-	/* Calculate string base and vector table pointers. */
-	if (imgp->execpath != NULL && imgp->auxargs != NULL)
-		execpath_len = strlen(imgp->execpath) + 1;
-	else
-		execpath_len = 0;
-
 	p = imgp->proc;
-	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
+	arginfo = (struct ps_strings *)PROC_PS_STRINGS(p);
 	destp = (uintptr_t)arginfo;
 
-	if (execpath_len != 0) {
+	if (imgp->execpath != NULL && imgp->auxargs != NULL) {
+		execpath_len = strlen(imgp->execpath) + 1;
 		destp -= execpath_len;
 		destp = rounddown2(destp, sizeof(void *));
 		imgp->execpathp = (void *)destp;
@@ -439,7 +431,6 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	struct l_sigframe *fp, frame;
 	struct sigacts *psp;
 	int onstack, sig;
-	uint32_t spsr;
 
 	td = curthread;
 	p = td->td_proc;
@@ -474,7 +465,6 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Fill in the frame to copy out */
 	bzero(&frame, sizeof(frame));
 	get_mcontext(td, &frame.sf_uc.uc_mcontext, 0);
-	spsr = frame.sf_uc.uc_mcontext.mc_gpregs.gp_spsr;
 
 	/* Translate the signal. */
 	sig = bsd_to_linux_signal(sig);
@@ -529,6 +519,7 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
 	.sv_usrstack	= LINUX_USRSTACK,
 	.sv_psstrings	= LINUX_PS_STRINGS,
+	.sv_psstringssz	= sizeof(struct ps_strings),
 	.sv_stackprot	= VM_PROT_READ | VM_PROT_WRITE,
 	.sv_copyout_auxargs = linux_copyout_auxargs,
 	.sv_copyout_strings = linux_copyout_strings,

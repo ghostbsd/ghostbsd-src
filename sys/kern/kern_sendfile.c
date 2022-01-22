@@ -158,7 +158,7 @@ sfstat_sysctl(SYSCTL_HANDLER_ARGS)
 	return (SYSCTL_OUT(req, &s, sizeof(s)));
 }
 SYSCTL_PROC(_kern_ipc, OID_AUTO, sfstat,
-    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_NEEDGIANT, NULL, 0,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
     sfstat_sysctl, "I",
     "sendfile statistics");
 
@@ -399,7 +399,6 @@ sendfile_iodone(void *arg, vm_page_t *pa, int count, int error)
 		(void)(so->so_proto->pr_usrreqs->pru_ready)(so, sfio->m,
 		    sfio->npages);
 
-	SOCK_LOCK(so);
 	sorele(so);
 #ifdef KERN_TLS
 out_with_ref:

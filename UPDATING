@@ -27,6 +27,64 @@ NOTE TO PEOPLE WHO THINK THAT FreeBSD 14.x IS SLOW:
 	world, or to merely disable the most expensive debugging functionality
 	at runtime, run "ln -s 'abort:false,junk:false' /etc/malloc.conf".)
 
+20211230:
+	The macros provided for the manipulation of CPU sets (e.g. CPU_AND)
+	have been modified to take 2 source arguments instead of only 1.
+	Externally maintained sources that use these macros will have to
+	be adapted. The FreeBSD version has been bumped to 1400046 to
+	reflect this change.
+
+20211214:
+	A number of the kernel include files are able to be included by
+	themselves.  A test has been added to buildworld to enforce this.
+
+20211209:
+	Remove mips as a recognized target. This starts the decommissioning of
+	mips support in FreeBSD. mips related items will be removed wholesale in
+	the coming days and weeks.
+
+	This broke the NO_CLEAN build for some people. Either do a clean build
+	or touch
+		lib/clang/include/llvm/Config/Targets.def
+		lib/clang/include/llvm/Config/AsmParsers.def
+		lib/clang/include/llvm/Config/Disassemblers.def
+		lib/clang/include/llvm/Config/AsmPrinters.def
+	before the build to force everything to rebuild that needs to.
+
+20211110:
+	Commit b8d60729deef changed the TCP congestion control framework so
+	that any of the included congestion control modules could be
+	the single module built into the kernel. Previously newreno
+	was automatically built in through direct reference. Has of
+	this commit you are required to declare at least one congestion
+	control module (e.g. 'options CC_NEWRENO') and to also delcare a 
+	default using the CC_DEFAULT option (e.g. options CC_DEFAULT="newreno\").
+	The GENERIC configuation includes CC_NEWRENO and defines newreno
+	as the default. If no congestion control option is built into the
+	kernel and you are including networking, the kernel compile will
+	fail. Also if no default is declared the kernel compile will fail.
+
+20211118:
+	Mips has been removed from universe builds. It will be removed from the
+	tree shortly.
+
+20211106:
+	Commit f0c9847a6c47 changed the arguments for VOP_ALLOCATE.
+	The NFS modules must be rebuilt from sources and any out
+	of tree file systems that implement their own VOP_ALLOCATE
+	may need to be modified.
+
+20211022:
+	The synchronous PPP kernel driver sppp(4) has been removed.
+	The cp(4) and ce(4) drivers are now always compiled with netgraph(4)
+	support, formerly enabled by NETGRAPH_CRONYX option.
+
+20211020:
+	sh(1) is now the default shell for the root user.  To force root to use
+	the csh shell, please run the following command as root:
+
+	# chsh -s csh
+
 20211004:
 	Ncurses distribution has been split between libtinfow and libncurses
 	with libncurses.so becoming a linker (ld) script to seamlessly link
@@ -2446,9 +2504,9 @@ COMMON ITEMS:
 	make installkernel KERNCONF=YOUR_KERNEL_HERE
 							[1]
 	<reboot in single user>				[3]
-	mergemaster -Fp					[5]
+	etcupdate -p					[5]
 	make installworld
-	mergemaster -Fi					[4]
+	etcupdate -B					[4]
 	make delete-old					[6]
 	<reboot>
 
@@ -2484,9 +2542,9 @@ COMMON ITEMS:
 	make installkernel KERNCONF=YOUR_KERNEL_HERE
 							[1]
 	<reboot in single user>				[3]
-	mergemaster -Fp					[5]
+	etcupdate -p					[5]
 	make installworld
-	mergemaster -Fi					[4]
+	etcupdate -B					[4]
 	make delete-old					[6]
 	<reboot>
 
@@ -2528,15 +2586,11 @@ COMMON ITEMS:
 	system.  Attempting to do it by hand is not recommended and those
 	that pursue this avenue should read this file carefully, as well
 	as the archives of freebsd-current and freebsd-hackers mailing lists
-	for potential gotchas.  The -U option is also useful to consider.
-	See mergemaster(8) for more information.
+	for potential gotchas.  See etcupdate(8) for more information.
 
 	[5] Usually this step is a no-op.  However, from time to time
 	you may need to do this if you get unknown user in the following
-	step.  It never hurts to do it all the time.  You may need to
-	install a new mergemaster (cd src/usr.sbin/mergemaster && make
-	install) after the buildworld before this step if you last updated
-	from current before 20130425 or from -stable before 20130430.
+	step.
 
 	[6] This only deletes old files and directories. Old libraries
 	can be deleted by "make delete-old-libs", but you have to make

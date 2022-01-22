@@ -134,7 +134,7 @@ linux_execve(struct thread *td, struct linux_execve_args *args)
 	char *path;
 	int error;
 
-	LCONVPATHEXIST(td, args->path, &path);
+	LCONVPATHEXIST(args->path, &path);
 
 	error = freebsd32_exec_copyin_args(&eargs, path, UIO_SYSSPACE,
 	    args->argp, args->envp);
@@ -678,7 +678,8 @@ linux_set_thread_area(struct thread *td,
 }
 
 void
-bsd_to_linux_regset32(struct reg32 *b_reg, struct linux_pt_regset32 *l_regset)
+bsd_to_linux_regset32(const struct reg32 *b_reg,
+    struct linux_pt_regset32 *l_regset)
 {
 
 	l_regset->ebx = b_reg->r_ebx;

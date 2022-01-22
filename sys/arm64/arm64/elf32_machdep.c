@@ -99,6 +99,7 @@ static struct sysentvec elf32_freebsd_sysvec = {
 	.sv_maxuser	= FREEBSD32_MAXUSER,
 	.sv_usrstack	= FREEBSD32_USRSTACK,
 	.sv_psstrings	= FREEBSD32_PS_STRINGS,
+	.sv_psstringssz	= sizeof(struct freebsd32_ps_strings),
 	.sv_stackprot	= VM_PROT_READ | VM_PROT_WRITE,
 	.sv_copyout_auxargs = elf32_freebsd_copyout_auxargs,
 	.sv_copyout_strings = freebsd32_copyout_strings,
@@ -204,6 +205,8 @@ freebsd32_fetch_syscall_args(struct thread *td)
 			panic("Too many system call arguiments");
 		error = copyin((void *)td->td_frame->tf_x[13], args,
 		    (narg - nap) * sizeof(int));
+		if (error != 0)
+			return (error);
 		for (i = 0; i < (narg - nap); i++)
 			sa->args[i + nap] = args[i];
 	}

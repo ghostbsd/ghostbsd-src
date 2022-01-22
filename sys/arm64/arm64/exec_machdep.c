@@ -211,11 +211,9 @@ set_dbregs(struct thread *td, struct dbreg *regs)
 	struct debug_monitor_state *monitor;
 	uint64_t addr;
 	uint32_t ctrl;
-	int count;
 	int i;
 
 	monitor = &td->td_pcb->pcb_dbg_regs;
-	count = 0;
 	monitor->dbg_enable_count = 0;
 
 	for (i = 0; i < DBG_BRP_MAX; i++) {
@@ -399,6 +397,9 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	 * Clear debug register state. It is not applicable to the new process.
 	 */
 	bzero(&pcb->pcb_dbg_regs, sizeof(pcb->pcb_dbg_regs));
+
+	/* Generate new pointer authentication keys */
+	ptrauth_exec(td);
 }
 
 /* Sanity check these are the same size, they will be memcpy'd to and from */
@@ -544,7 +545,6 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	struct trapframe *tf;
 	struct sigframe *fp, frame;
 	struct sigacts *psp;
-	struct sysentvec *sysent;
 	int onstack, sig;
 
 	td = curthread;
@@ -596,18 +596,13 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		sigexit(td, SIGILL);
 	}
 
-	tf->tf_x[0]= sig;
+	tf->tf_x[0] = sig;
 	tf->tf_x[1] = (register_t)&fp->sf_si;
 	tf->tf_x[2] = (register_t)&fp->sf_uc;
 
 	tf->tf_elr = (register_t)catcher;
 	tf->tf_sp = (register_t)fp;
-	sysent = p->p_sysent;
-	if (sysent->sv_sigcode_base != 0)
-		tf->tf_lr = (register_t)sysent->sv_sigcode_base;
-	else
-		tf->tf_lr = (register_t)(sysent->sv_psstrings -
-		    *(sysent->sv_szsigcode));
+	tf->tf_lr = (register_t)p->p_sysent->sv_sigcode_base;
 
 	CTR3(KTR_SIG, "sendsig: return td=%p pc=%#x sp=%#x", td, tf->tf_elr,
 	    tf->tf_sp);

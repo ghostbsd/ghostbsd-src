@@ -99,7 +99,6 @@ static struct timecounter *timecounters = &dummy_timecounter;
 
 /* Mutex to protect the timecounter list. */
 static struct mtx tc_lock;
-MTX_SYSINIT(tc_lock, &tc_lock, "tc", MTX_DEF);
 
 int tc_min_ticktock_freq = 1;
 
@@ -214,6 +213,23 @@ tc_delta(struct timehands *th)
 	    tc->tc_counter_mask);
 }
 
+static __inline void
+bintime_add_tc_delta(struct bintime *bt, uint64_t scale,
+    uint64_t large_delta, uint64_t delta)
+{
+	uint64_t x;
+
+	if (__predict_false(delta >= large_delta)) {
+		/* Avoid overflow for scale * delta. */
+		x = (scale >> 32) * delta;
+		bt->sec += x >> 32;
+		bintime_addx(bt, x << 32);
+		bintime_addx(bt, (scale & 0xffffffff) * delta);
+	} else {
+		bintime_addx(bt, scale * delta);
+	}
+}
+
 /*
  * Functions for reading the time.  We have to loop until we are sure that
  * the timehands that we operated on was not updated under our feet.  See
@@ -225,7 +241,7 @@ bintime_off(struct bintime *bt, u_int off)
 {
 	struct timehands *th;
 	struct bintime *btp;
-	uint64_t scale, x;
+	uint64_t scale;
 	u_int delta, gen, large_delta;
 
 	do {
@@ -239,15 +255,7 @@ bintime_off(struct bintime *bt, u_int off)
 		atomic_thread_fence_acq();
 	} while (gen == 0 || gen != th->th_generation);
 
-	if (__predict_false(delta >= large_delta)) {
-		/* Avoid overflow for scale * delta. */
-		x = (scale >> 32) * delta;
-		bt->sec += x >> 32;
-		bintime_addx(bt, x << 32);
-		bintime_addx(bt, (scale & 0xffffffff) * delta);
-	} else {
-		bintime_addx(bt, scale * delta);
-	}
+	bintime_add_tc_delta(bt, scale, large_delta, delta);
 }
 #define	GETTHBINTIME(dst, member)					\
 do {									\
@@ -1311,6 +1319,40 @@ tc_setclock(struct timespec *ts)
 }
 
 /*
+ * Recalculate the scaling factor.  We want the number of 1/2^64
+ * fractions of a second per period of the hardware counter, taking
+ * into account the th_adjustment factor which the NTP PLL/adjtime(2)
+ * processing provides us with.
+ *
+ * The th_adjustment is nanoseconds per second with 32 bit binary
+ * fraction and we want 64 bit binary fraction of second:
+ *
+ *	 x = a * 2^32 / 10^9 = a * 4.294967296
+ *
+ * The range of th_adjustment is +/- 5000PPM so inside a 64bit int
+ * we can only multiply by about 850 without overflowing, that
+ * leaves no suitably precise fractions for multiply before divide.
+ *
+ * Divide before multiply with a fraction of 2199/512 results in a
+ * systematic undercompensation of 10PPM of th_adjustment.  On a
+ * 5000PPM adjustment this is a 0.05PPM error.  This is acceptable.
+ *
+ * We happily sacrifice the lowest of the 64 bits of our result
+ * to the goddess of code clarity.
+ */
+static void
+recalculate_scaling_factor_and_large_delta(struct timehands *th)
+{
+	uint64_t scale;
+
+	scale = (uint64_t)1 << 63;
+	scale += (th->th_adjustment / 1024) * 2199;
+	scale /= th->th_counter->tc_frequency;
+	th->th_scale = scale * 2;
+	th->th_large_delta = MIN(((uint64_t)1 << 63) / scale, UINT_MAX);
+}
+
+/*
  * Initialize the next struct timehands in the ring and make
  * it the active timehands.  Along the way we might switch to a different
  * timecounter and/or do seconds processing in NTP.  Slightly magic.
@@ -1319,8 +1361,8 @@ static void
 tc_windup(struct bintime *new_boottimebin)
 {
 	struct bintime bt;
+	struct timecounter *tc;
 	struct timehands *th, *tho;
-	uint64_t scale;
 	u_int delta, ncount, ogen;
 	int i;
 	time_t t;
@@ -1348,9 +1390,10 @@ tc_windup(struct bintime *new_boottimebin)
 	 * changing timecounters, a counter value from the new timecounter.
 	 * Update the offset fields accordingly.
 	 */
+	tc = atomic_load_ptr(&timecounter);
 	delta = tc_delta(th);
-	if (th->th_counter != timecounter)
-		ncount = timecounter->tc_get_timecount(timecounter);
+	if (th->th_counter != tc)
+		ncount = tc->tc_get_timecount(tc);
 	else
 		ncount = 0;
 #ifdef FFCLOCK
@@ -1358,17 +1401,8 @@ tc_windup(struct bintime *new_boottimebin)
 #endif
 	th->th_offset_count += delta;
 	th->th_offset_count &= th->th_counter->tc_counter_mask;
-	while (delta > th->th_counter->tc_frequency) {
-		/* Eat complete unadjusted seconds. */
-		delta -= th->th_counter->tc_frequency;
-		th->th_offset.sec++;
-	}
-	if ((delta > th->th_counter->tc_frequency / 2) &&
-	    (th->th_scale * delta < ((uint64_t)1 << 63))) {
-		/* The product th_scale * delta just barely overflows. */
-		th->th_offset.sec++;
-	}
-	bintime_addx(&th->th_offset, th->th_scale * delta);
+	bintime_add_tc_delta(&th->th_offset, th->th_scale,
+	    th->th_large_delta, delta);
 
 	/*
 	 * Hardware latching timecounters may not generate interrupts on
@@ -1382,7 +1416,7 @@ tc_windup(struct bintime *new_boottimebin)
 		tho->th_counter->tc_poll_pps(tho->th_counter);
 
 	/*
-	 * Deal with NTP second processing.  The for loop normally
+	 * Deal with NTP second processing.  The loop normally
 	 * iterates at most once, but in extreme situations it might
 	 * keep NTP sane if timeouts are not run for several seconds.
 	 * At boot, the time step can be large when the TOD hardware
@@ -1393,64 +1427,43 @@ tc_windup(struct bintime *new_boottimebin)
 	bt = th->th_offset;
 	bintime_add(&bt, &th->th_boottime);
 	i = bt.sec - tho->th_microtime.tv_sec;
-	if (i > LARGE_STEP)
-		i = 2;
-	for (; i > 0; i--) {
-		t = bt.sec;
-		ntp_update_second(&th->th_adjustment, &bt.sec);
-		if (bt.sec != t)
-			th->th_boottime.sec += bt.sec - t;
+	if (i > 0) {
+		if (i > LARGE_STEP)
+			i = 2;
+
+		do {
+			t = bt.sec;
+			ntp_update_second(&th->th_adjustment, &bt.sec);
+			if (bt.sec != t)
+				th->th_boottime.sec += bt.sec - t;
+			--i;
+		} while (i > 0);
+
+		recalculate_scaling_factor_and_large_delta(th);
 	}
+
 	/* Update the UTC timestamps used by the get*() functions. */
 	th->th_bintime = bt;
 	bintime2timeval(&bt, &th->th_microtime);
 	bintime2timespec(&bt, &th->th_nanotime);
 
 	/* Now is a good time to change timecounters. */
-	if (th->th_counter != timecounter) {
+	if (th->th_counter != tc) {
 #ifndef __arm__
-		if ((timecounter->tc_flags & TC_FLAGS_C2STOP) != 0)
+		if ((tc->tc_flags & TC_FLAGS_C2STOP) != 0)
 			cpu_disable_c2_sleep++;
 		if ((th->th_counter->tc_flags & TC_FLAGS_C2STOP) != 0)
 			cpu_disable_c2_sleep--;
 #endif
-		th->th_counter = timecounter;
+		th->th_counter = tc;
 		th->th_offset_count = ncount;
-		tc_min_ticktock_freq = max(1, timecounter->tc_frequency /
-		    (((uint64_t)timecounter->tc_counter_mask + 1) / 3));
+		tc_min_ticktock_freq = max(1, tc->tc_frequency /
+		    (((uint64_t)tc->tc_counter_mask + 1) / 3));
+		recalculate_scaling_factor_and_large_delta(th);
 #ifdef FFCLOCK
 		ffclock_change_tc(th);
 #endif
 	}
-
-	/*-
-	 * Recalculate the scaling factor.  We want the number of 1/2^64
-	 * fractions of a second per period of the hardware counter, taking
-	 * into account the th_adjustment factor which the NTP PLL/adjtime(2)
-	 * processing provides us with.
-	 *
-	 * The th_adjustment is nanoseconds per second with 32 bit binary
-	 * fraction and we want 64 bit binary fraction of second:
-	 *
-	 *	 x = a * 2^32 / 10^9 = a * 4.294967296
-	 *
-	 * The range of th_adjustment is +/- 5000PPM so inside a 64bit int
-	 * we can only multiply by about 850 without overflowing, that
-	 * leaves no suitably precise fractions for multiply before divide.
-	 *
-	 * Divide before multiply with a fraction of 2199/512 results in a
-	 * systematic undercompensation of 10PPM of th_adjustment.  On a
-	 * 5000PPM adjustment this is a 0.05PPM error.  This is acceptable.
- 	 *
-	 * We happily sacrifice the lowest of the 64 bits of our result
-	 * to the goddess of code clarity.
-	 *
-	 */
-	scale = (uint64_t)1 << 63;
-	scale += (th->th_adjustment / 1024) * 2199;
-	scale /= th->th_counter->tc_frequency;
-	th->th_scale = scale * 2;
-	th->th_large_delta = MIN(((uint64_t)1 << 63) / scale, UINT_MAX);
 
 	/*
 	 * Now that the struct timehands is again consistent, set the new
@@ -1975,6 +1988,8 @@ inittimehands(void *dummy)
 
 	TUNABLE_STR_FETCH("kern.timecounter.hardware", tc_from_tunable,
 	    sizeof(tc_from_tunable));
+
+	mtx_init(&tc_lock, "tc", NULL, MTX_DEF);
 }
 SYSINIT(timehands, SI_SUB_TUNABLES, SI_ORDER_ANY, inittimehands, NULL);
 

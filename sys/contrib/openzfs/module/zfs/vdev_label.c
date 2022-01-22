@@ -496,6 +496,10 @@ vdev_config_generate(spa_t *spa, vdev_t *vd, boolean_t getstats,
 		fnvlist_add_uint64(nv, ZPOOL_CONFIG_ASIZE,
 		    vd->vdev_asize);
 		fnvlist_add_uint64(nv, ZPOOL_CONFIG_IS_LOG, vd->vdev_islog);
+		if (vd->vdev_noalloc) {
+			fnvlist_add_uint64(nv, ZPOOL_CONFIG_NONALLOCATING,
+			    vd->vdev_noalloc);
+		}
 		if (vd->vdev_removing) {
 			fnvlist_add_uint64(nv, ZPOOL_CONFIG_REMOVING,
 			    vd->vdev_removing);
@@ -665,7 +669,7 @@ vdev_config_generate(spa_t *spa, vdev_t *vd, boolean_t getstats,
 
 		if (idx) {
 			fnvlist_add_nvlist_array(nv, ZPOOL_CONFIG_CHILDREN,
-			    child, idx);
+			    (const nvlist_t * const *)child, idx);
 		}
 
 		for (c = 0; c < idx; c++)
@@ -933,7 +937,7 @@ vdev_inuse(vdev_t *vd, uint64_t crtxg, vdev_labeltype_t reason,
 	/*
 	 * Check to see if this is a spare device.  We do an explicit check for
 	 * spa_has_spare() here because it may be on our pending list of spares
-	 * to add.  We also check if it is an l2cache device.
+	 * to add.
 	 */
 	if (spa_spare_exists(device_guid, &spare_pool, NULL) ||
 	    spa_has_spare(spa, device_guid)) {
@@ -942,7 +946,6 @@ vdev_inuse(vdev_t *vd, uint64_t crtxg, vdev_labeltype_t reason,
 
 		switch (reason) {
 		case VDEV_LABEL_CREATE:
-		case VDEV_LABEL_L2CACHE:
 			return (B_TRUE);
 
 		case VDEV_LABEL_REPLACE:
@@ -959,8 +962,24 @@ vdev_inuse(vdev_t *vd, uint64_t crtxg, vdev_labeltype_t reason,
 	/*
 	 * Check to see if this is an l2cache device.
 	 */
-	if (spa_l2cache_exists(device_guid, NULL))
-		return (B_TRUE);
+	if (spa_l2cache_exists(device_guid, NULL) ||
+	    spa_has_l2cache(spa, device_guid)) {
+		if (l2cache_guid)
+			*l2cache_guid = device_guid;
+
+		switch (reason) {
+		case VDEV_LABEL_CREATE:
+			return (B_TRUE);
+
+		case VDEV_LABEL_REPLACE:
+			return (!spa_has_l2cache(spa, device_guid));
+
+		case VDEV_LABEL_L2CACHE:
+			return (spa_has_l2cache(spa, device_guid));
+		default:
+			break;
+		}
+	}
 
 	/*
 	 * We can't rely on a pool's state if it's been imported

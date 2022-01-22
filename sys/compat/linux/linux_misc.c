@@ -205,7 +205,7 @@ linux_alarm(struct thread *td, struct linux_alarm_args *args)
 {
 	struct itimerval it, old_it;
 	u_int secs;
-	int error;
+	int error __diagused;
 
 	secs = args->secs;
 	/*
@@ -276,12 +276,12 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 
 	if (!LUSECONVPATH(td)) {
 		NDINIT(&ni, LOOKUP, ISOPEN | FOLLOW | LOCKLEAF | AUDITVNODE1,
-		    UIO_USERSPACE, args->library, td);
+		    UIO_USERSPACE, args->library);
 		error = namei(&ni);
 	} else {
-		LCONVPATHEXIST(td, args->library, &library);
+		LCONVPATHEXIST(args->library, &library);
 		NDINIT(&ni, LOOKUP, ISOPEN | FOLLOW | LOCKLEAF | AUDITVNODE1,
-		    UIO_SYSSPACE, library, td);
+		    UIO_SYSSPACE, library);
 		error = namei(&ni);
 		LFREEPATH(library);
 	}
@@ -759,7 +759,7 @@ linux_utime(struct thread *td, struct linux_utime_args *args)
 		error = kern_utimesat(td, AT_FDCWD, args->fname, UIO_USERSPACE,
 		    tvp, UIO_SYSSPACE);
 	} else {
-		LCONVPATHEXIST(td, args->fname, &fname);
+		LCONVPATHEXIST(args->fname, &fname);
 		error = kern_utimesat(td, AT_FDCWD, fname, UIO_SYSSPACE, tvp,
 		    UIO_SYSSPACE);
 		LFREEPATH(fname);
@@ -791,7 +791,7 @@ linux_utimes(struct thread *td, struct linux_utimes_args *args)
 		error = kern_utimesat(td, AT_FDCWD, args->fname, UIO_USERSPACE,
 		    tvp, UIO_SYSSPACE);
 	} else {
-		LCONVPATHEXIST(td, args->fname, &fname);
+		LCONVPATHEXIST(args->fname, &fname);
 		error = kern_utimesat(td, AT_FDCWD, fname, UIO_SYSSPACE,
 		    tvp, UIO_SYSSPACE);
 		LFREEPATH(fname);
@@ -859,7 +859,7 @@ linux_common_utimensat(struct thread *td, int ldfd, const char *pathname,
 	}
 
 	if (pathname != NULL)
-		LCONVPATHEXIST_AT(td, pathname, &path, dfd);
+		LCONVPATHEXIST_AT(pathname, &path, dfd);
 	else if (lflags != 0)
 		return (EINVAL);
 
@@ -978,7 +978,7 @@ linux_futimesat(struct thread *td, struct linux_futimesat_args *args)
 		error = kern_utimesat(td, dfd, args->filename, UIO_USERSPACE,
 		    tvp, UIO_SYSSPACE);
 	} else {
-		LCONVPATHEXIST_AT(td, args->filename, &fname, dfd);
+		LCONVPATHEXIST_AT(args->filename, &fname, dfd);
 		error = kern_utimesat(td, dfd, fname, UIO_SYSSPACE,
 		    tvp, UIO_SYSSPACE);
 		LFREEPATH(fname);
@@ -1024,7 +1024,7 @@ linux_common_wait(struct thread *td, int pid, int *statusp,
 		} else if (WIFSTOPPED(tmpstat)) {
 			tmpstat = (tmpstat & 0xffff00ff) |
 			    (bsd_to_linux_signal(WSTOPSIG(tmpstat)) << 8);
-#if defined(__amd64__) && !defined(COMPAT_LINUX32)
+#if defined(__aarch64__) || (defined(__amd64__) && !defined(COMPAT_LINUX32))
 			if (WSTOPSIG(status) == SIGTRAP) {
 				tmpstat = linux_ptrace_status(td,
 				    siginfo.si_pid, tmpstat);
@@ -1087,7 +1087,6 @@ linux_waitid(struct thread *td, struct linux_waitid_args *args)
 	siginfo_t siginfo;
 	l_siginfo_t lsi;
 	idtype_t idtype;
-	struct proc *p;
 	int error;
 
 	options = 0;
@@ -1127,7 +1126,6 @@ linux_waitid(struct thread *td, struct linux_waitid_args *args)
 			return (error);
 	}
 	if (args->info != NULL) {
-		p = td->td_proc;
 		bzero(&lsi, sizeof(lsi));
 		if (td->td_retval[0] != 0) {
 			sig = bsd_to_linux_signal(siginfo.si_signo);
@@ -1154,7 +1152,7 @@ linux_mknod(struct thread *td, struct linux_mknod_args *args)
 		path = args->path;
 		seg = UIO_USERSPACE;
 	} else {
-		LCONVPATHCREAT(td, args->path, &path);
+		LCONVPATHCREAT(args->path, &path);
 		seg = UIO_SYSSPACE;
 	}
 
@@ -1210,7 +1208,7 @@ linux_mknodat(struct thread *td, struct linux_mknodat_args *args)
 		path = __DECONST(char *, args->filename);
 		seg = UIO_USERSPACE;
 	} else {
-		LCONVPATHCREAT_AT(td, args->filename, &path, dfd);
+		LCONVPATHCREAT_AT(args->filename, &path, dfd);
 		seg = UIO_SYSSPACE;
 	}
 

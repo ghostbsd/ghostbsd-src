@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/elf.h>
 #include <sys/eventhandler.h>
 #include <sys/exec.h>
+#include <sys/fcntl.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/limits.h>
@@ -54,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
+#include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/refcount.h>
@@ -1836,8 +1838,8 @@ get_proc_vector32(struct thread *td, struct proc *p, char ***proc_vectorp,
 	int i, error;
 
 	error = 0;
-	if (proc_readmem(td, p, (vm_offset_t)p->p_sysent->sv_psstrings, &pss,
-	    sizeof(pss)) != sizeof(pss))
+	if (proc_readmem(td, p, PROC_PS_STRINGS(p), &pss, sizeof(pss)) !=
+	    sizeof(pss))
 		return (ENOMEM);
 	switch (type) {
 	case PROC_ARG:
@@ -1912,8 +1914,8 @@ get_proc_vector(struct thread *td, struct proc *p, char ***proc_vectorp,
 	if (SV_PROC_FLAG(p, SV_ILP32) != 0)
 		return (get_proc_vector32(td, p, proc_vectorp, vsizep, type));
 #endif
-	if (proc_readmem(td, p, (vm_offset_t)p->p_sysent->sv_psstrings, &pss,
-	    sizeof(pss)) != sizeof(pss))
+	if (proc_readmem(td, p, PROC_PS_STRINGS(p), &pss, sizeof(pss)) !=
+	    sizeof(pss))
 		return (ENOMEM);
 	switch (type) {
 	case PROC_ARG:
@@ -2224,6 +2226,77 @@ sysctl_kern_proc_auxv(SYSCTL_HANDLER_ARGS)
 }
 
 /*
+ * Look up the canonical executable path running in the specified process.
+ * It tries to return the same hardlink name as was used for execve(2).
+ * This allows the programs that modify their behavior based on their progname,
+ * to operate correctly.
+ *
+ * Result is returned in retbuf, it must not be freed, similar to vn_fullpath()
+ *   calling conventions.
+ * binname is a pointer to temporary string buffer of length MAXPATHLEN,
+ *   allocated and freed by caller.
+ * freebuf should be freed by caller, from the M_TEMP malloc type.
+ */
+int
+proc_get_binpath(struct proc *p, char *binname, char **retbuf,
+    char **freebuf)
+{
+	struct nameidata nd;
+	struct vnode *vp, *dvp;
+	size_t freepath_size;
+	int error;
+	bool do_fullpath;
+
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	vp = p->p_textvp;
+	if (vp == NULL) {
+		PROC_UNLOCK(p);
+		*retbuf = "";
+		*freebuf = NULL;
+		return (0);
+	}
+	vref(vp);
+	dvp = p->p_textdvp;
+	if (dvp != NULL)
+		vref(dvp);
+	if (p->p_binname != NULL)
+		strlcpy(binname, p->p_binname, MAXPATHLEN);
+	PROC_UNLOCK(p);
+
+	do_fullpath = true;
+	*freebuf = NULL;
+	if (dvp != NULL && binname[0] != '\0') {
+		freepath_size = MAXPATHLEN;
+		if (vn_fullpath_hardlink(vp, dvp, binname, strlen(binname),
+		    retbuf, freebuf, &freepath_size) == 0) {
+			/*
+			 * Recheck the looked up path.  The binary
+			 * might have been renamed or replaced, in
+			 * which case we should not report old name.
+			 */
+			NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, *retbuf);
+			error = namei(&nd);
+			if (error == 0) {
+				if (nd.ni_vp == vp)
+					do_fullpath = false;
+				vrele(nd.ni_vp);
+				NDFREE(&nd, NDF_ONLY_PNBUF);
+			}
+		}
+	}
+	if (do_fullpath) {
+		free(*freebuf, M_TEMP);
+		*freebuf = NULL;
+		error = vn_fullpath(vp, retbuf, freebuf);
+	}
+	vrele(vp);
+	if (dvp != NULL)
+		vrele(dvp);
+	return (error);
+}
+
+/*
  * This sysctl allows a process to retrieve the path of the executable for
  * itself or another process.
  */
@@ -2233,32 +2306,25 @@ sysctl_kern_proc_pathname(SYSCTL_HANDLER_ARGS)
 	pid_t *pidp = (pid_t *)arg1;
 	unsigned int arglen = arg2;
 	struct proc *p;
-	struct vnode *vp;
-	char *retbuf, *freebuf;
+	char *retbuf, *freebuf, *binname;
 	int error;
 
 	if (arglen != 1)
 		return (EINVAL);
+	binname = malloc(MAXPATHLEN, M_TEMP, M_WAITOK);
+	binname[0] = '\0';
 	if (*pidp == -1) {	/* -1 means this process */
+		error = 0;
 		p = req->td->td_proc;
+		PROC_LOCK(p);
 	} else {
 		error = pget(*pidp, PGET_CANSEE, &p);
-		if (error != 0)
-			return (error);
 	}
 
-	vp = p->p_textvp;
-	if (vp == NULL) {
-		if (*pidp != -1)
-			PROC_UNLOCK(p);
-		return (0);
-	}
-	vref(vp);
-	if (*pidp != -1)
-		PROC_UNLOCK(p);
-	error = vn_fullpath(vp, &retbuf, &freebuf);
-	vrele(vp);
-	if (error)
+	if (error == 0)
+		error = proc_get_binpath(p, binname, &retbuf, &freebuf);
+	free(binname, M_TEMP);
+	if (error != 0)
 		return (error);
 	error = SYSCTL_OUT(req, retbuf, strlen(retbuf) + 1);
 	free(freebuf, M_TEMP);
@@ -2914,13 +2980,13 @@ sysctl_kern_proc_ps_strings(SYSCTL_HANDLER_ARGS)
 		 * process.
 		 */
 		ps_strings32 = SV_PROC_FLAG(p, SV_ILP32) != 0 ?
-		    PTROUT(p->p_sysent->sv_psstrings) : 0;
+		    PTROUT(PROC_PS_STRINGS(p)) : 0;
 		PROC_UNLOCK(p);
 		error = SYSCTL_OUT(req, &ps_strings32, sizeof(ps_strings32));
 		return (error);
 	}
 #endif
-	ps_strings = p->p_sysent->sv_psstrings;
+	ps_strings = PROC_PS_STRINGS(p);
 	PROC_UNLOCK(p);
 	error = SYSCTL_OUT(req, &ps_strings, sizeof(ps_strings));
 	return (error);
@@ -3033,11 +3099,13 @@ sysctl_kern_proc_sigtramp(SYSCTL_HANDLER_ARGS)
 			if (sv->sv_sigcode_base != 0) {
 				kst32.ksigtramp_start = sv->sv_sigcode_base;
 				kst32.ksigtramp_end = sv->sv_sigcode_base +
-				    *sv->sv_szsigcode;
+				    ((sv->sv_flags & SV_DSO_SIG) == 0 ?
+				    *sv->sv_szsigcode :
+				    (uintptr_t)sv->sv_szsigcode);
 			} else {
-				kst32.ksigtramp_start = sv->sv_psstrings -
+				kst32.ksigtramp_start = PROC_PS_STRINGS(p) -
 				    *sv->sv_szsigcode;
-				kst32.ksigtramp_end = sv->sv_psstrings;
+				kst32.ksigtramp_end = PROC_PS_STRINGS(p);
 			}
 		}
 		PROC_UNLOCK(p);
@@ -3049,11 +3117,12 @@ sysctl_kern_proc_sigtramp(SYSCTL_HANDLER_ARGS)
 	if (sv->sv_sigcode_base != 0) {
 		kst.ksigtramp_start = (char *)sv->sv_sigcode_base;
 		kst.ksigtramp_end = (char *)sv->sv_sigcode_base +
-		    *sv->sv_szsigcode;
+		    ((sv->sv_flags & SV_DSO_SIG) == 0 ? *sv->sv_szsigcode :
+		    (uintptr_t)sv->sv_szsigcode);
 	} else {
-		kst.ksigtramp_start = (char *)sv->sv_psstrings -
+		kst.ksigtramp_start = (char *)PROC_PS_STRINGS(p) -
 		    *sv->sv_szsigcode;
-		kst.ksigtramp_end = (char *)sv->sv_psstrings;
+		kst.ksigtramp_end = (char *)PROC_PS_STRINGS(p);
 	}
 	PROC_UNLOCK(p);
 	error = SYSCTL_OUT(req, &kst, sizeof(kst));
@@ -3128,6 +3197,80 @@ errlocked:
 	} else
 #endif
 		error = SYSCTL_OUT(req, &addr, sizeof(addr));
+	return (error);
+}
+
+static int
+sysctl_kern_proc_vm_layout(SYSCTL_HANDLER_ARGS)
+{
+	struct kinfo_vm_layout kvm;
+	struct proc *p;
+	struct vmspace *vmspace;
+	int error, *name;
+
+	name = (int *)arg1;
+	if ((u_int)arg2 != 1)
+		return (EINVAL);
+
+	error = pget((pid_t)name[0], PGET_CANDEBUG, &p);
+	if (error != 0)
+		return (error);
+#ifdef COMPAT_FREEBSD32
+	if (SV_CURPROC_FLAG(SV_ILP32)) {
+		if (!SV_PROC_FLAG(p, SV_ILP32)) {
+			PROC_UNLOCK(p);
+			return (EINVAL);
+		}
+	}
+#endif
+	vmspace = vmspace_acquire_ref(p);
+	PROC_UNLOCK(p);
+
+	memset(&kvm, 0, sizeof(kvm));
+	kvm.kvm_min_user_addr = vm_map_min(&vmspace->vm_map);
+	kvm.kvm_max_user_addr = vm_map_max(&vmspace->vm_map);
+	kvm.kvm_text_addr = (uintptr_t)vmspace->vm_taddr;
+	kvm.kvm_text_size = vmspace->vm_tsize;
+	kvm.kvm_data_addr = (uintptr_t)vmspace->vm_daddr;
+	kvm.kvm_data_size = vmspace->vm_dsize;
+	kvm.kvm_stack_addr = (uintptr_t)vmspace->vm_maxsaddr;
+	kvm.kvm_stack_size = vmspace->vm_ssize;
+	if ((vmspace->vm_map.flags & MAP_WIREFUTURE) != 0)
+		kvm.kvm_map_flags |= KMAP_FLAG_WIREFUTURE;
+	if ((vmspace->vm_map.flags & MAP_ASLR) != 0)
+		kvm.kvm_map_flags |= KMAP_FLAG_ASLR;
+	if ((vmspace->vm_map.flags & MAP_ASLR_IGNSTART) != 0)
+		kvm.kvm_map_flags |= KMAP_FLAG_ASLR_IGNSTART;
+	if ((vmspace->vm_map.flags & MAP_WXORX) != 0)
+		kvm.kvm_map_flags |= KMAP_FLAG_WXORX;
+	if ((vmspace->vm_map.flags & MAP_ASLR_STACK) != 0)
+		kvm.kvm_map_flags |= KMAP_FLAG_ASLR_STACK;
+
+#ifdef COMPAT_FREEBSD32
+	if (SV_CURPROC_FLAG(SV_ILP32)) {
+		struct kinfo_vm_layout32 kvm32;
+
+		memset(&kvm32, 0, sizeof(kvm32));
+		kvm32.kvm_min_user_addr = (uint32_t)kvm.kvm_min_user_addr;
+		kvm32.kvm_max_user_addr = (uint32_t)kvm.kvm_max_user_addr;
+		kvm32.kvm_text_addr = (uint32_t)kvm.kvm_text_addr;
+		kvm32.kvm_text_size = (uint32_t)kvm.kvm_text_size;
+		kvm32.kvm_data_addr = (uint32_t)kvm.kvm_data_addr;
+		kvm32.kvm_data_size = (uint32_t)kvm.kvm_data_size;
+		kvm32.kvm_stack_addr = (uint32_t)kvm.kvm_stack_addr;
+		kvm32.kvm_stack_size = (uint32_t)kvm.kvm_stack_size;
+		kvm32.kvm_map_flags = kvm.kvm_map_flags;
+		vmspace_free(vmspace);
+		error = SYSCTL_OUT(req, &kvm32, sizeof(kvm32));
+		goto out;
+	}
+#endif
+
+	error = SYSCTL_OUT(req, &kvm, sizeof(kvm));
+#ifdef COMPAT_FREEBSD32
+out:
+#endif
+	vmspace_free(vmspace);
 	return (error);
 }
 
@@ -3248,6 +3391,10 @@ static SYSCTL_NODE(_kern_proc, KERN_PROC_SIGTRAMP, sigtramp, CTLFLAG_RD |
 static SYSCTL_NODE(_kern_proc, KERN_PROC_SIGFASTBLK, sigfastblk, CTLFLAG_RD |
 	CTLFLAG_ANYBODY | CTLFLAG_MPSAFE, sysctl_kern_proc_sigfastblk,
 	"Thread sigfastblock address");
+
+static SYSCTL_NODE(_kern_proc, KERN_PROC_VM_LAYOUT, vm_layout, CTLFLAG_RD |
+	CTLFLAG_ANYBODY | CTLFLAG_MPSAFE, sysctl_kern_proc_vm_layout,
+	"Process virtual address space layout info");
 
 int allproc_gen;
 

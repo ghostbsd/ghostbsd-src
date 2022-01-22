@@ -164,6 +164,7 @@ static const char *mmc_errmsg[] =
 #define ccb_bp		ppriv_ptr1
 
 static	disk_strategy_t	sddastrategy;
+static	dumper_t	sddadump;
 static	periph_init_t	sddainit;
 static	void		sddaasync(void *callback_arg, u_int32_t code,
 				struct cam_path *path, void *arg);
@@ -650,7 +651,6 @@ sddaasync(void *callback_arg, u_int32_t code,
 {
 	struct ccb_getdev cgd;
 	struct cam_periph *periph;
-	struct sdda_softc *softc;
 
 	periph = (struct cam_periph *)callback_arg;
         CAM_DEBUG(path, CAM_DEBUG_TRACE, ("sddaasync(code=%d)\n", code));
@@ -693,7 +693,6 @@ sddaasync(void *callback_arg, u_int32_t code,
 	case AC_GETDEV_CHANGED:
 	{
 		CAM_DEBUG(path, CAM_DEBUG_TRACE, ("=> AC_GETDEV_CHANGED\n"));
-		softc = (struct sdda_softc *)periph->softc;
 		memset(&cgd, 0, sizeof(cgd));
 		xpt_setup_ccb(&cgd.ccb_h, periph->path, CAM_PRIORITY_NORMAL);
 		cgd.ccb_h.func_code = XPT_GDEV_TYPE;
@@ -754,7 +753,6 @@ sddaregister(struct cam_periph *periph, void *arg)
 {
 	struct sdda_softc *softc;
 	struct ccb_getdev *cgd;
-	union ccb *request_ccb;	/* CCB representing the probe request */
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("sddaregister\n"));
 	cgd = (struct ccb_getdev *)arg;
@@ -783,7 +781,6 @@ sddaregister(struct cam_periph *periph, void *arg)
 	periph->softc = softc;
 	softc->periph = periph;
 
-	request_ccb = (union ccb*) arg;
 	xpt_schedule(periph, CAM_PRIORITY_XPT);
 	TASK_INIT(&softc->start_init_task, 0, sdda_start_init_task, periph);
 	taskqueue_enqueue(taskqueue_thread, &softc->start_init_task);
@@ -1263,7 +1260,7 @@ sdda_start_init(void *context, union ccb *start_ccb)
 		mmc_decode_cid_sd(mmcp->card_cid, &softc->cid);
 	}
 
-	softc->sector_count = softc->csd.capacity / 512;
+	softc->sector_count = softc->csd.capacity / MMC_SECTOR_SIZE;
 	softc->mediasize = softc->csd.capacity;
 	softc->cmd6_time = mmc_get_cmd6_timeout(periph);
 
@@ -1275,7 +1272,7 @@ sdda_start_init(void *context, union ccb *start_ccb)
 		    (softc->raw_ext_csd[EXT_CSD_SEC_CNT + 3] << 24);
 		if (sec_count != 0) {
 			softc->sector_count = sec_count;
-			softc->mediasize = softc->sector_count * 512;
+			softc->mediasize = softc->sector_count * MMC_SECTOR_SIZE;
 			/* FIXME: there should be a better name for this option...*/
 			mmcp->card_features |= CARD_FEATURE_SDHC;
 		}
@@ -1562,7 +1559,7 @@ sdda_add_part(struct cam_periph *periph, u_int type, const char *name,
 	part->disk = disk_alloc();
 	part->disk->d_rotation_rate = DISK_RR_NON_ROTATING;
 	part->disk->d_devstat = devstat_new_entry(part->name,
-	    cnt, 512,
+	    cnt, MMC_SECTOR_SIZE,
 	    DEVSTAT_ALL_SUPPORTED,
 	    DEVSTAT_TYPE_DIRECT | XPORT_DEVSTAT_TYPE(cpi.transport),
 	    DEVSTAT_PRIORITY_DISK);
@@ -1570,6 +1567,8 @@ sdda_add_part(struct cam_periph *periph, u_int type, const char *name,
 	part->disk->d_open = sddaopen;
 	part->disk->d_close = sddaclose;
 	part->disk->d_strategy = sddastrategy;
+	if (cam_sim_pollable(periph->sim))
+		part->disk->d_dump = sddadump;
 	part->disk->d_getattr = sddagetattr;
 	part->disk->d_gone = sddadiskgonecb;
 	part->disk->d_name = part->name;
@@ -1842,7 +1841,7 @@ sddastart(struct cam_periph *periph, union ccb *start_ccb)
 	{
 		struct ccb_mmcio *mmcio;
 		uint64_t blockno = bp->bio_pblkno;
-		uint16_t count = bp->bio_bcount / 512;
+		uint16_t count = bp->bio_bcount / MMC_SECTOR_SIZE;
 		uint16_t opcode;
 
 		if (bp->bio_cmd == BIO_READ)
@@ -1879,7 +1878,7 @@ sddastart(struct cam_periph *periph, union ccb *start_ccb)
 		mmcio->cmd.data = softc->mmcdata;
 		memset(mmcio->cmd.data, 0, sizeof(struct mmc_data));
 		mmcio->cmd.data->data = bp->bio_data;
-		mmcio->cmd.data->len = 512 * count;
+		mmcio->cmd.data->len = MMC_SECTOR_SIZE * count;
 		mmcio->cmd.data->flags = (bp->bio_cmd == BIO_READ ? MMC_DATA_READ : MMC_DATA_WRITE);
 		/* Direct h/w to issue CMD12 upon completion */
 		if (count > 1) {
@@ -1938,7 +1937,7 @@ sddadone(struct cam_periph *periph, union ccb *done_ccb)
 			    /*reduction*/0,
 			    /*timeout*/0,
 			    /*getcount_only*/0);
-		error = 5; /* EIO */
+		error = EIO;
 	} else {
 		if ((done_ccb->ccb_h.status & CAM_DEV_QFRZN) != 0)
 			panic("REQ_CMP with QFRZN");
@@ -1959,7 +1958,7 @@ sddadone(struct cam_periph *periph, union ccb *done_ccb)
 		softc->outstanding_cmds--;
 		/* Complete partition switch */
 		softc->state = SDDA_STATE_NORMAL;
-		if (error != MMC_ERR_NONE) {
+		if (error != 0) {
 			/* TODO: Unpause retune if accessing RPMB */
 			xpt_release_ccb(done_ccb);
 			xpt_schedule(periph, CAM_PRIORITY_NORMAL);
@@ -2005,4 +2004,74 @@ sddaerror(union ccb *ccb, u_int32_t cam_flags, u_int32_t sense_flags)
 {
 	return(cam_periph_error(ccb, cam_flags, sense_flags));
 }
+
+static int
+sddadump(void *arg, void *virtual, vm_offset_t physical, off_t offset,
+    size_t length)
+{
+	struct ccb_mmcio mmcio;
+	struct disk *dp;
+	struct sdda_part *part;
+	struct sdda_softc *softc;
+	struct cam_periph *periph;
+	struct mmc_params *mmcp;
+	uint16_t count;
+	uint16_t opcode;
+	int error;
+
+	dp = arg;
+	part = dp->d_drv1;
+	softc = part->sc;
+	periph = softc->periph;
+	mmcp = &periph->path->device->mmc_ident_data;
+
+	if (softc->state != SDDA_STATE_NORMAL)
+		return (ENXIO);
+
+	count = length / MMC_SECTOR_SIZE;
+	if (count == 0)
+		return (0);
+
+	if (softc->part[softc->part_curr] != part)
+		return (EIO);	/* TODO implement polled partition switch */
+
+	memset(&mmcio, 0, sizeof(mmcio));
+	xpt_setup_ccb(&mmcio.ccb_h, periph->path, CAM_PRIORITY_NORMAL); /* XXX needed? */
+
+	mmcio.ccb_h.func_code = XPT_MMC_IO;
+	mmcio.ccb_h.flags = CAM_DIR_OUT;
+	mmcio.ccb_h.retry_count = 0;
+	mmcio.ccb_h.timeout = 15 * 1000;
+
+	if (count > 1)
+		opcode = MMC_WRITE_MULTIPLE_BLOCK;
+	else
+		opcode = MMC_WRITE_BLOCK;
+	mmcio.cmd.opcode = opcode;
+	mmcio.cmd.arg = offset / MMC_SECTOR_SIZE;
+	if (!(mmcp->card_features & CARD_FEATURE_SDHC))
+		mmcio.cmd.arg <<= 9;
+
+	mmcio.cmd.flags = MMC_RSP_R1 | MMC_CMD_ADTC;
+	mmcio.cmd.data = softc->mmcdata;
+	memset(mmcio.cmd.data, 0, sizeof(struct mmc_data));
+	mmcio.cmd.data->data = virtual;
+	mmcio.cmd.data->len = MMC_SECTOR_SIZE * count;
+	mmcio.cmd.data->flags = MMC_DATA_WRITE;
+
+	/* Direct h/w to issue CMD12 upon completion */
+	if (count > 1) {
+		mmcio.cmd.data->flags |= MMC_DATA_MULTI;
+		mmcio.stop.opcode = MMC_STOP_TRANSMISSION;
+		mmcio.stop.flags = MMC_RSP_R1B | MMC_CMD_AC;
+		mmcio.stop.arg = 0;
+	}
+
+	error = cam_periph_runccb((union ccb *)&mmcio, cam_periph_error,
+	    0, SF_NO_RECOVERY | SF_NO_RETRY, NULL);
+	if (error != 0)
+		printf("Aborting dump due to I/O error.\n");
+	return (error);
+}
+
 #endif /* _KERNEL */

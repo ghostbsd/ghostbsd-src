@@ -95,7 +95,7 @@ struct tcp_log_bbr {
 	uint8_t bbr_state;
 	uint8_t bbr_substate;
 	uint8_t inhpts;
-	uint8_t ininput;
+	uint8_t __spare;
 	uint8_t use_lt_bw;
 	uint8_t flex8;
 	uint32_t pkt_epoch;
@@ -235,7 +235,8 @@ enum tcp_log_events {
 	TCP_LOG_ACCOUNTING,	/* Log of TCP Accounting data 62 */
 	TCP_LOG_FSB,		/* FSB information 63 */
 	RACK_DSACK_HANDLING,	/* Handling of DSACK in rack for reordering window 64 */
-	TCP_LOG_END		/* End (keep at end)                65 */
+	TCP_HYSTART,		/* TCP Hystart logging 65 */
+	TCP_LOG_END		/* End (keep at end)                66 */
 };
 
 enum tcp_log_states {

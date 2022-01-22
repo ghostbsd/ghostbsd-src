@@ -68,6 +68,7 @@ dexter [label="Michael Dexter\ndexter@FreeBSD.org\n2016/11/15"]
 dru [label="Dru Lavigne\ndru@FreeBSD.org\n2013/01/22"]
 eadler [label="Eitan Adler\neadler@FreeBSD.org\n2012/10/15"]
 ebrandi [label="Edson Brandi\nebrandi@FreeBSD.org\n2012/09/13"]
+emaste [label="Ed Maste\nemaste@FreeBSD.org\n2021/08/18"]
 fernape [label="Fernando Apesteguia\fernape@FreeBSD.org\n2021/02/07"]
 gabor [label="Gabor Kovesdan\ngabor@FreeBSD.org\n2007/02/02"]
 ganbold [label="Ganbold Tsagaankhuu\nganbold@FreeBSD.org\n2008/02/26"]
@@ -82,6 +83,7 @@ joel [label="Joel Dahl\njoel@FreeBSD.org\n2005/04/05"]
 keramida [label="Giorgos Keramidas\nkeramida@FreeBSD.org\n2001/10/12"]
 linimon [label="Mark Linimon\nlinimon@FreeBSD.org\n2004/03/31"]
 loader [label="Fukang Chen\nloader@FreeBSD.org\n2007/07/30"]
+lwhsu [label="Li-Wen Hsu\nlwhsu@FreeBSD.org\n2021/08/01"]
 manolis [label="Manolis Kiagias\nmanolis@FreeBSD.org\n2008/05/24"]
 marck [label="Dmitry Morozovsky\nmarck@FreeBSD.org\n2004/08/10"]
 maxim [label="Maxim Konovalov\nmaxim@FreeBSD.org\n2002/02/07"]
@@ -131,6 +133,9 @@ blackend -> ale
 blackend -> ceri
 
 brueffer -> joel
+
+carlavilla -> emaste
+carlavilla -> lwhsu
 
 ceri -> brd
 ceri -> brueffer
@@ -210,4 +215,7 @@ trhodes -> jcamou
 
 wblock -> jgh
 wblock -> allanjude
+
+ygy -> emaste
+ygy -> lwhsu
 }

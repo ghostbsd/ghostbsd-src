@@ -58,8 +58,8 @@ __FBSDID("$FreeBSD$");
 extern const struct sctp_cc_functions sctp_cc_functions[];
 extern const struct sctp_ss_functions sctp_ss_functions[];
 
-void
-sctp_init(void)
+static void
+sctp_init(void *arg SCTP_UNUSED)
 {
 	u_long sb_max_adj;
 
@@ -73,7 +73,7 @@ sctp_init(void)
 	 */
 	sb_max_adj = (u_long)((u_quad_t)(SB_MAX) * MCLBYTES / (MSIZE + MCLBYTES));
 	SCTP_BASE_SYSCTL(sctp_sendspace) = min(sb_max_adj,
-	    (((uint32_t)nmbclusters / 2) * SCTP_DEFAULT_MAXSEGMENT));
+	    (((uint32_t)nmbclusters / 2) * MCLBYTES));
 	/*
 	 * Now for the recv window, should we take the same amount? or
 	 * should I do 1/2 the SB_MAX instead in the SB_MAX min above. For
@@ -92,6 +92,8 @@ sctp_init(void)
 	    sctp_addr_change_event_handler, NULL, EVENTHANDLER_PRI_FIRST);
 }
 
+VNET_SYSINIT(sctp_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, sctp_init, NULL);
+
 #ifdef VIMAGE
 static void
 sctp_finish(void *unused __unused)
@@ -104,35 +106,51 @@ VNET_SYSUNINIT(sctp, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH, sctp_finish, NULL);
 #endif
 
 void
-sctp_pathmtu_adjustment(struct sctp_tcb *stcb, uint16_t nxtsz)
+sctp_pathmtu_adjustment(struct sctp_tcb *stcb, uint32_t mtu, bool resend)
 {
+	struct sctp_association *asoc;
 	struct sctp_tmit_chunk *chk;
-	uint16_t overhead;
+	uint32_t overhead;
 
-	/* Adjust that too */
-	stcb->asoc.smallest_mtu = nxtsz;
-	/* now off to subtract IP_DF flag if needed */
-	overhead = IP_HDR_SIZE + sizeof(struct sctphdr);
-	if (sctp_auth_is_required_chunk(SCTP_DATA, stcb->asoc.peer_auth_chunks)) {
-		overhead += sctp_get_auth_chunk_len(stcb->asoc.peer_hmac_id);
+	asoc = &stcb->asoc;
+	KASSERT(mtu < asoc->smallest_mtu,
+	    ("Currently only reducing association MTU %u supported (MTU %u)",
+	    asoc->smallest_mtu, mtu));
+	asoc->smallest_mtu = mtu;
+	if (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) {
+		overhead = SCTP_MIN_OVERHEAD;
+	} else {
+		overhead = SCTP_MIN_V4_OVERHEAD;
 	}
-	TAILQ_FOREACH(chk, &stcb->asoc.send_queue, sctp_next) {
-		if ((chk->send_size + overhead) > nxtsz) {
+	if (asoc->idata_supported) {
+		if (sctp_auth_is_required_chunk(SCTP_IDATA, asoc->peer_auth_chunks)) {
+			overhead += sctp_get_auth_chunk_len(asoc->peer_hmac_id);
+		}
+	} else {
+		if (sctp_auth_is_required_chunk(SCTP_DATA, asoc->peer_auth_chunks)) {
+			overhead += sctp_get_auth_chunk_len(asoc->peer_hmac_id);
+		}
+	}
+	KASSERT(overhead % 4 == 0,
+	    ("overhead (%u) not a multiple of 4", overhead));
+	TAILQ_FOREACH(chk, &asoc->send_queue, sctp_next) {
+		if (((uint32_t)chk->send_size + overhead) > mtu) {
 			chk->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 		}
 	}
-	TAILQ_FOREACH(chk, &stcb->asoc.sent_queue, sctp_next) {
-		if ((chk->send_size + overhead) > nxtsz) {
-			/*
-			 * For this guy we also mark for immediate resend
-			 * since we sent to big of chunk
-			 */
+	TAILQ_FOREACH(chk, &asoc->sent_queue, sctp_next) {
+		if (((uint32_t)chk->send_size + overhead) > mtu) {
 			chk->flags |= CHUNK_FLAGS_FRAGMENT_OK;
-			if (chk->sent < SCTP_DATAGRAM_RESEND) {
+			if (resend && chk->sent < SCTP_DATAGRAM_RESEND) {
+				/*
+				 * If requested, mark the chunk for
+				 * immediate resend, since we sent it being
+				 * too big.
+				 */
 				sctp_flight_size_decrease(chk);
 				sctp_total_flight_decrease(stcb, chk);
 				chk->sent = SCTP_DATAGRAM_RESEND;
-				sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
+				sctp_ucount_incr(asoc->sent_queue_retran_cnt);
 				chk->rec.data.doing_fast_retransmit = 0;
 				if (SCTP_BASE_SYSCTL(sctp_logging_level) & SCTP_FLIGHT_LOGGING_ENABLE) {
 					sctp_misc_ints(SCTP_FLIGHT_LOG_DOWN_PMTU,
@@ -141,7 +159,7 @@ sctp_pathmtu_adjustment(struct sctp_tcb *stcb, uint16_t nxtsz)
 					    (uint32_t)(uintptr_t)chk->whoTo,
 					    chk->rec.data.tsn);
 				}
-				/* Clear any time so NO RTT is being done */
+				/* Clear any time, so NO RTT is being done. */
 				if (chk->do_rtt == 1) {
 					chk->do_rtt = 0;
 					chk->whoTo->rto_needed = 1;
@@ -229,7 +247,7 @@ sctp_notify(struct sctp_inpcb *inp,
 		}
 		/* Update the association MTU */
 		if (stcb->asoc.smallest_mtu > next_mtu) {
-			sctp_pathmtu_adjustment(stcb, next_mtu);
+			sctp_pathmtu_adjustment(stcb, next_mtu, true);
 		}
 		/* Finally, start the PMTU timer if it was running before. */
 		if (timer_stopped) {
@@ -1228,7 +1246,7 @@ sctp_fill_up_addresses(struct sctp_inpcb *inp,
     size_t limit,
     struct sockaddr *addr)
 {
-	size_t size = 0;
+	size_t size;
 
 	SCTP_IPI_ADDR_RLOCK();
 	/* fill up addresses for the endpoint's default vrf */
@@ -1238,17 +1256,17 @@ sctp_fill_up_addresses(struct sctp_inpcb *inp,
 	return (size);
 }
 
-static int
-sctp_count_max_addresses_vrf(struct sctp_inpcb *inp, uint32_t vrf_id)
+static size_t
+sctp_max_size_addresses_vrf(struct sctp_inpcb *inp, uint32_t vrf_id)
 {
-	int cnt = 0;
-	struct sctp_vrf *vrf = NULL;
+	struct sctp_vrf *vrf;
+	size_t size;
 
 	/*
-	 * In both sub-set bound an bound_all cases we return the MAXIMUM
-	 * number of addresses that you COULD get. In reality the sub-set
-	 * bound may have an exclusion list for a given TCB OR in the
-	 * bound-all case a TCB may NOT include the loopback or other
+	 * In both sub-set bound an bound_all cases we return the size of
+	 * the maximum number of addresses that you could get. In reality
+	 * the sub-set bound may have an exclusion list for a given TCB or
+	 * in the bound-all case a TCB may NOT include the loopback or other
 	 * addresses as well.
 	 */
 	SCTP_IPI_ADDR_LOCK_ASSERT();
@@ -1256,6 +1274,7 @@ sctp_count_max_addresses_vrf(struct sctp_inpcb *inp, uint32_t vrf_id)
 	if (vrf == NULL) {
 		return (0);
 	}
+	size = 0;
 	if (inp->sctp_flags & SCTP_PCB_FLAGS_BOUNDALL) {
 		struct sctp_ifn *sctp_ifn;
 		struct sctp_ifa *sctp_ifa;
@@ -1268,17 +1287,17 @@ sctp_count_max_addresses_vrf(struct sctp_inpcb *inp, uint32_t vrf_id)
 				case AF_INET:
 #ifdef INET6
 					if (sctp_is_feature_on(inp, SCTP_PCB_FLAGS_NEEDS_MAPPED_V4))
-						cnt += sizeof(struct sockaddr_in6);
+						size += sizeof(struct sockaddr_in6);
 					else
-						cnt += sizeof(struct sockaddr_in);
+						size += sizeof(struct sockaddr_in);
 #else
-					cnt += sizeof(struct sockaddr_in);
+					size += sizeof(struct sockaddr_in);
 #endif
 					break;
 #endif
 #ifdef INET6
 				case AF_INET6:
-					cnt += sizeof(struct sockaddr_in6);
+					size += sizeof(struct sockaddr_in6);
 					break;
 #endif
 				default:
@@ -1295,17 +1314,17 @@ sctp_count_max_addresses_vrf(struct sctp_inpcb *inp, uint32_t vrf_id)
 			case AF_INET:
 #ifdef INET6
 				if (sctp_is_feature_on(inp, SCTP_PCB_FLAGS_NEEDS_MAPPED_V4))
-					cnt += sizeof(struct sockaddr_in6);
+					size += sizeof(struct sockaddr_in6);
 				else
-					cnt += sizeof(struct sockaddr_in);
+					size += sizeof(struct sockaddr_in);
 #else
-				cnt += sizeof(struct sockaddr_in);
+				size += sizeof(struct sockaddr_in);
 #endif
 				break;
 #endif
 #ifdef INET6
 			case AF_INET6:
-				cnt += sizeof(struct sockaddr_in6);
+				size += sizeof(struct sockaddr_in6);
 				break;
 #endif
 			default:
@@ -1313,19 +1332,19 @@ sctp_count_max_addresses_vrf(struct sctp_inpcb *inp, uint32_t vrf_id)
 			}
 		}
 	}
-	return (cnt);
+	return (size);
 }
 
-static int
-sctp_count_max_addresses(struct sctp_inpcb *inp)
+static size_t
+sctp_max_size_addresses(struct sctp_inpcb *inp)
 {
-	int cnt = 0;
+	size_t size;
 
 	SCTP_IPI_ADDR_RLOCK();
-	/* count addresses for the endpoint's default VRF */
-	cnt = sctp_count_max_addresses_vrf(inp, inp->def_vrf_id);
+	/* Maximum size of all addresses for the endpoint's default VRF */
+	size = sctp_max_size_addresses_vrf(inp, inp->def_vrf_id);
 	SCTP_IPI_ADDR_RUNLOCK();
-	return (cnt);
+	return (size);
 }
 
 static int
@@ -2031,13 +2050,12 @@ flags_out:
 	case SCTP_MAXSEG:
 		{
 			struct sctp_assoc_value *av;
-			int ovh;
 
 			SCTP_CHECK_AND_CAST(av, optval, struct sctp_assoc_value, *optsize);
 			SCTP_FIND_STCB(inp, stcb, av->assoc_id);
 
 			if (stcb) {
-				av->assoc_value = sctp_get_frag_point(stcb, &stcb->asoc);
+				av->assoc_value = stcb->asoc.sctp_frag_point;
 				SCTP_TCB_UNLOCK(stcb);
 			} else {
 				if ((inp->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) ||
@@ -2045,15 +2063,7 @@ flags_out:
 				    ((inp->sctp_flags & SCTP_PCB_FLAGS_UDPTYPE) &&
 				    (av->assoc_id == SCTP_FUTURE_ASSOC))) {
 					SCTP_INP_RLOCK(inp);
-					if (inp->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) {
-						ovh = SCTP_MED_OVERHEAD;
-					} else {
-						ovh = SCTP_MED_V4_OVERHEAD;
-					}
-					if (inp->sctp_frag_point >= SCTP_DEFAULT_MAXSEGMENT)
-						av->assoc_value = 0;
-					else
-						av->assoc_value = inp->sctp_frag_point - ovh;
+					av->assoc_value = inp->sctp_frag_point;
 					SCTP_INP_RUNLOCK(inp);
 				} else {
 					SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, EINVAL);
@@ -2140,7 +2150,7 @@ flags_out:
 
 			SCTP_CHECK_AND_CAST(value, optval, uint32_t, *optsize);
 			SCTP_INP_RLOCK(inp);
-			*value = sctp_count_max_addresses(inp);
+			*value = (uint32_t)sctp_max_size_addresses(inp);
 			SCTP_INP_RUNLOCK(inp);
 			*optsize = sizeof(uint32_t);
 			break;
@@ -2148,14 +2158,14 @@ flags_out:
 	case SCTP_GET_REMOTE_ADDR_SIZE:
 		{
 			uint32_t *value;
-			size_t size;
 			struct sctp_nets *net;
+			size_t size;
 
 			SCTP_CHECK_AND_CAST(value, optval, uint32_t, *optsize);
 			/* FIXME MT: change to sctp_assoc_value? */
 			SCTP_FIND_STCB(inp, stcb, (sctp_assoc_t)*value);
 
-			if (stcb) {
+			if (stcb != NULL) {
 				size = 0;
 				/* Count the sizes */
 				TAILQ_FOREACH(net, &stcb->asoc.nets, sctp_next) {
@@ -2186,8 +2196,13 @@ flags_out:
 				*value = (uint32_t)size;
 				*optsize = sizeof(uint32_t);
 			} else {
-				SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, ENOTCONN);
-				error = ENOTCONN;
+				if ((inp->sctp_flags & SCTP_PCB_FLAGS_UDPTYPE) &&
+				    ((sctp_assoc_t)*value <= SCTP_ALL_ASSOC)) {
+					error = EINVAL;
+				} else {
+					error = ENOENT;
+				}
+				SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, error);
 			}
 			break;
 		}
@@ -2205,7 +2220,7 @@ flags_out:
 			SCTP_CHECK_AND_CAST(saddr, optval, struct sctp_getaddresses, *optsize);
 			SCTP_FIND_STCB(inp, stcb, saddr->sget_assoc_id);
 
-			if (stcb) {
+			if (stcb != NULL) {
 				left = *optsize - offsetof(struct sctp_getaddresses, addr);
 				*optsize = offsetof(struct sctp_getaddresses, addr);
 				addr = &saddr->addr[0].sa;
@@ -2261,8 +2276,13 @@ flags_out:
 				}
 				SCTP_TCB_UNLOCK(stcb);
 			} else {
-				SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, ENOENT);
-				error = ENOENT;
+				if ((inp->sctp_flags & SCTP_PCB_FLAGS_UDPTYPE) &&
+				    (saddr->sget_assoc_id <= SCTP_ALL_ASSOC)) {
+					error = EINVAL;
+				} else {
+					error = ENOENT;
+				}
+				SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, error);
 			}
 			break;
 		}
@@ -2274,12 +2294,18 @@ flags_out:
 			SCTP_CHECK_AND_CAST(saddr, optval, struct sctp_getaddresses, *optsize);
 			SCTP_FIND_STCB(inp, stcb, saddr->sget_assoc_id);
 
-			limit = *optsize - offsetof(struct sctp_getaddresses, addr);
-			actual = sctp_fill_up_addresses(inp, stcb, limit, &saddr->addr[0].sa);
-			if (stcb) {
+			if ((inp->sctp_flags & SCTP_PCB_FLAGS_UDPTYPE) &&
+			    ((saddr->sget_assoc_id == SCTP_CURRENT_ASSOC) ||
+			    (saddr->sget_assoc_id == SCTP_ALL_ASSOC))) {
+				error = EINVAL;
+			} else {
+				limit = *optsize - offsetof(struct sctp_getaddresses, addr);
+				actual = sctp_fill_up_addresses(inp, stcb, limit, &saddr->addr[0].sa);
+				*optsize = offsetof(struct sctp_getaddresses, addr) + actual;
+			}
+			if (stcb != NULL) {
 				SCTP_TCB_UNLOCK(stcb);
 			}
-			*optsize = offsetof(struct sctp_getaddresses, addr) + actual;
 			break;
 		}
 	case SCTP_PEER_ADDR_PARAMS:
@@ -2606,7 +2632,7 @@ flags_out:
 			    stcb->asoc.cnt_on_all_streams);
 			sstat->sstat_instrms = stcb->asoc.streamincnt;
 			sstat->sstat_outstrms = stcb->asoc.streamoutcnt;
-			sstat->sstat_fragmentation_point = sctp_get_frag_point(stcb, &stcb->asoc);
+			sstat->sstat_fragmentation_point = sctp_get_frag_point(stcb);
 			net = stcb->asoc.primary_destination;
 			if (net != NULL) {
 				memcpy(&sstat->sstat_primary.spinfo_address,
@@ -4960,22 +4986,12 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 	case SCTP_MAXSEG:
 		{
 			struct sctp_assoc_value *av;
-			int ovh;
 
 			SCTP_CHECK_AND_CAST(av, optval, struct sctp_assoc_value, optsize);
 			SCTP_FIND_STCB(inp, stcb, av->assoc_id);
 
-			if (inp->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) {
-				ovh = SCTP_MED_OVERHEAD;
-			} else {
-				ovh = SCTP_MED_V4_OVERHEAD;
-			}
 			if (stcb) {
-				if (av->assoc_value) {
-					stcb->asoc.sctp_frag_point = (av->assoc_value + ovh);
-				} else {
-					stcb->asoc.sctp_frag_point = SCTP_DEFAULT_MAXSEGMENT;
-				}
+				stcb->asoc.sctp_frag_point = av->assoc_value;
 				SCTP_TCB_UNLOCK(stcb);
 			} else {
 				if ((inp->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) ||
@@ -4983,15 +4999,7 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 				    ((inp->sctp_flags & SCTP_PCB_FLAGS_UDPTYPE) &&
 				    (av->assoc_id == SCTP_FUTURE_ASSOC))) {
 					SCTP_INP_WLOCK(inp);
-					/*
-					 * FIXME MT: I think this is not in
-					 * tune with the API ID
-					 */
-					if (av->assoc_value) {
-						inp->sctp_frag_point = (av->assoc_value + ovh);
-					} else {
-						inp->sctp_frag_point = SCTP_DEFAULT_MAXSEGMENT;
-					}
+					inp->sctp_frag_point = av->assoc_value;
 					SCTP_INP_WUNLOCK(inp);
 				} else {
 					SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, EINVAL);
@@ -5373,7 +5381,7 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 								break;
 							}
 							if (net->mtu < stcb->asoc.smallest_mtu) {
-								sctp_pathmtu_adjustment(stcb, net->mtu);
+								sctp_pathmtu_adjustment(stcb, net->mtu, true);
 							}
 						}
 					}
@@ -5517,7 +5525,7 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 									break;
 								}
 								if (net->mtu < stcb->asoc.smallest_mtu) {
-									sctp_pathmtu_adjustment(stcb, net->mtu);
+									sctp_pathmtu_adjustment(stcb, net->mtu, true);
 								}
 							}
 						}

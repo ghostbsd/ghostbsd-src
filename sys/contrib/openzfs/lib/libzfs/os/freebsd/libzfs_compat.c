@@ -22,7 +22,6 @@
 /*
  * Copyright (c) 2013 Martin Matuska <mm@FreeBSD.org>. All rights reserved.
  */
-#include <os/freebsd/zfs/sys/zfs_ioctl_compat.h>
 #include "../../libzfs_impl.h"
 #include <libzfs.h>
 #include <libzutil.h>
@@ -224,7 +223,7 @@ libzfs_error_init(int error)
 int
 zfs_ioctl(libzfs_handle_t *hdl, int request, zfs_cmd_t *zc)
 {
-	return (zfs_ioctl_fd(hdl->libzfs_fd, request, zc));
+	return (lzc_ioctl_fd(hdl->libzfs_fd, request, zc));
 }
 
 /*
@@ -267,6 +266,12 @@ find_shares_object(differ_info_t *di)
 	return (0);
 }
 
+int
+zfs_destroy_snaps_nvl_os(libzfs_handle_t *hdl, nvlist_t *snaps)
+{
+	return (0);
+}
+
 /*
  * Attach/detach the given filesystem to/from the given jail.
  */
@@ -299,6 +304,10 @@ zfs_jail(zfs_handle_t *zhp, int jailid, int attach)
 	case ZFS_TYPE_BOOKMARK:
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "bookmarks can not be jailed"));
+		return (zfs_error(hdl, EZFS_BADTYPE, errbuf));
+	case ZFS_TYPE_VDEV:
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+		    "vdevs can not be jailed"));
 		return (zfs_error(hdl, EZFS_BADTYPE, errbuf));
 	case ZFS_TYPE_POOL:
 	case ZFS_TYPE_FILESYSTEM:

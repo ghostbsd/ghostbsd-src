@@ -609,7 +609,7 @@ void crypto_cipher_deinit(struct crypto_cipher *ctx)
 #endif
 
 
-#ifdef CONFIG_WPS_NFC
+#ifdef CONFIG_WPS
 
 static const unsigned char RFC3526_PRIME_1536[] = {
 	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC9, 0x0F, 0xDA, 0xA2,
@@ -695,6 +695,8 @@ done:
 }
 
 
+#ifdef CONFIG_WPS_NFC
+
 void * dh5_init_fixed(const struct wpabuf *priv, const struct wpabuf *publ)
 {
 	DhKey *ret = NULL;
@@ -736,6 +738,8 @@ done:
 	return ret;
 }
 
+#endif /* CONFIG_WPS_NFC */
+
 
 struct wpabuf * dh5_derive_shared(void *ctx, const struct wpabuf *peer_public,
 				  const struct wpabuf *own_private)
@@ -772,7 +776,7 @@ void dh5_free(void *ctx)
 	XFREE(ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
 }
 
-#endif /* CONFIG_WPS_NFC */
+#endif /* CONFIG_WPS */
 
 
 int crypto_dh_init(u8 generator, const u8 *prime, size_t prime_len, u8 *privkey,
@@ -1620,30 +1624,6 @@ int crypto_ec_point_invert(struct crypto_ec *e, struct crypto_ec_point *p)
 		return -1;
 
 	if (mp_sub(&e->prime, point->y, point->y) != MP_OKAY)
-		return -1;
-
-	return 0;
-}
-
-
-int crypto_ec_point_solve_y_coord(struct crypto_ec *e,
-				  struct crypto_ec_point *p,
-				  const struct crypto_bignum *x, int y_bit)
-{
-	byte buf[1 + 2 * MAX_ECC_BYTES];
-	int ret;
-	int prime_len = crypto_ec_prime_len(e);
-
-	if (TEST_FAIL())
-		return -1;
-
-	buf[0] = y_bit ? ECC_POINT_COMP_ODD : ECC_POINT_COMP_EVEN;
-	ret = crypto_bignum_to_bin(x, buf + 1, prime_len, prime_len);
-	if (ret <= 0)
-		return -1;
-	ret = wc_ecc_import_point_der(buf, 1 + 2 * ret, e->key.idx,
-				      (ecc_point *) p);
-	if (ret != 0)
 		return -1;
 
 	return 0;

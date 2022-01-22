@@ -159,7 +159,7 @@ cpu_fetch_syscall_args(struct thread *td)
 	KASSERT(sa->callp->sy_narg <= nitems(sa->args),
 	    ("Syscall %d takes too many arguments", sa->code));
 
-	memcpy(dst_ap, ap, (MAXARGS - 1) * sizeof(register_t));
+	memcpy(dst_ap, ap, (nitems(sa->args) - 1) * sizeof(register_t));
 
 	td->td_retval[0] = 0;
 	td->td_retval[1] = 0;
@@ -399,7 +399,7 @@ print_registers(struct trapframe *frame)
 	}
 	printf("  sp: %16lx\n", frame->tf_sp);
 	print_gp_register(" lr", frame->tf_lr);
-	print_gp_register("elr", frame->tf_lr);
+	print_gp_register("elr", frame->tf_elr);
 	printf("spsr:         %8x\n", frame->tf_spsr);
 }
 
@@ -482,6 +482,12 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 #else
 		panic("No debugger in kernel.");
 #endif
+		break;
+	case EXCP_FPAC:
+		/* We can see this if the authentication on PAC fails */
+		print_registers(frame);
+		printf(" far: %16lx\n", READ_SPECIALREG(far_el1));
+		panic("FPAC kernel exception");
 		break;
 	case EXCP_UNKNOWN:
 		if (undef_insn(1, frame))
@@ -571,6 +577,11 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		if (!undef_insn(0, frame))
 			call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)far,
 			    exception);
+		userret(td, frame);
+		break;
+	case EXCP_FPAC:
+		call_trapsignal(td, SIGILL, ILL_ILLOPN, (void *)frame->tf_elr,
+		    exception);
 		userret(td, frame);
 		break;
 	case EXCP_SP_ALIGN:

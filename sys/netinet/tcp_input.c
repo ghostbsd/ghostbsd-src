@@ -144,6 +144,12 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, blackhole, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(blackhole), 0,
     "Do not send RST on segments to closed ports");
 
+VNET_DEFINE(bool, blackhole_local) = false;
+#define	V_blackhole_local	VNET(blackhole_local)
+SYSCTL_BOOL(_net_inet_tcp, OID_AUTO, blackhole_local, CTLFLAG_VNET |
+    CTLFLAG_RW, &VNET_NAME(blackhole_local), false,
+    "Enforce net.inet.tcp.blackhole for locally originated packets");
+
 VNET_DEFINE(int, tcp_delack_enabled) = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, delayed_ack, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(tcp_delack_enabled), 0,
@@ -238,8 +244,6 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, recvbuf_max, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(tcp_autorcvbuf_max), 0,
     "Max size of automatic receive buffer");
 
-VNET_DEFINE(struct inpcbhead, tcb);
-#define	tcb6	tcb  /* for KAME src sync over BSD*'s */
 VNET_DEFINE(struct inpcbinfo, tcbinfo);
 
 /*
@@ -253,28 +257,6 @@ VNET_DEFINE(counter_u64_t, tcps_states[TCP_NSTATES]);
 SYSCTL_COUNTER_U64_ARRAY(_net_inet_tcp, TCPCTL_STATES, states, CTLFLAG_RD |
     CTLFLAG_VNET, &VNET_NAME(tcps_states)[0], TCP_NSTATES,
     "TCP connection counts by TCP state");
-
-static void
-tcp_vnet_init(const void *unused)
-{
-
-	COUNTER_ARRAY_ALLOC(V_tcps_states, TCP_NSTATES, M_WAITOK);
-	VNET_PCPUSTAT_ALLOC(tcpstat, M_WAITOK);
-}
-VNET_SYSINIT(tcp_vnet_init, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
-    tcp_vnet_init, NULL);
-
-#ifdef VIMAGE
-static void
-tcp_vnet_uninit(const void *unused)
-{
-
-	COUNTER_ARRAY_FREE(V_tcps_states, TCP_NSTATES);
-	VNET_PCPUSTAT_FREE(tcpstat);
-}
-VNET_SYSUNINIT(tcp_vnet_uninit, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
-    tcp_vnet_uninit, NULL);
-#endif /* VIMAGE */
 
 /*
  * Kernel module interface for updating tcpstat.  The first argument is an index
@@ -935,8 +917,17 @@ findpcb:
 		 * When blackholing do not respond with a RST but
 		 * completely ignore the segment and drop it.
 		 */
-		if ((V_blackhole == 1 && (thflags & TH_SYN)) ||
-		    V_blackhole == 2)
+		if (((V_blackhole == 1 && (thflags & TH_SYN)) ||
+		    V_blackhole == 2) && (V_blackhole_local ||
+#ifdef INET6
+		    isipv6 ? !in6_localaddr(&ip6->ip6_src) :
+#endif
+#ifdef INET
+		    !in_localip(ip->ip_src)
+#else
+		    true
+#endif
+		    ))
 			goto dropunlock;
 
 		rstreason = BANDLIM_RST_CLOSEDPORT;
@@ -1898,7 +1889,7 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 						      tp->t_rxtcur);
 				sowwakeup(so);
 				if (sbavail(&so->so_snd))
-					(void) tp->t_fb->tfb_tcp_output(tp);
+					(void) tcp_output(tp);
 				goto check_delack;
 			}
 		} else if (th->th_ack == tp->snd_una &&
@@ -1967,7 +1958,7 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 				tp->t_flags |= TF_DELACK;
 			} else {
 				tp->t_flags |= TF_ACKNOW;
-				tp->t_fb->tfb_tcp_output(tp);
+				tcp_output(tp);
 			}
 			goto check_delack;
 		}
@@ -2638,7 +2629,7 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 						}
 					} else
 						tp->snd_cwnd += maxseg;
-					(void) tp->t_fb->tfb_tcp_output(tp);
+					(void) tcp_output(tp);
 					goto drop;
 				} else if (tp->t_dupacks == tcprexmtthresh ||
 					    (tp->t_flags & TF_SACK_PERMIT &&
@@ -2707,14 +2698,14 @@ enter_recovery:
 						    tcps_sack_recovery_episode);
 						tp->snd_recover = tp->snd_nxt;
 						tp->snd_cwnd = maxseg;
-						(void) tp->t_fb->tfb_tcp_output(tp);
+						(void) tcp_output(tp);
 						if (SEQ_GT(th->th_ack, tp->snd_una))
 							goto resume_partialack;
 						goto drop;
 					}
 					tp->snd_nxt = th->th_ack;
 					tp->snd_cwnd = maxseg;
-					(void) tp->t_fb->tfb_tcp_output(tp);
+					(void) tcp_output(tp);
 					KASSERT(tp->snd_limited <= 2,
 					    ("%s: tp->snd_limited too big",
 					    __func__));
@@ -2762,7 +2753,7 @@ enter_recovery:
 					    (tp->snd_nxt - tp->snd_una);
 					SOCKBUF_UNLOCK(&so->so_snd);
 					if (avail > 0)
-						(void) tp->t_fb->tfb_tcp_output(tp);
+						(void) tcp_output(tp);
 					sent = tp->snd_max - oldsndmax;
 					if (sent > maxseg) {
 						KASSERT((tp->t_dupacks == 2 &&
@@ -3314,7 +3305,7 @@ dodata:							/* XXX */
 	 * Return any desired output.
 	 */
 	if (needoutput || (tp->t_flags & TF_ACKNOW))
-		(void) tp->t_fb->tfb_tcp_output(tp);
+		(void) tcp_output(tp);
 
 check_delack:
 	INP_WLOCK_ASSERT(tp->t_inpcb);
@@ -3355,7 +3346,7 @@ dropafterack:
 #endif
 	TCP_PROBE3(debug__input, tp, th, m);
 	tp->t_flags |= TF_ACKNOW;
-	(void) tp->t_fb->tfb_tcp_output(tp);
+	(void) tcp_output(tp);
 	INP_WUNLOCK(tp->t_inpcb);
 	m_freem(m);
 	return;
@@ -4058,7 +4049,7 @@ tcp_newreno_partial_ack(struct tcpcb *tp, struct tcphdr *th)
 	 */
 	tp->snd_cwnd = maxseg + BYTES_THIS_ACK(tp, th);
 	tp->t_flags |= TF_ACKNOW;
-	(void) tp->t_fb->tfb_tcp_output(tp);
+	(void) tcp_output(tp);
 	tp->snd_cwnd = ocwnd;
 	if (SEQ_GT(onxt, tp->snd_nxt))
 		tp->snd_nxt = onxt;

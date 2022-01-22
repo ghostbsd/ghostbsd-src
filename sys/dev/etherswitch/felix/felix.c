@@ -35,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
+#include <sys/sysctl.h>
 #include <sys/rman.h>
 
 #include <machine/bus.h>
@@ -43,6 +44,8 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
+
+#include <dev/enetc/enetc_mdio.h>
 
 #include <dev/etherswitch/etherswitch.h>
 #include <dev/mii/mii.h>
@@ -93,7 +96,6 @@ static void felix_set_port_cfg(felix_softc_t, etherswitch_port_t *);
 
 static bool felix_is_phyport(felix_softc_t, int);
 static struct mii_data *felix_miiforport(felix_softc_t, unsigned int);
-static int felix_phyforport(felix_softc_t, int);
 
 static struct felix_pci_id felix_pci_ids[] = {
 	{PCI_VENDOR_FREESCALE, FELIX_DEV_ID, FELIX_DEV_NAME},
@@ -108,6 +110,13 @@ static device_method_t felix_methods[] = {
 
 	/* bus interface */
 	DEVMETHOD(bus_add_child,		device_add_child_ordered),
+	DEVMETHOD(bus_setup_intr,		bus_generic_setup_intr),
+	DEVMETHOD(bus_teardown_intr,		bus_generic_teardown_intr),
+	DEVMETHOD(bus_release_resource,		bus_generic_release_resource),
+	DEVMETHOD(bus_activate_resource,	bus_generic_activate_resource),
+	DEVMETHOD(bus_deactivate_resource,	bus_generic_deactivate_resource),
+	DEVMETHOD(bus_adjust_resource,		bus_generic_adjust_resource),
+	DEVMETHOD(bus_alloc_resource,		bus_generic_alloc_resource),
 
 	/* etherswitch interface */
 	DEVMETHOD(etherswitch_getinfo,		felix_getinfo),
@@ -124,6 +133,10 @@ static device_method_t felix_methods[] = {
 	DEVMETHOD(etherswitch_setvgroup,	felix_setvgroup),
 	DEVMETHOD(etherswitch_getvgroup,	felix_getvgroup),
 
+	/* miibus interface */
+	DEVMETHOD(miibus_readreg,		felix_readphy),
+	DEVMETHOD(miibus_writereg,		felix_writephy),
+
 	DEVMETHOD_END
 };
 
@@ -131,14 +144,15 @@ static devclass_t felix_devclass;
 DEFINE_CLASS_0(felix, felix_driver, felix_methods,
     sizeof(struct felix_softc));
 
-DRIVER_MODULE(felix, pci, felix_driver, felix_devclass, NULL, NULL);
+DRIVER_MODULE_ORDERED(felix, pci, felix_driver, felix_devclass,
+    NULL, NULL, SI_ORDER_ANY);
+DRIVER_MODULE(miibus, felix, miibus_fdt_driver, miibus_fdt_devclass,
+    NULL, NULL);
 DRIVER_MODULE(etherswitch, felix, etherswitch_driver, etherswitch_devclass,
     NULL, NULL);
 MODULE_VERSION(felix, 1);
 MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, felix,
     felix_pci_ids, nitems(felix_pci_ids) - 1);
-
-MODULE_DEPEND(felix, enetc_mdio, 1, 1, 1);
 
 static int
 felix_probe(device_t dev)
@@ -319,12 +333,38 @@ felix_setup(felix_softc_t sc)
 }
 
 static int
+felix_timer_rate(SYSCTL_HANDLER_ARGS)
+{
+	felix_softc_t sc;
+	int error, value, old;
+
+	sc = arg1;
+
+	old = value = sc->timer_ticks;
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	if (value < 0)
+		return (EINVAL);
+
+	if (value == old)
+		return (0);
+
+	FELIX_LOCK(sc);
+	sc->timer_ticks = value;
+	callout_reset(&sc->tick_callout, sc->timer_ticks, felix_tick, sc);
+	FELIX_UNLOCK(sc);
+
+	return (0);
+}
+
+static int
 felix_attach(device_t dev)
 {
 	phandle_t child, ports, node;
 	int error, port, rid;
 	felix_softc_t sc;
-	device_t mdio_dev;
 	uint32_t phy_addr;
 	ssize_t size;
 
@@ -333,12 +373,21 @@ felix_attach(device_t dev)
 	sc->info.es_vlan_caps = ETHERSWITCH_VLAN_DOT1Q;
 	strlcpy(sc->info.es_name, "Felix TSN Switch", sizeof(sc->info.es_name));
 
+	rid = PCIR_BAR(FELIX_BAR_MDIO);
+	sc->mdio = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
+	    RF_ACTIVE);
+	if (sc->mdio == NULL) {
+		device_printf(dev, "Failed to allocate MDIO registers.\n");
+		return (ENXIO);
+	}
+
 	rid = PCIR_BAR(FELIX_BAR_REGS);
 	sc->regs = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
 	    RF_ACTIVE);
 	if (sc->regs == NULL) {
 		device_printf(dev, "Failed to allocate registers BAR.\n");
-		return (ENXIO);
+		error = ENXIO;
+		goto out_fail;
 	}
 
 	mtx_init(&sc->mtx, "felix lock",  NULL, MTX_DEF);
@@ -396,25 +445,9 @@ felix_attach(device_t dev)
 			goto out_fail;
 		}
 
-		node = OF_parent(node);
-		if (node <= 0) {
-			device_printf(sc->dev,
-			    "Failed to obtain MDIO node.\n");
-			error = ENXIO;
-			goto out_fail;
-		}
-
-		mdio_dev = OF_device_from_xref(node);
-		if (mdio_dev == NULL) {
-			device_printf(sc->dev,
-			    "Failed to obtain MDIO driver handle.\n");
-			error = ENXIO;
-			goto out_fail;
-		}
-
 		sc->ports[port].phyaddr = phy_addr;
 		sc->ports[port].miibus = NULL;
-		error = mii_attach(mdio_dev, &sc->ports[port].miibus, sc->ports[port].ifp,
+		error = mii_attach(dev, &sc->ports[port].miibus, sc->ports[port].ifp,
 		    felix_ifmedia_upd, felix_ifmedia_sts, BMSR_DEFCAPMASK,
 		    phy_addr, MII_OFFSET_ANY, 0);
 		if (error != 0)
@@ -426,6 +459,13 @@ felix_attach(device_t dev)
 	error = felix_setup(sc);
 	if (error != 0)
 		goto out_fail;
+
+	sc->timer_ticks = hz;	/* Default to 1s. */
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
+	    OID_AUTO, "timer_ticks", CTLTYPE_INT | CTLFLAG_RW,
+	    sc, 0, felix_timer_rate, "I",
+	    "Number of ticks between timer invocations");
 
 	/* The tick routine has to be called with the lock held. */
 	FELIX_LOCK(sc);
@@ -447,7 +487,6 @@ static int
 felix_detach(device_t dev)
 {
 	felix_softc_t sc;
-	device_t mdio_dev;
 	int error;
 	int i;
 
@@ -468,10 +507,8 @@ felix_detach(device_t dev)
 		felix_setup(sc);
 
 	for (i = 0; i < sc->info.es_nports; i++) {
-		if (sc->ports[i].miibus != NULL) {
-			mdio_dev = device_get_parent(sc->ports[i].miibus);
-			device_delete_child(mdio_dev, sc->ports[i].miibus);
-		}
+		if (sc->ports[i].miibus != NULL)
+			device_delete_child(dev, sc->ports[i].miibus);
 		if (sc->ports[i].ifp != NULL)
 			if_free(sc->ports[i].ifp);
 		if (sc->ports[i].ifname != NULL)
@@ -481,6 +518,10 @@ felix_detach(device_t dev)
 	if (sc->regs != NULL)
 		error = bus_release_resource(sc->dev, SYS_RES_MEMORY,
 		    rman_get_rid(sc->regs), sc->regs);
+
+	if (sc->mdio != NULL)
+		error = bus_release_resource(sc->dev, SYS_RES_MEMORY,
+		    rman_get_rid(sc->mdio), sc->mdio);
 
 	return (error);
 }
@@ -759,32 +800,20 @@ static int
 felix_readphy(device_t dev, int phy, int reg)
 {
 	felix_softc_t sc;
-	device_t mdio_dev;
-	int port;
 
 	sc = device_get_softc(dev);
-	port = felix_phyforport(sc, phy);
-	if (port < 0)
-		return (UINT32_MAX);	/* Can't return errors here. */
 
-	mdio_dev = device_get_parent(sc->ports[port].miibus);
-	return (MIIBUS_READREG(mdio_dev, phy, reg));
+	return (enetc_mdio_read(sc->mdio, FELIX_MDIO_BASE, phy, reg));
 }
 
 static int
 felix_writephy(device_t dev, int phy, int reg, int data)
 {
 	felix_softc_t sc;
-	device_t mdio_dev;
-	int port;
 
 	sc = device_get_softc(dev);
-	port = felix_phyforport(sc, phy);
-	if (port < 0)
-		return (ENXIO);
 
-	mdio_dev = device_get_parent(sc->ports[port].miibus);
-	return (MIIBUS_WRITEREG(mdio_dev, phy, reg, data));
+	return (enetc_mdio_write(sc->mdio, FELIX_MDIO_BASE, phy, reg, data));
 }
 
 static int
@@ -934,7 +963,8 @@ felix_tick(void *arg)
 		MPASS(mii != NULL);
 		mii_tick(mii);
 	}
-	callout_reset(&sc->tick_callout, hz, felix_tick, sc);
+	if (sc->timer_ticks != 0)
+		callout_reset(&sc->tick_callout, sc->timer_ticks, felix_tick, sc);
 }
 
 static int
@@ -973,18 +1003,6 @@ felix_is_phyport(felix_softc_t sc, int port)
 {
 
 	return (!sc->ports[port].fixed_port);
-}
-
-static int
-felix_phyforport(felix_softc_t sc, int phy)
-{
-	int port;
-
-	for (port = 0; port < sc->info.es_nports; port++) {
-		if (sc->ports[port].phyaddr == phy)
-			return (port);
-	}
-	return (-1);
 }
 
 static  struct mii_data*

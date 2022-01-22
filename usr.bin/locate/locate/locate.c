@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: BSD-4-Clause
  *
- * Copyright (c) 1995 Wolfram Schneider <wosch@FreeBSD.org>. Berlin.
+ * Copyright (c) 1995-2022 Wolfram Schneider <wosch@FreeBSD.org>
  * Copyright (c) 1989, 1993
  *      The Regents of the University of California.  All rights reserved.
  *
@@ -97,15 +97,9 @@ static const char rcsid[] =
 #  include <fcntl.h>
 #endif
 
-
 #include "locate.h"
 #include "pathnames.h"
 
-#ifdef DEBUG
-#  include <sys/time.h>
-#  include <sys/types.h>
-#  include <sys/resource.h>
-#endif
 
 int f_mmap;             /* use mmap */
 int f_icase;            /* ignore case */
@@ -122,8 +116,8 @@ void    usage(void);
 void    statistic(FILE *, char *);
 void    fastfind(FILE *, char *, char *);
 void    fastfind_icase(FILE *, char *, char *);
-void    fastfind_mmap(char *, caddr_t, int, char *);
-void    fastfind_mmap_icase(char *, caddr_t, int, char *);
+void    fastfind_mmap(char *, caddr_t, off_t, char *);
+void    fastfind_mmap_icase(char *, caddr_t, off_t, char *);
 void	search_mmap(char *, char **);
 void	search_fopen(char *, char **);
 unsigned long cputime(void);
@@ -235,9 +229,6 @@ void
 search_fopen(char *db, char **s)
 {
 	FILE *fp;
-#ifdef DEBUG
-        long t0;
-#endif
 	       
 	/* can only read stdin once */
 	if (f_stdin) { 
@@ -259,9 +250,6 @@ search_fopen(char *db, char **s)
 
 	/* foreach search string ... */
 	while(*s != NULL) {
-#ifdef DEBUG
-		t0 = cputime();
-#endif
 		if (!f_stdin &&
 		    fseek(fp, (long)0, SEEK_SET) == -1)
 			err(1, "fseek to begin of ``%s''\n", db);
@@ -270,9 +258,6 @@ search_fopen(char *db, char **s)
 			fastfind_icase(fp, *s, db);
 		else
 			fastfind(fp, *s, db);
-#ifdef DEBUG
-		warnx("fastfind %ld ms", cputime () - t0);
-#endif
 		s++;
 	} 
 	(void)fclose(fp);
@@ -291,9 +276,6 @@ search_mmap(char *db, char **s)
         int fd;
         caddr_t p;
         off_t len;
-#ifdef DEBUG
-        long t0;
-#endif
 	if ((fd = open(db, O_RDONLY)) == -1 ||
 	    fstat(fd, &sb) == -1)
 		err(1, "`%s'", db);
@@ -310,16 +292,10 @@ search_mmap(char *db, char **s)
 
 	/* foreach search string ... */
 	while (*s != NULL) {
-#ifdef DEBUG
-		t0 = cputime();
-#endif
 		if (f_icase)
-			fastfind_mmap_icase(*s, p, (int)len, db);
+			fastfind_mmap_icase(*s, p, len, db);
 		else
-			fastfind_mmap(*s, p, (int)len, db);
-#ifdef DEBUG
-		warnx("fastfind %ld ms", cputime () - t0);
-#endif
+			fastfind_mmap(*s, p, len, db);
 		s++;
 	}
 
@@ -329,17 +305,6 @@ search_mmap(char *db, char **s)
 	(void)close(fd);
 }
 #endif /* MMAP */
-
-#ifdef DEBUG
-unsigned long
-cputime ()
-{
-	struct rusage rus;
-
-	getrusage(RUSAGE_SELF, &rus);
-	return(rus.ru_utime.tv_sec * 1000 + rus.ru_utime.tv_usec / 1000);
-}
-#endif /* DEBUG */
 
 void
 usage ()

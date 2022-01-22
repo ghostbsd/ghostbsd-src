@@ -1083,8 +1083,8 @@ cfiscsi_data_wait_new(struct cfiscsi_session *cs, union ctl_io *io,
 		return (NULL);
 	}
 
-	error = icl_conn_transfer_setup(cs->cs_conn, io, target_transfer_tagp,
-	    &cdw->cdw_icl_prv);
+	error = icl_conn_transfer_setup(cs->cs_conn, PRIV_REQUEST(io), io,
+	    target_transfer_tagp, &cdw->cdw_icl_prv);
 	if (error != 0) {
 		CFISCSI_SESSION_WARN(cs,
 		    "icl_conn_transfer_setup() failed with error %d", error);
@@ -1155,6 +1155,7 @@ cfiscsi_session_terminate_tasks(struct cfiscsi_session *cs)
 	}
 
 	CFISCSI_SESSION_LOCK(cs);
+	cs->cs_terminating_tasks = true;
 	while ((cdw = TAILQ_FIRST(&cs->cs_waiting_for_data_out)) != NULL) {
 		TAILQ_REMOVE(&cs->cs_waiting_for_data_out, cdw, cdw_next);
 		CFISCSI_SESSION_UNLOCK(cs);
@@ -2783,8 +2784,12 @@ cfiscsi_datamove_out(union ctl_io *io)
 	cdw->cdw_r2t_end = io->scsiio.ext_data_filled + r2t_len;
 
 	CFISCSI_SESSION_LOCK(cs);
-	if (cs->cs_terminating) {
+	if (cs->cs_terminating_tasks) {
 		CFISCSI_SESSION_UNLOCK(cs);
+		KASSERT((io->io_hdr.flags & CTL_FLAG_ABORT) != 0,
+		    ("%s: I/O request %p on termating session %p not aborted",
+		    __func__, io, cs));
+		CFISCSI_SESSION_WARN(cs, "aborting data_wait for aborted I/O");
 		cfiscsi_data_wait_abort(cs, cdw, 44);
 		return;
 	}
@@ -2857,12 +2862,11 @@ cfiscsi_scsi_command_done(union ctl_io *io)
 	struct iscsi_bhs_scsi_response *bhssr;
 #ifdef DIAGNOSTIC
 	struct cfiscsi_data_wait *cdw;
-#endif
 	struct cfiscsi_session *cs;
+#endif
 	uint16_t sense_length;
 
 	request = PRIV_REQUEST(io);
-	cs = PDU_SESSION(request);
 	bhssc = (struct iscsi_bhs_scsi_command *)request->ip_bhs;
 	KASSERT((bhssc->bhssc_opcode & ~ISCSI_BHS_OPCODE_IMMEDIATE) ==
 	    ISCSI_BHS_OPCODE_SCSI_COMMAND,
@@ -2872,6 +2876,7 @@ cfiscsi_scsi_command_done(union ctl_io *io)
 	//    bhssc->bhssc_initiator_task_tag);
 
 #ifdef DIAGNOSTIC
+	cs = PDU_SESSION(request);
 	CFISCSI_SESSION_LOCK(cs);
 	TAILQ_FOREACH(cdw, &cs->cs_waiting_for_data_out, cdw_next)
 		KASSERT(bhssc->bhssc_initiator_task_tag !=

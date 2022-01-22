@@ -1,6 +1,6 @@
 /*
  * hostapd - command line interface for hostapd daemon
- * Copyright (c) 2004-2019, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2004-2022, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -21,7 +21,7 @@
 
 static const char *const hostapd_cli_version =
 "hostapd_cli v" VERSION_STR "\n"
-"Copyright (c) 2004-2019, Jouni Malinen <j@w1.fi> and contributors";
+"Copyright (c) 2004-2022, Jouni Malinen <j@w1.fi> and contributors";
 
 static struct wpa_ctrl *ctrl_conn;
 static int hostapd_cli_quit = 0;
@@ -1048,7 +1048,7 @@ static char ** hostapd_complete_set(const char *str, int pos)
 	int arg = get_cmd_arg_num(str, pos);
 	const char *fields[] = {
 #ifdef CONFIG_WPS_TESTING
-		"wps_version_number", "wps_testing_dummy_cred",
+		"wps_version_number", "wps_testing_stub_cred",
 		"wps_corrupt_pkhash",
 #endif /* CONFIG_WPS_TESTING */
 #ifdef CONFIG_INTERWORKING

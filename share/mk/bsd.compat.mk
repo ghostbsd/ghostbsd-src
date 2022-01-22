@@ -58,32 +58,6 @@ LIB32_MACHINE=	powerpc
 LIB32_MACHINE_ARCH=	powerpc
 LIB32WMAKEFLAGS=	\
 		LD="${XLD} -m elf32ppc_fbsd"
-
-.elif ${COMPAT_ARCH:Mmips64*} != ""
-HAS_COMPAT=32
-.if ${COMPAT_COMPILER_TYPE} == gcc
-.if empty(COMPAT_CPUTYPE)
-LIB32CPUFLAGS=	-march=mips3
-.else
-LIB32CPUFLAGS=	-march=${COMPAT_CPUTYPE}
-.endif
-.else
-.if ${COMPAT_ARCH:Mmips64el*} != ""
-LIB32CPUFLAGS=  -target mipsel-unknown-freebsd14.0
-.else
-LIB32CPUFLAGS=  -target mips-unknown-freebsd14.0
-.endif
-.endif
-LIB32CPUFLAGS+= -mabi=32
-LIB32_MACHINE=	mips
-LIB32_MACHINE_ARCH:=	${COMPAT_ARCH:S/64//}
-.if ${COMPAT_ARCH:Mmips64el*} != ""
-_EMULATION=	elf32ltsmip_fbsd
-.else
-_EMULATION=	elf32btsmip_fbsd
-.endif
-LIB32WMAKEFLAGS= LD="${XLD} -m ${_EMULATION}"
-LIB32LDFLAGS=	-Wl,-m${_EMULATION}
 .endif
 
 LIB32WMAKEFLAGS+= NM="${XNM}"
@@ -92,18 +66,6 @@ LIB32WMAKEFLAGS+= OBJCOPY="${XOBJCOPY}"
 LIB32CFLAGS=	-DCOMPAT_32BIT
 LIB32DTRACE=	${DTRACE} -32
 LIB32WMAKEFLAGS+=	-DCOMPAT_32BIT
-
-# -------------------------------------------------------------------
-# soft-fp world
-.if ${COMPAT_ARCH:Marmv[67]*} != ""
-HAS_COMPAT=SOFT
-LIBSOFTCFLAGS=        -DCOMPAT_SOFTFP
-LIBSOFTCPUFLAGS= -mfloat-abi=softfp
-LIBSOFT_MACHINE=	arm
-LIBSOFT_MACHINE_ARCH=	${COMPAT_ARCH}
-LIBSOFTWMAKEENV= CPUTYPE=soft
-LIBSOFTWMAKEFLAGS=        -DCOMPAT_SOFTFP
-.endif
 
 # -------------------------------------------------------------------
 # In the program linking case, select LIBCOMPAT
@@ -154,8 +116,7 @@ LIBCOMPATLDFLAGS+=	-L${LIBCOMPATTMP}/usr/lib${libcompat}
 LIBCOMPATWMAKEENV+=	MACHINE=${LIBCOMPAT_MACHINE}
 LIBCOMPATWMAKEENV+=	MACHINE_ARCH=${LIBCOMPAT_MACHINE_ARCH}
 
-# -B is needed to find /usr/lib32/crti.o for GCC and /usr/libsoft/crti.o for
-# Clang/GCC.
+# -B is needed to find /usr/lib32/crti.o for gcc.
 LIBCOMPATCFLAGS+=	-B${LIBCOMPATTMP}/usr/lib${libcompat}
 
 .if defined(WANT_COMPAT)

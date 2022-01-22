@@ -109,8 +109,9 @@ struct sysentvec {
 					/* stack fixup function */
 	void		(*sv_sendsig)(void (*)(int), struct ksiginfo *, struct __sigset *);
 			    		/* send signal */
-	char 		*sv_sigcode;	/* start of sigtramp code */
+	const char 	*sv_sigcode;	/* start of sigtramp code */
 	int 		*sv_szsigcode;	/* size of sigtramp code */
+	int		sv_sigcodeoff;
 	char		*sv_name;	/* name of binary type */
 	int		(*sv_coredump)(struct thread *, struct vnode *, off_t, int);
 					/* function to dump core, or NULL */
@@ -119,7 +120,6 @@ struct sysentvec {
 	void		(*sv_elf_core_prepare_notes)(struct thread *,
 			    struct note_info_list *, size_t *);
 	int		(*sv_imgact_try)(struct image_params *);
-	vm_size_t	(*sv_stackgap)(struct image_params *, uintptr_t *);
 	int		(*sv_copyout_auxargs)(struct image_params *,
 			    uintptr_t);
 	int		sv_minsigstksz;	/* minimum signal stack size */
@@ -127,6 +127,7 @@ struct sysentvec {
 	vm_offset_t	sv_maxuser;	/* VM_MAXUSER_ADDRESS */
 	vm_offset_t	sv_usrstack;	/* USRSTACK */
 	vm_offset_t	sv_psstrings;	/* PS_STRINGS */
+	size_t		sv_psstringssz;	/* PS_STRINGS size */
 	int		sv_stackprot;	/* vm protection for stack */
 	int		(*sv_copyout_strings)(struct image_params *,
 			    uintptr_t *);
@@ -143,6 +144,7 @@ struct sysentvec {
 	vm_offset_t	sv_shared_page_len;
 	vm_offset_t	sv_sigcode_base;
 	void		*sv_shared_page_obj;
+	vm_offset_t	sv_vdso_base;
 	void		(*sv_schedtail)(struct thread *);
 	void		(*sv_thread_detach)(struct thread *);
 	int		(*sv_trap)(struct thread *);
@@ -171,6 +173,7 @@ struct sysentvec {
 #define	SV_RNG_SEED_VER	0x100000	/* random(4) reseed generation. */
 #define	SV_SIG_DISCIGN	0x200000	/* Do not discard ignored signals */
 #define	SV_SIG_WAITNDQ	0x400000	/* Wait does not dequeue SIGCHLD */
+#define	SV_DSO_SIG	0x800000	/* Signal trampoline packed in dso */
 
 #define	SV_ABI_MASK	0xff
 #define	SV_PROC_FLAG(p, x)	((p)->p_sysent->sv_flags & (x))
@@ -191,6 +194,12 @@ struct sysentvec {
 extern struct sysentvec aout_sysvec;
 extern struct sysent sysent[];
 extern const char *syscallnames[];
+
+struct nosys_args {
+	register_t dummy;
+};
+
+int	nosys(struct thread *, struct nosys_args *);
 
 #define	NO_SYSCALL (-1)
 
@@ -324,6 +333,7 @@ void exec_sysvec_init_secondary(struct sysentvec *sv, struct sysentvec *sv2);
 void exec_inittk(void);
 
 void exit_onexit(struct proc *p);
+void exec_free_abi_mappings(struct proc *p);
 void exec_onexec_old(struct thread *td);
 
 #define INIT_SYSENTVEC(name, sv)					\

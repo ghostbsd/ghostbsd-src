@@ -48,11 +48,6 @@ miidevs.h			optional miibus | mii			   \
 	compile-with	"${AWK} -f $S/tools/miidevs2h.awk $S/dev/mii/miidevs" \
 	no-obj no-implicit-rule before-depend				   \
 	clean		"miidevs.h"
-pccarddevs.h			standard				   \
-	dependency	"$S/tools/pccarddevs2h.awk $S/dev/pccard/pccarddevs" \
-	compile-with	"${AWK} -f $S/tools/pccarddevs2h.awk $S/dev/pccard/pccarddevs" \
-	no-obj no-implicit-rule before-depend				   \
-	clean		"pccarddevs.h"
 kbdmuxmap.h			optional	kbdmux_dflt_keymap 	   \
 	compile-with	"${KEYMAP} -L ${KBDMUX_DFLT_KEYMAP} | ${KEYMAP_FIX} > ${.TARGET}" \
 	no-obj no-implicit-rule before-depend				\
@@ -243,6 +238,9 @@ contrib/openzfs/module/zcommon/zfs_prop.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zcommon/zpool_prop.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zcommon/zprop_common.c		optional zfs compile-with "${ZFS_C}"
 
+# zfs edon-r hash support
+contrib/openzfs/module/icp/algs/edonr/edonr.c		optional zfs compile-with "${ZFS_C}"
+
 #zfs core common code
 contrib/openzfs/module/zfs/abd.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/aggsum.c		optional zfs compile-with "${ZFS_C}"
@@ -283,6 +281,7 @@ contrib/openzfs/module/zfs/dsl_prop.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/dsl_scan.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/dsl_synctask.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/dsl_userhold.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zfs/edonr_zfs.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/fm.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/gzip.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/lzjb.c		optional zfs compile-with "${ZFS_C}"
@@ -375,6 +374,7 @@ cddl/dev/fbt/fbt.c			optional dtrace_fbt      | dtraceall compile-with "${FBT_C}
 cddl/dev/systrace/systrace.c		optional dtrace_systrace | dtraceall compile-with "${CDDL_C}"
 cddl/dev/prototype.c			optional dtrace_prototype | dtraceall compile-with "${CDDL_C}"
 fs/nfsclient/nfs_clkdtrace.c		optional dtnfscl nfscl   | dtraceall nfscl compile-with "${CDDL_C}"
+compat/freebsd32/freebsd32_abort2.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_capability.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_ioctl.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_misc.c	optional compat_freebsd32
@@ -576,42 +576,42 @@ contrib/dev/acpica/components/utilities/utxface.c	optional acpi
 contrib/dev/acpica/components/utilities/utxferror.c	optional acpi
 contrib/dev/acpica/components/utilities/utxfinit.c	optional acpi
 contrib/dev/acpica/os_specific/service_layers/osgendbg.c	optional acpi acpi_debug
-contrib/ipfilter/netinet/fil.c	optional ipfilter inet \
-	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_auth.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_fil_freebsd.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_frag.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_log.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_nat.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_proxy.c optional ipfilter inet \
-	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_state.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_lookup.c optional ipfilter inet \
-	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -Wno-error -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_pool.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_htable.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter ${NO_WTAUTOLOGICAL_POINTER_COMPARE}"
-contrib/ipfilter/netinet/ip_sync.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/mlfk_ipl.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_nat6.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_rules.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_scan.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/ip_dstlist.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/contrib/ipfilter"
-contrib/ipfilter/netinet/radix_ipf.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/contrib/ipfilter"
+netpfil/ipfilter/netinet/fil.c	optional ipfilter inet \
+	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_auth.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_fil_freebsd.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_frag.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_log.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_nat.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_proxy.c optional ipfilter inet \
+	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_state.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_lookup.c optional ipfilter inet \
+	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -Wno-error -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_pool.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_htable.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter ${NO_WTAUTOLOGICAL_POINTER_COMPARE}"
+netpfil/ipfilter/netinet/ip_sync.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/mlfk_ipl.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_nat6.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_rules.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_scan.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/ip_dstlist.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/radix_ipf.c optional ipfilter inet \
+	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
 contrib/libfdt/fdt.c		optional fdt
 contrib/libfdt/fdt_ro.c		optional fdt
 contrib/libfdt/fdt_rw.c		optional fdt
@@ -713,9 +713,11 @@ crypto/camellia/camellia.c	optional crypto | ipsec | ipsec_support
 crypto/camellia/camellia-api.c	optional crypto | ipsec | ipsec_support
 crypto/chacha20/chacha.c	standard
 crypto/chacha20/chacha-sw.c	optional crypto | ipsec | ipsec_support
+crypto/chacha20_poly1305.c	optional crypto
 crypto/des/des_ecb.c		optional netsmb
 crypto/des/des_setkey.c		optional netsmb
 crypto/openssl/ossl.c		optional ossl
+crypto/openssl/ossl_aes.c	optional ossl
 crypto/openssl/ossl_chacha20.c	optional ossl
 crypto/openssl/ossl_poly1305.c	optional ossl
 crypto/openssl/ossl_sha1.c	optional ossl
@@ -884,10 +886,6 @@ dev/altera/pio/pio.c		optional altera_pio
 dev/altera/pio/pio_if.m		optional altera_pio
 dev/amdpm/amdpm.c		optional amdpm pci | nfpm pci
 dev/amdsmb/amdsmb.c		optional amdsmb pci
-dev/amr/amr.c			optional amr
-dev/amr/amr_cam.c		optional amrp amr
-dev/amr/amr_disk.c		optional amr
-dev/amr/amr_pci.c		optional amr pci
 #
 dev/ata/ata_if.m		optional ata | atacore
 dev/ata/ata-all.c		optional ata | atacore
@@ -1495,7 +1493,7 @@ t4fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t4fw.fwo"
 t4fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t4fw-1.26.2.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t4fw-1.26.6.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t4fw.fw"
@@ -1529,7 +1527,7 @@ t5fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t5fw.fwo"
 t5fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t5fw-1.26.2.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t5fw-1.26.6.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t5fw.fw"
@@ -1563,7 +1561,7 @@ t6fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t6fw.fwo"
 t6fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t6fw-1.26.2.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t6fw-1.26.6.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t6fw.fw"
@@ -1678,8 +1676,6 @@ dev/ena/ena_sysctl.c 		optional ena \
 	compile-with "${NORMAL_C} -I$S/contrib"
 contrib/ena-com/ena_com.c	optional ena
 contrib/ena-com/ena_eth_com.c	optional ena
-dev/esp/esp_pci.c		optional esp pci
-dev/esp/ncr53c9x.c		optional esp
 dev/etherswitch/arswitch/arswitch.c		optional arswitch
 dev/etherswitch/arswitch/arswitch_reg.c		optional arswitch
 dev/etherswitch/arswitch/arswitch_phy.c		optional arswitch
@@ -1848,23 +1844,26 @@ dev/iicbus/iicoc_fdt.c		optional iicoc ext_resources fdt
 dev/iicbus/iicoc_pci.c		optional iicoc pci
 dev/iicbus/isl12xx.c		optional isl12xx
 dev/iicbus/lm75.c		optional lm75
+dev/iicbus/max44009.c		optional max44009
 dev/iicbus/mux/pca9547.c	optional pca9547 iicmux fdt
 dev/iicbus/mux/iicmux.c		optional iicmux
 dev/iicbus/mux/iicmux_if.m	optional iicmux
 dev/iicbus/mux/iic_gpiomux.c	optional iic_gpiomux fdt
 dev/iicbus/mux/ltc430x.c	optional ltc430x
+dev/iicbus/mux/pca954x.c	optional pca954x
 dev/iicbus/nxprtc.c		optional nxprtc | pcf8563
 dev/iicbus/ofw_iicbus.c		optional fdt iicbus
+dev/iicbus/pcf8574.c		optional pcf8574
+dev/iicbus/pcf8591.c		optional pcf8591
 dev/iicbus/rtc8583.c		optional rtc8583
+dev/iicbus/rtc/pcf85063.c	optional pcf85063 iicbus fdt
 dev/iicbus/rtc/rx8803.c		optional rx8803 iicbus fdt
 dev/iicbus/s35390a.c		optional s35390a
 dev/iicbus/sy8106a.c		optional sy8106a ext_resources fdt
 dev/iicbus/syr827.c		optional syr827 ext_resources fdt
+dev/iicbus/gpio/tca6408.c	optional tca6408 fdt gpio
 dev/iicbus/gpio/tca6416.c	optional tca6416 fdt
 dev/iicbus/pmic/fan53555.c	optional fan53555 ext_resources fdt
-dev/iir/iir.c			optional iir
-dev/iir/iir_ctrl.c		optional iir
-dev/iir/iir_pci.c		optional iir pci
 dev/igc/if_igc.c		optional igc iflib pci
 dev/igc/igc_api.c		optional igc iflib pci
 dev/igc/igc_base.c		optional igc iflib pci
@@ -1929,12 +1928,6 @@ dev/iscsi/icl_conn_if.m		optional cfiscsi | iscsi
 dev/iscsi/icl_soft.c		optional iscsi
 dev/iscsi/icl_soft_proxy.c	optional iscsi
 dev/iscsi/iscsi.c		optional iscsi scbus
-dev/iscsi_initiator/iscsi.c	optional iscsi_initiator scbus
-dev/iscsi_initiator/iscsi_subr.c	optional iscsi_initiator scbus
-dev/iscsi_initiator/isc_cam.c	optional iscsi_initiator scbus
-dev/iscsi_initiator/isc_soc.c	optional iscsi_initiator scbus
-dev/iscsi_initiator/isc_sm.c	optional iscsi_initiator scbus
-dev/iscsi_initiator/isc_subr.c	optional iscsi_initiator scbus
 dev/ismt/ismt.c			optional ismt
 dev/isl/isl.c			optional isl iicbus
 dev/isp/isp.c			optional isp
@@ -2413,6 +2406,8 @@ dev/mii/axphy.c			optional miibus | axphy
 dev/mii/bmtphy.c		optional miibus | bmtphy
 dev/mii/brgphy.c		optional miibus | brgphy
 dev/mii/ciphy.c			optional miibus | ciphy
+dev/mii/dp83822phy.c		optional miibus | dp83822phy
+dev/mii/dp83867phy.c		optional miibus | dp83867phy
 dev/mii/e1000phy.c		optional miibus | e1000phy
 dev/mii/gentbi.c		optional miibus | gentbi
 dev/mii/icsphy.c		optional miibus | icsphy
@@ -2451,7 +2446,6 @@ dev/mlxfw/mlxfw_mfa2_tlv_multi.c	optional mlxfw \
 dev/mlx/mlx.c			optional mlx
 dev/mlx/mlx_disk.c		optional mlx
 dev/mlx/mlx_pci.c		optional mlx pci
-dev/mly/mly.c			optional mly
 dev/mmc/mmc_subr.c		optional mmc | mmcsd !mmccam
 dev/mmc/mmc.c			optional mmc !mmccam
 dev/mmc/mmcbr_if.m		standard
@@ -2609,10 +2603,6 @@ dev/ow/own_if.m			optional ow
 dev/ow/ow_temp.c		optional ow_temp
 dev/ow/owc_gpiobus.c		optional owc gpio
 dev/pbio/pbio.c			optional pbio isa
-dev/pccard/pccard.c		optional pccard
-dev/pccard/pccard_cis.c		optional pccard
-dev/pccard/pccard_cis_quirks.c	optional pccard
-dev/pccard/pccard_device.c	optional pccard
 dev/pccbb/pccbb.c		optional cbb
 dev/pccbb/pccbb_pci.c		optional cbb pci
 dev/pcf/pcf.c			optional pcf
@@ -3207,18 +3197,6 @@ dev/syscons/warp/warp_saver.c	optional warp_saver
 dev/tcp_log/tcp_log_dev.c	optional tcp_blackbox inet | tcp_blackbox inet6
 dev/tdfx/tdfx_pci.c		optional tdfx pci
 dev/ti/if_ti.c			optional ti pci
-dev/twa/tw_cl_init.c		optional twa \
-	compile-with "${NORMAL_C} -I$S/dev/twa"
-dev/twa/tw_cl_intr.c		optional twa \
-	compile-with "${NORMAL_C} -I$S/dev/twa"
-dev/twa/tw_cl_io.c		optional twa \
-	compile-with "${NORMAL_C} -I$S/dev/twa"
-dev/twa/tw_cl_misc.c		optional twa \
-	compile-with "${NORMAL_C} -I$S/dev/twa"
-dev/twa/tw_osl_cam.c		optional twa \
-	compile-with "${NORMAL_C} -I$S/dev/twa"
-dev/twa/tw_osl_freebsd.c	optional twa \
-	compile-with "${NORMAL_C} -I$S/dev/twa"
 dev/twe/twe.c			optional twe
 dev/twe/twe_freebsd.c		optional twe
 dev/tws/tws.c			optional tws
@@ -4140,7 +4118,6 @@ net/if.c			standard
 net/if_bridge.c			optional bridge inet | if_bridge inet
 net/if_clone.c			standard
 net/if_dead.c			standard
-net/if_debug.c			optional ddb
 net/if_disc.c			optional disc
 net/if_edsc.c			optional edsc
 net/if_enc.c			optional enc inet | enc inet6
@@ -4157,8 +4134,6 @@ net/if_llatbl.c			standard
 net/if_me.c			optional me inet
 net/if_media.c			standard
 net/if_mib.c			standard
-net/if_spppfr.c			optional sppp | netgraph_sppp
-net/if_spppsubr.c		optional sppp | netgraph_sppp
 net/if_stf.c			optional stf inet inet6
 net/if_tuntap.c			optional tuntap
 net/if_vlan.c			optional vlan
@@ -4192,8 +4167,7 @@ net/route/route_tables.c	standard
 net/route/route_temporal.c	standard
 net/rss_config.c		optional inet rss | inet6 rss
 net/rtsock.c			standard
-net/slcompress.c		optional netgraph_vjc | sppp | \
-					 netgraph_sppp
+net/slcompress.c		optional netgraph_vjc
 net/toeplitz.c			optional inet rss | inet6 rss | route_mpath
 net/vnet.c			optional vimage
 net80211/ieee80211.c		optional wlan
@@ -4316,7 +4290,6 @@ netgraph/ng_pred1.c		optional netgraph_pred1
 netgraph/ng_rfc1490.c		optional netgraph_rfc1490
 netgraph/ng_socket.c		optional netgraph_socket
 netgraph/ng_split.c		optional netgraph_split
-netgraph/ng_sppp.c		optional netgraph_sppp
 netgraph/ng_tag.c		optional netgraph_tag
 netgraph/ng_tcpmss.c		optional netgraph_tcpmss
 netgraph/ng_tee.c		optional netgraph_tee
@@ -4330,6 +4303,7 @@ netinet/accf_http.c		optional accept_filter_http inet
 netinet/if_ether.c		optional inet ether
 netinet/igmp.c			optional inet
 netinet/in.c			optional inet
+netinet/in_cksum.c		optional inet | inet6
 netinet/in_debug.c		optional inet ddb
 netinet/in_kdtrace.c		optional inet | inet6
 netinet/ip_carp.c		optional inet carp | inet6 carp
@@ -4341,7 +4315,6 @@ netinet/ip_id.c			optional inet
 netinet/in_jail.c		optional inet
 netinet/in_mcast.c		optional inet
 netinet/in_pcb.c		optional inet | inet6
-netinet/in_pcbgroup.c		optional inet pcbgroup | inet6 pcbgroup
 netinet/in_prot.c		optional inet | inet6
 netinet/in_proto.c		optional inet | inet6
 netinet/in_rmx.c		optional inet
@@ -4357,8 +4330,20 @@ netinet/ip_options.c		optional inet
 netinet/ip_output.c		optional inet
 netinet/ip_reass.c		optional inet
 netinet/raw_ip.c		optional inet | inet6
-netinet/cc/cc.c			optional inet | inet6
-netinet/cc/cc_newreno.c		optional inet | inet6
+netinet/cc/cc.c			optional cc_newreno inet | cc_vegas inet | \
+	cc_htcp inet | cc_hd inet | cc_dctcp inet | cc_cubic inet | \
+	cc_chd inet | cc_cdg inet | cc_newreno inet6 | cc_vegas inet6 | \
+	cc_htcp inet6 | cc_hd inet6 |cc_dctcp inet6 | cc_cubic inet6 | \
+	cc_chd inet6 | cc_cdg inet6
+netinet/cc/cc_cdg.c		optional inet cc_cdg tcp_hhook
+netinet/cc/cc_chd.c		optional inet cc_chd tcp_hhook
+netinet/cc/cc_cubic.c		optional inet cc_cubic | inet6 cc_cubic
+netinet/cc/cc_dctcp.c		optional inet cc_dctcp | inet6 cc_dctcp
+netinet/cc/cc_hd.c		optional inet cc_hd tcp_hhook
+netinet/cc/cc_htcp.c		optional inet cc_htcp | inet6 cc_htcp
+netinet/cc/cc_newreno.c		optional inet cc_newreno | inet6 cc_newreno
+netinet/cc/cc_vegas.c		optional inet cc_vegas tcp_hhook
+netinet/khelp/h_ertt.c		optional inet tcp_hhook
 netinet/sctp_asconf.c		optional inet sctp | inet6 sctp
 netinet/sctp_auth.c		optional inet sctp | inet6 sctp
 netinet/sctp_bsd_addr.c		optional inet sctp | inet6 sctp
@@ -4417,7 +4402,6 @@ netinet6/in6_ifattach.c		optional inet6
 netinet6/in6_jail.c		optional inet6
 netinet6/in6_mcast.c		optional inet6
 netinet6/in6_pcb.c		optional inet6
-netinet6/in6_pcbgroup.c		optional inet6 pcbgroup
 netinet6/in6_proto.c		optional inet6
 netinet6/in6_rmx.c		optional inet6
 netinet6/in6_rss.c		optional inet6 rss
@@ -4543,6 +4527,10 @@ nlm/nlm_prot_xdr.c		optional nfslockd | nfsd
 nlm/sm_inter_xdr.c		optional nfslockd | nfsd
 
 # Linux Kernel Programming Interface
+compat/linuxkpi/common/src/linux_80211.c	optional compat_linuxkpi wlan \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_80211_macops.c	optional compat_linuxkpi wlan \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_kmod.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_acpi.c		optional compat_linuxkpi acpi \
@@ -4569,6 +4557,8 @@ compat/linuxkpi/common/src/linux_kthread.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_lock.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_netdev.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_page.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_pci.c		optional compat_linuxkpi pci \
@@ -4586,6 +4576,8 @@ compat/linuxkpi/common/src/linux_schedule.c	optional compat_linuxkpi \
 compat/linuxkpi/common/src/linux_shmemfs.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_shrinker.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_skbuff.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_slab.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
@@ -4956,10 +4948,19 @@ opencrypto/xform_chacha20_poly1305.c	optional crypto \
 	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include -I$S/crypto/libsodium"
 opencrypto/xform_poly1305.c	optional crypto \
 	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include -I$S/crypto/libsodium"
+contrib/libsodium/src/libsodium/crypto_core/hchacha20/core_hchacha20.c \
+	optional crypto \
+	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
 contrib/libsodium/src/libsodium/crypto_onetimeauth/poly1305/onetimeauth_poly1305.c \
 	optional crypto \
 	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
 contrib/libsodium/src/libsodium/crypto_onetimeauth/poly1305/donna/poly1305_donna.c \
+	optional crypto \
+	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
+contrib/libsodium/src/libsodium/crypto_stream/chacha20/stream_chacha20.c \
+	optional crypto \
+	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
+contrib/libsodium/src/libsodium/crypto_stream/chacha20/ref/chacha20_ref.c \
 	optional crypto \
 	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
 contrib/libsodium/src/libsodium/crypto_verify/sodium/verify.c \
@@ -4969,21 +4970,6 @@ crypto/libsodium/randombytes.c	optional crypto \
 	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include -I$S/crypto/libsodium"
 crypto/libsodium/utils.c	optional crypto \
 	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include -I$S/crypto/libsodium"
-contrib/libsodium/src/libsodium/crypto_core/hchacha20/core_hchacha20.c \
-	optional crypto \
-	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
-contrib/libsodium/src/libsodium/crypto_stream/chacha20/stream_chacha20.c \
-	optional crypto \
-	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
-contrib/libsodium/src/libsodium/crypto_stream/chacha20/ref/chacha20_ref.c \
-	optional crypto \
-	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
-contrib/libsodium/src/libsodium/crypto_aead/chacha20poly1305/sodium/aead_chacha20poly1305.c \
-	optional crypto \
-	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
-contrib/libsodium/src/libsodium/crypto_aead/xchacha20poly1305/sodium/aead_xchacha20poly1305.c \
-	optional crypto \
-	compile-with "${NORMAL_C} -I$S/contrib/libsodium/src/libsodium/include/sodium -I$S/crypto/libsodium"
 
 rpc/auth_none.c			optional krpc | nfslockd | nfscl | nfsd
 rpc/auth_unix.c			optional krpc | nfslockd | nfscl | nfsd
@@ -5090,6 +5076,7 @@ security/mac_none/mac_none.c	optional mac_none
 security/mac_ntpd/mac_ntpd.c	optional mac_ntpd
 security/mac_partition/mac_partition.c optional mac_partition
 security/mac_portacl/mac_portacl.c optional mac_portacl
+security/mac_priority/mac_priority.c	optional mac_priority
 security/mac_seeotheruids/mac_seeotheruids.c optional mac_seeotheruids
 security/mac_stub/mac_stub.c	optional mac_stub
 security/mac_test/mac_test.c	optional mac_test

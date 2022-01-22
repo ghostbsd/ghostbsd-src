@@ -487,14 +487,17 @@ struct mntoptnames {
 #define	MNTK_RECURSE		0x00000200 /* pending recursive unmount */
 #define	MNTK_UPPER_WAITER	0x00000400 /* waiting to drain MNTK_UPPER_PENDING */
 #define	MNTK_LOOKUP_EXCL_DOTDOT	0x00000800
+/* UNUSED			0x00001000 */
 #define	MNTK_UNMAPPED_BUFS	0x00002000
 #define	MNTK_USES_BCACHE	0x00004000 /* FS uses the buffer cache. */
-#define	MNTK_TEXT_REFS		0x00008000 /* Keep use ref for text */
+/* UNUSED			0x00008000 */
 #define	MNTK_VMSETSIZE_BUG	0x00010000
 #define	MNTK_UNIONFS	0x00020000	/* A hack for F_ISUNIONSTACK */
 #define	MNTK_FPLOOKUP	0x00040000	/* fast path lookup is supported */
 #define	MNTK_SUSPEND_ALL	0x00080000 /* Suspended by all-fs suspension */
 #define	MNTK_TASKQUEUE_WAITER	0x00100000 /* Waiting on unmount taskqueue */
+/* UNUSED			0x00200000 */
+/* UNUSED			0x00400000 */
 #define	MNTK_NOASYNC	0x00800000	/* disable async */
 #define	MNTK_UNMOUNT	0x01000000	/* unmount in progress */
 #define	MNTK_MWAIT	0x02000000	/* waiting for unmount to finish */
@@ -504,7 +507,7 @@ struct mntoptnames {
 #define	MNTK_NULL_NOCACHE	0x20000000 /* auto disable cache for nullfs
 					      mounts over this fs */
 #define MNTK_LOOKUP_SHARED	0x40000000 /* FS supports shared lock lookups */
-#define	MNTK_NOKNOTE	0x80000000	/* Don't send KNOTEs from VOP hooks */
+/* UNUSED			0x80000000 */
 
 #ifdef _KERNEL
 static inline int
@@ -928,14 +931,12 @@ vfs_statfs_t	__vfs_statfs;
 
 #define VFS_KNOTE_LOCKED(vp, hint) do					\
 {									\
-	if (((vp)->v_vflag & VV_NOKNOTE) == 0)				\
-		VN_KNOTE((vp), (hint), KNF_LISTLOCKED);			\
+	VN_KNOTE((vp), (hint), KNF_LISTLOCKED);				\
 } while (0)
 
 #define VFS_KNOTE_UNLOCKED(vp, hint) do					\
 {									\
-	if (((vp)->v_vflag & VV_NOKNOTE) == 0)				\
-		VN_KNOTE((vp), (hint), 0);				\
+	VN_KNOTE((vp), (hint), 0);					\
 } while (0)
 
 #define	VFS_NOTIFY_UPPER_RECLAIM	1
@@ -973,7 +974,6 @@ vfs_statfs_t	__vfs_statfs;
 int	dounmount(struct mount *, uint64_t, struct thread *);
 
 int	kernel_mount(struct mntarg *ma, uint64_t flags);
-int	kernel_vmount(int flags, ...);
 struct mntarg *mount_arg(struct mntarg *ma, const char *name, const void *val, int len);
 struct mntarg *mount_argb(struct mntarg *ma, int flag, const char *name);
 struct mntarg *mount_argf(struct mntarg *ma, const char *name, const char *fmt, ...);
@@ -1014,7 +1014,6 @@ void	vfs_deallocate_syncvnode(struct mount *);
 int	vfs_donmount(struct thread *td, uint64_t fsflags,
 	    struct uio *fsoptions);
 void	vfs_getnewfsid(struct mount *);
-struct cdev *vfs_getrootfsid(struct mount *);
 struct	mount *vfs_getvfs(fsid_t *);      /* return vfs given fsid */
 struct	mount *vfs_busyfs(fsid_t *);
 int	vfs_modevent(module_t, int, void *);
@@ -1037,6 +1036,8 @@ void	vfs_register_for_notification(struct mount *, struct mount *,
 void	vfs_unregister_for_notification(struct mount *,
 	    struct mount_upper_node *);
 void	vfs_unregister_upper(struct mount *, struct mount_upper_node *);
+int	vfs_remount_ro(struct mount *mp);
+
 extern	TAILQ_HEAD(mntlist, mount) mountlist;	/* mounted filesystem list */
 extern	struct mtx_padalign mountlist_mtx;
 extern	struct nfs_public nfs_pub;

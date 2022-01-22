@@ -941,14 +941,12 @@ msdosfs_rename(struct vop_rename_args *ap)
 	struct componentname *fcnp, *tcnp;
 	struct denode *fdip, *fip, *tdip, *tip, *nip;
 	u_char toname[12], oldname[11];
-	u_long from_diroffset, to_diroffset;
+	u_long to_diroffset;
 	bool checkpath_locked, doingdirectory, newparent;
-	u_char to_count;
 	int error;
 	u_long cn, pcl, blkoff;
 	daddr_t bn, wait_scn, scn;
 	struct msdosfsmount *pmp;
-	struct mount *mp;
 	struct direntry *dotdotp;
 	struct buf *bp;
 
@@ -968,7 +966,6 @@ msdosfs_rename(struct vop_rename_args *ap)
 	/*
 	 * Check for cross-device rename.
 	 */
-	mp = fvp->v_mount;
 	if (fvp->v_mount != tdvp->v_mount ||
 	    (tvp != NULL && fvp->v_mount != tvp->v_mount)) {
 		error = EXDEV;
@@ -1031,7 +1028,6 @@ relock:
 	}
 	vrele(fvp);
 	fvp = DETOV(nip);
-	from_diroffset = fdip->de_fndoffset;
 
 	error = msdosfs_lookup_ino(tdvp, NULL, tcnp, &scn, &blkoff);
 	if (error != 0 && error != EJUSTRETURN) {
@@ -1077,7 +1073,6 @@ relock:
 	 * Remember direntry place to use for destination
 	 */
 	to_diroffset = tdip->de_fndoffset;
-	to_count = tdip->de_fndcnt;
 
 	/*
 	 * Be sure we are not renaming ".", "..", or an alias of ".". This
@@ -1438,7 +1433,7 @@ msdosfs_mkdir(struct vop_mkdir_args *ap)
 	return (0);
 
 bad:
-	clusterfree(pmp, newcluster, NULL);
+	clusterfree(pmp, newcluster);
 bad2:
 	return (error);
 }
@@ -1522,7 +1517,7 @@ msdosfs_readdir(struct vop_readdir_args *ap)
 	struct direntry *dentp;
 	struct dirent dirbuf;
 	struct uio *uio = ap->a_uio;
-	u_long *cookies = NULL;
+	uint64_t *cookies = NULL;
 	int ncookies = 0;
 	off_t offset, off;
 	int chksum = -1;
@@ -1558,7 +1553,7 @@ msdosfs_readdir(struct vop_readdir_args *ap)
 
 	if (ap->a_ncookies) {
 		ncookies = uio->uio_resid / 16;
-		cookies = malloc(ncookies * sizeof(u_long), M_TEMP,
+		cookies = malloc(ncookies * sizeof(*cookies), M_TEMP,
 		       M_WAITOK);
 		*ap->a_cookies = cookies;
 		*ap->a_ncookies = ncookies;

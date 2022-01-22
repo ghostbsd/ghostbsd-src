@@ -116,6 +116,13 @@ virtdone:
 	cmp	x15, x14
 	b.lo	1b
 
+#if defined(PERTHREAD_SSP)
+	/* Set sp_el0 to the boot canary for early per-thread SSP to work */
+	adrp	x15, boot_canary
+	add	x15, x15, :lo12:boot_canary
+	msr	sp_el0, x15
+#endif
+
 	/* Backup the module pointer */
 	mov	x1, x0
 
@@ -145,6 +152,16 @@ virtdone:
 	bl	initarm
 	/* We are done with the boot params */
 	add	sp, sp, #BOOTPARAMS_SIZE
+
+	/*
+	 * Enable pointer authentication in the kernel. We set the keys for
+	 * thread0 in initarm so have to wait until it returns to enable it.
+	 * If we were to enable it in initarm then any authentication when
+	 * returning would fail as it was called with pointer authentication
+	 * disabled.
+	 */
+	bl	ptrauth_start
+
 	bl	mi_startup
 
 	/* We should not get here */
@@ -200,6 +217,13 @@ mp_virtdone:
 	ldr	x4, [x4]
 	mov	sp, x4
 
+#if defined(PERTHREAD_SSP)
+	/* Set sp_el0 to the boot canary for early per-thread SSP to work */
+	adrp	x15, boot_canary
+	add	x15, x15, :lo12:boot_canary
+	msr	sp_el0, x15
+#endif
+
 	/* Load the kernel ttbr0 pagetable */
 	msr	ttbr0_el1, x27
 	isb
@@ -225,7 +249,7 @@ LENTRY(drop_to_el1)
 	ret
 1:
 	/* Configure the Hypervisor */
-	mov	x2, #(HCR_RW)
+	ldr	x2, =(HCR_RW | HCR_APK | HCR_API)
 	msr	hcr_el2, x2
 
 	/* Load the Virtualization Process ID Register */
@@ -776,30 +800,7 @@ initstack:
 initstack_end:
 
 
-ENTRY(sigcode)
-	mov	x0, sp
-	add	x0, x0, #SF_UC
-
-1:
-	mov	x8, #SYS_sigreturn
-	svc	0
-
-	/* sigreturn failed, exit */
-	mov	x8, #SYS_exit
-	svc	0
-
-	b	1b
-END(sigcode)
-	/* This may be copied to the stack, keep it 16-byte aligned */
-	.align	3
-esigcode:
-
-	.data
-	.align	3
-	.global	szsigcode
-szsigcode:
-	.quad	esigcode - sigcode
-
+.text
 EENTRY(aarch32_sigcode)
 	.word 0xe1a0000d	// mov r0, sp
 	.word 0xe2800040	// add r0, r0, #SIGF_UC

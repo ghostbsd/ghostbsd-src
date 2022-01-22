@@ -1389,7 +1389,7 @@ tmpfs_readdir(struct vop_readdir_args *va)
 	struct uio *uio;
 	struct tmpfs_mount *tm;
 	struct tmpfs_node *node;
-	u_long **cookies;
+	uint64_t **cookies;
 	int *eofflag, *ncookies;
 	ssize_t startresid;
 	int error, maxcookies;
@@ -1868,6 +1868,7 @@ struct vop_vector tmpfs_vnodeop_entries = {
 	.vop_lock1 =			vop_lock,
 	.vop_unlock = 			vop_unlock,
 	.vop_islocked = 		vop_islocked,
+	.vop_add_writecount =		vop_stdadd_writecount_nomsync,
 };
 VFS_VOP_VECTOR_REGISTER(tmpfs_vnodeop_entries);
 

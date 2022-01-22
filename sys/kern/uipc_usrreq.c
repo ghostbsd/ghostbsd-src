@@ -157,7 +157,7 @@ static struct task	unp_defer_task;
 static u_long	unpst_sendspace = PIPSIZ;
 static u_long	unpst_recvspace = PIPSIZ;
 static u_long	unpdg_sendspace = 2*1024;	/* really max datagram size */
-static u_long	unpdg_recvspace = 4*1024;
+static u_long	unpdg_recvspace = 16*1024;	/* support 8KB syslog msgs */
 static u_long	unpsp_sendspace = PIPSIZ;	/* really max datagram size */
 static u_long	unpsp_recvspace = PIPSIZ;
 
@@ -303,7 +303,6 @@ static void	unp_gc(__unused void *, int);
 static void	unp_scan(struct mbuf *, void (*)(struct filedescent **, int));
 static void	unp_discard(struct file *);
 static void	unp_freerights(struct filedescent **, int);
-static void	unp_init(void);
 static int	unp_internalize(struct mbuf **, struct thread *);
 static void	unp_internalize_fp(struct file *);
 static int	unp_externalize(struct mbuf *, struct mbuf **, int);
@@ -459,7 +458,6 @@ static struct protosw localsw[] = {
 static struct domain localdomain = {
 	.dom_family =		AF_LOCAL,
 	.dom_name =		"local",
-	.dom_init =		unp_init,
 	.dom_externalize =	unp_externalize,
 	.dom_dispose =		unp_dispose,
 	.dom_protosw =		localsw,
@@ -637,8 +635,7 @@ uipc_bindat(int fd, struct socket *so, struct sockaddr *nam, struct thread *td)
 
 restart:
 	NDINIT_ATRIGHTS(&nd, CREATE, NOFOLLOW | LOCKPARENT | SAVENAME | NOCACHE,
-	    UIO_SYSSPACE, buf, fd, cap_rights_init_one(&rights, CAP_BINDAT),
-	    td);
+	    UIO_SYSSPACE, buf, fd, cap_rights_init_one(&rights, CAP_BINDAT));
 /* SHOULD BE ABLE TO ADOPT EXISTING AND wakeup() ALA FIFO's */
 	error = namei(&nd);
 	if (error)
@@ -1006,7 +1003,7 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	struct unpcb *unp, *unp2;
 	struct socket *so2;
 	u_int mbcnt, sbcc;
-	int freed, error;
+	int error;
 
 	unp = sotounpcb(so);
 	KASSERT(unp != NULL, ("%s: unp == NULL", __func__));
@@ -1014,7 +1011,7 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	    so->so_type == SOCK_SEQPACKET,
 	    ("%s: socktype %d", __func__, so->so_type));
 
-	freed = error = 0;
+	error = 0;
 	if (flags & PRUS_OOB) {
 		error = EOPNOTSUPP;
 		goto release;
@@ -1570,8 +1567,7 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 	else
 		sa = NULL;
 	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | LOCKSHARED | LOCKLEAF,
-	    UIO_SYSSPACE, buf, fd, cap_rights_init_one(&rights, CAP_CONNECTAT),
-	    td);
+	    UIO_SYSSPACE, buf, fd, cap_rights_init_one(&rights, CAP_CONNECTAT));
 	error = namei(&nd);
 	if (error)
 		vp = NULL;
@@ -2150,14 +2146,9 @@ unp_zdtor(void *mem, int size __unused, void *arg __unused)
 #endif
 
 static void
-unp_init(void)
+unp_init(void *arg __unused)
 {
 	uma_dtor dtor;
-
-#ifdef VIMAGE
-	if (!IS_DEFAULT_VNET(curvnet))
-		return;
-#endif
 
 #ifdef INVARIANTS
 	dtor = unp_zdtor;
@@ -2179,6 +2170,7 @@ unp_init(void)
 	UNP_LINK_LOCK_INIT();
 	UNP_DEFERRED_LOCK_INIT();
 }
+SYSINIT(unp_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_SECOND, unp_init, NULL);
 
 static void
 unp_internalize_cleanup_rights(struct mbuf *control)

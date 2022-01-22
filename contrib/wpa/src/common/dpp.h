@@ -11,13 +11,11 @@
 #define DPP_H
 
 #ifdef CONFIG_DPP
-#include <openssl/x509.h>
-
 #include "utils/list.h"
 #include "common/wpa_common.h"
 #include "crypto/sha256.h"
+#include "crypto/crypto.h"
 
-struct crypto_ecdh;
 struct hostapd_ip_addr;
 struct dpp_global;
 struct json_token;
@@ -27,7 +25,9 @@ struct dpp_reconfig_id;
 #define DPP_VERSION (dpp_version_override)
 extern int dpp_version_override;
 #else /* CONFIG_TESTING_OPTIONS */
-#ifdef CONFIG_DPP2
+#ifdef CONFIG_DPP3
+#define DPP_VERSION 3
+#elif defined(CONFIG_DPP2)
 #define DPP_VERSION 2
 #else
 #define DPP_VERSION 1
@@ -43,7 +43,7 @@ enum dpp_public_action_frame_type {
 	DPP_PA_AUTHENTICATION_CONF = 2,
 	DPP_PA_PEER_DISCOVERY_REQ = 5,
 	DPP_PA_PEER_DISCOVERY_RESP = 6,
-	DPP_PA_PKEX_EXCHANGE_REQ = 7,
+	DPP_PA_PKEX_V1_EXCHANGE_REQ = 7,
 	DPP_PA_PKEX_EXCHANGE_RESP = 8,
 	DPP_PA_PKEX_COMMIT_REVEAL_REQ = 9,
 	DPP_PA_PKEX_COMMIT_REVEAL_RESP = 10,
@@ -54,6 +54,7 @@ enum dpp_public_action_frame_type {
 	DPP_PA_RECONFIG_AUTH_REQ = 15,
 	DPP_PA_RECONFIG_AUTH_RESP = 16,
 	DPP_PA_RECONFIG_AUTH_CONF = 17,
+	DPP_PA_PKEX_EXCHANGE_REQ = 18,
 };
 
 enum dpp_attribute_id {
@@ -157,7 +158,7 @@ struct dpp_bootstrap_info {
 	bool channels_listed;
 	u8 version;
 	int own;
-	EVP_PKEY *pubkey;
+	struct crypto_ec_key *pubkey;
 	u8 pubkey_hash[SHA256_MAC_LEN];
 	u8 pubkey_hash_chirp[SHA256_MAC_LEN];
 	const struct dpp_curve_params *curve;
@@ -175,23 +176,25 @@ struct dpp_pkex {
 	unsigned int initiator:1;
 	unsigned int exchange_done:1;
 	unsigned int failed:1;
+	unsigned int v2:1;
 	struct dpp_bootstrap_info *own_bi;
 	u8 own_mac[ETH_ALEN];
 	u8 peer_mac[ETH_ALEN];
 	char *identifier;
 	char *code;
-	EVP_PKEY *x;
-	EVP_PKEY *y;
+	struct crypto_ec_key *x;
+	struct crypto_ec_key *y;
 	u8 Mx[DPP_MAX_SHARED_SECRET_LEN];
 	u8 Nx[DPP_MAX_SHARED_SECRET_LEN];
 	u8 z[DPP_MAX_HASH_LEN];
-	EVP_PKEY *peer_bootstrap_key;
+	struct crypto_ec_key *peer_bootstrap_key;
 	struct wpabuf *exchange_req;
 	struct wpabuf *exchange_resp;
 	unsigned int t; /* number of failures on code use */
 	unsigned int exch_req_wait_time;
 	unsigned int exch_req_tries;
 	unsigned int freq;
+	u8 peer_version;
 };
 
 enum dpp_akm {
@@ -234,8 +237,8 @@ struct dpp_configuration {
 
 struct dpp_asymmetric_key {
 	struct dpp_asymmetric_key *next;
-	EVP_PKEY *csign;
-	EVP_PKEY *pp_key;
+	struct crypto_ec_key *csign;
+	struct crypto_ec_key *pp_key;
 	char *config_template;
 	char *connector_template;
 };
@@ -266,9 +269,9 @@ struct dpp_authentication {
 	u8 i_capab;
 	u8 r_capab;
 	enum dpp_netrole e_netrole;
-	EVP_PKEY *own_protocol_key;
-	EVP_PKEY *peer_protocol_key;
-	EVP_PKEY *reconfig_old_protocol_key;
+	struct crypto_ec_key *own_protocol_key;
+	struct crypto_ec_key *peer_protocol_key;
+	struct crypto_ec_key *reconfig_old_protocol_key;
 	struct wpabuf *req_msg;
 	struct wpabuf *resp_msg;
 	struct wpabuf *reconfig_req_msg;
@@ -361,19 +364,20 @@ struct dpp_configurator {
 	struct dl_list list;
 	unsigned int id;
 	int own;
-	EVP_PKEY *csign;
+	struct crypto_ec_key *csign;
 	u8 kid_hash[SHA256_MAC_LEN];
 	char *kid;
 	const struct dpp_curve_params *curve;
 	char *connector; /* own Connector for reconfiguration */
-	EVP_PKEY *connector_key;
-	EVP_PKEY *pp_key;
+	struct crypto_ec_key *connector_key;
+	struct crypto_ec_key *pp_key;
 };
 
 struct dpp_introduction {
 	u8 pmkid[PMKID_LEN];
 	u8 pmk[PMK_LEN_MAX];
 	size_t pmk_len;
+	int peer_version;
 };
 
 struct dpp_relay_config {
@@ -493,6 +497,8 @@ enum dpp_test_behavior {
 	DPP_TEST_STOP_AT_AUTH_CONF = 89,
 	DPP_TEST_STOP_AT_CONF_REQ = 90,
 	DPP_TEST_REJECT_CONFIG = 91,
+	DPP_TEST_NO_PROTOCOL_VERSION_PEER_DISC_REQ = 92,
+	DPP_TEST_NO_PROTOCOL_VERSION_PEER_DISC_RESP = 93,
 };
 
 extern enum dpp_test_behavior dpp_test;
@@ -595,17 +601,18 @@ dpp_peer_intro(struct dpp_introduction *intro, const char *own_connector,
 	       const u8 *csign_key, size_t csign_key_len,
 	       const u8 *peer_connector, size_t peer_connector_len,
 	       os_time_t *expiry);
+int dpp_get_connector_version(const char *connector);
 struct dpp_pkex * dpp_pkex_init(void *msg_ctx, struct dpp_bootstrap_info *bi,
 				const u8 *own_mac,
-				const char *identifier,
-				const char *code);
+				const char *identifier, const char *code,
+				bool v2);
 struct dpp_pkex * dpp_pkex_rx_exchange_req(void *msg_ctx,
 					   struct dpp_bootstrap_info *bi,
 					   const u8 *own_mac,
 					   const u8 *peer_mac,
 					   const char *identifier,
 					   const char *code,
-					   const u8 *buf, size_t len);
+					   const u8 *buf, size_t len, bool v2);
 struct wpabuf * dpp_pkex_rx_exchange_resp(struct dpp_pkex *pkex,
 					  const u8 *peer_mac,
 					  const u8 *buf, size_t len);
@@ -633,7 +640,6 @@ void dpp_pfs_free(struct dpp_pfs *pfs);
 
 struct wpabuf * dpp_build_csr(struct dpp_authentication *auth,
 			      const char *name);
-struct wpabuf * dpp_pkcs7_certs(const struct wpabuf *pkcs7);
 int dpp_validate_csr(struct dpp_authentication *auth, const struct wpabuf *csr);
 
 struct dpp_bootstrap_info * dpp_add_qr_code(struct dpp_global *dpp,
@@ -676,6 +682,7 @@ int dpp_relay_rx_gas_req(struct dpp_global *dpp, const u8 *src, const u8 *data,
 int dpp_controller_start(struct dpp_global *dpp,
 			 struct dpp_controller_config *config);
 void dpp_controller_stop(struct dpp_global *dpp);
+void dpp_controller_stop_for_ctx(struct dpp_global *dpp, void *cb_ctx);
 struct dpp_authentication * dpp_controller_get_auth(struct dpp_global *dpp,
 						    unsigned int id);
 void dpp_controller_new_qr_code(struct dpp_global *dpp,

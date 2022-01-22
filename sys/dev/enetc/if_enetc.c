@@ -150,6 +150,14 @@ static device_method_t enetc_methods[] = {
 	DEVMETHOD(miibus_linkchg,	enetc_miibus_linkchg),
 	DEVMETHOD(miibus_statchg,	enetc_miibus_statchg),
 
+	DEVMETHOD(bus_setup_intr,		bus_generic_setup_intr),
+	DEVMETHOD(bus_teardown_intr,		bus_generic_teardown_intr),
+	DEVMETHOD(bus_release_resource,		bus_generic_release_resource),
+	DEVMETHOD(bus_activate_resource,	bus_generic_activate_resource),
+	DEVMETHOD(bus_deactivate_resource,	bus_generic_deactivate_resource),
+	DEVMETHOD(bus_adjust_resource,		bus_generic_adjust_resource),
+	DEVMETHOD(bus_alloc_resource,		bus_generic_alloc_resource),
+
 	DEVMETHOD_END
 };
 
@@ -158,7 +166,7 @@ static driver_t enetc_driver = {
 };
 
 static devclass_t enetc_devclass;
-DRIVER_MODULE(miibus, enetc, miibus_driver, miibus_devclass, NULL, NULL);
+DRIVER_MODULE(miibus, enetc, miibus_fdt_driver, miibus_fdt_devclass, NULL, NULL);
 /* Make sure miibus gets procesed first. */
 DRIVER_MODULE_ORDERED(enetc, pci, enetc_driver, enetc_devclass, NULL, NULL,
     SI_ORDER_ANY);
@@ -368,6 +376,8 @@ enetc_attach_pre(if_ctx_t ctx)
 	sc->shared = scctx;
 	ifp = iflib_get_ifp(ctx);
 
+	mtx_init(&sc->mii_lock, "enetc_mdio", NULL, MTX_DEF);
+
 	pci_save_state(sc->dev);
 	pcie_flr(sc->dev, 1000, false);
 	pci_restore_state(sc->dev);
@@ -462,6 +472,8 @@ enetc_detach(if_ctx_t ctx)
 
 	if (sc->ctrl_queue.dma.idi_size != 0)
 		iflib_dma_free(&sc->ctrl_queue.dma);
+
+	mtx_destroy(&sc->mii_lock);
 
 	return (error);
 }
@@ -803,7 +815,7 @@ enetc_hash_mac(void *arg, struct sockaddr_dl *sdl, u_int cnt)
 	for (i = 0; i < 6; i++) {
 		bit = 0;
 		for (j = 0; j < 8; j++)
-			bit ^= address & BIT(i + j*6);
+			bit ^= !!(address & BIT(i + j*6));
 
 		hash |= bit << i;
 	}
@@ -844,7 +856,7 @@ enetc_hash_vid(uint16_t vid)
 
 	for (i = 0;i < 6;i++) {
 		bit = vid & BIT(i);
-		bit ^= vid & BIT(i + 6);
+		bit ^= !!(vid & BIT(i + 6));
 		hash |= bit << i;
 	}
 
@@ -1281,7 +1293,7 @@ enetc_isc_rxd_refill(void *data, if_rxd_update_t iru)
 	 * After enabling the queue NIC will prefetch the first
 	 * 8 descriptors. It probably assumes that the RX is fully
 	 * refilled when cidx == pidx.
-	 * Enable it only if we have enough decriptors ready on the ring.
+	 * Enable it only if we have enough descriptors ready on the ring.
 	 */
 	if (!queue->enabled && pidx >= 8) {
 		ENETC_RXQ_WR4(sc, iru->iru_qsidx, ENETC_RBMR, sc->rbmr);
@@ -1382,20 +1394,32 @@ static int
 enetc_miibus_readreg(device_t dev, int phy, int reg)
 {
 	struct enetc_softc *sc;
+	int val;
 
 	sc = iflib_get_softc(device_get_softc(dev));
-	return (enetc_mdio_read(sc->regs, ENETC_PORT_BASE + ENETC_EMDIO_BASE,
-	    phy, reg));
+
+	mtx_lock(&sc->mii_lock);
+	val = enetc_mdio_read(sc->regs, ENETC_PORT_BASE + ENETC_EMDIO_BASE,
+	    phy, reg);
+	mtx_unlock(&sc->mii_lock);
+
+	return (val);
 }
 
 static int
 enetc_miibus_writereg(device_t dev, int phy, int reg, int data)
 {
 	struct enetc_softc *sc;
+	int ret;
 
 	sc = iflib_get_softc(device_get_softc(dev));
-	return (enetc_mdio_write(sc->regs, ENETC_PORT_BASE + ENETC_EMDIO_BASE,
-	    phy, reg, data));
+
+	mtx_lock(&sc->mii_lock);
+	ret = enetc_mdio_write(sc->regs, ENETC_PORT_BASE + ENETC_EMDIO_BASE,
+	    phy, reg, data);
+	mtx_unlock(&sc->mii_lock);
+
+	return (ret);
 }
 
 static void

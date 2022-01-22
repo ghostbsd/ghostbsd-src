@@ -251,8 +251,9 @@ struct xvnode {
 #define	VIRF_PGREAD	0x0002	/* Direct reads from the page cache are permitted,
 				   never cleared once set */
 #define	VIRF_MOUNTPOINT	0x0004	/* This vnode is mounted on */
+#define	VIRF_TEXT_REF	0x0008	/* Executable mappings ref the vnode */
 
-#define	VI_TEXT_REF	0x0001	/* Text ref grabbed use ref */
+#define	VI_UNUSED0	0x0001	/* unused */
 #define	VI_MOUNT	0x0002	/* Mount in progress */
 #define	VI_DOINGINACT	0x0004	/* VOP_INACTIVE is in progress */
 #define	VI_OWEINACT	0x0008	/* Need to call inactive */
@@ -269,7 +270,7 @@ struct xvnode {
 #define	VV_COPYONWRITE	0x0040	/* vnode is doing copy-on-write */
 #define	VV_SYSTEM	0x0080	/* vnode being used by kernel */
 #define	VV_PROCDEP	0x0100	/* vnode is process dependent */
-#define	VV_NOKNOTE	0x0200	/* don't activate knotes on this vnode */
+/* UNUSED		0x0200	*/
 #define	VV_DELETED	0x0400	/* should be removed */
 #define	VV_MD		0x0800	/* vnode backs the md device */
 #define	VV_FORCEINSMQ	0x1000	/* force the insmntque to succeed */
@@ -682,7 +683,7 @@ cache_validate(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
 void	cache_fast_lookup_enabled_recalc(void);
 int	change_dir(struct vnode *vp, struct thread *td);
 void	cvtstat(struct stat *st, struct ostat *ost);
-void	freebsd11_cvtnstat(struct stat *sb, struct nstat *nsb);
+int	freebsd11_cvtnstat(struct stat *sb, struct nstat *nsb);
 int	freebsd11_cvtstat(struct stat *st, struct freebsd11_stat *ost);
 int	getnewvnode(const char *tag, struct mount *mp, struct vop_vector *vops,
 	    struct vnode **vpp);
@@ -697,6 +698,9 @@ int	vn_vptocnp(struct vnode **vp, char *buf, size_t *buflen);
 int	vn_getcwd(char *buf, char **retbuf, size_t *buflen);
 int	vn_fullpath(struct vnode *vp, char **retbuf, char **freebuf);
 int	vn_fullpath_global(struct vnode *vp, char **retbuf, char **freebuf);
+int	vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
+	    const char *hdrl_name, size_t hrdl_name_length, char **retbuf,
+	    char **freebuf, size_t *buflen);
 struct vnode *
 	vn_dir_dd_ino(struct vnode *vp);
 int	vn_commname(struct vnode *vn, char *buf, u_int buflen);
@@ -767,6 +771,8 @@ int	vn_open_cred(struct nameidata *ndp, int *flagp, int cmode,
 int	vn_open_vnode(struct vnode *vp, int fmode, struct ucred *cred,
 	    struct thread *td, struct file *fp);
 void	vn_pages_remove(struct vnode *vp, vm_pindex_t start, vm_pindex_t end);
+void	vn_pages_remove_valid(struct vnode *vp, vm_pindex_t start,
+	    vm_pindex_t end);
 int	vn_pollrecord(struct vnode *vp, struct thread *p, int events);
 int	vn_rdwr(enum uio_rw rw, struct vnode *vp, void *base,
 	    int len, off_t offset, enum uio_seg segflg, int ioflg,
@@ -874,6 +880,7 @@ int	vop_stdvptofh(struct vop_vptofh_args *ap);
 int	vop_stdunp_bind(struct vop_unp_bind_args *ap);
 int	vop_stdunp_connect(struct vop_unp_connect_args *ap);
 int	vop_stdunp_detach(struct vop_unp_detach_args *ap);
+int	vop_stdadd_writecount_nomsync(struct vop_add_writecount_args *ap);
 int	vop_eopnotsupp(struct vop_generic_args *ap);
 int	vop_ebadf(struct vop_generic_args *ap);
 int	vop_einval(struct vop_generic_args *ap);
@@ -924,10 +931,14 @@ void	vop_symlink_post(void *a, int rc);
 int	vop_sigdefer(struct vop_vector *vop, struct vop_generic_args *a);
 
 #ifdef DEBUG_VFS_LOCKS
+void	vop_fdatasync_debugpre(void *a);
+void	vop_fdatasync_debugpost(void *a, int rc);
 void	vop_fplookup_vexec_debugpre(void *a);
 void	vop_fplookup_vexec_debugpost(void *a, int rc);
 void	vop_fplookup_symlink_debugpre(void *a);
 void	vop_fplookup_symlink_debugpost(void *a, int rc);
+void	vop_fsync_debugpre(void *a);
+void	vop_fsync_debugpost(void *a, int rc);
 void	vop_strategy_debugpre(void *a);
 void	vop_lock_debugpre(void *a);
 void	vop_lock_debugpost(void *a, int rc);
@@ -936,10 +947,14 @@ void	vop_need_inactive_debugpre(void *a);
 void	vop_need_inactive_debugpost(void *a, int rc);
 void	vop_mkdir_debugpost(void *a, int rc);
 #else
+#define	vop_fdatasync_debugpre(x)		do { } while (0)
+#define	vop_fdatasync_debugpost(x, y)		do { } while (0)
 #define	vop_fplookup_vexec_debugpre(x)		do { } while (0)
 #define	vop_fplookup_vexec_debugpost(x, y)	do { } while (0)
 #define	vop_fplookup_symlink_debugpre(x)	do { } while (0)
 #define	vop_fplookup_symlink_debugpost(x, y)	do { } while (0)
+#define	vop_fsync_debugpre(x)			do { } while (0)
+#define	vop_fsync_debugpost(x, y)		do { } while (0)
 #define	vop_strategy_debugpre(x)		do { } while (0)
 #define	vop_lock_debugpre(x)			do { } while (0)
 #define	vop_lock_debugpost(x, y)		do { } while (0)

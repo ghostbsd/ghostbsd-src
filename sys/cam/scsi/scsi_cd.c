@@ -136,9 +136,13 @@ typedef enum {
 #define ccb_state ppriv_field0
 #define ccb_bp ppriv_ptr1
 
+/*
+ * According to the MMC-6 spec, 6.25.3.2.11, the lead-out is reported by
+ * READ_TOC as logical track 170, so at most 169 tracks may be reported.
+ */
 struct cd_tocdata {
 	struct ioc_toc_header header;
-	struct cd_toc_entry entries[100];
+	struct cd_toc_entry entries[170];
 };
 
 struct cd_toc_single {
@@ -740,9 +744,10 @@ cdregister(struct cam_periph *periph, void *arg)
 	callout_init_mtx(&softc->mediapoll_c, cam_periph_mtx(periph), 0);
 	if ((softc->flags & CD_FLAG_DISC_REMOVABLE) &&
 	    (cgd->inq_flags & SID_AEN) == 0 &&
-	    cd_poll_period != 0)
-		callout_reset(&softc->mediapoll_c, cd_poll_period * hz,
-		    cdmediapoll, periph);
+	    cd_poll_period != 0) {
+		callout_reset_sbt(&softc->mediapoll_c, cd_poll_period * SBT_1S,
+		    0, cdmediapoll, periph, C_PREL(1));
+	}
 
 	xpt_schedule(periph, CAM_PRIORITY_DEV);
 	return(CAM_REQ_CMP);
@@ -1596,12 +1601,13 @@ cddone(struct cam_periph *periph, union ccb *done_ccb)
 		}
 
 		/* Number of TOC entries, plus leadout */
-		num_entries = (toch->ending_track - toch->starting_track) + 2;
-		cdindex = toch->starting_track + num_entries -1;
+		num_entries = toch->ending_track - toch->starting_track + 2;
+		cdindex = toch->starting_track + num_entries - 1;
 
 		if ((done_ccb->ccb_h.ccb_state & CD_CCB_TYPE_MASK) ==
 		     CD_CCB_MEDIA_TOC_HDR) {
-			if (num_entries <= 0) {
+			if (num_entries <= 0 ||
+			    num_entries > nitems(softc->toc.entries)) {
 				softc->flags &= ~CD_FLAG_VALID_TOC;
 				bzero(&softc->toc, sizeof(softc->toc));
 				/*
@@ -1838,23 +1844,19 @@ cdioctl(struct disk *dp, u_long cmd, void *addr, int flag, struct thread *td)
 			 */
 			if (softc->flags & CD_FLAG_VALID_TOC) {
 				union msf_lba *sentry, *eentry;
+				struct ioc_toc_header *th;
 				int st, et;
 
-				if (args->end_track <
-				    softc->toc.header.ending_track + 1)
+				th = &softc->toc.header;
+				if (args->end_track < th->ending_track + 1)
 					args->end_track++;
-				if (args->end_track >
-				    softc->toc.header.ending_track + 1)
-					args->end_track =
-					    softc->toc.header.ending_track + 1;
-				st = args->start_track -
-					softc->toc.header.starting_track;
-				et = args->end_track -
-					softc->toc.header.starting_track;
-				if ((st < 0)
-				 || (et < 0)
-				 || (st > (softc->toc.header.ending_track -
-				     softc->toc.header.starting_track))) {
+				if (args->end_track > th->ending_track + 1)
+					args->end_track = th->ending_track + 1;
+				st = args->start_track - th->starting_track;
+				et = args->end_track - th->starting_track;
+				if (st < 0 || et < 0 ||
+				    st > th->ending_track - th->starting_track ||
+				    et > th->ending_track - th->starting_track) {
 					error = EINVAL;
 					cam_periph_unlock(periph);
 					break;
@@ -3133,9 +3135,12 @@ cdmediapoll(void *arg)
 			xpt_schedule(periph, CAM_PRIORITY_NORMAL);
 		}
 	}
+
 	/* Queue us up again */
-	if (cd_poll_period != 0)
-		callout_schedule(&softc->mediapoll_c, cd_poll_period * hz);
+	if (cd_poll_period != 0) {
+		callout_schedule_sbt(&softc->mediapoll_c,
+		    cd_poll_period * SBT_1S, 0, C_PREL(1));
+	}
 }
 
 /*
@@ -3145,12 +3150,10 @@ static int
 cdreadtoc(struct cam_periph *periph, u_int32_t mode, u_int32_t start,
 	  u_int8_t *data, u_int32_t len, u_int32_t sense_flags)
 {
-	u_int32_t ntoc;
         struct ccb_scsiio *csio;
 	union ccb *ccb;
 	int error;
 
-	ntoc = len;
 	error = 0;
 
 	ccb = cam_periph_getccb(periph, CAM_PRIORITY_NORMAL);

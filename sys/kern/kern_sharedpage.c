@@ -305,10 +305,12 @@ void
 exec_sysvec_init(void *param)
 {
 	struct sysentvec *sv;
+	vm_offset_t sb;
 #ifdef RANDOM_FENESTRASX
 	ptrdiff_t base;
 #endif
 	u_int flags;
+	int res;
 
 	sv = param;
 	flags = sv->sv_flags;
@@ -319,8 +321,21 @@ exec_sysvec_init(void *param)
 
 	sv->sv_shared_page_obj = shared_page_obj;
 	if ((flags & SV_ABI_MASK) == SV_ABI_FREEBSD) {
-		sv->sv_sigcode_base = sv->sv_shared_page_base +
-		    shared_page_fill(*(sv->sv_szsigcode), 16, sv->sv_sigcode);
+		if ((flags & SV_DSO_SIG) != 0) {
+			sb = sv->sv_shared_page_base;
+			res = shared_page_fill((uintptr_t)sv->sv_szsigcode,
+			    16, sv->sv_sigcode);
+			if (res == -1)
+				panic("copying sigtramp to shared page");
+			sb += res;
+			sv->sv_vdso_base = sb;
+			sb += sv->sv_sigcodeoff;
+			sv->sv_sigcode_base = sb;
+		} else {
+			sv->sv_sigcode_base = sv->sv_shared_page_base +
+			    shared_page_fill(*(sv->sv_szsigcode), 16,
+			    sv->sv_sigcode);
+		}
 	}
 	if ((flags & SV_TIMEKEEP) != 0) {
 #ifdef COMPAT_FREEBSD32
@@ -372,12 +387,17 @@ exec_sysvec_init_secondary(struct sysentvec *sv, struct sysentvec *sv2)
 	MPASS((sv2->sv_flags & SV_ABI_MASK) == (sv->sv_flags & SV_ABI_MASK));
 	MPASS((sv2->sv_flags & SV_TIMEKEEP) == (sv->sv_flags & SV_TIMEKEEP));
 	MPASS((sv2->sv_flags & SV_SHP) != 0 && (sv->sv_flags & SV_SHP) != 0);
+	MPASS((sv2->sv_flags & SV_DSO_SIG) == (sv->sv_flags & SV_DSO_SIG));
 	MPASS((sv2->sv_flags & SV_RNG_SEED_VER) ==
 	    (sv->sv_flags & SV_RNG_SEED_VER));
 
 	sv2->sv_shared_page_obj = sv->sv_shared_page_obj;
 	sv2->sv_sigcode_base = sv2->sv_shared_page_base +
 	    (sv->sv_sigcode_base - sv->sv_shared_page_base);
+	if ((sv2->sv_flags & SV_DSO_SIG) != 0) {
+		sv2->sv_vdso_base = sv2->sv_shared_page_base +
+		    (sv->sv_vdso_base - sv->sv_shared_page_base);
+	}
 	if ((sv2->sv_flags & SV_ABI_MASK) != SV_ABI_FREEBSD)
 		return;
 	if ((sv2->sv_flags & SV_TIMEKEEP) != 0) {

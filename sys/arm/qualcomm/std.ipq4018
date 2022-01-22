@@ -1,2 +1,34 @@
 arm/qualcomm/ipq4018_machdep.c		standard
 arm/qualcomm/ipq4018_mp.c		optional smp
+arm/qualcomm/qcom_scm_legacy.c		standard
+arm/qualcomm/qcom_cpu_kpssv2.c		optional smp
+
+arm/qualcomm/ipq4018_usb_hs_phy.c	optional qcom_ipq4018_hs_usbphy
+arm/qualcomm/ipq4018_usb_ss_phy.c	optional qcom_ipq4018_ss_usbphy
+
+dev/qcom_dwc3/qcom_dwc3.c		optional qcom_dwc3
+
+dev/qcom_rnd/qcom_rnd.c			optional qcom_rnd
+
+dev/qcom_qup/qcom_spi.c			optional qcom_qup_spi
+dev/qcom_qup/qcom_spi_hw.c		optional qcom_qup_spi
+
+dev/qcom_gcc/qcom_gcc_ipq4018.c		optional qcom_gcc_ipq4018
+dev/qcom_gcc/qcom_gcc_ipq4018_reset.c	optional qcom_gcc_ipq4018
+dev/qcom_gcc/qcom_gcc_ipq4018_clock.c	optional qcom_gcc_ipq4018
+
+dev/qcom_clk/qcom_clk_fepll.c		optional qcom_gcc_ipq4018
+dev/qcom_clk/qcom_clk_fdiv.c		optional qcom_gcc_ipq4018
+dev/qcom_clk/qcom_clk_apssdiv.c		optional qcom_gcc_ipq4018
+dev/qcom_clk/qcom_clk_freqtbl.c		optional qcom_gcc_ipq4018
+dev/qcom_clk/qcom_clk_rcg2.c		optional qcom_gcc_ipq4018
+dev/qcom_clk/qcom_clk_branch2.c		optional qcom_gcc_ipq4018
+dev/qcom_clk/qcom_clk_ro_div.c		optional qcom_gcc_ipq4018
+
+dev/qcom_tlmm/qcom_tlmm_debug.c		optional qcom_tlmm_ipq4018
+dev/qcom_tlmm/qcom_tlmm_ipq4018.c	optional qcom_tlmm_ipq4018
+dev/qcom_tlmm/qcom_tlmm_ipq4018_hw.c	optional qcom_tlmm_ipq4018
+dev/qcom_tlmm/qcom_tlmm_pin.c		optional qcom_tlmm_ipq4018
+dev/qcom_tlmm/qcom_tlmm_pinmux.c	optional qcom_tlmm_ipq4018
+
+dev/qcom_tcsr/qcom_tcsr.c		optional qcom_tcsr

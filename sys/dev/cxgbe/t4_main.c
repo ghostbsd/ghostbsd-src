@@ -518,6 +518,21 @@ SYSCTL_INT(_hw_cxgbe, OID_AUTO, fec, CTLFLAG_RDTUN, &t4_fec, 0,
     "Forward Error Correction (bit 0 = RS, bit 1 = BASER_RS)");
 
 /*
+ * Controls when the driver sets the FORCE_FEC bit in the L1_CFG32 that it
+ * issues to the firmware.  If the firmware doesn't support FORCE_FEC then the
+ * driver runs as if this is set to 0.
+ * -1 to set FORCE_FEC iff requested_fec != AUTO. Multiple FEC bits are okay.
+ *  0 to never set FORCE_FEC. requested_fec = AUTO means use the hint from the
+ *    transceiver. Multiple FEC bits may not be okay but will be passed on to
+ *    the firmware anyway (may result in l1cfg errors with old firmwares).
+ *  1 to always set FORCE_FEC. Multiple FEC bits are okay. requested_fec = AUTO
+ *    means set all FEC bits that are valid for the speed.
+ */
+static int t4_force_fec = -1;
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, force_fec, CTLFLAG_RDTUN, &t4_force_fec, 0,
+    "Controls the use of FORCE_FEC bit in L1 configuration.");
+
+/*
  * Link autonegotiation.
  * -1 to run with the firmware default.
  *  0 to disable.
@@ -771,9 +786,11 @@ static int sysctl_holdoff_pktc_idx(SYSCTL_HANDLER_ARGS);
 static int sysctl_qsize_rxq(SYSCTL_HANDLER_ARGS);
 static int sysctl_qsize_txq(SYSCTL_HANDLER_ARGS);
 static int sysctl_pause_settings(SYSCTL_HANDLER_ARGS);
-static int sysctl_fec(SYSCTL_HANDLER_ARGS);
+static int sysctl_link_fec(SYSCTL_HANDLER_ARGS);
+static int sysctl_requested_fec(SYSCTL_HANDLER_ARGS);
 static int sysctl_module_fec(SYSCTL_HANDLER_ARGS);
 static int sysctl_autoneg(SYSCTL_HANDLER_ARGS);
+static int sysctl_force_fec(SYSCTL_HANDLER_ARGS);
 static int sysctl_handle_t4_reg64(SYSCTL_HANDLER_ARGS);
 static int sysctl_temperature(SYSCTL_HANDLER_ARGS);
 static int sysctl_vdd(SYSCTL_HANDLER_ARGS);
@@ -1105,6 +1122,7 @@ t4_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
+	sysctl_ctx_init(&sc->ctx);
 	TUNABLE_INT_FETCH("hw.cxgbe.dflags", &sc->debug_flags);
 
 	if ((pci_get_device(dev) & 0xff00) == 0x5400)
@@ -1158,10 +1176,10 @@ t4_attach(device_t dev)
 
 	TASK_INIT(&sc->reset_task, 0, reset_adapter, sc);
 
-	sc->ctrlq_oid = SYSCTL_ADD_NODE(device_get_sysctl_ctx(sc->dev),
+	sc->ctrlq_oid = SYSCTL_ADD_NODE(&sc->ctx,
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev)), OID_AUTO, "ctrlq",
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "control queues");
-	sc->fwq_oid = SYSCTL_ADD_NODE(device_get_sysctl_ctx(sc->dev),
+	sc->fwq_oid = SYSCTL_ADD_NODE(&sc->ctx,
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev)), OID_AUTO, "fwq",
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "firmware event queue");
 
@@ -1295,6 +1313,11 @@ t4_attach(device_t dev)
 			sc->port[i] = NULL;
 			goto done;
 		}
+
+		if (is_bt(pi->port_type))
+			setbit(&sc->bt_map, pi->tx_chan);
+		else
+			MPASS(!isset(&sc->bt_map, pi->tx_chan));
 
 		snprintf(pi->lockname, sizeof(pi->lockname), "%sp%d",
 		    device_get_nameunit(dev), i);
@@ -1641,10 +1664,7 @@ notify_siblings(device_t dev, int detaching)
 static int
 t4_detach(device_t dev)
 {
-	struct adapter *sc;
 	int rc;
-
-	sc = device_get_softc(dev);
 
 	rc = notify_siblings(dev, 1);
 	if (rc) {
@@ -1713,6 +1733,7 @@ t4_detach_common(device_t dev)
 	}
 
 	device_delete_children(dev);
+	sysctl_ctx_free(&sc->ctx);
 	adapter_full_uninit(sc);
 
 	if ((sc->flags & (IS_VF | FW_OK)) == FW_OK)
@@ -2394,12 +2415,12 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 {
 	struct ifnet *ifp;
 	struct sbuf *sb;
-	struct sysctl_ctx_list *ctx;
+	struct sysctl_ctx_list *ctx = &vi->ctx;
 	struct sysctl_oid_list *children;
 	struct pfil_head_args pa;
 	struct adapter *sc = vi->adapter;
 
-	ctx = device_get_sysctl_ctx(vi->dev);
+	sysctl_ctx_init(ctx);
 	children = SYSCTL_CHILDREN(device_get_sysctl_tree(vi->dev));
 	vi->rxq_oid = SYSCTL_ADD_NODE(ctx, children, OID_AUTO, "rxq",
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "NIC rx queues");
@@ -2546,6 +2567,8 @@ cxgbe_attach(device_t dev)
 	struct vi_info *vi;
 	int i, rc;
 
+	sysctl_ctx_init(&pi->ctx);
+
 	rc = cxgbe_vi_attach(dev, &pi->vi[0]);
 	if (rc)
 		return (rc);
@@ -2587,6 +2610,7 @@ cxgbe_vi_detach(struct vi_info *vi)
 #endif
 	cxgbe_uninit_synchronized(vi);
 	callout_drain(&vi->tick);
+	sysctl_ctx_free(&vi->ctx);
 	vi_full_uninit(vi);
 
 	if_free(vi->ifp);
@@ -2606,6 +2630,7 @@ cxgbe_detach(device_t dev)
 		return (rc);
 	device_delete_children(dev);
 
+	sysctl_ctx_free(&pi->ctx);
 	doom_vi(sc, &pi->vi[0]);
 
 	if (pi->flags & HAS_TRACEQ) {
@@ -2850,7 +2875,7 @@ fail:
 	case SIOCSIFMEDIA:
 	case SIOCGIFMEDIA:
 	case SIOCGIFXMEDIA:
-		ifmedia_ioctl(ifp, ifr, &pi->media, cmd);
+		rc = ifmedia_ioctl(ifp, ifr, &pi->media, cmd);
 		break;
 
 	case SIOCGI2C: {
@@ -5702,7 +5727,9 @@ init_link_config(struct port_info *pi)
 	struct link_config *lc = &pi->link_cfg;
 
 	PORT_LOCK_ASSERT_OWNED(pi);
+	MPASS(lc->pcaps != 0);
 
+	lc->requested_caps = 0;
 	lc->requested_speed = 0;
 
 	if (t4_autoneg == 0)
@@ -5725,6 +5752,13 @@ init_link_config(struct port_info *pi)
 		    (FEC_RS | FEC_BASER_RS | FEC_NONE | FEC_MODULE);
 		if (lc->requested_fec == 0)
 			lc->requested_fec = FEC_AUTO;
+	}
+	lc->force_fec = 0;
+	if (lc->pcaps & FW_PORT_CAP32_FORCE_FEC) {
+		if (t4_force_fec < 0)
+			lc->force_fec = -1;
+		else if (t4_force_fec > 0)
+			lc->force_fec = 1;
 	}
 }
 
@@ -6441,11 +6475,6 @@ adapter_full_init(struct adapter *sc)
 
 	ASSERT_SYNCHRONIZED_OP(sc);
 
-	if (!(sc->flags & ADAP_SYSCTL_CTX)) {
-		sysctl_ctx_init(&sc->ctx);
-		sc->flags |= ADAP_SYSCTL_CTX;
-	}
-
 	/*
 	 * queues that belong to the adapter (not any particular port).
 	 */
@@ -6499,12 +6528,6 @@ static void
 adapter_full_uninit(struct adapter *sc)
 {
 	int i;
-
-	/* Do this before freeing the adapter queues. */
-	if (sc->flags & ADAP_SYSCTL_CTX) {
-		sysctl_ctx_free(&sc->ctx);
-		sc->flags &= ~ADAP_SYSCTL_CTX;
-	}
 
 	t4_teardown_adapter_queues(sc);
 
@@ -6597,11 +6620,6 @@ vi_full_init(struct vi_info *vi)
 #endif
 
 	ASSERT_SYNCHRONIZED_OP(sc);
-
-	if (!(vi->flags & VI_SYSCTL_CTX)) {
-		sysctl_ctx_init(&vi->ctx);
-		vi->flags |= VI_SYSCTL_CTX;
-	}
 
 	/*
 	 * Allocate tx/rx/fl queues for this VI.
@@ -6734,12 +6752,6 @@ vi_full_uninit(struct vi_info *vi)
 		quiesce_vi(vi);
 		free(vi->rss, M_CXGBE);
 		free(vi->nm_rss, M_CXGBE);
-	}
-
-	/* Do this before freeing the VI queues. */
-	if (vi->flags & VI_SYSCTL_CTX) {
-		sysctl_ctx_free(&vi->ctx);
-		vi->flags &= ~VI_SYSCTL_CTX;
 	}
 
 	t4_teardown_vi_queues(vi);
@@ -7041,7 +7053,7 @@ cxgbe_refresh_stats(struct vi_info *vi)
 	pi = vi->pi;
 	sc = vi->adapter;
 	tnl_cong_drops = 0;
-	t4_get_port_stats(sc, pi->tx_chan, &pi->stats);
+	t4_get_port_stats(sc, pi->port_id, &pi->stats);
 	chan_map = pi->rx_e_chan_map;
 	while (chan_map) {
 		i = ffs(chan_map) - 1;
@@ -7104,12 +7116,10 @@ static char *caps_decoder[] = {
 void
 t4_sysctls(struct adapter *sc)
 {
-	struct sysctl_ctx_list *ctx;
+	struct sysctl_ctx_list *ctx = &sc->ctx;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *children, *c0;
 	static char *doorbells = {"\20\1UDB\2WCWR\3UDBWC\4KDB"};
-
-	ctx = device_get_sysctl_ctx(sc->dev);
 
 	/*
 	 * dev.t4nex.X.
@@ -7621,11 +7631,9 @@ t4_sysctls(struct adapter *sc)
 void
 vi_sysctls(struct vi_info *vi)
 {
-	struct sysctl_ctx_list *ctx;
+	struct sysctl_ctx_list *ctx = &vi->ctx;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *children;
-
-	ctx = device_get_sysctl_ctx(vi->dev);
 
 	/*
 	 * dev.v?(cxgbe|cxl).X.
@@ -7726,15 +7734,13 @@ vi_sysctls(struct vi_info *vi)
 static void
 cxgbe_sysctls(struct port_info *pi)
 {
-	struct sysctl_ctx_list *ctx;
+	struct sysctl_ctx_list *ctx = &pi->ctx;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *children, *children2;
 	struct adapter *sc = pi->adapter;
 	int i;
 	char name[16];
 	static char *tc_flags = {"\20\1USER"};
-
-	ctx = device_get_sysctl_ctx(pi->dev);
 
 	/*
 	 * dev.cxgbe.X.
@@ -7758,9 +7764,12 @@ cxgbe_sysctls(struct port_info *pi)
 	    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE, pi, 0,
 	    sysctl_pause_settings, "A",
 	    "PAUSE settings (bit 0 = rx_pause, 1 = tx_pause, 2 = pause_autoneg)");
-	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "fec",
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "link_fec",
+	    CTLTYPE_STRING | CTLFLAG_MPSAFE, pi, 0, sysctl_link_fec, "A",
+	    "FEC in use on the link");
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "requested_fec",
 	    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE, pi, 0,
-	    sysctl_fec, "A",
+	    sysctl_requested_fec, "A",
 	    "FECs to use (bit 0 = RS, 1 = FC, 2 = none, 5 = auto, 6 = module)");
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "module_fec",
 	    CTLTYPE_STRING | CTLFLAG_MPSAFE, pi, 0, sysctl_module_fec, "A",
@@ -7769,7 +7778,12 @@ cxgbe_sysctls(struct port_info *pi)
 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, pi, 0,
 	    sysctl_autoneg, "I",
 	    "autonegotiation (-1 = not supported)");
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "force_fec",
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, pi, 0,
+	    sysctl_force_fec, "I", "when to use FORCE_FEC bit for link config");
 
+	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "rcaps", CTLFLAG_RD,
+	    &pi->link_cfg.requested_caps, 0, "L1 config requested by driver");
 	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "pcaps", CTLFLAG_RD,
 	    &pi->link_cfg.pcaps, 0, "port capabilities");
 	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "acaps", CTLFLAG_RD,
@@ -8278,7 +8292,33 @@ sysctl_pause_settings(SYSCTL_HANDLER_ARGS)
 }
 
 static int
-sysctl_fec(SYSCTL_HANDLER_ARGS)
+sysctl_link_fec(SYSCTL_HANDLER_ARGS)
+{
+	struct port_info *pi = arg1;
+	struct link_config *lc = &pi->link_cfg;
+	int rc;
+	struct sbuf *sb;
+	static char *bits = "\20\1RS-FEC\2FC-FEC\3NO-FEC\4RSVD1\5RSVD2";
+
+	rc = sysctl_wire_old_buffer(req, 0);
+	if (rc != 0)
+		return(rc);
+
+	sb = sbuf_new_for_sysctl(NULL, NULL, 128, req);
+	if (sb == NULL)
+		return (ENOMEM);
+	if (lc->link_ok)
+		sbuf_printf(sb, "%b", lc->fec, bits);
+	else
+		sbuf_printf(sb, "no link");
+	rc = sbuf_finish(sb);
+	sbuf_delete(sb);
+
+	return (rc);
+}
+
+static int
+sysctl_requested_fec(SYSCTL_HANDLER_ARGS)
 {
 	struct port_info *pi = arg1;
 	struct adapter *sc = pi->adapter;
@@ -8299,17 +8339,7 @@ sysctl_fec(SYSCTL_HANDLER_ARGS)
 		if (sb == NULL)
 			return (ENOMEM);
 
-		/*
-		 * Display the requested_fec when the link is down -- the actual
-		 * FEC makes sense only when the link is up.
-		 */
-		if (lc->link_ok) {
-			sbuf_printf(sb, "%b", (lc->fec & M_FW_PORT_CAP32_FEC) |
-			    (lc->requested_fec & (FEC_AUTO | FEC_MODULE)),
-			    bits);
-		} else {
-			sbuf_printf(sb, "%b", lc->requested_fec, bits);
-		}
+		sbuf_printf(sb, "%b", lc->requested_fec, bits);
 		rc = sbuf_finish(sb);
 		sbuf_delete(sb);
 	} else {
@@ -8331,7 +8361,7 @@ sysctl_fec(SYSCTL_HANDLER_ARGS)
 			return (EINVAL);/* some other bit is set too */
 
 		rc = begin_synchronized_op(sc, &pi->vi[0], SLEEP_OK | INTR_OK,
-		    "t4fec");
+		    "t4reqf");
 		if (rc)
 			return (rc);
 		PORT_LOCK(pi);
@@ -8464,6 +8494,39 @@ sysctl_autoneg(SYSCTL_HANDLER_ARGS)
 		set_current_media(pi);
 	}
 done:
+	PORT_UNLOCK(pi);
+	end_synchronized_op(sc, 0);
+	return (rc);
+}
+
+static int
+sysctl_force_fec(SYSCTL_HANDLER_ARGS)
+{
+	struct port_info *pi = arg1;
+	struct adapter *sc = pi->adapter;
+	struct link_config *lc = &pi->link_cfg;
+	int rc, val;
+
+	val = lc->force_fec;
+	MPASS(val >= -1 && val <= 1);
+	rc = sysctl_handle_int(oidp, &val, 0, req);
+	if (rc != 0 || req->newptr == NULL)
+		return (rc);
+	if (!(lc->pcaps & FW_PORT_CAP32_FORCE_FEC))
+		return (ENOTSUP);
+	if (val < -1 || val > 1)
+		return (EINVAL);
+
+	rc = begin_synchronized_op(sc, &pi->vi[0], SLEEP_OK | INTR_OK, "t4ff");
+	if (rc)
+		return (rc);
+	PORT_LOCK(pi);
+	lc->force_fec = val;
+	if (!hw_off_limits(sc)) {
+		fixup_link_config(pi);
+		if (pi->up_vis > 0)
+			rc = apply_link_config(pi);
+	}
 	PORT_UNLOCK(pi);
 	end_synchronized_op(sc, 0);
 	return (rc);
