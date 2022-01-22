@@ -81,6 +81,12 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpufunc.h>
 #include <machine/trap.h>
 
+#include "vdso_ia32_offsets.h"
+
+extern const char _binary_elf_vdso32_so_1_start[];
+extern const char _binary_elf_vdso32_so_1_end[];
+extern char _binary_elf_vdso32_so_1_size;
+
 #ifdef COMPAT_FREEBSD4
 static void freebsd4_ia32_sendsig(sig_t, ksiginfo_t *, sigset_t *);
 #endif
@@ -416,7 +422,9 @@ ia32_osendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_rsp = (uintptr_t)fp;
-	regs->tf_rip = p->p_sysent->sv_psstrings - sz_ia32_osigcode;
+	regs->tf_rip = p->p_sysent->sv_psstrings -
+	    (_binary_elf_vdso32_so_1_end - _binary_elf_vdso32_so_1_start) +
+	    VDSO_IA32_OSIGCODE_OFFSET;
 	regs->tf_rflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucode32sel;
 	regs->tf_ds = _udatasel;
@@ -527,8 +535,8 @@ freebsd4_ia32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_rsp = (uintptr_t)sfp;
-	regs->tf_rip = p->p_sysent->sv_sigcode_base + sz_ia32_sigcode -
-	    sz_freebsd4_ia32_sigcode;
+	regs->tf_rip = p->p_sysent->sv_sigcode_base +
+	    VDSO_FREEBSD4_IA32_SIGCODE_OFFSET - VDSO_IA32_SIGCODE_OFFSET;
 	regs->tf_rflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucode32sel;
 	regs->tf_ss = _udatasel;
@@ -742,15 +750,9 @@ ofreebsd32_sigreturn(struct thread *td, struct ofreebsd32_sigreturn_args *uap)
 #endif
 
 #ifdef COMPAT_FREEBSD4
-/*
- * MPSAFE
- */
 int
-freebsd4_freebsd32_sigreturn(td, uap)
-	struct thread *td;
-	struct freebsd4_freebsd32_sigreturn_args /* {
-		const struct freebsd4_freebsd32_ucontext *sigcntxp;
-	} */ *uap;
+freebsd4_freebsd32_sigreturn(struct thread *td,
+    struct freebsd4_freebsd32_sigreturn_args *uap)
 {
 	struct ia32_ucontext4 uc;
 	struct trapframe *regs;
@@ -816,15 +818,8 @@ freebsd4_freebsd32_sigreturn(td, uap)
 }
 #endif	/* COMPAT_FREEBSD4 */
 
-/*
- * MPSAFE
- */
 int
-freebsd32_sigreturn(td, uap)
-	struct thread *td;
-	struct freebsd32_sigreturn_args /* {
-		const struct freebsd32_ucontext *sigcntxp;
-	} */ *uap;
+freebsd32_sigreturn(struct thread *td, struct freebsd32_sigreturn_args *uap)
 {
 	struct ia32_ucontext uc;
 	struct trapframe *regs;

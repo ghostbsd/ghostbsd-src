@@ -2257,10 +2257,11 @@ again:
 			(void) nfsm_strtom(nd, dp->d_name, nlen);
 			if (nd->nd_flag & ND_NFSV3) {
 				NFSM_BUILD(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
-				*tl++ = 0;
-			} else
+				txdr_hyper(*cookiep, tl);
+			} else {
 				NFSM_BUILD(tl, u_int32_t *, NFSX_UNSIGNED);
-			*tl = txdr_unsigned(*cookiep);
+				*tl = txdr_unsigned(*cookiep);
+			}
 		}
 		cpos += dp->d_reclen;
 		dp = (struct dirent *)cpos;
@@ -2748,8 +2749,7 @@ again:
 				*tl = txdr_unsigned(dp->d_fileno);
 				dirlen += nfsm_strtom(nd, dp->d_name, nlen);
 				NFSM_BUILD(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
-				*tl++ = 0;
-				*tl = txdr_unsigned(*cookiep);
+				txdr_hyper(*cookiep, tl);
 				nfsrv_postopattr(nd, 0, nvap);
 				dirlen += nfsm_fhtom(nd,(u_int8_t *)&nfh,0,1);
 				dirlen += (5*NFSX_UNSIGNED+NFSX_V3POSTOPATTR);
@@ -2758,8 +2758,7 @@ again:
 			} else {
 				NFSM_BUILD(tl, u_int32_t *, 3 * NFSX_UNSIGNED);
 				*tl++ = newnfs_true;
-				*tl++ = 0;
-				*tl = txdr_unsigned(*cookiep);
+				txdr_hyper(*cookiep, tl);
 				dirlen += nfsm_strtom(nd, dp->d_name, nlen);
 				if (nvp != NULL) {
 					supports_nfsv4acls =
@@ -4056,10 +4055,15 @@ nfsvno_testexp(struct nfsrv_descript *nd, struct nfsexstuff *exp)
 	      (nd->nd_flag & ND_TLSCERTUSER) == 0))) {
 		if ((nd->nd_flag & ND_NFSV4) != 0)
 			return (NFSERR_WRONGSEC);
+#ifdef notnow
+		/* There is currently no auth_stat for this. */
 		else if ((nd->nd_flag & ND_TLS) == 0)
 			return (NFSERR_AUTHERR | AUTH_NEEDS_TLS);
 		else
 			return (NFSERR_AUTHERR | AUTH_NEEDS_TLS_MUTUAL_HOST);
+#endif
+		else
+			return (NFSERR_AUTHERR | AUTH_TOOWEAK);
 	}
 
 	/*
@@ -6418,7 +6422,7 @@ nfsvno_allocate(struct vnode *vp, off_t off, off_t len, struct ucred *cred,
 	 */
 	do {
 		olen = len;
-		error = VOP_ALLOCATE(vp, &off, &len);
+		error = VOP_ALLOCATE(vp, &off, &len, IO_SYNC, cred);
 		if (error == 0 && len > 0 && olen > len)
 			maybe_yield();
 	} while (error == 0 && len > 0 && olen > len);
@@ -6731,6 +6735,59 @@ nfsrv_checkwrongsec(struct nfsrv_descript *nd, int nextop, enum vtype vtyp)
 	if (nextop == NFSV4OP_OPEN && vtyp == VDIR)
 		return (false);
 	return (true);
+}
+
+/*
+ * Check DSs marked no space.
+ */
+void
+nfsrv_checknospc(void)
+{
+	struct statfs *tsf;
+	struct nfsdevice *ds;
+	struct vnode **dvpp, **tdvpp, *dvp;
+	char *devid, *tdevid;
+	int cnt, error = 0, i;
+
+	if (nfsrv_devidcnt <= 0)
+		return;
+	dvpp = mallocarray(nfsrv_devidcnt, sizeof(*dvpp), M_TEMP, M_WAITOK);
+	devid = malloc(nfsrv_devidcnt * NFSX_V4DEVICEID, M_TEMP, M_WAITOK);
+	tsf = malloc(sizeof(*tsf), M_TEMP, M_WAITOK);
+
+	/* Get an array of the dvps for the DSs. */
+	tdvpp = dvpp;
+	tdevid = devid;
+	i = 0;
+	NFSDDSLOCK();
+	/* First, search for matches for same file system. */
+	TAILQ_FOREACH(ds, &nfsrv_devidhead, nfsdev_list) {
+		if (ds->nfsdev_nmp != NULL && ds->nfsdev_nospc) {
+			if (++i > nfsrv_devidcnt)
+				break;
+			*tdvpp++ = ds->nfsdev_dvp;
+			NFSBCOPY(ds->nfsdev_deviceid, tdevid, NFSX_V4DEVICEID);
+			tdevid += NFSX_V4DEVICEID;
+		}
+	}
+	NFSDDSUNLOCK();
+
+	/* Do a VFS_STATFS() for each of the DSs and clear no space. */
+	cnt = i;
+	tdvpp = dvpp;
+	tdevid = devid;
+	for (i = 0; i < cnt && error == 0; i++) {
+		dvp = *tdvpp++;
+		error = VFS_STATFS(dvp->v_mount, tsf);
+		if (error == 0 && tsf->f_bavail > 0) {
+			NFSD_DEBUG(1, "nfsrv_checknospc: reset nospc\n");
+			nfsrv_marknospc(tdevid, false);
+		}
+		tdevid += NFSX_V4DEVICEID;
+	}
+	free(tsf, M_TEMP);
+	free(dvpp, M_TEMP);
+	free(devid, M_TEMP);
 }
 
 extern int (*nfsd_call_nfsd)(struct thread *, struct nfssvc_args *);

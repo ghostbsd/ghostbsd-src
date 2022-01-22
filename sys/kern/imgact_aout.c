@@ -107,6 +107,12 @@ struct sysentvec aout_sysvec = {
 
 #elif defined(__amd64__)
 
+#include "vdso_ia32_offsets.h"
+
+extern const char _binary_elf_vdso32_so_1_start[];
+extern const char _binary_elf_vdso32_so_1_end[];
+extern char _binary_elf_vdso32_so_1_size;
+
 #define	AOUT32_PS_STRINGS \
     (AOUT32_USRSTACK - sizeof(struct freebsd32_ps_strings))
 #define	AOUT32_MINUSER		FREEBSD32_MINUSER
@@ -114,14 +120,16 @@ struct sysentvec aout_sysvec = {
 extern const char *freebsd32_syscallnames[];
 extern u_long ia32_maxssiz;
 
+static int aout_szsigcode;
+
 struct sysentvec aout_sysvec = {
 	.sv_size	= FREEBSD32_SYS_MAXSYSCALL,
 	.sv_table	= freebsd32_sysent,
 	.sv_transtrap	= NULL,
 	.sv_fixup	= aout_fixup,
 	.sv_sendsig	= ia32_sendsig,
-	.sv_sigcode	= ia32_sigcode,
-	.sv_szsigcode	= &sz_ia32_sigcode,
+	.sv_sigcode	= _binary_elf_vdso32_so_1_start,
+	.sv_szsigcode	= &aout_szsigcode,
 	.sv_name	= "FreeBSD a.out",
 	.sv_coredump	= NULL,
 	.sv_imgact_try	= NULL,
@@ -142,8 +150,15 @@ struct sysentvec aout_sysvec = {
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 };
+
+static void
+aout_sysent(void *arg __unused)
+{
+	aout_szsigcode = (int)(uintptr_t)&_binary_elf_vdso32_so_1_size;
+}
+SYSINIT(aout_sysent, SI_SUB_EXEC, SI_ORDER_ANY, aout_sysent, NULL);
 #else
-#error "Port me"
+#error "Only ia32 arch is supported"
 #endif
 
 static int
@@ -159,7 +174,7 @@ aout_fixup(uintptr_t *stack_base, struct image_params *imgp)
 static int
 exec_aout_imgact(struct image_params *imgp)
 {
-	const struct exec *a_out = (const struct exec *) imgp->image_header;
+	const struct exec *a_out;
 	struct vmspace *vmspace;
 	vm_map_t map;
 	vm_object_t object;
@@ -168,6 +183,8 @@ exec_aout_imgact(struct image_params *imgp)
 	unsigned long file_offset;
 	unsigned long bss_size;
 	int error;
+
+	a_out = (const struct exec *)imgp->image_header;
 
 	/*
 	 * Linux and *BSD binaries look very much alike,
@@ -178,7 +195,7 @@ exec_aout_imgact(struct image_params *imgp)
 	if (((a_out->a_midmag >> 16) & 0xff) != 0x86 &&
 	    ((a_out->a_midmag >> 16) & 0xff) != 0 &&
 	    ((((int)ntohl(a_out->a_midmag)) >> 16) & 0xff) != 0x86)
-                return -1;
+                return (-1);
 
 	/*
 	 * Set file/virtual offset based on a.out variant.

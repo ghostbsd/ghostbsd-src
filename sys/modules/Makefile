@@ -194,6 +194,8 @@ SUBDIR=	\
 	${_itwd} \
 	${_iwi} \
 	${_iwifw} \
+	${_iwlwifi} \
+	${_iwlwififw} \
 	${_iwm} \
 	${_iwmfw} \
 	${_iwn} \
@@ -216,6 +218,7 @@ SUBDIR=	\
 	libmchain \
 	lindebugfs \
 	linuxkpi \
+	linuxkpi_wlan \
 	${_lio} \
 	lpt \
 	mac_biba \
@@ -227,6 +230,7 @@ SUBDIR=	\
 	mac_ntpd \
 	mac_partition \
 	mac_portacl \
+	mac_priority \
 	mac_seeotheruids \
 	mac_stub \
 	mac_test \
@@ -519,6 +523,10 @@ _ipoib=		ipoib
 _iser=		iser
 .endif
 _ipmi=		ipmi
+_iwlwifi=	iwlwifi
+.if ${MK_SOURCELESS_UCODE} != "no"
+_iwlwififw=	iwlwififw
+.endif
 _mlx4=		mlx4
 _mlx5=		mlx5
 .if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
@@ -627,7 +635,9 @@ _sdhci_fdt=	sdhci_fdt
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _agp=		agp
 _an=		an
+.if ${MACHINE_CPUARCH} == "i386" || !empty(COMPAT_FREEBSD32_ENABLED)
 _aout=		aout
+.endif
 _bios=		bios
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe

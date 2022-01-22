@@ -121,28 +121,31 @@ extern const volatile int lkpi_build_bug_on_zero;
 	}							\
 } while (0)
 
+extern int linuxkpi_warn_dump_stack;
 #define	WARN_ON(cond) ({					\
-      bool __ret = (cond);					\
-      if (__ret) {						\
+	bool __ret = (cond);					\
+	if (__ret) {						\
 		printf("WARNING %s failed at %s:%d\n",		\
 		    __stringify(cond), __FILE__, __LINE__);	\
-		linux_dump_stack();				\
-      }								\
-      unlikely(__ret);						\
+		if (linuxkpi_warn_dump_stack)				\
+			linux_dump_stack();				\
+	}								\
+	unlikely(__ret);						\
 })
 
 #define	WARN_ON_SMP(cond)	WARN_ON(cond)
 
 #define	WARN_ON_ONCE(cond) ({					\
-      static bool __warn_on_once;				\
-      bool __ret = (cond);					\
-      if (__ret && !__warn_on_once) {				\
+	static bool __warn_on_once;				\
+	bool __ret = (cond);					\
+	if (__ret && !__warn_on_once) {				\
 		__warn_on_once = 1;				\
 		printf("WARNING %s failed at %s:%d\n",		\
 		    __stringify(cond), __FILE__, __LINE__);	\
-		linux_dump_stack();				\
-      }								\
-      unlikely(__ret);						\
+		if (linuxkpi_warn_dump_stack)				\
+			linux_dump_stack();				\
+	}								\
+	unlikely(__ret);						\
 })
 
 #define	oops_in_progress	SCHEDULER_STOPPED()
@@ -394,6 +397,24 @@ kstrtouint(const char *cp, unsigned int base, unsigned int *res)
 }
 
 static inline int
+kstrtou8(const char *cp, unsigned int base, u8 *res)
+{
+	char *end;
+	unsigned long temp;
+
+	*res = temp = strtoul(cp, &end, base);
+
+	/* skip newline character, if any */
+	if (*end == '\n')
+		end++;
+	if (*cp == 0 || *end != 0)
+		return (-EINVAL);
+	if (temp != (u8)temp)
+		return (-ERANGE);
+	return (0);
+}
+
+static inline int
 kstrtou16(const char *cp, unsigned int base, u16 *res)
 {
 	char *end;
@@ -482,6 +503,21 @@ kstrtobool_from_user(const char __user *s, size_t count, bool *res)
 		return (-EFAULT);
 
 	return (kstrtobool(buf, res));
+}
+
+static inline int
+kstrtou8_from_user(const char __user *s, size_t count, unsigned int base,
+    u8 *p)
+{
+	char buf[8] = {};
+
+	if (count > (sizeof(buf) - 1))
+		count = (sizeof(buf) - 1);
+
+	if (copy_from_user(buf, s, count))
+		return (-EFAULT);
+
+	return (kstrtou8(buf, base, p));
 }
 
 #define min(x, y)	((x) < (y) ? (x) : (y))
@@ -612,6 +648,37 @@ linux_ratelimited(linux_ratelimit_t *rl)
 
 #define	TAINT_WARN	0
 #define	test_taint(x)	(0)
+
+static inline int
+_h2b(const char c)
+{
+
+	if (c >= '0' && c <= '9')
+		return (c - '0');
+	if (c >= 'a' && c <= 'f')
+		return (10 + c - 'a');
+	if (c >= 'A' && c <= 'F')
+		return (10 + c - 'A');
+	return (-EINVAL);
+}
+
+static inline int
+hex2bin(uint8_t *bindst, const char *hexsrc, size_t binlen)
+{
+	int hi4, lo4;
+
+	while (binlen > 0) {
+		hi4 = _h2b(*hexsrc++);
+		lo4 = _h2b(*hexsrc++);
+		if (hi4 < 0 || lo4 < 0)
+			return (-EINVAL);
+
+		*bindst++ = (hi4 << 4) | lo4;
+		binlen--;
+	}
+
+	return (0);
+}
 
 /*
  * Checking if an option is defined would be easy if we could do CPP inside CPP.

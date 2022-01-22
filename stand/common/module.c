@@ -381,14 +381,19 @@ command_pnpmatch(int argc, char *argv[])
 			return(CMD_OK);
 		}
 	}
-	argv += (optind - 1);
-	argc -= (optind - 1);
+	argv += optind;
+	argc -= optind;
 
-	module = mod_searchmodule_pnpinfo(argv[1], argv[2]);
+	if (argc != 2) {
+		command_errmsg = "Usage: pnpmatch <busname> compat=<compatdata>";
+		return (CMD_CRIT);
+	}
+
+	module = mod_searchmodule_pnpinfo(argv[0], argv[1]);
 	if (module)
 		printf("Matched module: %s\n", module);
-	else if(argv[1])
-		printf("No module matches %s\n", argv[1]);
+	else
+		printf("No module matches %s on bus %s\n", argv[1], argv[0]);
 
 	return (CMD_OK);
 }
@@ -419,13 +424,15 @@ command_pnpload(int argc, char *argv[])
 			return(CMD_OK);
 		}
 	}
-	argv += (optind - 1);
-	argc -= (optind - 1);
+	argv += optind;
+	argc -= optind;
 
-	if (argc != 2)
+	if (argc != 2) {
+		command_errmsg = "Usage: pnpload <busname> compat=<compatdata>";
 		return (CMD_ERROR);
+	}
 
-	module = mod_searchmodule_pnpinfo(argv[1], argv[2]);
+	module = mod_searchmodule_pnpinfo(argv[0], argv[1]);
 
 	error = mod_load(module, NULL, 0, NULL);
 	if (error == EEXIST) {
@@ -439,7 +446,7 @@ command_pnpload(int argc, char *argv[])
 
 #if defined(LOADER_FDT_SUPPORT)
 static void
-pnpautoload_simplebus(void) {
+pnpautoload_fdt_bus(const char *busname) {
 	const char *pnpstring;
 	const char *compatstr;
 	char *pnpinfo = NULL;
@@ -457,7 +464,7 @@ pnpautoload_simplebus(void) {
 			pnplen += strlen(compatstr) + 1;
 			asprintf(&pnpinfo, "compat=%s", compatstr);
 
-			module = mod_searchmodule_pnpinfo("simplebus", pnpinfo);
+			module = mod_searchmodule_pnpinfo(busname, pnpinfo);
 			if (module) {
 				error = mod_loadkld(module, 0, NULL);
 				if (error)
@@ -473,12 +480,15 @@ pnpautoload_simplebus(void) {
 
 struct pnp_bus {
 	const char *name;
-	void (*load)(void);
+	void (*load)(const char *busname);
 };
 
 struct pnp_bus pnp_buses[] = {
 #if defined(LOADER_FDT_SUPPORT)
-	{"simplebus", pnpautoload_simplebus},
+	{"simplebus", pnpautoload_fdt_bus},
+	{"ofwbus", pnpautoload_fdt_bus},
+	{"iicbus", pnpautoload_fdt_bus},
+	{"spibus", pnpautoload_fdt_bus},
 #endif
 };
 
@@ -521,8 +531,8 @@ command_pnpautoload(int argc, char *argv[])
 			continue;
 		}
 		if (verbose)
-			printf("Autoloading modules for simplebus\n");
-		pnp_buses[i].load();
+			printf("Autoloading modules for %s\n", pnp_buses[i].name);
+		pnp_buses[i].load(pnp_buses[i].name);
 		match = 1;
 	}
 	if (match == 0)
@@ -1040,6 +1050,57 @@ file_removemetadata(struct preloaded_file *fp)
 		free(md);
 	}
 	fp->f_metadata = NULL;
+}
+
+/*
+ * Add a buffer to the list of preloaded "files".
+ */
+int
+file_addbuf(const char *name, const char *type, size_t len, void *buf)
+{
+	struct preloaded_file	*fp;
+	vm_offset_t dest;
+
+	/* We can't load first */
+	if ((file_findfile(NULL, NULL)) == NULL) {
+		command_errmsg = "can't load file before kernel";
+		return (-1);
+	}
+
+	/* Figure out where to load the data. */
+	dest = loadaddr;
+	if (archsw.arch_loadaddr != NULL)
+		dest = archsw.arch_loadaddr(LOAD_RAW, (void *)name, dest);
+
+	/* Create & populate control structure */
+	fp = file_alloc();
+	if (fp == NULL) {
+		snprintf(command_errbuf, sizeof (command_errbuf),
+		    "no memory to load %s", name);
+		return (-1);
+	}
+	fp->f_name = strdup(name);
+	fp->f_type = strdup(type);
+	fp->f_args = NULL;
+	fp->f_metadata = NULL;
+	fp->f_loader = -1;
+	fp->f_addr = dest;
+	fp->f_size = len;
+	if ((fp->f_name == NULL) || (fp->f_type == NULL)) {
+		snprintf(command_errbuf, sizeof (command_errbuf),
+		    "no memory to load %s", name);
+		free(fp->f_name);
+		free(fp->f_type);
+		return (-1);
+	}
+
+	/* Copy the data in. */
+	archsw.arch_copyin(buf, fp->f_addr, len);
+	loadaddr = fp->f_addr + len;
+
+	/* Add to the list of loaded files */
+	file_insert_tail(fp);
+	return(0);
 }
 
 struct file_metadata *

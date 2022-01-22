@@ -14,6 +14,7 @@ SRCS=	linux_compat.c \
 	linux_kmod.c \
 	linux_kthread.c \
 	linux_lock.c \
+	linux_netdev.c \
 	linux_page.c \
 	linux_pci.c \
 	linux_radix.c \
@@ -22,6 +23,7 @@ SRCS=	linux_compat.c \
 	linux_schedule.c \
 	linux_shmemfs.c \
 	linux_shrinker.c \
+	linux_skbuff.c \
 	linux_slab.c \
 	linux_tasklet.c \
 	linux_usb.c \
@@ -37,5 +39,7 @@ SRCS+=	${LINUXKPI_GENSRCS}
 
 CFLAGS+= -I${SRCTOP}/sys/compat/linuxkpi/common/include
 CFLAGS+= -I${SRCTOP}/sys/contrib/ck/include
+
+EXPORT_SYMS=	YES
 
 .include <bsd.kmod.mk>

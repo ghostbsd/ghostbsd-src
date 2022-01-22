@@ -56,7 +56,6 @@ arm64/arm64/gic_v3.c				standard
 arm64/arm64/gic_v3_acpi.c			optional acpi
 arm64/arm64/gic_v3_fdt.c			optional fdt
 arm64/arm64/identcpu.c				standard
-arm64/arm64/in_cksum.c				optional inet | inet6
 arm64/arm64/locore.S				standard no-obj
 arm64/arm64/machdep.c				standard
 arm64/arm64/machdep_boot.c			standard
@@ -69,6 +68,7 @@ arm64/arm64/nexus.c				standard
 arm64/arm64/ofw_machdep.c			optional fdt
 arm64/arm64/pmap.c				standard
 arm64/arm64/ptrace_machdep.c			standard
+arm64/arm64/sigtramp.S				standard
 arm64/arm64/stack_machdep.c			optional ddb | stack
 arm64/arm64/support.S				standard
 arm64/arm64/swtch.S				standard
@@ -127,6 +127,10 @@ ghashv8-armx.o					optional armv8crypto	\
 
 crypto/des/des_enc.c				optional netsmb
 crypto/openssl/ossl_aarch64.c			optional ossl
+crypto/openssl/aarch64/chacha-armv8.S		optional ossl		\
+	compile-with	"${CC} -c ${CFLAGS:N-mgeneral-regs-only} ${WERROR} ${PROF} ${.IMPSRC}"
+crypto/openssl/aarch64/poly1305-armv8.S		optional ossl		\
+	compile-with	"${CC} -c ${CFLAGS:N-mgeneral-regs-only} ${WERROR} ${PROF} ${.IMPSRC}"
 crypto/openssl/aarch64/sha1-armv8.S		optional ossl		\
 	compile-with	"${CC} -c ${CFLAGS:N-mgeneral-regs-only} ${WERROR} ${PROF} ${.IMPSRC}"
 crypto/openssl/aarch64/sha256-armv8.S		optional ossl		\

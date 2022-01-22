@@ -33,6 +33,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/types.h>
+#include <sys/param.h>
 #include <sys/module.h>
 
 #include <linux/list.h>
@@ -50,6 +51,7 @@
 #define MODULE_LICENSE(name)
 #define	MODULE_INFO(tag, info)
 #define	MODULE_FIRMWARE(firmware)
+#define	MODULE_SUPPORTED_DEVICE(name)
 
 #define	THIS_MODULE	((struct module *)0)
 

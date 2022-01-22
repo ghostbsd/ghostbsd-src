@@ -82,7 +82,6 @@ struct pfctl {
 	int loadopt;
 	int asd;			/* anchor stack depth */
 	int bn;				/* brace number */
-	int brace;
 	int tdirty;			/* kernel dirty */
 #define PFCTL_ANCHOR_STACK_DEPTH 64
 	struct pfctl_anchor *astack[PFCTL_ANCHOR_STACK_DEPTH];
@@ -185,7 +184,7 @@ struct node_queue_opt {
 };
 
 #define QPRI_BITSET_SIZE	256
-BITSET_DEFINE(qpri_bitset, QPRI_BITSET_SIZE);
+__BITSET_DEFINE(qpri_bitset, QPRI_BITSET_SIZE);
 LIST_HEAD(gen_sc, segment);
 
 struct pfctl_altq {
