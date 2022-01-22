@@ -1025,9 +1025,7 @@ static void
 gicv3_its_pre_ithread(device_t dev, struct intr_irqsrc *isrc)
 {
 	struct gicv3_its_irqsrc *girq;
-	struct gicv3_its_softc *sc;
 
-	sc = device_get_softc(dev);
 	girq = (struct gicv3_its_irqsrc *)isrc;
 	gic_icc_write(EOIR1, girq->gi_lpi + GIC_FIRST_LPI);
 }
@@ -1042,9 +1040,7 @@ static void
 gicv3_its_post_filter(device_t dev, struct intr_irqsrc *isrc)
 {
 	struct gicv3_its_irqsrc *girq;
-	struct gicv3_its_softc *sc;
 
-	sc = device_get_softc(dev);
 	girq = (struct gicv3_its_irqsrc *)isrc;
 	gic_icc_write(EOIR1, girq->gi_lpi + GIC_FIRST_LPI);
 }
@@ -1124,7 +1120,8 @@ its_get_devid(device_t pci_dev)
 	uintptr_t id;
 
 	if (pci_get_id(pci_dev, PCI_ID_MSI, &id) != 0)
-		panic("its_get_devid: Unable to get the MSI DeviceID");
+		panic("%s: %s: Unable to get the MSI DeviceID", __func__,
+		    device_get_nameunit(pci_dev));
 
 	return (id);
 }
@@ -1959,11 +1956,19 @@ gicv3_its_fdt_attach(device_t dev)
 	/* Register this device as a interrupt controller */
 	xref = OF_xref_from_node(ofw_bus_get_node(dev));
 	sc->sc_pic = intr_pic_register(dev, xref);
-	intr_pic_add_handler(device_get_parent(dev), sc->sc_pic,
+	err = intr_pic_add_handler(device_get_parent(dev), sc->sc_pic,
 	    gicv3_its_intr, sc, sc->sc_irq_base, sc->sc_irq_length);
+	if (err != 0) {
+		device_printf(dev, "Failed to add PIC handler: %d\n", err);
+		return (err);
+	}
 
 	/* Register this device to handle MSI interrupts */
-	intr_msi_register(dev, xref);
+	err = intr_msi_register(dev, xref);
+	if (err != 0) {
+		device_printf(dev, "Failed to register for MSIs: %d\n", err);
+		return (err);
+	}
 
 	return (0);
 }
@@ -2020,11 +2025,19 @@ gicv3_its_acpi_attach(device_t dev)
 
 	di = device_get_ivars(dev);
 	sc->sc_pic = intr_pic_register(dev, di->msi_xref);
-	intr_pic_add_handler(device_get_parent(dev), sc->sc_pic,
+	err = intr_pic_add_handler(device_get_parent(dev), sc->sc_pic,
 	    gicv3_its_intr, sc, sc->sc_irq_base, sc->sc_irq_length);
+	if (err != 0) {
+		device_printf(dev, "Failed to add PIC handler: %d\n", err);
+		return (err);
+	}
 
 	/* Register this device to handle MSI interrupts */
-	intr_msi_register(dev, di->msi_xref);
+	err = intr_msi_register(dev, di->msi_xref);
+	if (err != 0) {
+		device_printf(dev, "Failed to register for MSIs: %d\n", err);
+		return (err);
+	}
 
 	return (0);
 }

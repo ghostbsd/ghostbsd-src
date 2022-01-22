@@ -641,7 +641,7 @@ int
 umtxq_requeue(struct umtx_key *key, int n_wake, struct umtx_key *key2,
     int n_requeue)
 {
-	struct umtxq_queue *uh, *uh2;
+	struct umtxq_queue *uh;
 	struct umtx_q *uq, *uq_temp;
 	int ret;
 
@@ -649,7 +649,6 @@ umtxq_requeue(struct umtx_key *key, int n_wake, struct umtx_key *key2,
 	UMTXQ_LOCKED_ASSERT(umtxq_getchain(key));
 	UMTXQ_LOCKED_ASSERT(umtxq_getchain(key2));
 	uh = umtxq_queue_lookup(key, UMTX_SHARED_QUEUE);
-	uh2 = umtxq_queue_lookup(key2, UMTX_SHARED_QUEUE);
 	if (uh == NULL)
 		return (0);
 	TAILQ_FOREACH_SAFE(uq, &uh->head, uq_link, uq_temp) {
@@ -4857,15 +4856,15 @@ sys__umtx_op(struct thread *td, struct _umtx_op_args *uap)
 #ifdef COMPAT_FREEBSD32
 #ifdef COMPAT_FREEBSD10
 int
-freebsd10_freebsd32_umtx_lock(struct thread *td,
-    struct freebsd10_freebsd32_umtx_lock_args *uap)
+freebsd10_freebsd32__umtx_lock(struct thread *td,
+    struct freebsd10_freebsd32__umtx_lock_args *uap)
 {
 	return (do_lock_umtx32(td, (uint32_t *)uap->umtx, td->td_tid, NULL));
 }
 
 int
-freebsd10_freebsd32_umtx_unlock(struct thread *td,
-    struct freebsd10_freebsd32_umtx_unlock_args *uap)
+freebsd10_freebsd32__umtx_unlock(struct thread *td,
+    struct freebsd10_freebsd32__umtx_unlock_args *uap)
 {
 	return (do_unlock_umtx32(td, (uint32_t *)uap->umtx, td->td_tid));
 }
@@ -4875,7 +4874,7 @@ int
 freebsd32__umtx_op(struct thread *td, struct freebsd32__umtx_op_args *uap)
 {
 
-	return (kern__umtx_op(td, uap->obj, uap->op, uap->val, uap->uaddr,
+	return (kern__umtx_op(td, uap->obj, uap->op, uap->val, uap->uaddr1,
 	    uap->uaddr2, &umtx_native_ops32));
 }
 #endif /* COMPAT_FREEBSD32 */

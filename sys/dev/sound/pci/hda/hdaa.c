@@ -6463,8 +6463,13 @@ hdaa_sysctl_reconfig(SYSCTL_HANDLER_ARGS)
 	HDA_BOOTHVERBOSE(
 		device_printf(dev, "Reconfiguration...\n");
 	);
-	if ((error = device_delete_children(dev)) != 0)
+
+	bus_topo_lock();
+
+	if ((error = device_delete_children(dev)) != 0) {
+		bus_topo_unlock();
 		return (error);
+	}
 	hdaa_lock(devinfo);
 	hdaa_unconfigure(dev);
 	hdaa_configure(dev);
@@ -6473,6 +6478,9 @@ hdaa_sysctl_reconfig(SYSCTL_HANDLER_ARGS)
 	HDA_BOOTHVERBOSE(
 		device_printf(dev, "Reconfiguration done\n");
 	);
+
+	bus_topo_unlock();
+
 	return (0);
 }
 
@@ -6669,7 +6677,7 @@ hdaa_attach(device_t dev)
 	    devinfo, 0, hdaa_sysctl_gpo_config, "A", "GPO configuration");
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
-	    "reconfig", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+	    "reconfig", CTLTYPE_INT | CTLFLAG_RW,
 	    dev, 0, hdaa_sysctl_reconfig, "I", "Reprocess configuration");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,

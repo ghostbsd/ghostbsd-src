@@ -20,7 +20,8 @@ INCS=	a.out.h ar.h assert.h bitstring.h complex.h cpio.h _ctype.h ctype.h \
 	netdb.h nl_types.h nlist.h nss.h nsswitch.h paths.h \
 	printf.h proc_service.h pthread.h \
 	pthread_np.h pwd.h ranlib.h readpassphrase.h regex.h \
-	res_update.h resolv.h runetype.h search.h semaphore.h setjmp.h \
+	res_update.h resolv.h runetype.h sched.h \
+	search.h semaphore.h setjmp.h \
 	signal.h spawn.h stab.h stdalign.h stdbool.h stddef.h \
 	stdnoreturn.h stdio.h stdlib.h string.h stringlist.h \
 	strings.h sysexits.h tar.h termios.h tgmath.h \
@@ -33,7 +34,7 @@ INCS+=	vis.h
 
 MHDRS=	float.h floatingpoint.h stdarg.h
 
-PHDRS=	sched.h _semaphore.h
+PHDRS=	_semaphore.h
 
 LHDRS=	aio.h errno.h fcntl.h linker_set.h poll.h stdatomic.h stdint.h \
 	syslog.h ucontext.h
@@ -176,7 +177,7 @@ PCIDIR=		${INCLUDEDIR}/dev/pci
 VERIEXEC=	veriexec_ioctl.h
 VERIEXECDIR=	${INCLUDEDIR}/dev/veriexec
 
-.PATH: ${SRCTOP}/sys/contrib/ipfilter/netinet
+.PATH: ${SRCTOP}/sys/netpfil/ipfilter/netinet
 IPFILTER=	ip_auth.h \
 		ip_compat.h \
 		ip_dstlist.h \
@@ -407,7 +408,7 @@ symlinks: .PHONY .META
 .endfor
 .if ${MK_IPFILTER} != "no"
 	cd ${SRCTOP}; ${INSTALL_SYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} \
-	    $$(printf '../../../%s ' sys/contrib/ipfilter/netinet/*.h) \
+	    $$(printf '../../../%s ' sys/netpfil/ipfilter/netinet/*.h) \
 	    ${SDESTDIR}${INCLUDEDIR}/netinet;
 .endif
 .if ${MK_PF} != "no"

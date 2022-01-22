@@ -239,11 +239,11 @@ sysctl_somaxconn(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 SYSCTL_PROC(_kern_ipc, OID_AUTO, soacceptqueue,
-    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, 0, sizeof(int),
+    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE, 0, sizeof(int),
     sysctl_somaxconn, "I",
     "Maximum listen socket pending connection accept queue size");
 SYSCTL_PROC(_kern_ipc, KIPC_SOMAXCONN, somaxconn,
-    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_SKIP | CTLFLAG_NEEDGIANT, 0,
+    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_SKIP | CTLFLAG_MPSAFE, 0,
     sizeof(int), sysctl_somaxconn, "I",
     "Maximum listen socket pending connection accept queue size (compat)");
 
@@ -364,7 +364,7 @@ sysctl_maxsockets(SYSCTL_HANDLER_ARGS)
 
 	newmaxsockets = maxsockets;
 	error = sysctl_handle_int(oidp, &newmaxsockets, 0, req);
-	if (error == 0 && req->newptr) {
+	if (error == 0 && req->newptr && newmaxsockets != maxsockets) {
 		if (newmaxsockets > maxsockets &&
 		    newmaxsockets <= maxfiles) {
 			maxsockets = newmaxsockets;
@@ -375,7 +375,7 @@ sysctl_maxsockets(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 SYSCTL_PROC(_kern_ipc, OID_AUTO, maxsockets,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, &maxsockets, 0,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, &maxsockets, 0,
     sysctl_maxsockets, "IU",
     "Maximum number of sockets available");
 
@@ -785,7 +785,7 @@ sonewconn(struct socket *head, int connstatus)
 			sp->so_qstate = SQ_NONE;
 			sp->so_listen = NULL;
 			SOCK_UNLOCK(sp);
-			sorele(head);	/* does SOLISTEN_UNLOCK, head stays */
+			sorele_locked(head);	/* does SOLISTEN_UNLOCK, head stays */
 			soabort(sp);
 			SOLISTEN_LOCK(head);
 		}
@@ -1090,7 +1090,7 @@ solisten_dequeue(struct socket *head, struct socket **ret, int flags)
 	else
 		so->so_state |= (flags & SOCK_NONBLOCK) ? SS_NBIO : 0;
 	SOCK_UNLOCK(so);
-	sorele(head);
+	sorele_locked(head);
 
 	*ret = so;
 	return (0);
@@ -1170,7 +1170,7 @@ sofree(struct socket *so)
 			KASSERT(so->so_listen == NULL,
 			    ("%s: so %p not on (in)comp with so_listen",
 			    __func__, so));
-		sorele(sol);
+		sorele_locked(sol);
 		KASSERT(refcount_load(&so->so_count) == 1,
 		    ("%s: so %p count %u", __func__, so, so->so_count));
 		so->so_count = 0;
@@ -1211,6 +1211,20 @@ sofree(struct socket *so)
 	knlist_destroy(&so->so_rdsel.si_note);
 	knlist_destroy(&so->so_wrsel.si_note);
 	sodealloc(so);
+}
+
+/*
+ * Release a reference on a socket while holding the socket lock.
+ * Unlocks the socket lock before returning.
+ */
+void
+sorele_locked(struct socket *so)
+{
+	SOCK_LOCK_ASSERT(so);
+	if (refcount_release(&so->so_count))
+		sofree(so);
+	else
+		SOCK_UNLOCK(so);
 }
 
 /*
@@ -1282,7 +1296,7 @@ drop:
 	}
 	KASSERT((so->so_state & SS_NOFDREF) == 0, ("soclose: NOFDREF"));
 	so->so_state |= SS_NOFDREF;
-	sorele(so);
+	sorele_locked(so);
 	if (listening) {
 		struct socket *sp, *tsp;
 
@@ -2158,7 +2172,6 @@ dontblock:
 			else
 				m_freem(cm);
 			if (controlp != NULL) {
-				orig_resid = 0;
 				while (*controlp != NULL)
 					controlp = &(*controlp)->m_next;
 			}
@@ -4060,7 +4073,7 @@ soisconnected(struct socket *so)
 				 * The socket is about to soabort().
 				 */
 				SOCK_UNLOCK(so);
-				sorele(head);
+				sorele_locked(head);
 				return;
 			}
 			last = refcount_release(&head->so_count);

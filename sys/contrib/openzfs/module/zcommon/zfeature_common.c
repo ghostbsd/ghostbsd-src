@@ -225,14 +225,11 @@ zfs_mod_supported_feature(const char *name)
 	 *
 	 * The equivalent _can_ be done on FreeBSD by way of the sysctl
 	 * tree, but this has not been done yet.  Therefore, we return
-	 * that all features except edonr are supported.
+	 * that all features are supported.
 	 */
-#if defined(__FreeBSD__)
-	if (strcmp(name, "org.illumos:edonr") == 0)
-		return (B_FALSE);
-	else
-		return (B_TRUE);
-#elif defined(_KERNEL) || defined(LIB_ZPOOL_BUILD)
+
+#if defined(_KERNEL) || defined(LIB_ZPOOL_BUILD) || defined(__FreeBSD__)
+	(void) name;
 	return (B_TRUE);
 #else
 	return (zfs_mod_supported(ZFS_SYSFS_POOL_FEATURES, name));

@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/imgact.h>
 #include <sys/ktr.h>
 #include <sys/proc.h>
+#include <sys/ptrace.h>
 #include <sys/reg.h>
 #include <sys/sdt.h>
 
@@ -49,6 +50,8 @@ __FBSDID("$FreeBSD$");
 #include <compat/linux/linux_misc.h>
 #include <compat/linux/linux_mmap.h>
 #include <compat/linux/linux_util.h>
+
+#define	LINUX_ARCH_AARCH64		0xc00000b7
 
 /* DTrace init */
 LIN_SDT_PROVIDER_DECLARE(LINUX_DTRACE);
@@ -71,7 +74,7 @@ linux_execve(struct thread *td, struct linux_execve_args *uap)
 		error = exec_copyin_args(&eargs, uap->path, UIO_USERSPACE,
 		    uap->argp, uap->envp);
 	} else {
-		LCONVPATHEXIST(td, uap->path, &path);
+		LCONVPATHEXIST(uap->path, &path);
 		error = exec_copyin_args(&eargs, path, UIO_SYSSPACE,
 		    uap->argp, uap->envp);
 		LFREEPATH(path);
@@ -133,7 +136,7 @@ linux_set_cloned_tls(struct thread *td, void *desc)
 }
 
 void
-bsd_to_linux_regset(struct reg *b_reg, struct linux_pt_regset *l_regset)
+bsd_to_linux_regset(const struct reg *b_reg, struct linux_pt_regset *l_regset)
 {
 
 	KASSERT(sizeof(l_regset->x) == sizeof(b_reg->x) + sizeof(l_ulong),
@@ -145,3 +148,35 @@ bsd_to_linux_regset(struct reg *b_reg, struct linux_pt_regset *l_regset)
 	l_regset->pc = b_reg->elr;
 	l_regset->cpsr = b_reg->spsr;
 }
+
+void
+linux_to_bsd_regset(struct reg *b_reg, const struct linux_pt_regset *l_regset)
+{
+
+	KASSERT(sizeof(l_regset->x) == sizeof(b_reg->x) + sizeof(l_ulong),
+	    ("%s: size mismatch\n", __func__));
+
+	memcpy(b_reg->x, l_regset->x, sizeof(b_reg->x));
+	b_reg->sp = l_regset->sp;
+	b_reg->elr = l_regset->pc;
+	b_reg->spsr = l_regset->cpsr;
+}
+
+void
+linux_ptrace_get_syscall_info_machdep(const struct reg *reg,
+    struct syscall_info *si)
+{
+
+	si->arch = LINUX_ARCH_AARCH64;
+	si->instruction_pointer = reg->lr;
+	si->stack_pointer = reg->sp;
+}
+
+int
+linux_ptrace_getregs_machdep(struct thread *td __unused, pid_t pid __unused,
+    struct linux_pt_regset *l_regset __unused)
+{
+
+	return (0);
+}
+

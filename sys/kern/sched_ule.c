@@ -1744,6 +1744,26 @@ schedinit(void)
 }
 
 /*
+ * schedinit_ap() is needed prior to calling sched_throw(NULL) to ensure that
+ * the pcpu requirements are met for any calls in the period between curthread
+ * initialization and sched_throw().  One can safely add threads to the queue
+ * before sched_throw(), for instance, as long as the thread lock is setup
+ * correctly.
+ *
+ * TDQ_SELF() relies on the below sched pcpu setting; it may be used only
+ * after schedinit_ap().
+ */
+void
+schedinit_ap(void)
+{
+
+#ifdef SMP
+	PCPU_SET(sched, DPCPU_PTR(tdq));
+#endif
+	PCPU_GET(idlethread)->td_lock = TDQ_LOCKPTR(TDQ_SELF());
+}
+
+/*
  * This is only somewhat accurate since given many processes of the same
  * priority they will switch when their slices run out, which will be
  * at most sched_slice stathz ticks.
@@ -2020,7 +2040,7 @@ tdq_trysteal(struct tdq *tdq)
 		/*
 		 * The data returned by sched_highest() is stale and
 		 * the chosen CPU no longer has an eligible thread.
-		 * At this point unconditonally exit the loop to bound
+		 * At this point unconditionally exit the loop to bound
 		 * the time spent in the critcal section.
 		 */
 		if (steal->tdq_load < steal_thresh ||
@@ -2965,7 +2985,52 @@ sched_idletd(void *dummy)
 }
 
 /*
- * A CPU is entering for the first time or a thread is exiting.
+ * sched_throw_grab() chooses a thread from the queue to switch to
+ * next.  It returns with the tdq lock dropped in a spinlock section to
+ * keep interrupts disabled until the CPU is running in a proper threaded
+ * context.
+ */
+static struct thread *
+sched_throw_grab(struct tdq *tdq)
+{
+	struct thread *newtd;
+
+	newtd = choosethread();
+	spinlock_enter();
+	TDQ_UNLOCK(tdq);
+	KASSERT(curthread->td_md.md_spinlock_count == 1,
+	    ("invalid count %d", curthread->td_md.md_spinlock_count));
+	return (newtd);
+}
+
+/*
+ * A CPU is entering for the first time.
+ */
+void
+sched_ap_entry(void)
+{
+	struct thread *newtd;
+	struct tdq *tdq;
+
+	tdq = TDQ_SELF();
+
+	/* This should have been setup in schedinit_ap(). */
+	THREAD_LOCKPTR_ASSERT(curthread, TDQ_LOCKPTR(tdq));
+
+	TDQ_LOCK(tdq);
+	/* Correct spinlock nesting. */
+	spinlock_exit();
+	PCPU_SET(switchtime, cpu_ticks());
+	PCPU_SET(switchticks, ticks);
+
+	newtd = sched_throw_grab(tdq);
+
+	/* doesn't return */
+	cpu_throw(NULL, newtd);
+}
+
+/*
+ * A thread is exiting.
  */
 void
 sched_throw(struct thread *td)
@@ -2973,36 +3038,21 @@ sched_throw(struct thread *td)
 	struct thread *newtd;
 	struct tdq *tdq;
 
-	if (__predict_false(td == NULL)) {
-#ifdef SMP
-		PCPU_SET(sched, DPCPU_PTR(tdq));
-#endif
-		/* Correct spinlock nesting and acquire the correct lock. */
-		tdq = TDQ_SELF();
-		TDQ_LOCK(tdq);
-		spinlock_exit();
-		PCPU_SET(switchtime, cpu_ticks());
-		PCPU_SET(switchticks, ticks);
-		PCPU_GET(idlethread)->td_lock = TDQ_LOCKPTR(tdq);
-	} else {
-		tdq = TDQ_SELF();
-		THREAD_LOCK_ASSERT(td, MA_OWNED);
-		THREAD_LOCKPTR_ASSERT(td, TDQ_LOCKPTR(tdq));
-		tdq_load_rem(tdq, td);
-		td->td_lastcpu = td->td_oncpu;
-		td->td_oncpu = NOCPU;
-		thread_lock_block(td);
-	}
-	newtd = choosethread();
-	spinlock_enter();
-	TDQ_UNLOCK(tdq);
-	KASSERT(curthread->td_md.md_spinlock_count == 1,
-	    ("invalid count %d", curthread->td_md.md_spinlock_count));
+	tdq = TDQ_SELF();
+
+	MPASS(td != NULL);
+	THREAD_LOCK_ASSERT(td, MA_OWNED);
+	THREAD_LOCKPTR_ASSERT(td, TDQ_LOCKPTR(tdq));
+
+	tdq_load_rem(tdq, td);
+	td->td_lastcpu = td->td_oncpu;
+	td->td_oncpu = NOCPU;
+	thread_lock_block(td);
+
+	newtd = sched_throw_grab(tdq);
+
 	/* doesn't return */
-	if (__predict_false(td == NULL))
-		cpu_throw(td, newtd);		/* doesn't return */
-	else
-		cpu_switch(td, newtd, TDQ_LOCKPTR(tdq));
+	cpu_switch(td, newtd, TDQ_LOCKPTR(tdq));
 }
 
 /*
@@ -3033,7 +3083,7 @@ sched_fork_exit(struct thread *td)
 }
 
 /*
- * Create on first use to catch odd startup conditons.
+ * Create on first use to catch odd startup conditions.
  */
 char *
 sched_tdname(struct thread *td)

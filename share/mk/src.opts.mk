@@ -1,6 +1,8 @@
 # $FreeBSD$
 #
-# Option file for FreeBSD /usr/src builds.
+# Option file for FreeBSD /usr/src builds, at least the userland and boot loader
+# portions of the tree. These options generally chose what parts of the tree to
+# include or omit and are FreeBSD source tree specific.
 #
 # Users define WITH_FOO and WITHOUT_FOO on the command line or in /etc/src.conf
 # and /etc/make.conf files. These translate in the build system to MK_FOO={yes,no}
@@ -131,6 +133,7 @@ __DEFAULT_YES_OPTIONS = \
     LLVM_COV \
     LLVM_CXXFILT \
     LOADER_GELI \
+    LOADER_KBOOT \
     LOADER_LUA \
     LOADER_OFW \
     LOADER_UBOOT \
@@ -200,7 +203,6 @@ __DEFAULT_NO_OPTIONS = \
     DTRACE_TESTS \
     EXPERIMENTAL \
     HESIOD \
-    LIBSOFT \
     LOADER_FIREWIRE \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
@@ -259,7 +261,6 @@ __T=${MACHINE_ARCH}
 __LLVM_TARGETS= \
 		aarch64 \
 		arm \
-		mips \
 		powerpc \
 		riscv \
 		x86
@@ -277,46 +278,35 @@ __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_${__llt:${__LLVM_TARGET_FILT}:tu}/LLVM
 .endif
 .endfor
 
-__DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF
+__DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF LLVM_TARGET_MIPS
 
 .include <bsd.compiler.mk>
 
-.if ${__T:Mriscv*} != ""
-BROKEN_OPTIONS+=OFED
-.endif
 .if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "i386"
 __DEFAULT_YES_OPTIONS+=LLDB
 .else
 __DEFAULT_NO_OPTIONS+=LLDB
 .endif
-# LIB32 is supported on amd64, mips64, and powerpc64
-.if (${__T} == "amd64" || ${__T:Mmips64*} || ${__T} == "powerpc64")
+# LIB32 is supported on amd64 and powerpc64
+.if (${__T} == "amd64" || ${__T} == "powerpc64")
 __DEFAULT_YES_OPTIONS+=LIB32
 .else
 BROKEN_OPTIONS+=LIB32
 .endif
-# Only doing soft float API stuff on armv6 and armv7
-.if ${__T} != "armv6" && ${__T} != "armv7"
-BROKEN_OPTIONS+=LIBSOFT
-.endif
-.if ${__T:Mmips*}
-# GOOGLETEST cannot currently be compiled on mips due to external circumstances.
-# Notably, the freebsd-gcc port isn't linking in libgcc so we end up trying ot
-# link to a hidden symbol. LLVM would successfully link this in, but some of
-# the mips variants are broken under LLVM until LLVM 10. GOOGLETEST should be
-# marked no longer broken with the switch to LLVM.
-BROKEN_OPTIONS+=GOOGLETEST SSP
-.endif
-# EFI doesn't exist on mips or powerpc.
-.if ${__T:Mmips*} || ${__T:Mpowerpc*}
+# EFI doesn't exist on powerpc (well, officially)
+.if ${__T:Mpowerpc*}
 BROKEN_OPTIONS+=EFI
 .endif
 # OFW is only for powerpc, exclude others
 .if ${__T:Mpowerpc*} == ""
 BROKEN_OPTIONS+=LOADER_OFW
 .endif
-# UBOOT is only for arm, mips and powerpc, exclude others
-.if ${__T:Marm*} == "" && ${__T:Mmips*} == "" && ${__T:Mpowerpc*} == ""
+# KBOOT is only for powerpc64 (powerpc64le broken)
+.if ${__T} != "powerpc64"
+BROKEN_OPTIONS+=LOADER_KBOOT
+.endif
+# UBOOT is only for arm, and big-endian powerpc
+.if (${__T:Marm*} == "" && ${__T:Mpowerpc*} == "") || ${__T} == "powerpc64le"
 BROKEN_OPTIONS+=LOADER_UBOOT
 .endif
 # GELI and Lua in loader currently cause boot failures on powerpc.
@@ -334,10 +324,6 @@ __DEFAULT_YES_OPTIONS+=OPENSSL_KTLS
 __DEFAULT_NO_OPTIONS+=OPENSSL_KTLS
 .endif
 
-.if ${__T:Mmips64*}
-# profiling won't work on MIPS64 because there is only assembly for o32
-BROKEN_OPTIONS+=PROFILE
-.endif
 .if ${__T} != "aarch64" && ${__T} != "amd64" && ${__T} != "i386" && \
     ${__T} != "powerpc64"
 BROKEN_OPTIONS+=CXGBETOOL
@@ -393,6 +379,9 @@ MK_KERBEROS_SUPPORT:=	no
 .if ${MK_CXX} == "no"
 MK_CLANG:=	no
 MK_GOOGLETEST:=	no
+MK_OFED:=	no
+MK_OPENMP:=	no
+MK_PMC:=	no
 MK_TESTS:=	no
 .endif
 
@@ -418,6 +407,7 @@ MK_NLS_CATALOGS:= no
 .if ${MK_OPENSSL} == "no"
 MK_DMAGENT:=	no
 MK_OPENSSH:=	no
+MK_OPENSSL_KTLS:=	no
 MK_KERBEROS:=	no
 MK_KERBEROS_SUPPORT:=	no
 MK_LDNS:=	no

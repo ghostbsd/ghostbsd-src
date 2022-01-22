@@ -395,7 +395,8 @@ tcp_lro_parser(struct mbuf *m, struct lro_parser *po, struct lro_parser *pi, boo
 			    htons(m->m_pkthdr.ether_vtag) & htons(EVL_VLID_MASK);
 		}
 		/* Store decrypted flag, if any. */
-		if (__predict_false(m->m_flags & M_DECRYPTED))
+		if (__predict_false((m->m_pkthdr.csum_flags &
+		    CSUM_TLS_MASK) == CSUM_TLS_DECRYPTED))
 			po->data.lro_flags |= LRO_FLAG_DECRYPTED;
 	}
 
@@ -819,7 +820,7 @@ static void
 tcp_flush_out_entry(struct lro_ctrl *lc, struct lro_entry *le)
 {
 	/* Check if we need to recompute any checksums. */
-	if (le->m_head->m_pkthdr.lro_nsegs > 1) {
+	if (le->needs_merge) {
 		uint16_t csum;
 
 		switch (le->inner.data.lro_type) {
@@ -833,6 +834,8 @@ tcp_flush_out_entry(struct lro_ctrl *lc, struct lro_entry *le)
 			le->m_head->m_pkthdr.csum_flags = CSUM_DATA_VALID |
 			    CSUM_PSEUDO_HDR | CSUM_IP_CHECKED | CSUM_IP_VALID;
 			le->m_head->m_pkthdr.csum_data = 0xffff;
+			if (__predict_false(le->outer.data.lro_flags & LRO_FLAG_DECRYPTED))
+				le->m_head->m_pkthdr.csum_flags |= CSUM_TLS_DECRYPTED;
 			break;
 		case LRO_TYPE_IPV6_TCP:
 			csum = tcp_lro_update_checksum(&le->inner, le,
@@ -844,6 +847,8 @@ tcp_flush_out_entry(struct lro_ctrl *lc, struct lro_entry *le)
 			le->m_head->m_pkthdr.csum_flags = CSUM_DATA_VALID |
 			    CSUM_PSEUDO_HDR;
 			le->m_head->m_pkthdr.csum_data = 0xffff;
+			if (__predict_false(le->outer.data.lro_flags & LRO_FLAG_DECRYPTED))
+				le->m_head->m_pkthdr.csum_flags |= CSUM_TLS_DECRYPTED;
 			break;
 		case LRO_TYPE_NONE:
 			switch (le->outer.data.lro_type) {
@@ -854,6 +859,8 @@ tcp_flush_out_entry(struct lro_ctrl *lc, struct lro_entry *le)
 				le->m_head->m_pkthdr.csum_flags = CSUM_DATA_VALID |
 				    CSUM_PSEUDO_HDR | CSUM_IP_CHECKED | CSUM_IP_VALID;
 				le->m_head->m_pkthdr.csum_data = 0xffff;
+				if (__predict_false(le->outer.data.lro_flags & LRO_FLAG_DECRYPTED))
+					le->m_head->m_pkthdr.csum_flags |= CSUM_TLS_DECRYPTED;
 				break;
 			case LRO_TYPE_IPV6_TCP:
 				csum = tcp_lro_update_checksum(&le->outer, le,
@@ -862,6 +869,8 @@ tcp_flush_out_entry(struct lro_ctrl *lc, struct lro_entry *le)
 				le->m_head->m_pkthdr.csum_flags = CSUM_DATA_VALID |
 				    CSUM_PSEUDO_HDR;
 				le->m_head->m_pkthdr.csum_data = 0xffff;
+				if (__predict_false(le->outer.data.lro_flags & LRO_FLAG_DECRYPTED))
+					le->m_head->m_pkthdr.csum_flags |= CSUM_TLS_DECRYPTED;
 				break;
 			default:
 				break;
@@ -912,6 +921,8 @@ tcp_set_entry_to_mbuf(struct lro_ctrl *lc, struct lro_entry *le,
 	le->next_seq = ntohl(th->th_seq) + tcp_data_len;
 	le->ack_seq = th->th_ack;
 	le->window = th->th_win;
+	le->flags = th->th_flags;
+	le->needs_merge = 0;
 
 	/* Setup new data pointers. */
 	le->m_head = m;
@@ -953,10 +964,12 @@ tcp_push_and_replace(struct lro_ctrl *lc, struct lro_entry *le, struct mbuf *m)
 }
 
 static void
-tcp_lro_mbuf_append_pkthdr(struct mbuf *m, const struct mbuf *p)
+tcp_lro_mbuf_append_pkthdr(struct lro_entry *le, const struct mbuf *p)
 {
+	struct mbuf *m;
 	uint32_t csum;
 
+	m = le->m_head;
 	if (m->m_pkthdr.lro_nsegs == 1) {
 		/* Compute relative checksum. */
 		csum = p->m_pkthdr.lro_tcp_d_csum;
@@ -973,6 +986,7 @@ tcp_lro_mbuf_append_pkthdr(struct mbuf *m, const struct mbuf *p)
 	m->m_pkthdr.lro_tcp_d_csum = csum;
 	m->m_pkthdr.lro_tcp_d_len += p->m_pkthdr.lro_tcp_d_len;
 	m->m_pkthdr.lro_nsegs += p->m_pkthdr.lro_nsegs;
+	le->needs_merge = 1;
 }
 
 static void
@@ -1021,7 +1035,7 @@ again:
 	}
 	if ((th->th_flags & ~(TH_ACK | TH_PUSH)) != 0) {
 		/*
-		 * Make sure that previously seen segements/ACKs are delivered
+		 * Make sure that previously seen segments/ACKs are delivered
 		 * before this segment, e.g. FIN.
 		 */
 		le->m_head->m_nextpkt = m->m_nextpkt;
@@ -1079,10 +1093,12 @@ again:
 		}
 		/* Try to append the new segment. */
 		if (__predict_false(ntohl(th->th_seq) != le->next_seq ||
+				    ((th->th_flags & TH_ACK) !=
+				      (le->flags & TH_ACK)) ||
 				    (tcp_data_len == 0 &&
 				     le->ack_seq == th->th_ack &&
 				     le->window == th->th_win))) {
-			/* Out of order packet or duplicate ACK. */
+			/* Out of order packet, non-ACK + ACK or dup ACK. */
 			tcp_push_and_replace(lc, le, m);
 			goto again;
 		}
@@ -1091,8 +1107,12 @@ again:
 			le->next_seq += tcp_data_len;
 			le->ack_seq = th->th_ack;
 			le->window = th->th_win;
+			le->needs_merge = 1;
 		} else if (th->th_ack == le->ack_seq) {
-			le->window = WIN_MAX(le->window, th->th_win);
+			if (WIN_GT(th->th_win, le->window)) {
+				le->window = th->th_win;
+				le->needs_merge = 1;
+			}
 		}
 
 		if (tcp_data_len == 0) {
@@ -1101,7 +1121,7 @@ again:
 		}
 
 		/* Merge TCP data checksum and length to head mbuf. */
-		tcp_lro_mbuf_append_pkthdr(le->m_head, m);
+		tcp_lro_mbuf_append_pkthdr(le, m);
 
 		/*
 		 * Adjust the mbuf so that m_data points to the first byte of
@@ -1301,8 +1321,7 @@ tcp_lro_flush_tcphpts(struct lro_ctrl *lc, struct lro_entry *le)
 
 	/* Check if the inp is dead, Jim. */
 	if (tp == NULL ||
-	    (inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT)) ||
-	    (inp->inp_flags2 & INP_FREED)) {
+	    (inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT))) {
 		INP_WUNLOCK(inp);
 		return (TCP_LRO_CANNOT);
 	}
@@ -1345,8 +1364,7 @@ tcp_lro_flush_tcphpts(struct lro_ctrl *lc, struct lro_entry *le)
 	/* Check if any data mbufs left. */
 	if (le->m_head != NULL) {
 		counter_u64_add(tcp_inp_lro_direct_queue, 1);
-		tcp_lro_log(tp, lc, le, NULL, 22, 1,
-			    inp->inp_flags2, inp->inp_in_input, 1);
+		tcp_lro_log(tp, lc, le, NULL, 22, 1, inp->inp_flags2, 0, 1);
 		tcp_queue_pkts(inp, tp, le);
 	}
 	if (should_wake) {

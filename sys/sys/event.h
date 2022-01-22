@@ -93,7 +93,7 @@ struct kevent {
 
 #if defined(_WANT_FREEBSD11_KEVENT)
 /* Older structure used in FreeBSD 11.x and older. */
-struct kevent_freebsd11 {
+struct freebsd11_kevent {
 	__uintptr_t	ident;		/* identifier for this event */
 	short		filter;		/* filter for event */
 	unsigned short	flags;
@@ -105,29 +105,29 @@ struct kevent_freebsd11 {
 
 #if defined(_WANT_KEVENT32) || (defined(_KERNEL) && defined(__LP64__))
 struct kevent32 {
-	uint32_t	ident;		/* identifier for this event */
+	__uint32_t	ident;		/* identifier for this event */
 	short		filter;		/* filter for event */
-	u_short		flags;
-	u_int		fflags;
+	unsigned short	flags;
+	unsigned int	fflags;
 #ifndef __amd64__
-	uint32_t	pad0;
+	__uint32_t	pad0;
 #endif
-	uint32_t	data1, data2;
-	uint32_t	udata;		/* opaque user data identifier */
+	__uint32_t	data1, data2;
+	__uint32_t	udata;		/* opaque user data identifier */
 #ifndef __amd64__
-	uint32_t	pad1;
+	__uint32_t	pad1;
 #endif
-	uint32_t	ext64[8];
+	__uint32_t	ext64[8];
 };
 
 #ifdef _WANT_FREEBSD11_KEVENT
-struct kevent32_freebsd11 {
-	u_int32_t	ident;		/* identifier for this event */
+struct freebsd11_kevent32 {
+	__uint32_t	ident;		/* identifier for this event */
 	short		filter;		/* filter for event */
-	u_short		flags;
-	u_int		fflags;
-	int32_t		data;
-	u_int32_t	udata;		/* opaque user data identifier */
+	unsigned short	flags;
+	unsigned int	fflags;
+	__int32_t	data;
+	__uint32_t	udata;		/* opaque user data identifier */
 };
 #endif
 #endif

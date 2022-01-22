@@ -41,6 +41,9 @@ extern "C" {
 _LIBZFS_CORE_H int libzfs_core_init(void);
 _LIBZFS_CORE_H void libzfs_core_fini(void);
 
+struct zfs_cmd;
+_LIBZFS_CORE_H int lzc_ioctl_fd(int, unsigned long, struct zfs_cmd *);
+
 /*
  * NB: this type should be kept binary-compatible with dmu_objset_type_t.
  */
@@ -143,6 +146,10 @@ _LIBZFS_CORE_H int lzc_wait_fs(const char *, zfs_wait_activity_t, boolean_t *);
 
 _LIBZFS_CORE_H int lzc_set_bootenv(const char *, const nvlist_t *);
 _LIBZFS_CORE_H int lzc_get_bootenv(const char *, nvlist_t **);
+
+_LIBZFS_CORE_H int lzc_get_vdev_prop(const char *, nvlist_t *, nvlist_t **);
+_LIBZFS_CORE_H int lzc_set_vdev_prop(const char *, nvlist_t *, nvlist_t **);
+
 #ifdef	__cplusplus
 }
 #endif

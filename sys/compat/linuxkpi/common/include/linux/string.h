@@ -28,8 +28,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_STRING_H_
-#define	_LINUX_STRING_H_
+#ifndef	_LINUXKPI_LINUX_STRING_H_
+#define	_LINUXKPI_LINUX_STRING_H_
 
 #include <sys/ctype.h>
 
@@ -167,6 +167,19 @@ str_has_prefix(const char *str, const char *prefix)
 	return (strncmp(str, prefix, len) == 0 ? len : 0);
 }
 
+static inline char *
+strreplace(char *str, char old, char new)
+{
+	char *p;
+
+	p = strchrnul(str, old);
+	while (p != NULL && *p != '\0') {
+		*p = new;
+		p = strchrnul(str, old);
+	}
+	return (p);
+}
+
 static inline ssize_t
 strscpy(char* dst, const char* src, size_t len)
 {
@@ -183,4 +196,4 @@ strscpy(char* dst, const char* src, size_t len)
 	return (-E2BIG);
 }
 
-#endif					/* _LINUX_STRING_H_ */
+#endif					/* _LINUXKPI_LINUX_STRING_H_ */

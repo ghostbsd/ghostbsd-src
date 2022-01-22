@@ -51,6 +51,7 @@
 #include <sys/seqc.h>
 #include <vm/uma.h>
 
+#include <net/if.h>
 #include <net/radix.h>
 #include <netinet/in.h>
 #ifdef _KERNEL
@@ -550,6 +551,7 @@ struct pf_kpooladdr {
 TAILQ_HEAD(pf_kpalist, pf_kpooladdr);
 
 struct pf_kpool {
+	struct mtx		 mtx;
 	struct pf_kpalist	 list;
 	struct pf_kpooladdr	*cur;
 	struct pf_poolhashkey	 key;
@@ -578,6 +580,7 @@ struct pf_krule {
 	struct pf_rule_addr	 dst;
 	union pf_krule_ptr	 skip[PF_SKIP_COUNT];
 	char			 label[PF_RULE_MAX_LABEL_COUNT][PF_RULE_LABEL_SIZE];
+	uint32_t		 ridentifier;
 	char			 ifname[IFNAMSIZ];
 	char			 qname[PF_QNAME_SIZE];
 	char			 pqname[PF_QNAME_SIZE];
@@ -1746,10 +1749,13 @@ struct pfioc_iface {
 #define	DIOCSETIFFLAG	_IOWR('D', 89, struct pfioc_iface)
 #define	DIOCCLRIFFLAG	_IOWR('D', 90, struct pfioc_iface)
 #define	DIOCKILLSRCNODES	_IOWR('D', 91, struct pfioc_src_node_kill)
-#define	DIOCKEEPCOUNTERS	_IOWR('D', 92, struct pfioc_nv)
+#define	DIOCGIFSPEEDV0	_IOWR('D', 92, struct pf_ifspeed_v0)
+#define	DIOCGIFSPEEDV1	_IOWR('D', 92, struct pf_ifspeed_v1)
 #define DIOCGETSTATESV2	_IOWR('D', 93, struct pfioc_states_v2)
 #define	DIOCGETSYNCOOKIES	_IOWR('D', 94, struct pfioc_nv)
 #define	DIOCSETSYNCOOKIES	_IOWR('D', 95, struct pfioc_nv)
+#define	DIOCKEEPCOUNTERS	_IOWR('D', 96, struct pfioc_nv)
+#define	DIOCKEEPCOUNTERS_FREEBSD13	_IOWR('D', 92, struct pfioc_nv)
 
 struct pf_ifspeed_v0 {
 	char			ifname[IFNAMSIZ];
@@ -1765,9 +1771,6 @@ struct pf_ifspeed_v1 {
 
 /* Latest version of struct pf_ifspeed_vX */
 #define PF_IFSPEED_VERSION	1
-
-#define	DIOCGIFSPEEDV0	_IOWR('D', 92, struct pf_ifspeed_v0)
-#define	DIOCGIFSPEEDV1	_IOWR('D', 92, struct pf_ifspeed_v1)
 
 /*
  * Compatibility and convenience macros
@@ -1915,9 +1918,7 @@ extern void			 pf_unload_vnet_purge(void);
 extern void			 pf_intr(void *);
 extern void			 pf_purge_expired_src_nodes(void);
 
-extern int			 pf_unlink_state(struct pf_kstate *, u_int);
-#define	PF_ENTER_LOCKED		0x00000001
-#define	PF_RETURN_LOCKED	0x00000002
+extern int			 pf_unlink_state(struct pf_kstate *);
 extern int			 pf_state_insert(struct pfi_kkif *,
 				    struct pfi_kkif *,
 				    struct pf_state_key *,

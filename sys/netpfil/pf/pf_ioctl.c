@@ -1542,6 +1542,8 @@ pf_krule_free(struct pf_krule *rule)
 	counter_u64_free(rule->states_cur);
 	counter_u64_free(rule->states_tot);
 	counter_u64_free(rule->src_nodes);
+
+	mtx_destroy(&rule->rpool.mtx);
 	free(rule, M_PFRULE);
 }
 
@@ -1860,6 +1862,8 @@ pf_ioctl_addrule(struct pf_krule *rule, uint32_t ticket,
 	int			 rs_num;
 	int			 error = 0;
 
+	mtx_init(&rule->rpool.mtx, "pf_krule_pool", NULL, MTX_DEF);
+
 	if ((rule->return_icmp >> 8) > ICMP_MAXTYPE) {
 		error = EINVAL;
 		goto errout_unlocked;
@@ -1999,6 +2003,7 @@ pf_ioctl_addrule(struct pf_krule *rule, uint32_t ticket,
 	TAILQ_INSERT_TAIL(ruleset->rules[rs_num].inactive.ptr,
 	    rule, entries);
 	ruleset->rules[rs_num].inactive.rcount++;
+
 	PF_RULES_WUNLOCK();
 
 	return (0);
@@ -2029,19 +2034,20 @@ pf_label_match(const struct pf_krule *rule, const char *label)
 static unsigned int
 pf_kill_matching_state(struct pf_state_key_cmp *key, int dir)
 {
-	struct pf_kstate *match;
+	struct pf_kstate *s;
 	int more = 0;
-	unsigned int killed = 0;
 
-	/* Call with unlocked hashrow */
+	s = pf_find_state_all(key, dir, &more);
+	if (s == NULL)
+		return (0);
 
-	match = pf_find_state_all(key, dir, &more);
-	if (match && !more) {
-		pf_unlink_state(match, 0);
-		killed++;
+	if (more) {
+		PF_STATE_UNLOCK(s);
+		return (0);
 	}
 
-	return (killed);
+	pf_unlink_state(s);
+	return (1);
 }
 
 static int
@@ -2137,7 +2143,7 @@ relock_DIOCKILLSTATES:
 			match_key.port[1] = s->key[idx]->port[0];
 		}
 
-		pf_unlink_state(s, PF_ENTER_LOCKED);
+		pf_unlink_state(s);
 		killed++;
 
 		if (psk->psk_kill_match)
@@ -3159,18 +3165,21 @@ DIOCGETSTATESV2_full:
 			key.port[didx] = pnl->dport;
 
 			state = pf_find_state_all(&key, direction, &m);
-
-			if (m > 1)
-				error = E2BIG;	/* more than one state */
-			else if (state != NULL) {
-				/* XXXGL: not locked read */
-				sk = state->key[sidx];
-				PF_ACPY(&pnl->rsaddr, &sk->addr[sidx], sk->af);
-				pnl->rsport = sk->port[sidx];
-				PF_ACPY(&pnl->rdaddr, &sk->addr[didx], sk->af);
-				pnl->rdport = sk->port[didx];
-			} else
+			if (state == NULL) {
 				error = ENOENT;
+			} else {
+				if (m > 1) {
+					PF_STATE_UNLOCK(state);
+					error = E2BIG;	/* more than one state */
+				} else {
+					sk = state->key[sidx];
+					PF_ACPY(&pnl->rsaddr, &sk->addr[sidx], sk->af);
+					pnl->rsport = sk->port[sidx];
+					PF_ACPY(&pnl->rdaddr, &sk->addr[didx], sk->af);
+					pnl->rdport = sk->port[didx];
+					PF_STATE_UNLOCK(state);
+				}
+			}
 		}
 		break;
 	}
@@ -4661,6 +4670,9 @@ DIOCCHANGEADDR_error:
 		pf_kill_srcnodes((struct pfioc_src_node_kill *)addr);
 		break;
 
+#ifdef COMPAT_FREEBSD13
+	case DIOCKEEPCOUNTERS_FREEBSD13:
+#endif
 	case DIOCKEEPCOUNTERS:
 		error = pf_keepcounters((struct pfioc_nv *)addr);
 		break;
@@ -5036,7 +5048,7 @@ relock:
 			s->timeout = PFTM_PURGE;
 			/* Don't send out individual delete messages. */
 			s->state_flags |= PFSTATE_NOSYNC;
-			pf_unlink_state(s, PF_ENTER_LOCKED);
+			pf_unlink_state(s);
 			goto relock;
 		}
 		PF_HASHROW_UNLOCK(ih);
@@ -5223,7 +5235,7 @@ relock_DIOCCLRSTATES:
 			 * delete messages.
 			 */
 			s->state_flags |= PFSTATE_NOSYNC;
-			pf_unlink_state(s, PF_ENTER_LOCKED);
+			pf_unlink_state(s);
 			killed++;
 
 			if (kill->psk_kill_match)
@@ -5251,7 +5263,7 @@ pf_killstates(struct pf_kstate_kill *kill, unsigned int *killed)
 			kill->psk_pfcmp.creatorid = V_pf_status.hostid;
 		if ((s = pf_find_state_byid(kill->psk_pfcmp.id,
 		    kill->psk_pfcmp.creatorid))) {
-			pf_unlink_state(s, PF_ENTER_LOCKED);
+			pf_unlink_state(s);
 			*killed = 1;
 		}
 		return;

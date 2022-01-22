@@ -10,7 +10,35 @@ newline.  Entries should be separated by a newline.
 
 Changes to this file should not be MFCed.
 
-422084abbda:
+05a1d0f5d7ac:
+	Kernel TLS offload now supports receive-side offload of TLS 1.3.
+
+19dc64451179:
+	if_stf now supports 6rd (RFC5969).
+
+c1d255d3ffdb, 3968b47cd974, bd452dcbede6:
+	Add WiFi 6 support to wpa.
+
+ba48d52ca6c8,4ac3d08a9693,2533eca1c2b9:
+	The default bell tone is now 800Hz. It may be set with kbdcontrol
+	again. There's devd integration for people wishing to use their sound
+	cards for the beep.
+
+92b3e07229ba:
+	net.inet.tcp.nolocaltimewait enabled by default.  It prevents
+	creation of timewait entries for TCP connections that were
+	terminated locally.
+
+d410b585b6f0:
+	sh(1) is now the default shell for the root user.
+
+396851c20aeb:
+	libncursesw has been split into libtinfow and libncursesw, linker
+	scripts should make it transparent for consumers. pkg-config files
+	are also now installed to ease ports detecting the ncurses setup from
+	base.
+
+a422084abbda:
 	LLVM's MemorySanitizer can now be used in amd64 kernels.  See the
 	kmsan(9) manual page for more information.
 

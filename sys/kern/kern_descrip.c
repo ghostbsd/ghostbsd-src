@@ -107,6 +107,9 @@ VFS_SMR_DECLARE;
 
 static int	closefp(struct filedesc *fdp, int fd, struct file *fp,
 		    struct thread *td, bool holdleaders, bool audit);
+static void	export_file_to_kinfo(struct file *fp, int fd,
+		    cap_rights_t *rightsp, struct kinfo_file *kif,
+		    struct filedesc *fdp, int flags);
 static int	fd_first_free(struct filedesc *fdp, int low, int size);
 static void	fdgrowtable(struct filedesc *fdp, int nfd);
 static void	fdgrowtable_exp(struct filedesc *fdp, int nfd);
@@ -477,7 +480,8 @@ kern_fcntl(struct thread *td, int fd, int cmd, intptr_t arg)
 	struct proc *p;
 	struct vnode *vp;
 	struct mount *mp;
-	int error, flg, seals, tmp;
+	struct kinfo_file *kif;
+	int error, flg, kif_sz, seals, tmp;
 	uint64_t bsize;
 	off_t foffset;
 
@@ -850,6 +854,41 @@ kern_fcntl(struct thread *td, int fd, int cmd, intptr_t arg)
 		    mp->mnt_flag & MNT_UNION)
 			td->td_retval[0] = 1;
 		fdrop(fp, td);
+		break;
+
+	case F_KINFO:
+#ifdef CAPABILITY_MODE
+		if (IN_CAPABILITY_MODE(td)) {
+			error = ECAPMODE;
+			break;
+		}
+#endif
+		error = copyin((void *)arg, &kif_sz, sizeof(kif_sz));
+		if (error != 0)
+			break;
+		if (kif_sz != sizeof(*kif)) {
+			error = EINVAL;
+			break;
+		}
+		kif = malloc(sizeof(*kif), M_TEMP, M_WAITOK | M_ZERO);
+		FILEDESC_SLOCK(fdp);
+		error = fget_cap_locked(fdp, fd, &cap_fcntl_rights, &fp, NULL);
+		if (error == 0 && fhold(fp)) {
+			export_file_to_kinfo(fp, fd, NULL, kif, fdp, 0);
+			FILEDESC_SUNLOCK(fdp);
+			fdrop(fp, td);
+			if ((kif->kf_status & KF_ATTR_VALID) != 0) {
+				kif->kf_structsize = sizeof(*kif);
+				error = copyout(kif, (void *)arg, sizeof(*kif));
+			} else {
+				error = EBADF;
+			}
+		} else {
+			FILEDESC_SUNLOCK(fdp);
+			if (error == 0)
+				error = EBADF;
+		}
+		free(kif, M_TEMP);
 		break;
 
 	default:
@@ -1561,10 +1600,11 @@ freebsd11_nfstat(struct thread *td, struct freebsd11_nfstat_args *uap)
 	int error;
 
 	error = kern_fstat(td, uap->fd, &ub);
-	if (error == 0) {
-		freebsd11_cvtnstat(&ub, &nub);
+	if (error != 0)
+		return (error);
+	error = freebsd11_cvtnstat(&ub, &nub);
+	if (error != 0)
 		error = copyout(&nub, uap->sb, sizeof(nub));
-	}
 	return (error);
 }
 #endif /* COMPAT_FREEBSD11 */
@@ -3213,8 +3253,9 @@ _fget(struct thread *td, int fd, struct file **fpp, int flags,
 			error = EBADF;
 		break;
 	case FEXEC:
-	    	if ((fp->f_flag & (FREAD | FEXEC)) == 0 ||
-		    ((fp->f_flag & FWRITE) != 0))
+		if (fp->f_ops != &path_fileops &&
+		    ((fp->f_flag & (FREAD | FEXEC)) == 0 ||
+		    (fp->f_flag & FWRITE) != 0))
 			error = EBADF;
 		break;
 	case 0:
@@ -4249,14 +4290,13 @@ export_kinfo_to_sb(struct export_fd_buf *efbuf)
 
 	kif = &efbuf->kif;
 	if (efbuf->remainder != -1) {
-		if (efbuf->remainder < kif->kf_structsize) {
-			/* Terminate export. */
-			efbuf->remainder = 0;
-			return (0);
-		}
+		if (efbuf->remainder < kif->kf_structsize)
+			return (ENOMEM);
 		efbuf->remainder -= kif->kf_structsize;
 	}
-	return (sbuf_bcat(efbuf->sb, kif, kif->kf_structsize) == 0 ? 0 : ENOMEM);
+	if (sbuf_bcat(efbuf->sb, kif, kif->kf_structsize) != 0)
+		return (sbuf_error(efbuf->sb));
+	return (0);
 }
 
 static int
@@ -4266,7 +4306,7 @@ export_file_to_sb(struct file *fp, int fd, cap_rights_t *rightsp,
 	int error;
 
 	if (efbuf->remainder == 0)
-		return (0);
+		return (ENOMEM);
 	export_file_to_kinfo(fp, fd, rightsp, &efbuf->kif, efbuf->fdp,
 	    efbuf->flags);
 	FILEDESC_SUNLOCK(efbuf->fdp);
@@ -4282,7 +4322,7 @@ export_vnode_to_sb(struct vnode *vp, int fd, int fflags,
 	int error;
 
 	if (efbuf->remainder == 0)
-		return (0);
+		return (ENOMEM);
 	if (efbuf->pdp != NULL)
 		PWDDESC_XUNLOCK(efbuf->pdp);
 	export_vnode_to_kinfo(vp, fd, fflags, &efbuf->kif, efbuf->flags);
@@ -4328,22 +4368,25 @@ kern_proc_filedesc_out(struct proc *p,  struct sbuf *sb, ssize_t maxlen,
 	fdp = fdhold(p);
 	pdp = pdhold(p);
 	PROC_UNLOCK(p);
+
 	efbuf = malloc(sizeof(*efbuf), M_TEMP, M_WAITOK);
 	efbuf->fdp = NULL;
 	efbuf->pdp = NULL;
 	efbuf->sb = sb;
 	efbuf->remainder = maxlen;
 	efbuf->flags = flags;
-	if (tracevp != NULL)
-		export_vnode_to_sb(tracevp, KF_FD_TYPE_TRACE, FREAD | FWRITE,
-		    efbuf);
-	if (textvp != NULL)
-		export_vnode_to_sb(textvp, KF_FD_TYPE_TEXT, FREAD, efbuf);
-	if (cttyvp != NULL)
-		export_vnode_to_sb(cttyvp, KF_FD_TYPE_CTTY, FREAD | FWRITE,
-		    efbuf);
+
 	error = 0;
-	if (pdp == NULL || fdp == NULL)
+	if (tracevp != NULL)
+		error = export_vnode_to_sb(tracevp, KF_FD_TYPE_TRACE,
+		    FREAD | FWRITE, efbuf);
+	if (error == 0 && textvp != NULL)
+		error = export_vnode_to_sb(textvp, KF_FD_TYPE_TEXT, FREAD,
+		    efbuf);
+	if (error == 0 && cttyvp != NULL)
+		error = export_vnode_to_sb(cttyvp, KF_FD_TYPE_CTTY,
+		    FREAD | FWRITE, efbuf);
+	if (error != 0 || pdp == NULL || fdp == NULL)
 		goto fail;
 	efbuf->fdp = fdp;
 	efbuf->pdp = pdp;
@@ -4353,23 +4396,25 @@ kern_proc_filedesc_out(struct proc *p,  struct sbuf *sb, ssize_t maxlen,
 		/* working directory */
 		if (pwd->pwd_cdir != NULL) {
 			vrefact(pwd->pwd_cdir);
-			export_vnode_to_sb(pwd->pwd_cdir, KF_FD_TYPE_CWD,
-			    FREAD, efbuf);
+			error = export_vnode_to_sb(pwd->pwd_cdir,
+			    KF_FD_TYPE_CWD, FREAD, efbuf);
 		}
 		/* root directory */
-		if (pwd->pwd_rdir != NULL) {
+		if (error == 0 && pwd->pwd_rdir != NULL) {
 			vrefact(pwd->pwd_rdir);
-			export_vnode_to_sb(pwd->pwd_rdir, KF_FD_TYPE_ROOT,
-			    FREAD, efbuf);
+			error = export_vnode_to_sb(pwd->pwd_rdir,
+			    KF_FD_TYPE_ROOT, FREAD, efbuf);
 		}
 		/* jail directory */
-		if (pwd->pwd_jdir != NULL) {
+		if (error == 0 && pwd->pwd_jdir != NULL) {
 			vrefact(pwd->pwd_jdir);
-			export_vnode_to_sb(pwd->pwd_jdir, KF_FD_TYPE_JAIL,
-			    FREAD, efbuf);
+			error = export_vnode_to_sb(pwd->pwd_jdir,
+			    KF_FD_TYPE_JAIL, FREAD, efbuf);
 		}
 	}
 	PWDDESC_XUNLOCK(pdp);
+	if (error != 0)
+		goto fail;
 	if (pwd != NULL)
 		pwd_drop(pwd);
 	FILEDESC_SLOCK(fdp);
@@ -4389,7 +4434,7 @@ kern_proc_filedesc_out(struct proc *p,  struct sbuf *sb, ssize_t maxlen,
 		 * loop continues.
 		 */
 		error = export_file_to_sb(fp, i, &rights, efbuf);
-		if (error != 0 || efbuf->remainder == 0)
+		if (error != 0)
 			break;
 	}
 	FILEDESC_SUNLOCK(fdp);
@@ -4619,9 +4664,11 @@ kern_proc_cwd_out(struct proc *p,  struct sbuf *sb, ssize_t maxlen)
 		return (EINVAL);
 
 	efbuf = malloc(sizeof(*efbuf), M_TEMP, M_WAITOK);
+	efbuf->fdp = NULL;
 	efbuf->pdp = pdp;
 	efbuf->sb = sb;
 	efbuf->remainder = maxlen;
+	efbuf->flags = 0;
 
 	PWDDESC_XLOCK(pdp);
 	pwd = PWDDESC_XLOCKED_LOAD_PWD(pdp);

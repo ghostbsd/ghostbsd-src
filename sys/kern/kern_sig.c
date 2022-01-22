@@ -2133,7 +2133,7 @@ pksignal(struct proc *p, int sig, ksiginfo_t *ksi)
 
 /* Utility function for finding a thread to send signal event to. */
 int
-sigev_findtd(struct proc *p ,struct sigevent *sigev, struct thread **ttd)
+sigev_findtd(struct proc *p, struct sigevent *sigev, struct thread **ttd)
 {
 	struct thread *td;
 
@@ -2992,8 +2992,10 @@ sigprocess(struct thread *td, int sig)
 		 * and p_sigact are consistent.
 		 */
 		if ((p->p_flag & P_TRACED) == 0) {
-			ksi.ksi_flags |= KSI_HEAD;
-			sigqueue_add(queue, sig, &ksi);
+			if ((ksi.ksi_flags & KSI_PTRACE) == 0) {
+				ksi.ksi_flags |= KSI_HEAD;
+				sigqueue_add(queue, sig, &ksi);
+			}
 			return (SIGSTATUS_HANDLED);
 		}
 	}
@@ -3262,7 +3264,7 @@ postsig(int sig)
 int
 sig_ast_checksusp(struct thread *td)
 {
-	struct proc *p;
+	struct proc *p __diagused;
 	int ret;
 
 	p = td->td_proc;
@@ -3560,7 +3562,7 @@ sysctl_debug_num_cores_check (SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 SYSCTL_PROC(_debug, OID_AUTO, ncores,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, 0, sizeof(int),
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, 0, sizeof(int),
     sysctl_debug_num_cores_check, "I",
     "Maximum number of generated process corefiles while using index format");
 
@@ -3658,7 +3660,7 @@ corefile_open_last(struct thread *td, char *name, int indexpos,
 		    i);
 		name[indexpos + indexlen] = ch;
 
-		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name, td);
+		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name);
 		error = vn_open_cred(&nd, &flags, cmode, oflags, td->td_ucred,
 		    NULL);
 		if (error != 0)
@@ -3833,7 +3835,7 @@ corefile_open(const char *comm, uid_t uid, pid_t pid, struct thread *td,
 		if ((td->td_proc->p_flag & P_SUGID) != 0)
 			flags |= O_EXCL;
 
-		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name, td);
+		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name);
 		error = vn_open_cred(&nd, &flags, cmode, oflags, td->td_ucred,
 		    NULL);
 		if (error == 0) {

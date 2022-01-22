@@ -1706,6 +1706,8 @@ static int ssl_start_async_job(SSL *s, struct ssl_async_args *args,
         if (s->waitctx == NULL)
             return -1;
     }
+
+    s->rwstate = SSL_NOTHING;
     switch (ASYNC_start_job(&s->job, s->waitctx, &ret, func, args,
                             sizeof(struct ssl_async_args))) {
     case ASYNC_ERR:
@@ -2026,7 +2028,8 @@ ossl_ssize_t SSL_sendfile(SSL *s, int fd, off_t offset, size_t size, int flags)
     }
 
 #ifdef OPENSSL_NO_KTLS
-    ERR_raise_data(ERR_LIB_SYS, ERR_R_INTERNAL_ERROR, "calling sendfile()");
+    SYSerr(SSL_F_SSL_SENDFILE, ERR_R_INTERNAL_ERROR);
+    ERR_add_error_data(1, "calling sendfile()");
     return -1;
 #else
     ret = ktls_sendfile(SSL_get_wfd(s), fd, offset, size, flags);

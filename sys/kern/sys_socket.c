@@ -598,7 +598,7 @@ soaio_process_job(struct socket *so, struct sockbuf *sb, struct kaiocb *job)
 	struct ucred *td_savedcred;
 	struct thread *td;
 	struct file *fp;
-	size_t cnt, done, job_total_nbytes;
+	size_t cnt, done, job_total_nbytes __diagused;
 	long ru_before;
 	int error, flags;
 
@@ -727,7 +727,6 @@ soaio_process_sb(struct socket *so, struct sockbuf *sb)
 	sb->sb_flags &= ~SB_AIO_RUNNING;
 	SOCKBUF_UNLOCK(sb);
 
-	SOCK_LOCK(so);
 	sorele(so);
 	CURVNET_RESTORE();
 }

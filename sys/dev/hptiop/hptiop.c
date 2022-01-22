@@ -214,8 +214,6 @@ static int hptiop_ioctl(ioctl_dev_t dev, u_long cmd, caddr_t data,
 	int ret = EFAULT;
 	struct hpt_iop_hba *hba = hba_from_dev(dev);
 
-	mtx_lock(&Giant);
-
 	switch (cmd) {
 	case HPT_DO_IOCONTROL:
 		ret = hba->ops->do_ioctl(hba,
@@ -225,9 +223,6 @@ static int hptiop_ioctl(ioctl_dev_t dev, u_long cmd, caddr_t data,
 		ret = hptiop_rescan_bus(hba);
 		break;
 	}
-
-	mtx_unlock(&Giant);
-
 	return ret;
 }
 
@@ -473,10 +468,6 @@ static void hptiop_drain_outbound_queue_itl(struct hpt_iop_hba *hba)
 		if (req & IOPMU_QUEUE_MASK_HOST_BITS)
 			hptiop_request_callback_itl(hba, req);
 		else {
-			struct hpt_iop_request_header *p;
-
-			p = (struct hpt_iop_request_header *)
-				((char *)hba->u.itl.mu + req);
 			temp = bus_space_read_4(hba->bar0t,
 					hba->bar0h,req +
 					offsetof(struct hpt_iop_request_header,

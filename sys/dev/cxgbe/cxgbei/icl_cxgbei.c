@@ -129,11 +129,6 @@ SYSCTL_INT(_kern_icl_cxgbei, OID_AUTO, recvspace, CTLFLAG_RWTUN,
 
 static volatile u_int icl_cxgbei_ncons;
 
-#define ICL_CONN_LOCK(X)		mtx_lock(X->ic_lock)
-#define ICL_CONN_UNLOCK(X)		mtx_unlock(X->ic_lock)
-#define ICL_CONN_LOCK_ASSERT(X)		mtx_assert(X->ic_lock, MA_OWNED)
-#define ICL_CONN_LOCK_ASSERT_NOT(X)	mtx_assert(X->ic_lock, MA_NOTOWNED)
-
 static icl_conn_new_pdu_t	icl_cxgbei_conn_new_pdu;
 static icl_conn_pdu_data_segment_length_t
 				    icl_cxgbei_conn_pdu_data_segment_length;
@@ -789,7 +784,6 @@ int
 icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 {
 	struct icl_cxgbei_conn *icc = ic_to_icc(ic);
-	struct cxgbei_data *ci;
 	struct find_ofld_adapter_rr fa;
 	struct file *fp;
 	struct socket *so;
@@ -841,7 +835,6 @@ icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 	if (fa.sc == NULL)
 		return (EINVAL);
 	icc->sc = fa.sc;
-	ci = icc->sc->iscsi_ulp_softc;
 
 	max_rx_pdu_len = ISCSI_BHS_SIZE + ic->ic_max_recv_data_segment_length;
 	max_tx_pdu_len = ISCSI_BHS_SIZE + ic->ic_max_send_data_segment_length;
@@ -1094,11 +1087,9 @@ icl_cxgbei_conn_task_setup(struct icl_conn *ic, struct icl_pdu *ip,
 	MPASS(arg != NULL);
 	MPASS(*arg == NULL);
 
-	if (ic->ic_disconnecting || ic->ic_socket == NULL)
-		return (ECONNRESET);
-
 	if ((csio->ccb_h.flags & CAM_DIR_MASK) != CAM_DIR_IN ||
-	    csio->dxfer_len < ci->ddp_threshold) {
+	    csio->dxfer_len < ci->ddp_threshold || ic->ic_disconnecting ||
+	    ic->ic_socket == NULL) {
 no_ddp:
 		/*
 		 * No DDP for this I/O.	 Allocate an ITT (based on the one
@@ -1156,7 +1147,7 @@ no_ddp:
 		mbufq_drain(&mq);
 		t4_free_page_pods(prsv);
 		free(ddp, M_CXGBEI);
-		return (ECONNRESET);
+		goto no_ddp;
 	}
 	mbufq_concat(&toep->ulp_pduq, &mq);
 	INP_WUNLOCK(inp);
@@ -1185,32 +1176,36 @@ icl_cxgbei_conn_task_done(struct icl_conn *ic, void *arg)
 static inline bool
 ddp_sgl_check(struct ctl_sg_entry *sg, int entries, int xferlen)
 {
+#ifdef INVARIANTS
 	int total_len = 0;
+#endif
 
 	MPASS(entries > 0);
 	if (((vm_offset_t)sg[--entries].addr & 3U) != 0)
 		return (false);
 
+#ifdef INVARIANTS
 	total_len += sg[entries].len;
+#endif
 
 	while (--entries >= 0) {
 		if (((vm_offset_t)sg[entries].addr & PAGE_MASK) != 0 ||
 		    (sg[entries].len % PAGE_SIZE) != 0)
 			return (false);
+#ifdef INVARIANTS
 		total_len += sg[entries].len;
+#endif
 	}
 
 	MPASS(total_len == xferlen);
 	return (true);
 }
 
-/* XXXNP: PDU should be passed in as parameter, like on the initiator. */
-#define io_to_request_pdu(io) ((io)->io_hdr.ctl_private[CTL_PRIV_FRONTEND].ptr)
 #define io_to_ddp_state(io) ((io)->io_hdr.ctl_private[CTL_PRIV_FRONTEND2].ptr)
 
 int
-icl_cxgbei_conn_transfer_setup(struct icl_conn *ic, union ctl_io *io,
-    uint32_t *tttp, void **arg)
+icl_cxgbei_conn_transfer_setup(struct icl_conn *ic, struct icl_pdu *ip,
+    union ctl_io *io, uint32_t *tttp, void **arg)
 {
 	struct icl_cxgbei_conn *icc = ic_to_icc(ic);
 	struct toepcb *toep = icc->toep;
@@ -1233,7 +1228,6 @@ icl_cxgbei_conn_transfer_setup(struct icl_conn *ic, union ctl_io *io,
 
 	if (ctsio->ext_data_filled == 0) {
 		int first_burst;
-		struct icl_pdu *ip = io_to_request_pdu(io);
 #ifdef INVARIANTS
 		struct icl_cxgbei_pdu *icp = ip_to_icp(ip);
 

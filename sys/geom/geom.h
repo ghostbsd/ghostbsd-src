@@ -96,7 +96,6 @@ struct g_class {
 	u_int			version;
 	u_int			spare0;
 	g_taste_t		*taste;
-	g_config_t		*config;
 	g_ctl_req_t		*ctlreq;
 	g_init_t		*init;
 	g_fini_t		*fini;
@@ -269,7 +268,6 @@ int g_attr_changed(struct g_provider *pp, const char *attr, int flag);
 int g_media_changed(struct g_provider *pp, int flag);
 int g_media_gone(struct g_provider *pp, int flag);
 void g_orphan_provider(struct g_provider *pp, int error);
-void g_waitidlelock(void);
 struct g_event *g_alloc_event(int flag);
 void g_post_event_ep(g_event_t *func, void *arg, struct g_event *ep, ...);
 

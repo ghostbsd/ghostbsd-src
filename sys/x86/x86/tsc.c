@@ -32,12 +32,14 @@ __FBSDID("$FreeBSD$");
 #include "opt_clock.h"
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/cpu.h>
 #include <sys/eventhandler.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
-#include <sys/systm.h>
+#include <sys/proc.h>
+#include <sys/sched.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/timetc.h>
@@ -46,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/vdso.h>
 #include <machine/clock.h>
 #include <machine/cputypes.h>
+#include <machine/fpu.h>
 #include <machine/md_var.h>
 #include <machine/specialreg.h>
 #include <x86/vmware.h>
@@ -57,6 +60,7 @@ __FBSDID("$FreeBSD$");
 uint64_t	tsc_freq;
 int		tsc_is_invariant;
 int		tsc_perf_stat;
+static int	tsc_early_calib_exact;
 
 static eventhandler_tag tsc_levels_tag, tsc_pre_tag, tsc_post_tag;
 
@@ -84,7 +88,7 @@ SYSCTL_INT(_machdep, OID_AUTO, disable_tsc, CTLFLAG_RDTUN, &tsc_disabled, 0,
 static int	tsc_skip_calibration;
 SYSCTL_INT(_machdep, OID_AUTO, disable_tsc_calibration, CTLFLAG_RDTUN,
     &tsc_skip_calibration, 0,
-    "Disable TSC frequency calibration");
+    "Disable early TSC frequency calibration");
 
 static void tsc_freq_changed(void *arg, const struct cf_level *level,
     int status);
@@ -117,31 +121,38 @@ static struct timecounter tsc_timecounter = {
 #endif
 };
 
+static int
+tsc_freq_cpuid_vm(void)
+{
+	u_int regs[4];
+
+	if (vm_guest == VM_GUEST_NO)
+		return (false);
+	if (hv_high < 0x40000010)
+		return (false);
+	do_cpuid(0x40000010, regs);
+	tsc_freq = (uint64_t)(regs[0]) * 1000;
+	tsc_early_calib_exact = 1;
+	return (true);
+}
+
 static void
 tsc_freq_vmware(void)
 {
 	u_int regs[4];
 
-	if (hv_high >= 0x40000010) {
-		do_cpuid(0x40000010, regs);
-		tsc_freq = regs[0] * 1000;
-	} else {
-		vmware_hvcall(VMW_HVCMD_GETHZ, regs);
-		if (regs[1] != UINT_MAX)
-			tsc_freq = regs[0] | ((uint64_t)regs[1] << 32);
-	}
-	tsc_is_invariant = 1;
+	vmware_hvcall(VMW_HVCMD_GETHZ, regs);
+	if (regs[1] != UINT_MAX)
+		tsc_freq = regs[0] | ((uint64_t)regs[1] << 32);
+	tsc_early_calib_exact = 1;
 }
 
 /*
- * Calculate TSC frequency using information from the CPUID leaf 0x15
- * 'Time Stamp Counter and Nominal Core Crystal Clock'.  If leaf 0x15
- * is not functional, as it is on Skylake/Kabylake, try 0x16 'Processor
- * Frequency Information'.  Leaf 0x16 is described in the SDM as
- * informational only, but if 0x15 did not work, and TSC calibration
- * is disabled, it is the best we can get at all.  It should still be
- * an improvement over the parsing of the CPU model name in
- * tsc_freq_intel(), when available.
+ * Calculate TSC frequency using information from the CPUID leaf 0x15 'Time
+ * Stamp Counter and Nominal Core Crystal Clock'.  If leaf 0x15 is not
+ * functional, as it is on Skylake/Kabylake, try 0x16 'Processor Frequency
+ * Information'.  Leaf 0x16 is described in the SDM as informational only, but
+ * we can use this value until late calibration is complete.
  */
 static bool
 tsc_freq_cpuid(uint64_t *res)
@@ -167,8 +178,8 @@ tsc_freq_cpuid(uint64_t *res)
 	return (false);
 }
 
-static void
-tsc_freq_intel(void)
+static bool
+tsc_freq_intel_brand(uint64_t *res)
 {
 	char brand[48];
 	u_int regs[4];
@@ -205,7 +216,7 @@ tsc_freq_intel(void)
 				i = 1000000;
 				break;
 			default:
-				return;
+				return (false);
 			}
 #define	C2D(c)	((c) - '0')
 			if (p[1] == '.') {
@@ -221,17 +232,39 @@ tsc_freq_intel(void)
 				freq *= i * 1000000;
 			}
 #undef C2D
-			tsc_freq = freq;
+			*res = freq;
+			return (true);
 		}
 	}
+	return (false);
+}
+
+static void
+tsc_freq_8254(uint64_t *res)
+{
+	uint64_t tsc1, tsc2;
+	int64_t overhead;
+	int count, i;
+
+	overhead = 0;
+	for (i = 0, count = 8; i < count; i++) {
+		tsc1 = rdtsc_ordered();
+		DELAY(0);
+		tsc2 = rdtsc_ordered();
+		if (i > 0)
+			overhead += tsc2 - tsc1;
+	}
+	overhead /= count;
+
+	tsc1 = rdtsc_ordered();
+	DELAY(100000);
+	tsc2 = rdtsc_ordered();
+	tsc_freq = (tsc2 - tsc1 - overhead) * 10;
 }
 
 static void
 probe_tsc_freq(void)
 {
-	uint64_t tmp_freq, tsc1, tsc2;
-	int no_cpuid_override;
-
 	if (cpu_power_ecx & CPUID_PERF_STAT) {
 		/*
 		 * XXX Some emulators expose host CPUID without actual support
@@ -242,11 +275,6 @@ probe_tsc_freq(void)
 		DELAY(10);
 		if (rdmsr(MSR_MPERF) > 0 && rdmsr(MSR_APERF) > 0)
 			tsc_perf_stat = 1;
-	}
-
-	if (vm_guest == VM_GUEST_VMWARE) {
-		tsc_freq_vmware();
-		return;
 	}
 
 	switch (cpu_vendor_id) {
@@ -287,50 +315,52 @@ probe_tsc_freq(void)
 		break;
 	}
 
-	if (tsc_skip_calibration) {
-		if (tsc_freq_cpuid(&tmp_freq))
-			tsc_freq = tmp_freq;
-		else if (cpu_vendor_id == CPU_VENDOR_INTEL)
-			tsc_freq_intel();
-		if (tsc_freq == 0)
-			tsc_disabled = 1;
-	} else {
-		if (bootverbose)
-			printf("Calibrating TSC clock ... ");
-		tsc1 = rdtsc();
-		DELAY(1000000);
-		tsc2 = rdtsc();
-		tsc_freq = tsc2 - tsc1;
+	if (tsc_freq_cpuid_vm())
+		return;
 
-		/*
-		 * If the difference between calibrated frequency and
-		 * the frequency reported by CPUID 0x15/0x16 leafs
-		 * differ significantly, this probably means that
-		 * calibration is bogus.  It happens on machines
-		 * without 8254 timer.  The BIOS rarely properly
-		 * reports it in FADT boot flags, so just compare the
-		 * frequencies directly.
-		 */
-		if (tsc_freq_cpuid(&tmp_freq) && qabs(tsc_freq - tmp_freq) >
-		    uqmin(tsc_freq, tmp_freq)) {
-			no_cpuid_override = 0;
-			TUNABLE_INT_FETCH("machdep.disable_tsc_cpuid_override",
-			    &no_cpuid_override);
-			if (!no_cpuid_override) {
-				if (bootverbose) {
-					printf(
-	"TSC clock: calibration freq %ju Hz, CPUID freq %ju Hz%s\n",
-					    (uintmax_t)tsc_freq,
-					    (uintmax_t)tmp_freq,
-					    no_cpuid_override ? "" :
-					    ", doing CPUID override");
-				}
-				tsc_freq = tmp_freq;
-			}
-		}
+	if (vm_guest == VM_GUEST_VMWARE) {
+		tsc_freq_vmware();
+		return;
 	}
-	if (bootverbose)
-		printf("TSC clock: %ju Hz\n", (intmax_t)tsc_freq);
+
+	if (tsc_freq_cpuid(&tsc_freq)) {
+		/*
+		 * If possible, use the value obtained from CPUID as the initial
+		 * frequency.  This will be refined later during boot but is
+		 * good enough for now.  The 8254 PIT is not functional on some
+		 * newer platforms anyway, so don't delay our boot for what
+		 * might be a garbage result.  Late calibration is required if
+		 * the initial frequency was obtained from CPUID.16H, as the
+		 * derived value may be off by as much as 1%.
+		 */
+		if (bootverbose)
+			printf("Early TSC frequency %juHz derived from CPUID\n",
+			    (uintmax_t)tsc_freq);
+	} else if (tsc_skip_calibration) {
+		/*
+		 * Try to parse the brand string to obtain the nominal TSC
+		 * frequency.
+		 */
+		if (cpu_vendor_id == CPU_VENDOR_INTEL &&
+		    tsc_freq_intel_brand(&tsc_freq)) {
+			if (bootverbose)
+				printf(
+		    "Early TSC frequency %juHz derived from brand string\n",
+				    (uintmax_t)tsc_freq);
+		} else {
+			tsc_disabled = 1;
+		}
+	} else {
+		/*
+		 * Calibrate against the 8254 PIT.  This estimate will be
+		 * refined later in tsc_calib().
+		 */
+		tsc_freq_8254(&tsc_freq);
+		if (bootverbose)
+			printf(
+		    "Early TSC frequency %juHz calibrated from 8254 PIT\n",
+			    (uintmax_t)tsc_freq);
+	}
 }
 
 void
@@ -372,13 +402,18 @@ init_TSC(void)
 		break;
 	}
 #endif
-		
+
 	probe_tsc_freq();
 
 	/*
 	 * Inform CPU accounting about our boot-time clock rate.  This will
 	 * be updated if someone loads a cpufreq driver after boot that
 	 * discovers a new max frequency.
+	 *
+	 * The frequency may also be updated after late calibration is complete;
+	 * however, we register the TSC as the ticker now to avoid switching
+	 * counters after much of the kernel has already booted and potentially
+	 * sampled the CPU clock.
 	 */
 	if (tsc_freq != 0)
 		set_cputicker(rdtsc, tsc_freq, !tsc_is_invariant);
@@ -656,10 +691,47 @@ init_TSC_tc(void)
 	if (tsc_freq != 0) {
 		tsc_timecounter.tc_frequency = tsc_freq >> shift;
 		tsc_timecounter.tc_priv = (void *)(intptr_t)shift;
-		tc_init(&tsc_timecounter);
+
+		/*
+		 * Timecounter registration is deferred until after late
+		 * calibration is finished.
+		 */
 	}
 }
 SYSINIT(tsc_tc, SI_SUB_SMP, SI_ORDER_ANY, init_TSC_tc, NULL);
+
+static void
+tsc_update_freq(uint64_t new_freq)
+{
+	atomic_store_rel_64(&tsc_freq, new_freq);
+	atomic_store_rel_64(&tsc_timecounter.tc_frequency,
+	    new_freq >> (int)(intptr_t)tsc_timecounter.tc_priv);
+}
+
+/*
+ * Perform late calibration of the TSC frequency once ACPI-based timecounters
+ * are available.  At this point timehands are not set up, so we read the
+ * highest-quality timecounter directly rather than using (s)binuptime().
+ */
+void
+tsc_calibrate(void)
+{
+	uint64_t freq;
+
+	if (tsc_disabled)
+		return;
+	if (tsc_early_calib_exact)
+		goto calibrated;
+
+	fpu_kern_enter(curthread, NULL, FPU_KERN_NOCTX);
+	freq = clockcalib(rdtsc_ordered, "TSC");
+	fpu_kern_leave(curthread, NULL);
+	tsc_update_freq(freq);
+
+calibrated:
+	tc_init(&tsc_timecounter);
+	set_cputicker(rdtsc, tsc_freq, !tsc_is_invariant);
+}
 
 void
 resume_TSC(void)
@@ -752,9 +824,7 @@ tsc_freq_changed(void *arg, const struct cf_level *level, int status)
 
 	/* Total setting for this level gives the new frequency in MHz. */
 	freq = (uint64_t)level->total_set.freq * 1000000;
-	atomic_store_rel_64(&tsc_freq, freq);
-	tsc_timecounter.tc_frequency =
-	    freq >> (int)(intptr_t)tsc_timecounter.tc_priv;
+	tsc_update_freq(freq);
 }
 
 static int
@@ -767,16 +837,12 @@ sysctl_machdep_tsc_freq(SYSCTL_HANDLER_ARGS)
 	if (freq == 0)
 		return (EOPNOTSUPP);
 	error = sysctl_handle_64(oidp, &freq, 0, req);
-	if (error == 0 && req->newptr != NULL) {
-		atomic_store_rel_64(&tsc_freq, freq);
-		atomic_store_rel_64(&tsc_timecounter.tc_frequency,
-		    freq >> (int)(intptr_t)tsc_timecounter.tc_priv);
-	}
+	if (error == 0 && req->newptr != NULL)
+		tsc_update_freq(freq);
 	return (error);
 }
-
 SYSCTL_PROC(_machdep, OID_AUTO, tsc_freq,
-    CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+    CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_MPSAFE,
     0, 0, sysctl_machdep_tsc_freq, "QU",
     "Time Stamp Counter frequency");
 

@@ -744,7 +744,7 @@ ses_elm_addlstatus_proto(struct ses_elm_addlstatus_base_hdr *hdr)
 int
 ses_elm_addlstatus_eip(struct ses_elm_addlstatus_base_hdr *hdr)
 {
-	return ((hdr)->byte0 >> 4) & 0x1;
+	return ((hdr)->byte0 >> 4 & 0x1);
 }
 int
 ses_elm_addlstatus_invalid(struct ses_elm_addlstatus_base_hdr *hdr)
@@ -1339,7 +1339,6 @@ ses_process_config(enc_softc_t *enc, struct enc_fsm_state *state,
     union ccb *ccb, uint8_t **bufp, int error, int xfer_len)
 {
 	struct ses_iterator iter;
-	ses_softc_t *ses;
 	enc_cache_t *enc_cache;
 	ses_cache_t *ses_cache;
 	uint8_t *buf;
@@ -1362,7 +1361,6 @@ ses_process_config(enc_softc_t *enc, struct enc_fsm_state *state,
 
 	CAM_DEBUG(enc->periph->path, CAM_DEBUG_SUBTRACE,
 	    ("entering %s(%p, %d)\n", __func__, bufp, xfer_len));
-	ses = enc->enc_private;
 	enc_cache = &enc->enc_daemon_cache;
 	ses_cache = enc_cache->private;
 	buf = *bufp;
@@ -2754,13 +2752,6 @@ ses_init_enc(enc_softc_t *enc)
 }
 
 static int
-ses_get_enc_status(enc_softc_t *enc, int slpflag)
-{
-	/* Automatically updated, caller checks enc_cache->encstat itself */
-	return (0);
-}
-
-static int
 ses_set_enc_status(enc_softc_t *enc, uint8_t encstat, int slpflag)
 {
 	ses_control_request_t req;
@@ -2868,9 +2859,8 @@ ses_get_elm_devnames(enc_softc_t *enc, encioc_elm_devnames_t *elmdn)
  * \return	0 on success, errno otherwise.
  */
 static int
-ses_handle_string(enc_softc_t *enc, encioc_string_t *sstr, int ioc)
+ses_handle_string(enc_softc_t *enc, encioc_string_t *sstr, unsigned long ioc)
 {
-	ses_softc_t *ses;
 	enc_cache_t *enc_cache;
 	ses_cache_t *ses_cache;
 	const struct ses_enc_desc *enc_desc;
@@ -2883,12 +2873,11 @@ ses_handle_string(enc_softc_t *enc, encioc_string_t *sstr, int ioc)
 	uint8_t *buf;
 	size_t size, rsize;
 
-	ses = enc->enc_private;
 	enc_cache = &enc->enc_daemon_cache;
 	ses_cache = enc_cache->private;
 
 	/* Implement SES2r20 6.1.6 */
-	if (sstr->bufsiz > 0xffff)
+	if (sstr->bufsiz > ENC_STRING_MAX)
 		return (EINVAL); /* buffer size too large */
 
 	switch (ioc) {
@@ -2997,7 +2986,6 @@ static struct enc_vec ses_enc_vec =
 	.softc_invalidate	= ses_softc_invalidate,
 	.softc_cleanup		= ses_softc_cleanup,
 	.init_enc		= ses_init_enc,
-	.get_enc_status		= ses_get_enc_status,
 	.set_enc_status		= ses_set_enc_status,
 	.get_elm_status		= ses_get_elm_status,
 	.set_elm_status		= ses_set_elm_status,

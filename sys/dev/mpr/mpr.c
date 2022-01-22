@@ -2250,7 +2250,8 @@ mpr_periodic(void *arg)
 		mpr_reinit(sc);
 	}
 
-	callout_reset(&sc->periodic, MPR_PERIODIC_DELAY * hz, mpr_periodic, sc);
+	callout_reset_sbt(&sc->periodic, MPR_PERIODIC_DELAY * SBT_1S, 0,
+	    mpr_periodic, sc, C_PREL(1));
 }
 
 static void
@@ -3402,7 +3403,7 @@ mpr_add_chain(struct mpr_command *cm, int segsleft)
 	rem_segs = 0;
 	if (cm->cm_sglsize < (sgc_size * segsleft)) {
 		/*
-		 * rem_segs is the number of segements remaining after the
+		 * rem_segs is the number of segment remaining after the
 		 * segments that will go into the current frame.  Since it is
 		 * known that at least one more frame is required, account for
 		 * the chain element.  To know if more than one more frame is

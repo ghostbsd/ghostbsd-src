@@ -88,7 +88,6 @@ DIRDEPS+= \
 	sbin/ipf/ippool \
 	sbin/ipf/libipf \
 	sbin/ipfw \
-	sbin/iscontrol \
 	sbin/kldconfig \
 	sbin/kldload \
 	sbin/kldstat \
@@ -129,7 +128,6 @@ DIRDEPS+= \
 	sbin/savecore \
 	sbin/setkey \
 	sbin/shutdown \
-	sbin/spppcontrol \
 	sbin/swapon \
 	sbin/sysctl \
 	sbin/tunefs \

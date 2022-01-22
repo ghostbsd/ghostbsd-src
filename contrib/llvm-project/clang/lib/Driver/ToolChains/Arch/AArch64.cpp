@@ -41,18 +41,18 @@ std::string aarch64::getAArch64TargetCPU(const ArgList &Args,
   if (CPU == "native")
     return std::string(llvm::sys::getHostCPUName());
 
-  // arm64e requires v8.3a and only runs on apple-a12 and later CPUs.
-  if (Triple.isArm64e())
-    return "apple-a12";
-
   if (CPU.size())
     return CPU;
 
   if (Triple.isTargetMachineMac() &&
       Triple.getArch() == llvm::Triple::aarch64) {
-    // Apple Silicon macs default to A12 CPUs.
-    return "apple-a12";
+    // Apple Silicon macs default to M1 CPUs.
+    return "apple-m1";
   }
+
+  // arm64e requires v8.3a and only runs on apple-a12 and later CPUs.
+  if (Triple.isArm64e())
+    return "apple-a12";
 
   // Make sure we pick the appropriate Apple CPU if -arch is used or when
   // targetting a Darwin OS.
@@ -185,12 +185,25 @@ getAArch64MicroArchFeaturesFromMcpu(const Driver &D, StringRef Mcpu,
 void aarch64::getAArch64TargetFeatures(const Driver &D,
                                        const llvm::Triple &Triple,
                                        const ArgList &Args,
-                                       std::vector<StringRef> &Features) {
+                                       std::vector<StringRef> &Features,
+                                       bool ForAS) {
   Arg *A;
   bool success = true;
   // Enable NEON by default.
   Features.push_back("+neon");
-  if ((A = Args.getLastArg(options::OPT_march_EQ)))
+  llvm::StringRef WaMArch;
+  if (ForAS)
+    for (const auto *A :
+         Args.filtered(options::OPT_Wa_COMMA, options::OPT_Xassembler))
+      for (StringRef Value : A->getValues())
+        if (Value.startswith("-march="))
+          WaMArch = Value.substr(7);
+  // Call getAArch64ArchFeaturesFromMarch only if "-Wa,-march=" or
+  // "-Xassembler -march" is detected. Otherwise it may return false
+  // and causes Clang to error out.
+  if (!WaMArch.empty())
+    success = getAArch64ArchFeaturesFromMarch(D, WaMArch, Args, Features);
+  else if ((A = Args.getLastArg(options::OPT_march_EQ)))
     success = getAArch64ArchFeaturesFromMarch(D, A->getValue(), Args, Features);
   else if ((A = Args.getLastArg(options::OPT_mcpu_EQ)))
     success = getAArch64ArchFeaturesFromMcpu(D, A->getValue(), Args, Features);
@@ -209,8 +222,15 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
     success = getAArch64MicroArchFeaturesFromMcpu(
         D, getAArch64TargetCPU(Args, Triple, A), Args, Features);
 
-  if (!success)
-    D.Diag(diag::err_drv_clang_unsupported) << A->getAsString(Args);
+  if (!success) {
+    auto Diag = D.Diag(diag::err_drv_clang_unsupported);
+    // If "-Wa,-march=" is used, 'WaMArch' will contain the argument's value,
+    // while 'A' is uninitialized. Only dereference 'A' in the other case.
+    if (!WaMArch.empty())
+      Diag << "-march=" + WaMArch.str();
+    else
+      Diag << A->getAsString(Args);
+  }
 
   if (Args.getLastArg(options::OPT_mgeneral_regs_only)) {
     Features.push_back("-fp-armv8");
@@ -235,11 +255,17 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
     StringRef Scope = A->getValue();
     bool EnableRetBr = false;
     bool EnableBlr = false;
-    if (Scope != "none" && Scope != "all") {
+    bool DisableComdat = false;
+    if (Scope != "none") {
       SmallVector<StringRef, 4> Opts;
       Scope.split(Opts, ",");
       for (auto Opt : Opts) {
         Opt = Opt.trim();
+        if (Opt == "all") {
+          EnableBlr = true;
+          EnableRetBr = true;
+          continue;
+        }
         if (Opt == "retbr") {
           EnableRetBr = true;
           continue;
@@ -248,19 +274,27 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
           EnableBlr = true;
           continue;
         }
+        if (Opt == "comdat") {
+          DisableComdat = false;
+          continue;
+        }
+        if (Opt == "nocomdat") {
+          DisableComdat = true;
+          continue;
+        }
         D.Diag(diag::err_invalid_sls_hardening)
             << Scope << A->getAsString(Args);
         break;
       }
-    } else if (Scope == "all") {
-      EnableRetBr = true;
-      EnableBlr = true;
     }
 
     if (EnableRetBr)
       Features.push_back("+harden-sls-retbr");
     if (EnableBlr)
       Features.push_back("+harden-sls-blr");
+    if (DisableComdat) {
+      Features.push_back("+harden-sls-nocomdat");
+    }
   }
 
   // En/disable crc

@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause
- *
  * Copyright (c) 2020-2021 The FreeBSD Foundation
  *
  * This software was developed by Björn Zeeb under sponsorship from
@@ -30,8 +28,8 @@
  * $FreeBSD$
  */
 
-#ifndef	__LKPI_NET_IEEE80211_RADIOTAP_H
-#define	__LKPI_NET_IEEE80211_RADIOTAP_H
+#ifndef	_LINUXKPI_NET_IEEE80211_RADIOTAP_H
+#define	_LINUXKPI_NET_IEEE80211_RADIOTAP_H
 
 /* Any possibly duplicate content is only maintained in one place now. */
 #include <net80211/ieee80211_radiotap.h>
@@ -52,4 +50,4 @@ struct ieee80211_vendor_radiotap {
 	u8		data[0];
 };
 
-#endif	/* __LKPI_NET_IEEE80211_RADIOTAP_H */
+#endif	/* _LINUXKPI_NET_IEEE80211_RADIOTAP_H */

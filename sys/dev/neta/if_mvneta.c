@@ -65,6 +65,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 #include <machine/resource.h>
 
+#if defined(__aarch64__)
+#include <dev/extres/clk/clk.h>
+#endif
+
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
 
@@ -199,9 +203,6 @@ STATIC int mvneta_detach(device_t);
 /* MII */
 STATIC int mvneta_miibus_readreg(device_t, int, int);
 STATIC int mvneta_miibus_writereg(device_t, int, int, int);
-
-/* Clock */
-STATIC uint32_t mvneta_get_clk(void);
 
 static device_method_t mvneta_methods[] = {
 	/* Device interface */
@@ -343,16 +344,6 @@ static struct {
 } mvneta_intrs[] = {
 	{ mvneta_rxtxth_intr, "MVNETA aggregated interrupt" },
 };
-
-STATIC uint32_t
-mvneta_get_clk()
-{
-#if defined(__aarch64__)
-	return (A3700_TCLK_250MHZ);
-#else
-	return (get_tclk());
-#endif
-}
 
 static int
 mvneta_set_mac_address(struct mvneta_softc *sc, uint8_t *addr)
@@ -541,7 +532,9 @@ mvneta_attach(device_t self)
 #if !defined(__aarch64__)
 	uint32_t reg;
 #endif
-
+#if defined(__aarch64__)
+	clk_t clk;
+#endif
 	sc = device_get_softc(self);
 	sc->dev = self;
 
@@ -562,6 +555,27 @@ mvneta_attach(device_t self)
 	 */
 	MVNETA_WRITE(sc, MVNETA_PRXINIT, 0x00000001);
 	MVNETA_WRITE(sc, MVNETA_PTXINIT, 0x00000001);
+
+#if defined(__aarch64__)
+	error = clk_get_by_ofw_index(sc->dev, ofw_bus_get_node(sc->dev), 0,
+	    &clk);
+	if (error != 0) {
+		device_printf(sc->dev,
+			"Cannot get clock, using default frequency: %d\n",
+			A3700_TCLK_250MHZ);
+		sc->clk_freq = A3700_TCLK_250MHZ;
+	} else {
+		error = clk_get_freq(clk, &sc->clk_freq);
+		if (error != 0) {
+			device_printf(sc->dev,
+				"Cannot obtain frequency from parent clock\n");
+			bus_release_resources(sc->dev, res_spec, sc->res);
+			return (error);
+		}
+	}
+#else
+	sc->clk_freq = get_tclk();
+#endif
 
 #if !defined(__aarch64__)
 	/*
@@ -712,10 +726,8 @@ mvneta_attach(device_t self)
 		    mvneta_mediastatus, BMSR_DEFCAPMASK, sc->phy_addr,
 		    MII_OFFSET_ANY, 0);
 		if (error != 0) {
-			if (bootverbose) {
-				device_printf(self,
-				    "MII attach failed, error: %d\n", error);
-			}
+			device_printf(self, "MII attach failed, error: %d\n",
+			    error);
 			ether_ifdetach(sc->ifp);
 			mvneta_detach(self);
 			return (error);
@@ -1380,7 +1392,7 @@ mvneta_ring_init_rx_queue(struct mvneta_softc *sc, int q)
 	rx = MVNETA_RX_RING(sc, q);
 	rx->dma = rx->cpu = 0;
 	rx->queue_th_received = MVNETA_RXTH_COUNT;
-	rx->queue_th_time = (mvneta_get_clk() / 1000) / 10; /* 0.1 [ms] */
+	rx->queue_th_time = (sc->clk_freq / 1000) / 10; /* 0.1 [ms] */
 
 	/* Initialize LRO */
 	rx->lro_enabled = FALSE;
@@ -2792,6 +2804,7 @@ mvneta_tx_set_csumflag(struct ifnet *ifp,
     struct mvneta_tx_desc *t, struct mbuf *m)
 {
 	struct ether_header *eh;
+	struct ether_vlan_header *evh;
 	int csum_flags;
 	uint32_t iphl, ipoff;
 	struct ip *ip;
@@ -2806,6 +2819,9 @@ mvneta_tx_set_csumflag(struct ifnet *ifp,
 		break;
 	case ETHERTYPE_VLAN:
 		ipoff = ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN;
+		evh = mtod(m, struct ether_vlan_header *);
+		if (ntohs(evh->evl_proto) == ETHERTYPE_VLAN)
+			ipoff += ETHER_VLAN_ENCAP_LEN;
 		break;
 	default:
 		csum_flags = 0;
@@ -3385,7 +3401,7 @@ sysctl_set_queue_rxthtime(SYSCTL_HANDLER_ARGS)
 	mvneta_rx_lockq(sc, arg->queue);
 	rx = MVNETA_RX_RING(sc, arg->queue);
 	time_mvtclk = rx->queue_th_time;
-	time_us = ((uint64_t)time_mvtclk * 1000ULL * 1000ULL) / mvneta_get_clk();
+	time_us = ((uint64_t)time_mvtclk * 1000ULL * 1000ULL) / sc->clk_freq;
 	mvneta_rx_unlockq(sc, arg->queue);
 	mvneta_sc_unlock(sc);
 
@@ -3402,8 +3418,7 @@ sysctl_set_queue_rxthtime(SYSCTL_HANDLER_ARGS)
 		mvneta_sc_unlock(sc);
 		return (EINVAL);
 	}
-	time_mvtclk =
-	    (uint64_t)mvneta_get_clk() * (uint64_t)time_us / (1000ULL * 1000ULL);
+	time_mvtclk = sc->clk_freq * (uint64_t)time_us / (1000ULL * 1000ULL);
 	rx->queue_th_time = time_mvtclk;
 	reg = MVNETA_PRXITTH_RITT(rx->queue_th_time);
 	MVNETA_WRITE(sc, MVNETA_PRXITTH(arg->queue), reg);

@@ -771,10 +771,6 @@ The
 and
 .Sy edonr
 checksum algorithms require enabling the appropriate features on the pool.
-.Fx
-does not support the
-.Sy edonr
-algorithm.
 .Pp
 Please see
 .Xr zpool-features 7
@@ -1639,6 +1635,11 @@ If the property is set to
 .Sy on ,
 the dataset is shared using the default options:
 .Dl sec=sys,rw,crossmnt,no_subtree_check
+.Pp
+Please note that the options are comma-separated, unlike those found in
+.Xr exports 5 .
+This is done to negate the need for quoting, as well as to make parsing
+with scripts easier.
 .Pp
 See
 .Xr exports 5

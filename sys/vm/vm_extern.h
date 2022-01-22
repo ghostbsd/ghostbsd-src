@@ -133,5 +133,42 @@ u_int vm_active_count(void);
 u_int vm_inactive_count(void);
 u_int vm_laundry_count(void);
 u_int vm_wait_count(void);
+
+/*
+ * Is pa a multiple of alignment, which is a power-of-two?
+ */
+static inline bool
+vm_addr_align_ok(vm_paddr_t pa, u_long alignment)
+{
+#ifdef INVARIANTS
+	if (!powerof2(alignment))
+		panic("%s: alignment is not a power of 2: %#lx",
+		    __func__, alignment);
+#endif
+	return ((pa & (alignment - 1)) == 0);
+}
+
+/*
+ * Do the first and last addresses of a range match in all bits except the ones
+ * in -boundary (a power-of-two)?  For boundary == 0, all addresses match.
+ */
+static inline bool
+vm_addr_bound_ok(vm_paddr_t pa, vm_paddr_t size, vm_paddr_t boundary)
+{
+#ifdef INVARIANTS
+	if (!powerof2(boundary))
+		panic("%s: boundary is not a power of 2: %#jx",
+		    __func__, (uintmax_t)boundary);
+#endif
+	return (((pa ^ (pa + size - 1)) & -boundary) == 0);
+}
+
+static inline bool
+vm_addr_ok(vm_paddr_t pa, vm_paddr_t size, u_long alignment,
+    vm_paddr_t boundary)
+{
+	return (vm_addr_align_ok(pa, alignment) &&
+	    vm_addr_bound_ok(pa, size, boundary));
+}
 #endif				/* _KERNEL */
 #endif				/* !_VM_EXTERN_H_ */

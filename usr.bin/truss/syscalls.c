@@ -1945,11 +1945,9 @@ print_arg(struct syscall_arg *sc, unsigned long *args, register_t *retval,
 		fputs(strsig2(args[sc->offset]), fp);
 		break;
 	case Sigset: {
-		long sig;
 		sigset_t ss;
 		int i, first;
 
-		sig = args[sc->offset];
 		if (get_struct(pid, args[sc->offset], (void *)&ss,
 		    sizeof(ss)) == -1) {
 			print_pointer(fp, args[sc->offset]);
@@ -2111,7 +2109,7 @@ print_arg(struct syscall_arg *sc, unsigned long *args, register_t *retval,
 		break;
 	}
 	case Kevent11: {
-		struct kevent_freebsd11 *ke11;
+		struct freebsd11_kevent *ke11;
 		struct kevent ke;
 		int numevents = -1;
 		size_t bytes;
@@ -2123,7 +2121,7 @@ print_arg(struct syscall_arg *sc, unsigned long *args, register_t *retval,
 			numevents = retval[0];
 
 		if (numevents >= 0) {
-			bytes = sizeof(struct kevent_freebsd11) * numevents;
+			bytes = sizeof(struct freebsd11_kevent) * numevents;
 			if ((ke11 = malloc(bytes)) == NULL)
 				err(1,
 				    "Cannot malloc %zu bytes for kevent array",

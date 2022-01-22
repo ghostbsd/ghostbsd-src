@@ -43,8 +43,6 @@ AHD_DEBUG_OPTS		opt_aic79xx.h
 AHD_TMODE_ENABLE	opt_aic79xx.h	
 AHD_REG_PRETTY_PRINT	opt_aic79xx.h
 
-TWA_DEBUG		opt_twa.h
-
 # Debugging options.
 ALT_BREAK_TO_DEBUGGER	opt_kdb.h
 BREAK_TO_DEBUGGER	opt_kdb.h
@@ -81,6 +79,15 @@ BOOTVERBOSE	opt_global.h
 CALLOUT_PROFILING
 CAPABILITIES	opt_capsicum.h
 CAPABILITY_MODE	opt_capsicum.h
+CC_CDG		opt_global.h
+CC_CHD		opt_global.h
+CC_CUBIC	opt_global.h
+CC_DEFAULT	opt_cc.h
+CC_DCTCP	opt_global.h
+CC_HD		opt_global.h
+CC_HTCP		opt_global.h
+CC_NEWRENO	opt_global.h
+CC_VEGAS	opt_global.h
 COMPAT_43	opt_global.h
 COMPAT_43TTY	opt_global.h
 COMPAT_FREEBSD4	opt_global.h
@@ -91,6 +98,7 @@ COMPAT_FREEBSD9	opt_global.h
 COMPAT_FREEBSD10	opt_global.h
 COMPAT_FREEBSD11	opt_global.h
 COMPAT_FREEBSD12	opt_global.h
+COMPAT_FREEBSD13	opt_global.h
 COMPAT_LINUXKPI	opt_dontuse.h
 _COMPAT_LINUX32	opt_compat.h	# XXX: make sure opt_compat.h exists
 COMPILING_LINT	opt_global.h
@@ -156,6 +164,7 @@ MAC_NONE	opt_dontuse.h
 MAC_NTPD	opt_dontuse.h
 MAC_PARTITION	opt_dontuse.h
 MAC_PORTACL	opt_dontuse.h
+MAC_PRIORITY	opt_dontuse.h
 MAC_SEEOTHERUIDS	opt_dontuse.h
 MAC_STATIC	opt_mac.h
 MAC_STUB	opt_dontuse.h
@@ -450,7 +459,6 @@ MBUF_PROFILING
 MBUF_STRESS_TEST
 MROUTING		opt_mrouting.h
 NFSLOCKD
-PCBGROUP		opt_pcbgroup.h
 PF_DEFAULT_TO_DROP	opt_pf.h
 ROUTE_MPATH		opt_route.h
 ROUTETABLES		opt_route.h
@@ -723,11 +731,6 @@ DEV_PFLOG		opt_pf.h
 DEV_PFSYNC		opt_pf.h
 DEV_SPLASH		opt_splash.h
 DEV_VLAN		opt_vlan.h
-
-# ed driver
-ED_HPP			opt_ed.h
-ED_3C503		opt_ed.h
-ED_SIC			opt_ed.h
 
 # bce driver
 BCE_DEBUG		opt_bce.h

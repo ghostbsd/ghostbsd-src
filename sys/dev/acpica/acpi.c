@@ -281,7 +281,7 @@ TUNABLE_STR("hw.acpi.remove_interface", acpi_remove_interface,
 static int acpi_debug_objects;
 TUNABLE_INT("debug.acpi.enable_debug_objects", &acpi_debug_objects);
 SYSCTL_PROC(_debug_acpi, OID_AUTO, enable_debug_objects,
-    CTLFLAG_RW | CTLTYPE_INT | CTLFLAG_NEEDGIANT, NULL, 0,
+    CTLFLAG_RW | CTLTYPE_INT | CTLFLAG_MPSAFE, NULL, 0,
     acpi_debug_objects_sysctl, "I",
     "Enable Debug objects");
 
@@ -576,31 +576,31 @@ acpi_attach(device_t dev)
 	CTLFLAG_RD | CTLFLAG_MPSAFE, 0, "");
     SYSCTL_ADD_PROC(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "supported_sleep_state",
-	CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+	CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	0, 0, acpi_supported_sleep_state_sysctl, "A",
 	"List supported ACPI sleep states.");
     SYSCTL_ADD_PROC(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "power_button_state",
-	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	&sc->acpi_power_button_sx, 0, acpi_sleep_state_sysctl, "A",
 	"Power button ACPI sleep state.");
     SYSCTL_ADD_PROC(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "sleep_button_state",
-	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	&sc->acpi_sleep_button_sx, 0, acpi_sleep_state_sysctl, "A",
 	"Sleep button ACPI sleep state.");
     SYSCTL_ADD_PROC(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "lid_switch_state",
-	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	&sc->acpi_lid_switch_sx, 0, acpi_sleep_state_sysctl, "A",
 	"Lid ACPI sleep state. Set to S3 if you want to suspend your laptop when close the Lid.");
     SYSCTL_ADD_PROC(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "standby_state",
-	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	&sc->acpi_standby_sx, 0, acpi_sleep_state_sysctl, "A", "");
     SYSCTL_ADD_PROC(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "suspend_state",
-	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
+	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	&sc->acpi_suspend_sx, 0, acpi_sleep_state_sysctl, "A", "");
     SYSCTL_ADD_INT(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "sleep_delay", CTLFLAG_RW, &sc->acpi_sleep_delay, 0,
@@ -755,7 +755,7 @@ acpi_suspend(device_t dev)
 {
     int error;
 
-    GIANT_REQUIRED;
+    bus_topo_assert();
 
     error = bus_generic_suspend(dev);
     if (error == 0)
@@ -768,7 +768,7 @@ static int
 acpi_resume(device_t dev)
 {
 
-    GIANT_REQUIRED;
+    bus_topo_assert();
 
     acpi_set_power_children(dev, ACPI_STATE_D0);
 
@@ -779,7 +779,7 @@ static int
 acpi_shutdown(device_t dev)
 {
 
-    GIANT_REQUIRED;
+    bus_topo_assert();
 
     /* Allow children to shutdown first. */
     bus_generic_shutdown(dev);
@@ -1173,7 +1173,7 @@ acpi_get_cpus(device_t dev, device_t child, enum cpu_sets op, size_t setsize,
 			return (error);
 		if (setsize != sizeof(cpuset_t))
 			return (EINVAL);
-		CPU_AND(cpuset, &cpuset_domain[d]);
+		CPU_AND(cpuset, cpuset, &cpuset_domain[d]);
 		return (0);
 	default:
 		return (bus_generic_get_cpus(dev, child, op, setsize, cpuset));
@@ -1849,9 +1849,10 @@ acpi_bus_get_prop(device_t bus, device_t child, const char *propname,
 			memcpy(propvalue, obj->Buffer.Pointer,
 			    MIN(size, obj->Buffer.Length));
 		return (obj->Buffer.Length);
-	}
 
-	return (-1);
+	default:
+		return (0);
+	}
 }
 
 int
@@ -2259,6 +2260,15 @@ acpi_probe_child(ACPI_HANDLE handle, UINT32 level, void *context, void **status)
 		/* Never disable PCI link devices. */
 		if (acpi_MatchHid(handle, "PNP0C0F"))
 		    break;
+
+		/*
+		 * RTC Device should be enabled for CMOS register space
+		 * unless FADT indicate it is not present.
+		 * (checked in RTC probe routine.)
+		 */
+		if (acpi_MatchHid(handle, "PNP0B00"))
+		    break;
+
 		/*
 		 * Docking stations should remain enabled since the system
 		 * may be undocked at boot.
@@ -3232,10 +3242,9 @@ acpi_EnterSleepState(struct acpi_softc *sc, int state)
 #endif
 
     /*
-     * Be sure to hold Giant across DEVICE_SUSPEND/RESUME since non-MPSAFE
-     * drivers need this.
+     * Be sure to hold Giant across DEVICE_SUSPEND/RESUME
      */
-    mtx_lock(&Giant);
+    bus_topo_lock();
 
     slp_state = ACPI_SS_NONE;
 
@@ -3361,7 +3370,7 @@ backout:
     }
     sc->acpi_next_sstate = 0;
 
-    mtx_unlock(&Giant);
+    bus_topo_unlock();
 
 #ifdef EARLY_AP_STARTUP
     thread_lock(curthread);
@@ -4329,11 +4338,11 @@ acpi_debug_sysctl(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_PROC(_debug_acpi, OID_AUTO, layer,
-    CTLFLAG_RW | CTLTYPE_STRING | CTLFLAG_NEEDGIANT, "debug.acpi.layer", 0,
+    CTLFLAG_RW | CTLTYPE_STRING | CTLFLAG_MPSAFE, "debug.acpi.layer", 0,
     acpi_debug_sysctl, "A",
     "");
 SYSCTL_PROC(_debug_acpi, OID_AUTO, level,
-    CTLFLAG_RW | CTLTYPE_STRING | CTLFLAG_NEEDGIANT, "debug.acpi.level", 0,
+    CTLFLAG_RW | CTLTYPE_STRING | CTLFLAG_MPSAFE, "debug.acpi.level", 0,
     acpi_debug_sysctl, "A",
     "");
 #endif /* ACPI_DEBUG */

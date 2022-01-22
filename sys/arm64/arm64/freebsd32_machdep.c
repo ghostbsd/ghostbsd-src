@@ -27,7 +27,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/exec.h>
 #include <sys/proc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -41,6 +42,11 @@ __FBSDID("$FreeBSD$");
 #endif
 #include <compat/freebsd32/freebsd32_proto.h>
 #include <compat/freebsd32/freebsd32_signal.h>
+
+#include <vm/vm.h>
+#include <vm/vm_param.h>
+#include <vm/pmap.h>
+#include <vm/vm_map.h>
 
 extern void freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask);
 
@@ -165,11 +171,9 @@ set_fpcontext32(struct thread *td, mcontext32_vfp_t *mcp)
 static void
 get_mcontext32(struct thread *td, mcontext32_t *mcp, int flags)
 {
-	struct pcb *pcb;
 	struct trapframe *tf;
 	int i;
 
-	pcb = td->td_pcb;
 	tf = td->td_frame;
 
 	if ((flags & GET_MC_CLEAR_RET) != 0) {
@@ -315,14 +319,12 @@ freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	struct sysentvec *sysent;
 	int onstack;
 	int sig;
-	int code;
 
 	siginfo_to_siginfo32(&ksi->ksi_info, &siginfo);
 	td = curthread;
 	p = td->td_proc;
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	sig = ksi->ksi_signo;
-	code = ksi->ksi_code;
 	psp = p->p_sigacts;
 	mtx_assert(&psp->ps_mtx, MA_OWNED);
 	tf = td->td_frame;
@@ -394,7 +396,7 @@ freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	if (sysent->sv_sigcode_base != 0)
 		tf->tf_x[14] = (register_t)sysent->sv_sigcode_base;
 	else
-		tf->tf_x[14] = (register_t)(sysent->sv_psstrings -
+		tf->tf_x[14] = (register_t)(PROC_PS_STRINGS(p) -
 		    *(sysent->sv_szsigcode));
 	/* Set the mode to enter in the signal handler */
 	if ((register_t)catcher & 1)
@@ -411,20 +413,6 @@ freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 }
 
 #ifdef COMPAT_43
-/*
- * COMPAT_FREEBSD32 assumes we have this system call when COMPAT_43 is defined.
- * FreeBSD/arm provies a similar getpagesize() syscall.
- */
-#define ARM32_PAGE_SIZE 4096
-int
-ofreebsd32_getpagesize(struct thread *td,
-    struct ofreebsd32_getpagesize_args *uap)
-{
-
-	td->td_retval[0] = ARM32_PAGE_SIZE;
-	return (0);
-}
-
 /*
  * Mirror the osigreturn definition in kern_sig.c for !i386 platforms. This
  * mirrors what's connected to the FreeBSD/arm syscall.

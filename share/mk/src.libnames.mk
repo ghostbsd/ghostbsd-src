@@ -16,10 +16,12 @@ _PRIVATELIBS=	\
 		atf_c \
 		atf_cxx \
 		auditd \
+		bsddialog \
 		bsdstat \
 		cbor \
 		devdctl \
 		event1 \
+		fido2 \
 		gmock \
 		gtest \
 		gmock_main \
@@ -33,6 +35,10 @@ _PRIVATELIBS=	\
 		unbound \
 		zstd
 
+# Let projects based on FreeBSD append to _PRIVATELIBS
+# by maintaining their own LOCAL_PRIVATELIBS list.
+_PRIVATELIBS+=	${LOCAL_PRIVATELIBS}
+
 _INTERNALLIBS=	\
 		amu \
 		bsnmptools \
@@ -42,6 +48,7 @@ _INTERNALLIBS=	\
 		fifolog \
 		ifconfig \
 		ipf \
+		iscsiutil \
 		lpr \
 		lua \
 		lutok \
@@ -75,6 +82,10 @@ _INTERNALLIBS=	\
 		wpatls \
 		wpautils \
 		wpawps
+
+# Let projects based on FreeBSD append to _INTERNALLIBS
+# by maintaining their own LOCAL_INTERNALLIBS list.
+_INTERNALLIBS+=	${LOCAL_INTERNALLIBS}
 
 _LIBRARIES=	\
 		${_PRIVATELIBS} \
@@ -128,6 +139,7 @@ _LIBRARIES=	\
 		execinfo \
 		fetch \
 		figpar \
+		formw \
 		geom \
 		gpio \
 		gssapi \
@@ -258,16 +270,25 @@ LIBVERIEXEC?=	${LIBVERIEXECDIR}/libveriexec.a
 # 2nd+ order consumers.  Auto-generating this would be better.
 _DP_80211=	sbuf bsdxml
 _DP_9p=		sbuf
+# XXX: Not bootstrapped so uses host version on non-FreeBSD, so don't use a
+# FreeBSD-specific dependency list
+.if ${.MAKE.OS} == "FreeBSD" || !defined(BOOTSTRAPPING)
 _DP_archive=	z bz2 lzma bsdxml zstd
+.endif
+_DP_avl=	spl
+_DP_bsddialog=	formw ncursesw tinfow
 _DP_zstd=	pthread
 .if ${MK_BLACKLIST} != "no"
 _DP_blacklist+=	pthread
 .endif
 _DP_crypto=	pthread
+# See comment by _DP_archive above
+.if ${.MAKE.OS} == "FreeBSD" || !defined(BOOTSTRAPPING)
 .if ${MK_OPENSSL} != "no"
 _DP_archive+=	crypto
 .else
 _DP_archive+=	md
+.endif
 .endif
 _DP_sqlite3=	pthread
 _DP_ssl=	crypto
@@ -324,7 +345,7 @@ _DP_fetch=	ssl crypto
 _DP_fetch=	md
 .endif
 _DP_execinfo=	elf
-_DP_dwarf=	elf
+_DP_dwarf=	elf z
 _DP_dpv=	dialog figpar util tinfow ncursesw
 _DP_dialog=	tinfow ncursesw m
 _DP_cuse=	pthread
@@ -339,6 +360,7 @@ _DP_pam=	radius tacplus opie md util
 _DP_pam+=	krb5
 .endif
 .if ${MK_OPENSSH} != "no"
+_DP_fido2+=	crypto z
 _DP_pam+=	ssh
 .endif
 .if ${MK_NIS} != "no"
@@ -378,6 +400,8 @@ _DP_stats=	sbuf pthread
 _DP_stdthreads=	pthread
 _DP_tacplus=	md
 _DP_ncursesw=	tinfow
+_DP_formw=	ncursesw
+_DP_nvpair=	spl
 _DP_panelw=	ncursesw
 _DP_rpcsec_gss=	gssapi
 _DP_smb=	kiconv
@@ -389,9 +413,9 @@ _DP_uutil=	avl spl
 _DP_zfs=	md pthread umem util uutil m avl bsdxml crypto geom nvpair \
 	z zfs_core zutil
 _DP_zfsbootenv= zfs nvpair
-_DP_zfs_core=	nvpair
+_DP_zfs_core=	nvpair spl zutil
 _DP_zpool=	md pthread z icp spl nvpair avl umem
-_DP_zutil=	avl tpool
+_DP_zutil=	avl geom m tpool
 _DP_be=		zfs spl nvpair zfsbootenv
 _DP_netmap=
 _DP_ifconfig=	m
@@ -450,8 +474,12 @@ LDADD_${_l}?=	${LDADD_${_l}_L} -l${_l:S/${PIE_SUFFIX}//}${PIE_SUFFIX}
 LDADD_${_l}?=	${LDADD_${_l}_L} -l${_l}
 .endif
 # Add in all dependencies for static linkage.
+# Bootstrapping from non-FreeBSD needs special handling, since it overrides
+# NO_SHARED back to yes despite only building static versions of bootstrap
+# libraries (see tools/build/mk/Makefile.boot.pre).
 .if defined(_DP_${_l}) && (${_INTERNALLIBS:M${_l}} || \
-    (defined(NO_SHARED) && ${NO_SHARED:tl} != "no"))
+    (defined(NO_SHARED) && ${NO_SHARED:tl} != "no") || \
+    (defined(BOOTSTRAPPING) && ${.MAKE.OS} != "FreeBSD"))
 .for _d in ${_DP_${_l}}
 DPADD_${_l}+=	${DPADD_${_d}}
 LDADD_${_l}+=	${LDADD_${_d}}
@@ -536,6 +564,9 @@ LIBIFCONFIG?=	${LIBIFCONFIGDIR}/libifconfig${PIE_SUFFIX}.a
 
 LIBIPFDIR=	${_LIB_OBJTOP}/sbin/ipf/libipf
 LIBIPF?=	${LIBIPFDIR}/libipf${PIE_SUFFIX}.a
+
+LIBISCSIUTILDIR=	${_LIB_OBJTOP}/lib/libiscsiutil
+LIBISCSIUTIL?=	${LIBISCSIUTILDIR}/libiscsiutil${PIE_SUFFIX}.a
 
 LIBTELNETDIR=	${_LIB_OBJTOP}/lib/libtelnet
 LIBTELNET?=	${LIBTELNETDIR}/libtelnet${PIE_SUFFIX}.a
@@ -690,6 +721,7 @@ LIBCAP_SYSCTLDIR=	${OBJTOP}/lib/libcasper/services/cap_sysctl
 LIBCAP_SYSLOGDIR=	${OBJTOP}/lib/libcasper/services/cap_syslog
 LIBCBORDIR=	${OBJTOP}/lib/libcbor
 LIBBSDXMLDIR=	${OBJTOP}/lib/libexpat
+LIBFIDO2DIR=	${OBJTOP}/lib/libfido2
 LIBKVMDIR=	${OBJTOP}/lib/libkvm
 LIBPTHREADDIR=	${OBJTOP}/lib/libthr
 LIBMDIR=	${OBJTOP}/lib/msun

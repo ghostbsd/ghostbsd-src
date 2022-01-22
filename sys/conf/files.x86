@@ -79,6 +79,9 @@ dev/bxe/57710_init_values.c     optional	bxe pci
 dev/bxe/57711_init_values.c     optional	bxe pci
 dev/bxe/57712_init_values.c     optional	bxe pci
 dev/coretemp/coretemp.c		optional	coretemp
+dev/cp/cpddk.c			optional	cp \
+	compile-with "${NORMAL_C} ${NO_WMISLEADING_INDENTATION}"
+dev/cp/if_cp.c			optional	cp
 dev/cpuctl/cpuctl.c		optional	cpuctl
 dev/dpms/dpms.c			optional	dpms
 dev/fb/fb.c			optional	fb | vga
@@ -140,6 +143,7 @@ dev/hyperv/vmbus/vmbus_xact.c				optional	hyperv
 dev/ichwd/ichwd.c		optional	ichwd
 dev/imcsmb/imcsmb.c		optional	imcsmb
 dev/imcsmb/imcsmb_pci.c		optional	imcsmb pci
+dev/intel/pchtherm.c		optional	pchtherm
 dev/intel/spi.c			optional	intelspi
 dev/io/iodev.c			optional	io
 dev/iommu/busdma_iommu.c	optional	acpi iommu pci
@@ -331,4 +335,4 @@ x86/x86/ucode.c			standard
 x86/x86/delay.c			standard
 x86/xen/hvm.c			optional	xenhvm
 x86/xen/xen_intr.c		optional	xenhvm
-x86/xen/xen_apic.c		optional	xenhvm
+x86/xen/xen_apic.c		optional	xenhvm smp

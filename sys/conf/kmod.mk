@@ -80,8 +80,8 @@ OBJCOPY?=	objcopy
 
 .SUFFIXES: .out .o .c .cc .cxx .C .y .l .s .S .m
 
-# amd64 and mips use direct linking for kmod, all others use shared binaries
-.if ${MACHINE_CPUARCH} != amd64 && ${MACHINE_CPUARCH} != mips
+# amd64 uses direct linking for kmod, all others use shared binaries
+.if ${MACHINE_CPUARCH} != amd64
 __KLD_SHARED=yes
 .else
 __KLD_SHARED=no
@@ -173,10 +173,6 @@ LDFLAGS+=	--no-toc-optimize
 .endif
 .endif
 
-.if ${MACHINE_CPUARCH} == mips
-CFLAGS+=	-G0 -fno-pic -mno-abicalls -mlong-calls
-.endif
-
 .if defined(DEBUG) || defined(DEBUG_FLAGS)
 CTFFLAGS+=	-g
 .endif
@@ -238,8 +234,8 @@ EXPORT_SYMS?=	NO
 CLEANFILES+=	export_syms
 .endif
 
-.if exists(${SYSDIR}/conf/ldscript.kmod.${MACHINE_ARCH})
-LDSCRIPT_FLAGS?= -T ${SYSDIR}/conf/ldscript.kmod.${MACHINE_ARCH}
+.if exists(${SYSDIR}/conf/ldscript.kmod.${MACHINE})
+LDSCRIPT_FLAGS?= -T ${SYSDIR}/conf/ldscript.kmod.${MACHINE}
 .endif
 
 .if ${__KLD_SHARED} == yes

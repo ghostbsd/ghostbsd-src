@@ -242,7 +242,7 @@ linux_pci_find(device_t dev, const struct pci_device_id **idp)
 	subdevice = pci_get_subdevice(dev);
 
 	spin_lock(&pci_lock);
-	list_for_each_entry(pdrv, &pci_drivers, links) {
+	list_for_each_entry(pdrv, &pci_drivers, node) {
 		for (id = pdrv->id_table; id->vendor != 0; id++) {
 			if (vendor == id->vendor &&
 			    (PCI_ANY_ID == id->device || device == id->device) &&
@@ -640,16 +640,16 @@ _linux_pci_register_driver(struct pci_driver *pdrv, devclass_t dc)
 
 	linux_set_current(curthread);
 	spin_lock(&pci_lock);
-	list_add(&pdrv->links, &pci_drivers);
+	list_add(&pdrv->node, &pci_drivers);
 	spin_unlock(&pci_lock);
 	pdrv->bsddriver.name = pdrv->name;
 	pdrv->bsddriver.methods = pci_methods;
 	pdrv->bsddriver.size = sizeof(struct pci_dev);
 
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	error = devclass_add_driver(dc, &pdrv->bsddriver,
 	    BUS_PASS_DEFAULT, &pdrv->bsdclass);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 	return (-error);
 }
 
@@ -690,14 +690,17 @@ pci_resource_start(struct pci_dev *pdev, int bar)
 	struct resource_list_entry *rle;
 	rman_res_t newstart;
 	device_t dev;
+	int error;
 
 	if ((rle = linux_pci_get_bar(pdev, bar, true)) == NULL)
 		return (0);
 	dev = pdev->pdrv != NULL && pdev->pdrv->isdrm ?
 	    device_get_parent(pdev->dev.bsddev) : pdev->dev.bsddev;
-	if (BUS_TRANSLATE_RESOURCE(dev, rle->type, rle->start, &newstart)) {
-		device_printf(pdev->dev.bsddev, "translate of %#jx failed\n",
-		    (uintmax_t)rle->start);
+	error = bus_translate_resource(dev, rle->type, rle->start, &newstart);
+	if (error != 0) {
+		device_printf(pdev->dev.bsddev,
+		    "translate of %#jx failed: %d\n",
+		    (uintmax_t)rle->start, error);
 		return (0);
 	}
 	return (newstart);
@@ -734,12 +737,12 @@ linux_pci_unregister_driver(struct pci_driver *pdrv)
 	bus = devclass_find("pci");
 
 	spin_lock(&pci_lock);
-	list_del(&pdrv->links);
+	list_del(&pdrv->node);
 	spin_unlock(&pci_lock);
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	if (bus != NULL)
 		devclass_delete_driver(bus, &pdrv->bsddriver);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 }
 
 void
@@ -750,12 +753,12 @@ linux_pci_unregister_drm_driver(struct pci_driver *pdrv)
 	bus = devclass_find("vgapci");
 
 	spin_lock(&pci_lock);
-	list_del(&pdrv->links);
+	list_del(&pdrv->node);
 	spin_unlock(&pci_lock);
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	if (bus != NULL)
 		devclass_delete_driver(bus, &pdrv->bsddriver);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 }
 
 CTASSERT(sizeof(dma_addr_t) <= sizeof(uint64_t));
@@ -1060,11 +1063,9 @@ dma_pool_obj_import(void *arg, void **store, int count, int domain __unused,
     int flags)
 {
 	struct dma_pool *pool = arg;
-	struct linux_dma_priv *priv;
 	struct linux_dma_obj *obj;
 	int error, i;
 
-	priv = pool->pool_device->dma_priv;
 	for (i = 0; i < count; i++) {
 		obj = uma_zalloc(linux_dma_obj_zone, flags);
 		if (obj == NULL)
@@ -1087,11 +1088,9 @@ static void
 dma_pool_obj_release(void *arg, void **store, int count)
 {
 	struct dma_pool *pool = arg;
-	struct linux_dma_priv *priv;
 	struct linux_dma_obj *obj;
 	int i;
 
-	priv = pool->pool_device->dma_priv;
 	for (i = 0; i < count; i++) {
 		obj = store[i];
 		bus_dmamem_free(pool->pool_dmat, obj->vaddr, obj->dmamap);

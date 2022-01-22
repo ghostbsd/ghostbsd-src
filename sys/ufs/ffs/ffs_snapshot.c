@@ -265,7 +265,7 @@ ffs_snapshot(mp, snapfile)
 	 */
 restart:
 	NDINIT(&nd, CREATE, LOCKPARENT | LOCKLEAF | NOCACHE, UIO_SYSSPACE,
-	    snapfile, td);
+	    snapfile);
 	if ((error = namei(&nd)) != 0)
 		return (error);
 	if (nd.ni_vp != NULL) {
@@ -1084,7 +1084,8 @@ expunge_ufs1(snapvp, cancelip, fs, acctfunc, expungetype, clearmode)
 	dip->di_size = 0;
 	dip->di_blocks = 0;
 	dip->di_flags &= ~SF_SNAPSHOT;
-	bzero(&dip->di_db[0], (UFS_NDADDR + UFS_NIADDR) * sizeof(ufs1_daddr_t));
+	bzero(dip->di_db, UFS_NDADDR * sizeof(ufs1_daddr_t));
+	bzero(dip->di_ib, UFS_NIADDR * sizeof(ufs1_daddr_t));
 	bdwrite(bp);
 	/*
 	 * Now go through and expunge all the blocks in the file
@@ -1366,7 +1367,8 @@ expunge_ufs2(snapvp, cancelip, fs, acctfunc, expungetype, clearmode)
 	dip->di_size = 0;
 	dip->di_blocks = 0;
 	dip->di_flags &= ~SF_SNAPSHOT;
-	bzero(&dip->di_db[0], (UFS_NDADDR + UFS_NIADDR) * sizeof(ufs2_daddr_t));
+	bzero(dip->di_db, UFS_NDADDR * sizeof(ufs2_daddr_t));
+	bzero(dip->di_ib, UFS_NIADDR * sizeof(ufs2_daddr_t));
 	if (clearmode || cancelip->i_effnlink == 0)
 		dip->di_mode = 0;
 	else
@@ -2124,7 +2126,6 @@ ffs_snapshot_mount(mp)
 	}
 	VOP_UNLOCK(vp);
 	VI_LOCK(devvp);
-	ASSERT_VOP_LOCKED(devvp, "ffs_snapshot_mount");
 	sn->sn_listsize = snaplistsize;
 	sn->sn_blklist = (daddr_t *)snapblklist;
 	devvp->v_vflag |= VV_COPYONWRITE;
@@ -2172,7 +2173,6 @@ ffs_snapshot_unmount(mp)
 		sn = devvp->v_rdev->si_snapdata;
 	}
 	try_free_snapdata(devvp);
-	ASSERT_VOP_LOCKED(devvp, "ffs_snapshot_unmount");
 }
 
 /*

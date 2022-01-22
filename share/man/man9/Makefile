@@ -948,7 +948,8 @@ MLINKS+=crypto_driver.9 crypto_copyback.9 \
 	crypto_driver.9 CRYPTODEV_PROCESS.9 \
 	crypto_driver.9 hmac_init_ipad.9 \
 	crypto_driver.9 hmac_init_opad.9
-MLINKS+=crypto_request.9 crypto_destroyreq.9 \
+MLINKS+=crypto_request.9 crypto_clonereq.9 \
+	crypto_request.9 crypto_destroyreq.9 \
 	crypto_request.9 crypto_dispatch.9 \
 	crypto_request.9 crypto_freereq.9 \
 	crypto_request.9 crypto_getreq.9 \
@@ -1313,7 +1314,6 @@ MLINKS+=ithread.9 ithread_add_handler.9 \
 	ithread.9 ithread_schedule.9
 MLINKS+=kernacc.9 useracc.9
 MLINKS+=kernel_mount.9 free_mntarg.9 \
-	kernel_mount.9 kernel_vmount.9 \
 	kernel_mount.9 mount_arg.9 \
 	kernel_mount.9 mount_argb.9 \
 	kernel_mount.9 mount_argf.9 \
@@ -2330,6 +2330,17 @@ MLINKS+=vm_map_stack.9 vm_map_growstack.9
 MLINKS+=vm_map_wire.9 vm_map_wire_mapped.9 \
 	vm_page_wire.9 vm_page_unwire.9 \
 	vm_page_wire.9 vm_page_unwire_noq.9
+MLINKS+=vm_page_alloc.9 vm_page_alloc_after.9 \
+	vm_page_alloc.9 vm_page_alloc_contig.9 \
+	vm_page_alloc.9 vm_page_alloc_contig_domain.9 \
+	vm_page_alloc.9 vm_page_alloc_domain.9 \
+	vm_page_alloc.9 vm_page_alloc_domain_after.9 \
+	vm_page_alloc.9 vm_page_alloc_freelist.9 \
+	vm_page_alloc.9 vm_page_alloc_freelist_domain.9 \
+	vm_page_alloc.9 vm_page_alloc_noobj.9 \
+	vm_page_alloc.9 vm_page_alloc_noobj_contig.9 \
+	vm_page_alloc.9 vm_page_alloc_noobj_contig_domain.9 \
+	vm_page_alloc.9 vm_page_alloc_noobj_domain.9
 MLINKS+=vm_page_bits.9 vm_page_clear_dirty.9 \
 	vm_page_bits.9 vm_page_dirty.9 \
 	vm_page_bits.9 vm_page_is_valid.9 \
@@ -2342,13 +2353,10 @@ MLINKS+=vm_page_busy.9 vm_page_busied.9 \
 	vm_page_busy.9 vm_page_busy_downgrade.9 \
 	vm_page_busy.9 vm_page_busy_sleep.9 \
 	vm_page_busy.9 vm_page_sbusied.9 \
-	vm_page_busy.9 vm_page_sbusy.9 \
-	vm_page_busy.9 vm_page_sleep_if_busy.9 \
 	vm_page_busy.9 vm_page_sunbusy.9 \
 	vm_page_busy.9 vm_page_trysbusy.9 \
 	vm_page_busy.9 vm_page_tryxbusy.9 \
 	vm_page_busy.9 vm_page_xbusied.9 \
-	vm_page_busy.9 vm_page_xbusy.9 \
 	vm_page_busy.9 vm_page_xunbusy.9 \
 	vm_page_busy.9 vm_page_assert_sbusied.9 \
 	vm_page_busy.9 vm_page_assert_unbusied.9 \

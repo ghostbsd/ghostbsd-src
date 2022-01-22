@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/queue.h>
 #include <machine/bus.h>
 #include <sys/random.h>
+#include <sys/refcount.h>
 #include <sys/rman.h>
 #include <sys/sbuf.h>
 #include <sys/selinfo.h>
@@ -140,7 +141,7 @@ struct _device {
 	int		unit;		/**< current unit number */
 	char*		nameunit;	/**< name+unit e.g. foodev0 */
 	char*		desc;		/**< driver specific description */
-	int		busy;		/**< count of calls to device_busy() */
+	u_int		busy;		/**< count of calls to device_busy() */
 	device_state_t	state;		/**< current device state  */
 	uint32_t	devflags;	/**< api level flags for device_get_flags() */
 	u_int		flags;		/**< internal device flags  */
@@ -244,7 +245,7 @@ devclass_sysctl_init(devclass_t dc)
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 	SYSCTL_ADD_PROC(&dc->sysctl_ctx, SYSCTL_CHILDREN(dc->sysctl_tree),
 	    OID_AUTO, "%parent",
-	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    dc, DEVCLASS_SYSCTL_PARENT, devclass_sysctl_handler, "A",
 	    "parent class");
 }
@@ -266,6 +267,7 @@ device_sysctl_handler(SYSCTL_HANDLER_ARGS)
 
 	sbuf_new_for_sysctl(&sb, NULL, 1024, req);
 	sbuf_clear_flags(&sb, SBUF_INCLUDENUL);
+	bus_topo_lock();
 	switch (arg2) {
 	case DEVICE_SYSCTL_DESC:
 		sbuf_cat(&sb, dev->desc ? dev->desc : "");
@@ -283,10 +285,12 @@ device_sysctl_handler(SYSCTL_HANDLER_ARGS)
 		sbuf_cat(&sb, dev->parent ? dev->parent->nameunit : "");
 		break;
 	default:
-		sbuf_delete(&sb);
-		return (EINVAL);
+		error = EINVAL;
+		goto out;
 	}
 	error = sbuf_finish(&sb);
+out:
+	bus_topo_unlock();
 	sbuf_delete(&sb);
 	return (error);
 }
@@ -306,33 +310,33 @@ device_sysctl_init(device_t dev)
 	    dev->nameunit + strlen(dc->name),
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "", "device_index");
 	SYSCTL_ADD_PROC(&dev->sysctl_ctx, SYSCTL_CHILDREN(dev->sysctl_tree),
-	    OID_AUTO, "%desc", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+	    OID_AUTO, "%desc", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    dev, DEVICE_SYSCTL_DESC, device_sysctl_handler, "A",
 	    "device description");
 	SYSCTL_ADD_PROC(&dev->sysctl_ctx, SYSCTL_CHILDREN(dev->sysctl_tree),
 	    OID_AUTO, "%driver",
-	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    dev, DEVICE_SYSCTL_DRIVER, device_sysctl_handler, "A",
 	    "device driver name");
 	SYSCTL_ADD_PROC(&dev->sysctl_ctx, SYSCTL_CHILDREN(dev->sysctl_tree),
 	    OID_AUTO, "%location",
-	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    dev, DEVICE_SYSCTL_LOCATION, device_sysctl_handler, "A",
 	    "device location relative to parent");
 	SYSCTL_ADD_PROC(&dev->sysctl_ctx, SYSCTL_CHILDREN(dev->sysctl_tree),
 	    OID_AUTO, "%pnpinfo",
-	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    dev, DEVICE_SYSCTL_PNPINFO, device_sysctl_handler, "A",
 	    "device identification");
 	SYSCTL_ADD_PROC(&dev->sysctl_ctx, SYSCTL_CHILDREN(dev->sysctl_tree),
 	    OID_AUTO, "%parent",
-	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    dev, DEVICE_SYSCTL_PARENT, device_sysctl_handler, "A",
 	    "parent device");
 	if (bus_get_domain(dev, &domain) == 0)
 		SYSCTL_ADD_INT(&dev->sysctl_ctx,
 		    SYSCTL_CHILDREN(dev->sysctl_tree), OID_AUTO, "%domain",
-		    CTLFLAG_RD, NULL, domain, "NUMA domain");
+		    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, domain, "NUMA domain");
 }
 
 static void
@@ -862,6 +866,34 @@ static kobj_method_t null_methods[] = {
 };
 
 DEFINE_CLASS(null, null_methods, 0);
+
+void
+bus_topo_assert()
+{
+
+	GIANT_REQUIRED;	
+}
+
+struct mtx *
+bus_topo_mtx(void)
+{
+
+	return (&Giant);
+}
+
+void
+bus_topo_lock(void)
+{
+
+	mtx_lock(bus_topo_mtx());
+}
+
+void
+bus_topo_unlock(void)
+{
+
+	mtx_unlock(bus_topo_mtx());
+}
 
 /*
  * Bus pass implementation
@@ -2077,7 +2109,7 @@ device_probe_child(device_t dev, device_t child)
 	/* We should preserve the devclass (or lack of) set by the bus. */
 	int hasclass = (child->devclass != NULL);
 
-	GIANT_REQUIRED;
+	bus_topo_assert();
 
 	dc = dev->devclass;
 	if (!dc)
@@ -2634,13 +2666,13 @@ device_disable(device_t dev)
 void
 device_busy(device_t dev)
 {
-	if (dev->state < DS_ATTACHING)
-		panic("device_busy: called for unattached device");
-	if (dev->busy == 0 && dev->parent)
+
+	/*
+	 * Mark the device as busy, recursively up the tree if this busy count
+	 * goes 0->1.
+	 */
+	if (refcount_acquire(&dev->busy) == 0 && dev->parent != NULL)
 		device_busy(dev->parent);
-	dev->busy++;
-	if (dev->state == DS_ATTACHED)
-		dev->state = DS_BUSY;
 }
 
 /**
@@ -2649,17 +2681,12 @@ device_busy(device_t dev)
 void
 device_unbusy(device_t dev)
 {
-	if (dev->busy != 0 && dev->state != DS_BUSY &&
-	    dev->state != DS_ATTACHING)
-		panic("device_unbusy: called for non-busy device %s",
-		    device_get_nameunit(dev));
-	dev->busy--;
-	if (dev->busy == 0) {
-		if (dev->parent)
-			device_unbusy(dev->parent);
-		if (dev->state == DS_BUSY)
-			dev->state = DS_ATTACHED;
-	}
+
+	/*
+	 * Mark the device as unbsy, recursively if this is the last busy count.
+	 */
+	if (refcount_release(&dev->busy) && dev->parent != NULL)
+		device_unbusy(dev->parent);
 }
 
 /**
@@ -2900,7 +2927,7 @@ device_probe(device_t dev)
 {
 	int error;
 
-	GIANT_REQUIRED;
+	bus_topo_assert();
 
 	if (dev->state >= DS_ALIVE)
 		return (-1);
@@ -2934,7 +2961,7 @@ device_probe_and_attach(device_t dev)
 {
 	int error;
 
-	GIANT_REQUIRED;
+	bus_topo_assert();
 
 	error = device_probe(dev);
 	if (error == -1)
@@ -3004,10 +3031,7 @@ device_attach(device_t dev)
 	attachentropy = (uint16_t)(get_cyclecount() - attachtime);
 	random_harvest_direct(&attachentropy, sizeof(attachentropy), RANDOM_ATTACH);
 	device_sysctl_update(dev);
-	if (dev->busy)
-		dev->state = DS_BUSY;
-	else
-		dev->state = DS_ATTACHED;
+	dev->state = DS_ATTACHED;
 	dev->flags &= ~DF_DONENOMATCH;
 	EVENTHANDLER_DIRECT_INVOKE(device_attach, dev);
 	devadded(dev);
@@ -3035,10 +3059,10 @@ device_detach(device_t dev)
 {
 	int error;
 
-	GIANT_REQUIRED;
+	bus_topo_assert();
 
 	PDEBUG(("%s", DEVICENAME(dev)));
-	if (dev->state == DS_BUSY)
+	if (dev->busy > 0)
 		return (EBUSY);
 	if (dev->state == DS_ATTACHING) {
 		device_printf(dev, "device in attaching state! Deferring detach.\n");
@@ -3090,7 +3114,7 @@ int
 device_quiesce(device_t dev)
 {
 	PDEBUG(("%s", DEVICENAME(dev)));
-	if (dev->state == DS_BUSY)
+	if (dev->busy > 0)
 		return (EBUSY);
 	if (dev->state != DS_ATTACHED)
 		return (0);
@@ -4242,6 +4266,24 @@ bus_generic_adjust_resource(device_t dev, device_t child, int type,
 	return (EINVAL);
 }
 
+/*
+ * @brief Helper function for implementing BUS_TRANSLATE_RESOURCE().
+ *
+ * This simple implementation of BUS_TRANSLATE_RESOURCE() simply calls the
+ * BUS_TRANSLATE_RESOURCE() method of the parent of @p dev.  If there is no
+ * parent, no translation happens.
+ */
+int
+bus_generic_translate_resource(device_t dev, int type, rman_res_t start,
+    rman_res_t *newstart)
+{
+	if (dev->parent)
+		return (BUS_TRANSLATE_RESOURCE(dev->parent, type, start,
+		    newstart));
+	*newstart = start;
+	return (0);
+}
+
 /**
  * @brief Helper function for implementing BUS_ALLOC_RESOURCE().
  *
@@ -4670,6 +4712,21 @@ bus_adjust_resource(device_t dev, int type, struct resource *r, rman_res_t start
 	if (dev->parent == NULL)
 		return (EINVAL);
 	return (BUS_ADJUST_RESOURCE(dev->parent, dev, type, r, start, end));
+}
+
+/**
+ * @brief Wrapper function for BUS_TRANSLATE_RESOURCE().
+ *
+ * This function simply calls the BUS_TRANSLATE_RESOURCE() method of the
+ * parent of @p dev.
+ */
+int
+bus_translate_resource(device_t dev, int type, rman_res_t start,
+    rman_res_t *newstart)
+{
+	if (dev->parent == NULL)
+		return (EINVAL);
+	return (BUS_TRANSLATE_RESOURCE(dev->parent, type, start, newstart));
 }
 
 /**
@@ -5681,7 +5738,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	int error, old;
 
 	/* Locate the device to control. */
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	req = (struct devreq *)data;
 	switch (cmd) {
 	case DEV_ATTACH:
@@ -5708,7 +5765,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		break;
 	}
 	if (error) {
-		mtx_unlock(&Giant);
+		bus_topo_unlock();
 		return (error);
 	}
 
@@ -5929,7 +5986,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		    req->dr_flags);
 		break;
 	}
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 	return (error);
 }
 
@@ -5951,7 +6008,7 @@ devctl2_init(void)
  */
 static int obsolete_panic = 0;
 SYSCTL_INT(_debug, OID_AUTO, obsolete_panic, CTLFLAG_RWTUN, &obsolete_panic, 0,
-    "Panic when obsolete features are used (0 = never, 1 = if osbolete, "
+    "Panic when obsolete features are used (0 = never, 1 = if obsolete, "
     "2 = if deprecated)");
 
 static void

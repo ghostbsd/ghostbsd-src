@@ -46,6 +46,7 @@ M=		${MACHINE}
 
 AWK?=		awk
 CP?=		cp
+ELFDUMP?=	elfdump
 NM?=		nm
 OBJCOPY?=	objcopy
 SIZE?=		size
@@ -73,9 +74,6 @@ CFLAGS=	${COPTFLAGS} ${DEBUG}
 CFLAGS+= ${INCLUDES} -D_KERNEL -DHAVE_KERNEL_OPTION_HEADERS -include opt_global.h
 CFLAGS_PARAM_INLINE_UNIT_GROWTH?=100
 CFLAGS_PARAM_LARGE_FUNCTION_GROWTH?=1000
-.if ${MACHINE_CPUARCH} == "mips"
-CFLAGS_ARCH_PARAMS?=--param max-inline-insns-single=1000 -DMACHINE_ARCH='"${MACHINE_ARCH}"'
-.endif
 CFLAGS.gcc+= -fms-extensions -finline-limit=${INLINE_LIMIT}
 CFLAGS.gcc+= --param inline-unit-growth=${CFLAGS_PARAM_INLINE_UNIT_GROWTH}
 CFLAGS.gcc+= --param large-function-growth=${CFLAGS_PARAM_LARGE_FUNCTION_GROWTH}
@@ -90,7 +88,9 @@ WERROR?=	-Werror
 CFLAGS+=	-fno-common
 
 # XXX LOCORE means "don't declare C stuff" not "for locore.s".
-ASM_CFLAGS= -x assembler-with-cpp -DLOCORE ${CFLAGS} ${ASM_CFLAGS.${.IMPSRC:T}} 
+ASM_CFLAGS= -x assembler-with-cpp -DLOCORE ${CFLAGS} ${ASM_CFLAGS.${.IMPSRC:T}}
+
+COMPAT_FREEBSD32_ENABLED!= grep COMPAT_FREEBSD32 opt_global.h || true ; echo
 
 KASAN_ENABLED!=	grep KASAN opt_global.h || true ; echo
 .if !empty(KASAN_ENABLED)
@@ -100,7 +100,8 @@ SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kasan \
 		-mllvm -asan-instrument-dynamic-allocas=true \
 		-mllvm -asan-globals=true \
 		-mllvm -asan-use-after-scope=true \
-		-mllvm -asan-instrumentation-with-call-threshold=0
+		-mllvm -asan-instrumentation-with-call-threshold=0 \
+		-mllvm -asan-instrument-byval=false
 .endif
 
 KCSAN_ENABLED!=	grep KCSAN opt_global.h || true ; echo

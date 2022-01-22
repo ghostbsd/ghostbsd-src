@@ -44,7 +44,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/protosw.h>
-#include <sys/rmlock.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
@@ -1377,8 +1376,8 @@ in_leavegroup_locked(struct in_multi *inm, /*const*/ struct in_mfilter *imf)
 static int
 inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 {
+	struct epoch_tracker		 et;
 	struct group_source_req		 gsr;
-	struct rm_priotracker		 in_ifa_tracker;
 	sockunion_t			*gsa, *ssa;
 	struct ifnet			*ifp;
 	struct in_mfilter		*imf;
@@ -1416,9 +1415,10 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		ssa->sin.sin_addr = mreqs.imr_sourceaddr;
 
 		if (!in_nullhost(mreqs.imr_interface)) {
-			IN_IFADDR_RLOCK(&in_ifa_tracker);
+			NET_EPOCH_ENTER(et);
 			INADDR_TO_IFP(mreqs.imr_interface, ifp);
-			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
+			/* XXXGL: ifref? */
+			NET_EPOCH_EXIT(et);
 		}
 		if (sopt->sopt_name == IP_BLOCK_SOURCE)
 			doblock = 1;
@@ -1444,10 +1444,11 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		    ssa->sin.sin_len != sizeof(struct sockaddr_in))
 			return (EINVAL);
 
-		if (gsr.gsr_interface == 0 || V_if_index < gsr.gsr_interface)
-			return (EADDRNOTAVAIL);
-
+		NET_EPOCH_ENTER(et);
 		ifp = ifnet_byindex(gsr.gsr_interface);
+		NET_EPOCH_EXIT(et);
+		if (ifp == NULL)
+			return (EADDRNOTAVAIL);
 
 		if (sopt->sopt_name == MCAST_BLOCK_SOURCE)
 			doblock = 1;
@@ -1623,6 +1624,7 @@ inp_freemoptions(struct ip_moptions *imo)
 static int
 inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
+	struct epoch_tracker	 et;
 	struct __msfilterreq	 msfr;
 	sockunion_t		*gsa;
 	struct ifnet		*ifp;
@@ -1648,10 +1650,9 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	if (error)
 		return (error);
 
-	if (msfr.msfr_ifindex == 0 || V_if_index < msfr.msfr_ifindex)
-		return (EINVAL);
-
+	NET_EPOCH_ENTER(et);
 	ifp = ifnet_byindex(msfr.msfr_ifindex);
+	NET_EPOCH_EXIT(et);	/* XXXGL: unsafe ifnet pointer left */
 	if (ifp == NULL)
 		return (EINVAL);
 
@@ -1871,7 +1872,6 @@ static struct ifnet *
 inp_lookup_mcast_ifp(const struct inpcb *inp,
     const struct sockaddr_in *gsin, const struct in_addr ina)
 {
-	struct rm_priotracker in_ifa_tracker;
 	struct ifnet *ifp;
 	struct nhop_object *nh;
 
@@ -1883,11 +1883,9 @@ inp_lookup_mcast_ifp(const struct inpcb *inp,
 
 	ifp = NULL;
 	if (!in_nullhost(ina)) {
-		IN_IFADDR_RLOCK(&in_ifa_tracker);
 		INADDR_TO_IFP(ina, ifp);
 		if (ifp != NULL)
 			if_ref(ifp);
-		IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 	} else {
 		nh = fib4_lookup(inp->inp_inc.inc_fibnum, gsin->sin_addr, 0, NHR_NONE, 0);
 		if (nh != NULL) {
@@ -2028,11 +2026,11 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 		if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
 			return (EINVAL);
 
-		if (gsr.gsr_interface == 0 || V_if_index < gsr.gsr_interface)
-			return (EADDRNOTAVAIL);
 		NET_EPOCH_ENTER(et);
 		ifp = ifnet_byindex_ref(gsr.gsr_interface);
 		NET_EPOCH_EXIT(et);
+		if (ifp == NULL)
+			return (EADDRNOTAVAIL);
 		break;
 
 	default:
@@ -2245,9 +2243,9 @@ out_inp_unlocked:
 static int
 inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 {
+	struct epoch_tracker		 et;
 	struct group_source_req		 gsr;
 	struct ip_mreq_source		 mreqs;
-	struct rm_priotracker		 in_ifa_tracker;
 	sockunion_t			*gsa, *ssa;
 	struct ifnet			*ifp;
 	struct in_mfilter		*imf;
@@ -2307,9 +2305,10 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		 * using an IPv4 address as a key is racy.
 		 */
 		if (!in_nullhost(mreqs.imr_interface)) {
-			IN_IFADDR_RLOCK(&in_ifa_tracker);
+			NET_EPOCH_ENTER(et);
 			INADDR_TO_IFP(mreqs.imr_interface, ifp);
-			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
+			/* XXXGL ifref? */
+			NET_EPOCH_EXIT(et);
 		}
 		CTR3(KTR_IGMPV3, "%s: imr_interface = 0x%08x, ifp = %p",
 		    __func__, ntohl(mreqs.imr_interface.s_addr), ifp);
@@ -2340,11 +2339,9 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 				return (EINVAL);
 		}
 
-		if (gsr.gsr_interface == 0 || V_if_index < gsr.gsr_interface)
-			return (EADDRNOTAVAIL);
-
+		NET_EPOCH_ENTER(et);
 		ifp = ifnet_byindex(gsr.gsr_interface);
-
+		NET_EPOCH_EXIT(et);	/* XXXGL: unsafe ifp */
 		if (ifp == NULL)
 			return (EADDRNOTAVAIL);
 		break;
@@ -2465,7 +2462,6 @@ out_inp_locked:
 static int
 inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 {
-	struct rm_priotracker	 in_ifa_tracker;
 	struct in_addr		 addr;
 	struct ip_mreqn		 mreqn;
 	struct ifnet		*ifp;
@@ -2482,13 +2478,17 @@ inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 
-		if (mreqn.imr_ifindex < 0 || V_if_index < mreqn.imr_ifindex)
+		if (mreqn.imr_ifindex < 0)
 			return (EINVAL);
 
 		if (mreqn.imr_ifindex == 0) {
 			ifp = NULL;
 		} else {
+			struct epoch_tracker et;
+
+			NET_EPOCH_ENTER(et);
 			ifp = ifnet_byindex(mreqn.imr_ifindex);
+			NET_EPOCH_EXIT(et);	/* XXXGL: unsafe ifp */
 			if (ifp == NULL)
 				return (EADDRNOTAVAIL);
 		}
@@ -2504,9 +2504,12 @@ inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 		if (in_nullhost(addr)) {
 			ifp = NULL;
 		} else {
-			IN_IFADDR_RLOCK(&in_ifa_tracker);
+			struct epoch_tracker et;
+
+			NET_EPOCH_ENTER(et);
 			INADDR_TO_IFP(addr, ifp);
-			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
+			/* XXXGL ifref? */
+			NET_EPOCH_EXIT(et);
 			if (ifp == NULL)
 				return (EADDRNOTAVAIL);
 		}
@@ -2534,6 +2537,7 @@ inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 static int
 inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
+	struct epoch_tracker	 et;
 	struct __msfilterreq	 msfr;
 	sockunion_t		*gsa;
 	struct ifnet		*ifp;
@@ -2564,10 +2568,9 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 	gsa->sin.sin_port = 0;	/* ignore port */
 
-	if (msfr.msfr_ifindex == 0 || V_if_index < msfr.msfr_ifindex)
-		return (EADDRNOTAVAIL);
-
+	NET_EPOCH_ENTER(et);
 	ifp = ifnet_byindex(msfr.msfr_ifindex);
+	NET_EPOCH_EXIT(et);	/* XXXGL: unsafe ifp */
 	if (ifp == NULL)
 		return (EADDRNOTAVAIL);
 
@@ -2879,13 +2882,6 @@ sysctl_ip_mcast_filters(SYSCTL_HANDLER_ARGS)
 	if (namelen != 2)
 		return (EINVAL);
 
-	ifindex = name[0];
-	if (ifindex <= 0 || ifindex > V_if_index) {
-		CTR2(KTR_IGMPV3, "%s: ifindex %u out of range",
-		    __func__, ifindex);
-		return (ENOENT);
-	}
-
 	group.s_addr = name[1];
 	if (!IN_MULTICAST(ntohl(group.s_addr))) {
 		CTR2(KTR_IGMPV3, "%s: group 0x%08x is not multicast",
@@ -2893,6 +2889,7 @@ sysctl_ip_mcast_filters(SYSCTL_HANDLER_ARGS)
 		return (EINVAL);
 	}
 
+	ifindex = name[0];
 	NET_EPOCH_ENTER(et);
 	ifp = ifnet_byindex(ifindex);
 	if (ifp == NULL) {

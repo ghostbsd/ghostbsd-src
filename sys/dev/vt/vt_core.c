@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/consio.h>
+#include <sys/devctl.h>
 #include <sys/eventhandler.h>
 #include <sys/fbio.h>
 #include <sys/font.h>
@@ -51,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/random.h>
 #include <sys/reboot.h>
+#include <sys/sbuf.h>
 #include <sys/systm.h>
 #include <sys/terminal.h>
 
@@ -118,8 +120,8 @@ const struct terminal_class vt_termclass = {
 #define	VT_TIMERFREQ	25
 
 /* Bell pitch/duration. */
-#define	VT_BELLDURATION	((5 * hz + 99) / 100)
-#define	VT_BELLPITCH	800
+#define	VT_BELLDURATION	(SBT_1S / 20)
+#define	VT_BELLPITCH	(1193182 / 800) /* Approx 1491Hz */
 
 #define	VT_UNIT(vw)	((vw)->vw_device->vd_unit * VT_MAXWINDOWS + \
 			(vw)->vw_number)
@@ -257,6 +259,8 @@ static struct vt_window	vt_conswindow = {
 	.vw_terminal = &vt_consterm,
 	.vw_kbdmode = K_XLATE,
 	.vw_grabbed = 0,
+	.vw_bell_pitch = VT_BELLPITCH,
+	.vw_bell_duration = VT_BELLDURATION,
 };
 struct terminal vt_consterm = {
 	.tm_class = &vt_termclass,
@@ -1088,11 +1092,35 @@ vt_allocate_keyboard(struct vt_device *vd)
 	return (idx0);
 }
 
+#define DEVCTL_LEN 64
+static void
+vtterm_devctl(bool enabled, bool hushed, int hz, sbintime_t duration)
+{
+	struct sbuf sb;
+	char *buf;
+
+	buf = malloc(DEVCTL_LEN, M_VT, M_NOWAIT);
+	if (buf == NULL)
+		return;
+	sbuf_new(&sb, buf, DEVCTL_LEN, SBUF_FIXEDLEN);
+	sbuf_printf(&sb, "enabled=%s hushed=%s hz=%d duration_ms=%d",
+	    enabled ? "true" : "false", hushed ? "true" : "false",
+	    hz, (int)(duration / SBT_1MS));
+	sbuf_finish(&sb);
+	if (sbuf_error(&sb) == 0)
+		devctl_notify("VT", "BELL", "RING", sbuf_data(&sb));
+	sbuf_delete(&sb);
+	free(buf, M_VT);
+}
+
 static void
 vtterm_bell(struct terminal *tm)
 {
 	struct vt_window *vw = tm->tm_softc;
 	struct vt_device *vd = vw->vw_device;
+
+	vtterm_devctl(vt_enable_bell, vd->vd_flags & VDF_QUIET_BELL,
+	    vw->vw_bell_pitch, vw->vw_bell_duration);
 
 	if (!vt_enable_bell)
 		return;
@@ -1100,24 +1128,34 @@ vtterm_bell(struct terminal *tm)
 	if (vd->vd_flags & VDF_QUIET_BELL)
 		return;
 
-	sysbeep(1193182 / VT_BELLPITCH, VT_BELLDURATION);
+	if (vw->vw_bell_pitch == 0 ||
+	    vw->vw_bell_duration == 0)
+		return;
+
+	sysbeep(vw->vw_bell_pitch, vw->vw_bell_duration);
 }
 
 static void
 vtterm_beep(struct terminal *tm, u_int param)
 {
-	u_int freq, period;
-
-	if (!vt_enable_bell)
-		return;
+	u_int freq;
+	sbintime_t period;
+	struct vt_window *vw = tm->tm_softc;
+	struct vt_device *vd = vw->vw_device;
 
 	if ((param == 0) || ((param & 0xffff) == 0)) {
 		vtterm_bell(tm);
 		return;
 	}
 
-	period = ((param >> 16) & 0xffff) * hz / 1000;
+	period = ((param >> 16) & 0xffff) * SBT_1MS;
 	freq = 1193182 / (param & 0xffff);
+
+	vtterm_devctl(vt_enable_bell, vd->vd_flags & VDF_QUIET_BELL,
+	    freq, period);
+
+	if (!vt_enable_bell)
+		return;
 
 	sysbeep(freq, period);
 }
@@ -1176,6 +1214,11 @@ vtterm_param(struct terminal *tm, int cmd, unsigned int arg)
 		break;
 	case TP_MOUSE:
 		vw->vw_mouse_level = arg;
+		break;
+	case TP_SETBELLPD:
+		vw->vw_bell_pitch = TP_SETBELLPD_PITCH(arg);
+		vw->vw_bell_duration =
+		    TICKS_2_MSEC(TP_SETBELLPD_DURATION(arg)) * SBT_1MS;
 		break;
 	}
 }
@@ -2516,6 +2559,7 @@ skip_thunk:
 	case FBIO_GETDISPSTART:	/* get display start address */
 	case FBIO_GETLINEWIDTH:	/* get scan line width in bytes */
 	case FBIO_BLANK:	/* blank display */
+	case FBIO_GETRGBOFFS:	/* get RGB offsets */
 		if (vd->vd_driver->vd_fb_ioctl)
 			return (vd->vd_driver->vd_fb_ioctl(vd, cmd, data, td));
 		break;

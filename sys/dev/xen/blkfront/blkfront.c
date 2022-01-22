@@ -47,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #include <sys/rman.h>
 #include <machine/resource.h>
-#include <machine/intr_machdep.h>
 #include <machine/vmparam.h>
 
 #include <xen/xen-os.h>
@@ -925,7 +924,7 @@ xbd_setup_sysctl(struct xbd_softc *xbd)
 	    "communication channel pages (negotiated)");
 
 	SYSCTL_ADD_PROC(sysctl_ctx, children, OID_AUTO,
-	    "features", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_NEEDGIANT, xbd,
+	    "features", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, xbd,
 	    0, xbd_sysctl_features, "A", "protocol features (negotiated)");
 }
 

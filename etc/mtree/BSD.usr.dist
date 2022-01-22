@@ -9,6 +9,8 @@
     ..
     include
         private
+            bsddialog
+            ..
             bsdstat
             ..
             event1
@@ -35,7 +37,7 @@
     ..
     lib
         clang
-            12.0.1
+            13.0.0
                 include
                     cuda_wrappers
                     ..
@@ -167,6 +169,10 @@
     ..
     share
         atf             tags=package=tests
+        ..
+        bhyve
+            kbdlayout
+            ..
         ..
         bsdconfig
             media

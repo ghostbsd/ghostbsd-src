@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
 #include <sys/sched.h>
@@ -95,6 +96,8 @@ __FBSDID("$FreeBSD$");
 #include <compat/linux/linux_signal.h>
 #include <compat/linux/linux_util.h>
 
+#define	LINUX_ARCH_AMD64		0xc000003e
+
 int
 linux_execve(struct thread *td, struct linux_execve_args *args)
 {
@@ -108,7 +111,7 @@ linux_execve(struct thread *td, struct linux_execve_args *args)
 		error = exec_copyin_args(&eargs, args->path, UIO_USERSPACE,
 		    args->argp, args->envp);
 	} else {
-		LCONVPATHEXIST(td, args->path, &path);
+		LCONVPATHEXIST(args->path, &path);
 		error = exec_copyin_args(&eargs, path, UIO_SYSSPACE, args->argp,
 		    args->envp);
 		LFREEPATH(path);
@@ -299,7 +302,7 @@ DEFINE_IFUNC(, int, futex_xorl, (int, uint32_t *, int *))
 }
 
 void
-bsd_to_linux_regset(struct reg *b_reg, struct linux_pt_regset *l_regset)
+bsd_to_linux_regset(const struct reg *b_reg, struct linux_pt_regset *l_regset)
 {
 
 	l_regset->r15 = b_reg->r_r15;
@@ -329,4 +332,83 @@ bsd_to_linux_regset(struct reg *b_reg, struct linux_pt_regset *l_regset)
 	l_regset->es = b_reg->r_es;
 	l_regset->fs = b_reg->r_fs;
 	l_regset->gs = b_reg->r_gs;
+}
+
+void
+linux_to_bsd_regset(struct reg *b_reg, const struct linux_pt_regset *l_regset)
+{
+
+	b_reg->r_r15 = l_regset->r15;
+	b_reg->r_r14 = l_regset->r14;
+	b_reg->r_r13 = l_regset->r13;
+	b_reg->r_r12 = l_regset->r12;
+	b_reg->r_rbp = l_regset->rbp;
+	b_reg->r_rbx = l_regset->rbx;
+	b_reg->r_r11 = l_regset->r11;
+	b_reg->r_r10 = l_regset->r10;
+	b_reg->r_r9 = l_regset->r9;
+	b_reg->r_r8 = l_regset->r8;
+	b_reg->r_rax = l_regset->rax;
+	b_reg->r_rcx = l_regset->rcx;
+	b_reg->r_rdx = l_regset->rdx;
+	b_reg->r_rsi = l_regset->rsi;
+	b_reg->r_rdi = l_regset->rdi;
+	b_reg->r_rax = l_regset->orig_rax;
+	b_reg->r_rip = l_regset->rip;
+	b_reg->r_cs = l_regset->cs;
+	b_reg->r_rflags = l_regset->eflags;
+	b_reg->r_rsp = l_regset->rsp;
+	b_reg->r_ss = l_regset->ss;
+	b_reg->r_ds = l_regset->ds;
+	b_reg->r_es = l_regset->es;
+	b_reg->r_fs = l_regset->fs;
+	b_reg->r_gs = l_regset->gs;
+}
+
+void
+linux_ptrace_get_syscall_info_machdep(const struct reg *reg,
+    struct syscall_info *si)
+{
+
+	si->arch = LINUX_ARCH_AMD64;
+	si->instruction_pointer = reg->r_rip;
+	si->stack_pointer = reg->r_rsp;
+}
+
+int
+linux_ptrace_getregs_machdep(struct thread *td, pid_t pid,
+    struct linux_pt_regset *l_regset)
+{
+	struct ptrace_lwpinfo lwpinfo;
+	struct pcb *pcb;
+	int error;
+
+	pcb = td->td_pcb;
+	if (td == curthread)
+		update_pcb_bases(pcb);
+
+	l_regset->fs_base = pcb->pcb_fsbase;
+	l_regset->gs_base = pcb->pcb_gsbase;
+
+	error = kern_ptrace(td, PT_LWPINFO, pid, &lwpinfo, sizeof(lwpinfo));
+	if (error != 0) {
+		linux_msg(td, "PT_LWPINFO failed with error %d", error);
+		return (error);
+	}
+	if ((lwpinfo.pl_flags & PL_FLAG_SCE) != 0) {
+		/*
+		 * Undo the mangling done in exception.S:fast_syscall_common().
+		 */
+		l_regset->r10 = l_regset->rcx;
+	}
+	if ((lwpinfo.pl_flags & (PL_FLAG_SCE | PL_FLAG_SCX)) != 0) {
+		/*
+		 * In Linux, the syscall number - passed to the syscall
+		 * as rax - is preserved in orig_rax; rax gets overwritten
+		 * with syscall return value.
+		 */
+		l_regset->orig_rax = lwpinfo.pl_syscall_code;
+	}
+
+	return (0);
 }

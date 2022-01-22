@@ -38,7 +38,6 @@ SUBDIR=	\
 	${_amdsbwd} \
 	${_amdsmn} \
 	${_amdtemp} \
-	amr \
 	${_aout} \
 	${_arcmsr} \
 	${_allwinner} \
@@ -110,8 +109,6 @@ SUBDIR=	\
 	${_em} \
 	${_ena} \
 	${_enetc} \
-	${_enetc_mdio} \
-	esp \
 	${_et} \
 	evdev \
 	${_exca} \
@@ -124,6 +121,7 @@ SUBDIR=	\
 	filemon \
 	firewire \
 	firmware \
+	flash \
 	${_ftwd} \
 	fusefs \
 	${_fxp} \
@@ -140,8 +138,6 @@ SUBDIR=	\
 	${_hptnr} \
 	${_hptrr} \
 	hwpmc \
-	${_hwpmc_mips24k} \
-	${_hwpmc_mips74k} \
 	${_hyperv} \
 	i2c \
 	${_iavf} \
@@ -166,7 +162,6 @@ SUBDIR=	\
 	if_vxlan \
 	iflib \
 	${_igc} \
-	${_iir} \
 	imgact_binmisc \
 	${_intelspi} \
 	${_io} \
@@ -193,6 +188,8 @@ SUBDIR=	\
 	${_itwd} \
 	${_iwi} \
 	${_iwifw} \
+	${_iwlwifi} \
+	${_iwlwififw} \
 	${_iwm} \
 	${_iwmfw} \
 	${_iwn} \
@@ -214,6 +211,7 @@ SUBDIR=	\
 	libmchain \
 	lindebugfs \
 	linuxkpi \
+	linuxkpi_wlan \
 	${_lio} \
 	lpt \
 	mac_biba \
@@ -225,6 +223,7 @@ SUBDIR=	\
 	mac_ntpd \
 	mac_partition \
 	mac_portacl \
+	mac_priority \
 	mac_seeotheruids \
 	mac_stub \
 	mac_test \
@@ -244,7 +243,6 @@ SUBDIR=	\
 	${_mlx5} \
 	${_mlx5en} \
 	${_mlx5ib} \
-	${_mly} \
 	mmc \
 	mmcsd \
 	${_mpr} \
@@ -353,13 +351,12 @@ SUBDIR=	\
 	${_speaker} \
 	spi \
 	${_splash} \
-	${_sppp} \
 	ste \
 	stge \
 	${_sume} \
 	${_superio} \
 	${_p2sb} \
-	${_sym} \
+	sym \
 	${_syscons} \
 	sysvipc \
 	tcp \
@@ -367,7 +364,6 @@ SUBDIR=	\
 	tmpfs \
 	${_toecore} \
 	${_tpm} \
-	${_twa} \
 	twe \
 	tws \
 	uart \
@@ -410,8 +406,7 @@ _autofs=	autofs
 .endif
 
 .if ${MK_CDDL} != "no" || defined(ALL_MODULES)
-.if (${MACHINE_CPUARCH} != "arm" || ${MACHINE_ARCH:Marmv[67]*} != "") && \
-	${MACHINE_CPUARCH} != "mips"
+.if ${MACHINE_CPUARCH} != "arm" || ${MACHINE_ARCH:Marmv[67]*} != ""
 .if ${KERN_OPTS:MKDTRACE_HOOKS}
 SUBDIR+=	dtrace
 .endif
@@ -488,7 +483,6 @@ _dpdk_lpm6=	dpdk_lpm6
 .if ${MK_ISCSI} != "no" || defined(ALL_MODULES)
 SUBDIR+=	cfiscsi
 SUBDIR+=	iscsi
-SUBDIR+=	iscsi_initiator
 .endif
 
 .if !empty(OPT_FDT)
@@ -518,6 +512,10 @@ _ipoib=		ipoib
 _iser=		iser
 .endif
 _ipmi=		ipmi
+_iwlwifi=	iwlwifi
+.if ${MK_SOURCELESS_UCODE} != "no"
+_iwlwififw=	iwlwififw
+.endif
 _mlx4=		mlx4
 _mlx5=		mlx5
 .if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
@@ -552,23 +550,19 @@ _bce=		bce
 _fxp=		fxp
 _ispfw=		ispfw
 _ti=		ti
-
-.if ${MACHINE_CPUARCH} != "mips"
 _mwlfw=		mwlfw
 _otusfw=	otusfw
 _ralfw=		ralfw
 _rtwnfw=	rtwnfw
 .endif
-.endif
 
 .if ${MK_SOURCELESS_UCODE} != "no" && ${MACHINE_CPUARCH} != "arm" && \
-	${MACHINE_CPUARCH} != "mips" && \
 	${MACHINE_ARCH} != "powerpc" && ${MACHINE_ARCH} != "powerpcspe" && \
 	${MACHINE_CPUARCH} != "riscv"
 _cxgbe=		cxgbe
 .endif
 
-.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "arm64"
+.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "arm64" || ${MACHINE_ARCH:Mpowerpc64*}
 _ice=		ice
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ice_ddp=	ice_ddp
@@ -576,8 +570,7 @@ _ice_ddp=	ice_ddp
 .endif
 
 # These rely on 64bit atomics
-.if ${MACHINE_ARCH} != "powerpc" && ${MACHINE_ARCH} != "powerpcspe" && \
-	${MACHINE_CPUARCH} != "mips"
+.if ${MACHINE_ARCH} != "powerpc" && ${MACHINE_ARCH} != "powerpcspe"
 _mps=		mps
 _mpr=		mpr
 .endif
@@ -590,25 +583,14 @@ SUBDIR+=	tests
 SUBDIR+=	zfs
 .endif
 
-.if (${MACHINE_CPUARCH} == "mips" && ${MACHINE_ARCH:Mmips64} == "")
-_hwpmc_mips24k=	hwpmc_mips24k
-_hwpmc_mips74k=	hwpmc_mips74k
-.endif
-
 .if ${MACHINE_CPUARCH} != "aarch64" && ${MACHINE_CPUARCH} != "arm" && \
-	${MACHINE_CPUARCH} != "mips" && ${MACHINE_CPUARCH} != "powerpc" && \
-	${MACHINE_CPUARCH} != "riscv"
+	${MACHINE_CPUARCH} != "powerpc" && ${MACHINE_CPUARCH} != "riscv"
 _syscons=	syscons
 .endif
 
-.if ${MACHINE_CPUARCH} != "mips"
-# no BUS_SPACE_UNSPECIFIED
-# No barrier instruction support (specific to this driver)
-_sym=		sym
 # intr_disable() is a macro, causes problems
 .if ${MK_SOURCELESS_UCODE} != "no"
 _cxgb=		cxgb
-.endif
 .endif
 
 .if ${MACHINE_CPUARCH} == "aarch64"
@@ -617,7 +599,6 @@ _armv8crypto=	armv8crypto
 _dwwdt=		dwwdt
 _em=		em
 _enetc=		enetc
-_enetc_mdio=	enetc_mdio
 _felix=		felix
 _rockchip=	rockchip
 .endif
@@ -630,7 +611,9 @@ _neta=		neta
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _agp=		agp
+.if ${MACHINE_CPUARCH} == "i386" || !empty(COMPAT_FREEBSD32_ENABLED)
 _aout=		aout
+.endif
 _bios=		bios
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe
@@ -665,7 +648,6 @@ _rdma=		rdma
 _safe=		safe
 _speaker=	speaker
 _splash=	splash
-_sppp=		sppp
 _p2sb=		p2sb
 _wbwd=		wbwd
 
@@ -701,7 +683,6 @@ _hptrr=		hptrr
 _hyperv=	hyperv
 _ichwd=		ichwd
 _ida=		ida
-_iir=		iir
 _intelspi=	intelspi
 _ips=		ips
 _isci=		isci
@@ -715,7 +696,6 @@ _iwifw=		iwifw
 _iwmfw=		iwmfw
 _iwnfw=		iwnfw
 .endif
-_mly=		mly
 _nfe=		nfe
 _nvd=		nvd
 _nvme=		nvme
@@ -730,7 +710,6 @@ _s3=		s3
 _sdhci_acpi=	sdhci_acpi
 _superio=	superio
 _tpm=		tpm
-_twa=		twa
 _vesa=		vesa
 _viawd=		viawd
 _vmd=		vmd

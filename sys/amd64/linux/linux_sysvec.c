@@ -358,17 +358,12 @@ linux_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	size_t execpath_len;
 	struct proc *p;
 
-	/* Calculate string base and vector table pointers. */
-	if (imgp->execpath != NULL && imgp->auxargs != NULL)
-		execpath_len = strlen(imgp->execpath) + 1;
-	else
-		execpath_len = 0;
-
 	p = imgp->proc;
-	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
+	arginfo = (struct ps_strings *)PROC_PS_STRINGS(p);
 	destp = (uintptr_t)arginfo;
 
-	if (execpath_len != 0) {
+	if (imgp->execpath != NULL && imgp->auxargs != NULL) {
+		execpath_len = strlen(imgp->execpath) + 1;
 		destp -= execpath_len;
 		destp = rounddown2(destp, sizeof(void *));
 		imgp->execpathp = (void *)destp;
@@ -675,10 +670,10 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		sp = (caddr_t)td->td_sigstk.ss_sp + td->td_sigstk.ss_size -
-		    sizeof(struct l_rt_sigframe);
+		sp = (caddr_t)td->td_sigstk.ss_sp + td->td_sigstk.ss_size;
 	} else
-		sp = (caddr_t)regs->tf_rsp - sizeof(struct l_rt_sigframe) - 128;
+		sp = (caddr_t)regs->tf_rsp - 128;
+	sp -= sizeof(struct l_rt_sigframe);
 	/* Align to 16 bytes. */
 	sfp = (struct l_rt_sigframe *)((unsigned long)sp & ~0xFul);
 
@@ -700,6 +695,8 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 
 	/* Copy the sigframe out to the user's stack. */
 	if (copyout(&sf, sfp, sizeof(*sfp)) != 0) {
+		uprintf("pid %d comm %s has trashed its stack, killing\n",
+		    p->p_pid, p->p_comm);
 		PROC_LOCK(p);
 		sigexit(td, SIGILL);
 	}
@@ -779,6 +776,7 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_maxuser	= VM_MAXUSER_ADDRESS_LA48,
 	.sv_usrstack	= LINUX_USRSTACK_LA48,
 	.sv_psstrings	= LINUX_PS_STRINGS_LA48,
+	.sv_psstringssz	= sizeof(struct ps_strings),
 	.sv_stackprot	= VM_PROT_ALL,
 	.sv_copyout_auxargs = linux_copyout_auxargs,
 	.sv_copyout_strings = linux_copyout_strings,

@@ -15,6 +15,7 @@ cddl/dev/dtrace/i386/dtrace_asm.S			optional dtrace compile-with "${DTRACE_S}"
 cddl/dev/dtrace/i386/dtrace_subr.c			optional dtrace compile-with "${DTRACE_C}"
 crypto/aesni/aeskeys_i386.S	optional aesni
 crypto/des/arch/i386/des_enc.S	optional netsmb
+crypto/openssl/i386/aesni-x86.S	optional ossl
 crypto/openssl/i386/chacha-x86.S	optional ossl
 crypto/openssl/i386/poly1305-x86.S	optional ossl
 crypto/openssl/i386/sha1-586.S	optional ossl
@@ -33,9 +34,6 @@ dev/ce/ceddk.c			optional ce
 dev/ce/if_ce.c			optional ce
 dev/ce/tau32-ddk.c		optional ce \
 	compile-with "${NORMAL_C} ${NO_WCONSTANT_CONVERSION} ${NO_WMISLEADING_INDENTATION}"
-dev/cp/cpddk.c			optional cp \
-	compile-with "${NORMAL_C} ${NO_WMISLEADING_INDENTATION}"
-dev/cp/if_cp.c			optional cp
 dev/glxiic/glxiic.c		optional glxiic
 dev/glxsb/glxsb.c		optional glxsb
 dev/glxsb/glxsb_hash.c		optional glxsb
@@ -110,7 +108,7 @@ i386/i386/elf_machdep.c		standard
 i386/i386/exception.s		standard
 i386/i386/gdb_machdep.c		optional gdb
 i386/i386/geode.c		optional cpu_geode
-i386/i386/in_cksum.c		optional inet | inet6
+i386/i386/in_cksum_machdep.c	optional inet | inet6
 i386/i386/initcpu.c		standard
 i386/i386/io.c			optional io
 i386/i386/k6_mem.c		optional mem
@@ -173,3 +171,9 @@ x86/x86/local_apic.c		optional apic
 x86/x86/mptable.c		optional apic
 x86/x86/mptable_pci.c		optional apic pci
 x86/x86/msi.c			optional apic pci
+# Clock calibration subroutine; uses floating-point arithmetic
+subr_clockcalib.o		standard				\
+	dependency	"$S/kern/subr_clockcalib.c"			\
+	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc} ${WERROR} -m80387 ${.IMPSRC}" \
+	no-implicit-rule						\
+	clean		"subr_clockcalib.o"

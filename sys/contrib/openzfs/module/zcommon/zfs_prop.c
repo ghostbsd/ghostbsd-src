@@ -83,10 +83,7 @@ zfs_prop_init(void)
 		{ "noparity",   ZIO_CHECKSUM_NOPARITY },
 		{ "sha512",	ZIO_CHECKSUM_SHA512 },
 		{ "skein",	ZIO_CHECKSUM_SKEIN },
-#if !defined(__FreeBSD__)
-
 		{ "edonr",	ZIO_CHECKSUM_EDONR },
-#endif
 		{ NULL }
 	};
 
@@ -103,11 +100,8 @@ zfs_prop_init(void)
 		{ "skein",	ZIO_CHECKSUM_SKEIN },
 		{ "skein,verify",
 				ZIO_CHECKSUM_SKEIN | ZIO_CHECKSUM_VERIFY },
-#if !defined(__FreeBSD__)
-
 		{ "edonr,verify",
 				ZIO_CHECKSUM_EDONR | ZIO_CHECKSUM_VERIFY },
-#endif
 		{ NULL }
 	};
 
@@ -396,21 +390,13 @@ zfs_prop_init(void)
 	zprop_register_index(ZFS_PROP_CHECKSUM, "checksum",
 	    ZIO_CHECKSUM_DEFAULT, PROP_INHERIT, ZFS_TYPE_FILESYSTEM |
 	    ZFS_TYPE_VOLUME,
-#if !defined(__FreeBSD__)
 	    "on | off | fletcher2 | fletcher4 | sha256 | sha512 | skein"
 	    " | edonr",
-#else
-	    "on | off | fletcher2 | fletcher4 | sha256 | sha512 | skein",
-#endif
 	    "CHECKSUM", checksum_table);
 	zprop_register_index(ZFS_PROP_DEDUP, "dedup", ZIO_CHECKSUM_OFF,
 	    PROP_INHERIT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
 	    "on | off | verify | sha256[,verify] | sha512[,verify] | "
-#if !defined(__FreeBSD__)
 	    "skein[,verify] | edonr,verify",
-#else
-	    "skein[,verify]",
-#endif
 	    "DEDUP", dedup_table);
 	zprop_register_index(ZFS_PROP_COMPRESSION, "compression",
 	    ZIO_COMPRESS_DEFAULT, PROP_INHERIT,
@@ -738,18 +724,6 @@ zfs_name_to_prop(const char *propname)
 }
 
 /*
- * For user property names, we allow all lowercase alphanumeric characters, plus
- * a few useful punctuation characters.
- */
-static int
-valid_char(char c)
-{
-	return ((c >= 'a' && c <= 'z') ||
-	    (c >= '0' && c <= '9') ||
-	    c == '-' || c == '_' || c == '.' || c == ':');
-}
-
-/*
  * Returns true if this is a valid user-defined property (one with a ':').
  */
 boolean_t
@@ -761,7 +735,7 @@ zfs_prop_user(const char *name)
 
 	for (i = 0; i < strlen(name); i++) {
 		c = name[i];
-		if (!valid_char(c))
+		if (!zprop_valid_char(c))
 			return (B_FALSE);
 		if (c == ':')
 			foundsep = B_TRUE;

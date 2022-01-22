@@ -73,9 +73,13 @@ int zfs_nopwrite_enabled = 1;
 unsigned long zfs_per_txg_dirty_frees_percent = 5;
 
 /*
- * Enable/disable forcing txg sync when dirty in dmu_offset_next.
+ * Enable/disable forcing txg sync when dirty checking for holes with lseek().
+ * By default this is enabled to ensure accurate hole reporting, it can result
+ * in a significant performance penalty for lseek(SEEK_HOLE) heavy workloads.
+ * Disabling this option will result in holes never being reported in dirty
+ * files which is always safe.
  */
-int zfs_dmu_offset_next_sync = 0;
+int zfs_dmu_offset_next_sync = 1;
 
 /*
  * Limit the amount we can prefetch with one call to this amount.  This
@@ -613,7 +617,7 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 	return (0);
 }
 
-static int
+int
 dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
     uint64_t length, int read, void *tag, int *numbufsp, dmu_buf_t ***dbpp)
 {
@@ -968,9 +972,7 @@ dmu_free_long_object(objset_t *os, uint64_t object)
 	dmu_tx_mark_netfree(tx);
 	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err == 0) {
-		if (err == 0)
-			err = dmu_object_free(os, object, tx);
-
+		err = dmu_object_free(os, object, tx);
 		dmu_tx_commit(tx);
 	} else {
 		dmu_tx_abort(tx);
@@ -1841,7 +1843,7 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 	dsa->dsa_tx = NULL;
 
 	zio_nowait(arc_write(pio, os->os_spa, txg,
-	    zgd->zgd_bp, dr->dt.dl.dr_data, DBUF_IS_L2CACHEABLE(db),
+	    zgd->zgd_bp, dr->dt.dl.dr_data, dbuf_is_l2cacheable(db),
 	    &zp, dmu_sync_ready, NULL, NULL, dmu_sync_done, dsa,
 	    ZIO_PRIORITY_SYNC_WRITE, ZIO_FLAG_CANFAIL, &zb));
 
@@ -2095,42 +2097,41 @@ int
 dmu_offset_next(objset_t *os, uint64_t object, boolean_t hole, uint64_t *off)
 {
 	dnode_t *dn;
-	int i, err;
-	boolean_t clean = B_TRUE;
+	int err;
 
+restart:
 	err = dnode_hold(os, object, FTAG, &dn);
 	if (err)
 		return (err);
 
-	/*
-	 * Check if dnode is dirty
-	 */
-	for (i = 0; i < TXG_SIZE; i++) {
-		if (multilist_link_active(&dn->dn_dirty_link[i])) {
-			clean = B_FALSE;
-			break;
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+
+	if (dnode_is_dirty(dn)) {
+		/*
+		 * If the zfs_dmu_offset_next_sync module option is enabled
+		 * then strict hole reporting has been requested.  Dirty
+		 * dnodes must be synced to disk to accurately report all
+		 * holes.  When disabled dirty dnodes are reported to not
+		 * have any holes which is always safe.
+		 *
+		 * When called by zfs_holey_common() the zp->z_rangelock
+		 * is held to prevent zfs_write() and mmap writeback from
+		 * re-dirtying the dnode after txg_wait_synced().
+		 */
+		if (zfs_dmu_offset_next_sync) {
+			rw_exit(&dn->dn_struct_rwlock);
+			dnode_rele(dn, FTAG);
+			txg_wait_synced(dmu_objset_pool(os), 0);
+			goto restart;
 		}
-	}
 
-	/*
-	 * If compatibility option is on, sync any current changes before
-	 * we go trundling through the block pointers.
-	 */
-	if (!clean && zfs_dmu_offset_next_sync) {
-		clean = B_TRUE;
-		dnode_rele(dn, FTAG);
-		txg_wait_synced(dmu_objset_pool(os), 0);
-		err = dnode_hold(os, object, FTAG, &dn);
-		if (err)
-			return (err);
-	}
-
-	if (clean)
-		err = dnode_next_offset(dn,
-		    (hole ? DNODE_FIND_HOLE : 0), off, 1, 1, 0);
-	else
 		err = SET_ERROR(EBUSY);
+	} else {
+		err = dnode_next_offset(dn, DNODE_FIND_HAVELOCK |
+		    (hole ? DNODE_FIND_HOLE : 0), off, 1, 1, 0);
+	}
 
+	rw_exit(&dn->dn_struct_rwlock);
 	dnode_rele(dn, FTAG);
 
 	return (err);

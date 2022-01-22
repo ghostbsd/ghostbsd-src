@@ -288,7 +288,6 @@ options 	SX_NOINLINE
 # PREEMPTION allows the threads that are in the kernel to be preempted by
 #	  higher priority [interrupt] threads.  It helps with interactivity
 #	  and allows interrupt threads to run sooner rather than waiting.
-#	  WARNING! Only tested on amd64 and i386.
 # FULL_PREEMPTION instructs the kernel to preempt non-realtime kernel
 #	  threads.  Its sole use is to expose race conditions and other
 #	  bugs during development.  Enabling this option will reduce
@@ -364,6 +363,9 @@ options 	COMPAT_FREEBSD11
 
 # Enable FreeBSD12 compatibility syscalls
 options 	COMPAT_FREEBSD12
+
+# Enable FreeBSD13 compatibility syscalls
+options 	COMPAT_FREEBSD13
 
 # Enable Linux Kernel Programming Interface
 options 	COMPAT_LINUXKPI
@@ -646,7 +648,26 @@ options 	HWPMC_HOOKS		# Other necessary kernel hooks
 #
 options 	INET			#Internet communications protocols
 options 	INET6			#IPv6 communications protocols
-
+#
+# Note if you include INET/INET6 or both options
+# You *must* define at least one of the congestion control
+# options or the compile will fail. Generic defines
+# options CC_NEWRENO. You also will need to specify
+# a default or the compile of your kernel will fail
+# as well. The string in default is the name of the
+# cc module as it would appear in the sysctl for
+# setting the default. Generic defines newreno
+# as shown below.
+#
+options 	CC_CDG
+options 	CC_CHD
+options 	CC_CUBIC
+options 	CC_DCTCP
+options 	CC_HD
+options 	CC_HTCP
+options 	CC_NEWRENO
+options 	CC_VEGAS
+options		CC_DEFAULT=\"newreno\"
 options		RATELIMIT		# TX rate limiting support
 
 options 	ROUTETABLES=2		# allocated fibs up to 65536. default is 1.
@@ -810,7 +831,6 @@ options 	NETGRAPH_PRED1
 options 	NETGRAPH_RFC1490
 options 	NETGRAPH_SOCKET
 options 	NETGRAPH_SPLIT
-options 	NETGRAPH_SPPP
 options 	NETGRAPH_TAG
 options 	NETGRAPH_TCPMSS
 options 	NETGRAPH_TEE
@@ -874,10 +894,6 @@ device		wlan_xauth
 #  The 'wlan_amrr' device provides AMRR transmit rate control algorithm
 device		wlan_acl
 device		wlan_amrr
-
-#  The `sppp' device serves a similar role for certain types
-#  of synchronous PPP links (like `cx', `ar').
-device		sppp
 
 #  The `bpf' device enables the Berkeley Packet Filter.  Be
 #  aware of the legal and administrative consequences of enabling this
@@ -1226,6 +1242,7 @@ options 	MAC_NONE
 options 	MAC_NTPD
 options 	MAC_PARTITION
 options 	MAC_PORTACL
+options 	MAC_PRIORITY
 options 	MAC_SEEOTHERUIDS
 options 	MAC_STUB
 options 	MAC_TEST
@@ -1505,9 +1522,6 @@ options		TERMINAL_KERN_ATTR=(FG_LIGHTRED|BG_BLACK)
 # ahc: Adaptec 274x/284x/2910/293x/294x/394x/3950x/3960x/398X/4944/
 #      19160x/29160x, aic7770/aic78xx
 # ahd: Adaptec 29320/39320 Controllers.
-# esp: Emulex ESP, NCR 53C9x and QLogic FAS families based controllers
-#      including the AMD Am53C974 (found on devices such as the Tekram
-#      DC-390(T)) and the Sun ESP and FAS families of controllers
 # isp: Qlogic ISP 1020, 1040 and 1040B PCI SCSI host adapters,
 #      ISP 1240 Dual Ultra SCSI, ISP 1080 and 1280 (Dual) Ultra2,
 #      ISP 12160 Ultra3 SCSI,
@@ -1527,8 +1541,6 @@ options		TERMINAL_KERN_ATTR=(FG_LIGHTRED|BG_BLACK)
 device		aacraid
 device		ahc
 device		ahd
-device		esp
-device		iscsi_initiator
 device		isp
 envvar		hint.isp.0.disable="1"
 envvar		hint.isp.0.role="3"
@@ -1620,30 +1632,12 @@ options 	ISP_DEFAULT_ROLES=0
 device		ciss
 
 #
-# Intel Integrated RAID controllers.
-# This driver was developed and is maintained by Intel.  Contacts
-# at Intel for this driver are
-# "Kannanthanam, Boji T" <boji.t.kannanthanam@intel.com> and
-# "Leubner, Achim" <achim.leubner@intel.com>.
-#
-device		iir
-
-#
-# Mylex AcceleRAID and eXtremeRAID controllers with v6 and later
-# firmware.  These controllers have a SCSI-like interface, and require
-# the CAM infrastructure.
-#
-device		mly
-
-#
 # Compaq Smart RAID, Mylex DAC960 and AMI MegaRAID controllers.  Only
 # one entry is needed; the code will find and configure all supported
 # controllers.
 #
 device		ida		# Compaq Smart RAID
 device		mlx		# Mylex DAC960
-device		amr		# AMI MegaRAID
-device		amrp		# SCSI Passthrough interface (optional, CAM req.)
 device		mfi		# LSI MegaRAID SAS
 device		mfip		# LSI MegaRAID SAS passthrough, requires CAM
 options 	MFI_DEBUG
@@ -1716,8 +1710,7 @@ envvar		hint.ata.1.port="0x170"
 envvar		hint.ata.1.irq="15"
 
 #
-# uart: newbusified driver for serial interfaces.  It consolidates the sio(4),
-#	sab(4) and zs(4) drivers.
+# uart: generic driver for serial interfaces.
 #
 device		uart
 
@@ -1740,15 +1733,14 @@ envvar		hint.uart.0.port="0x3f8"
 envvar		hint.uart.0.flags="0x10"
 envvar		hint.uart.0.baud="115200"
 
-# `flags' for serial drivers that support consoles like sio(4) and uart(4):
+# `flags' for serial drivers that support consoles, like uart(4):
 #	0x10	enable console support for this unit.  Other console flags
 #		(if applicable) are ignored unless this is set.  Enabling
 #		console support does not make the unit the preferred console.
-#		Boot with -h or set boot_serial=YES in the loader.  For sio(4)
-#		specifically, the 0x20 flag can also be set (see above).
+#		Boot with -h or set boot_serial=YES in the loader.
 #		Currently, at most one unit can have console support; the
 #		first one (in config file order) with this flag set is
-#		preferred.  Setting this flag for sio0 gives the old behavior.
+#		preferred.
 #	0x80	use this port for serial line gdb support in ddb.  Also known
 #		as debug port.
 #
@@ -1938,6 +1930,7 @@ envvar		hint.fxp.0.prefer_iomap="0"
 device		gem		# Apple GMAC/Sun ERI/Sun GEM
 device		jme		# JMicron JMC250 Gigabit/JMC260 Fast Ethernet
 device		lge		# Level 1 LXT1001 gigabit Ethernet
+device		lio		# Support for Cavium 23XX Ethernet adapters
 device		mlxfw		# Mellanox firmware update module
 device		mlx5		# Shared code module between IB and Ethernet
 device		mlx5en		# Mellanox ConnectX-4 and ConnectX-4 LX
@@ -2169,10 +2162,10 @@ options		SND_PCM_64
 options		SND_OLDSTEREO
 
 #
-# PC Card/PCMCIA and Cardbus
+# Cardbus
 #
-# cbb: pci/cardbus bridge implementing YENTA interface
-# cardbus: cardbus slots
+# cbb: pci/CardBus bridge implementing YENTA interface
+# cardbus: CardBus slots
 device		cbb
 device		cardbus
 

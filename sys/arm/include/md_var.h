@@ -52,9 +52,8 @@ enum cpu_class {
 extern enum cpu_class cpu_class;
 
 struct dumperinfo;
-extern int busdma_swi_pending;
-void busdma_swi(void);
-int minidumpsys(struct dumperinfo *);
+struct minidumpstate;
+int cpu_minidumpsys(struct dumperinfo *, const struct minidumpstate *);
 
 extern uint32_t initial_fpscr;
 

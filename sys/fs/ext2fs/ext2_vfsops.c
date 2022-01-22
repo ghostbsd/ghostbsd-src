@@ -240,7 +240,7 @@ ext2_mount(struct mount *mp)
 	 */
 	if (fspec == NULL)
 		return (EINVAL);
-	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, fspec, td);
+	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, fspec);
 	if ((error = namei(ndp)) != 0)
 		return (error);
 	NDFREE(ndp, NDF_ONLY_PNBUF);
@@ -611,7 +611,8 @@ ext2_compute_sb_data(struct vnode *devvp, struct ext2fs *es,
 		return (EINVAL);
 	}
 
-	if (le32toh(es->e2fs_first_dblock) >= fs->e2fs_bcount) {
+	if (le32toh(es->e2fs_first_dblock) != (fs->e2fs_bsize > 1024 ? 0 : 1) ||
+	    le32toh(es->e2fs_first_dblock) >= fs->e2fs_bcount) {
 		SDT_PROBE1(ext2fs, , vfsops, ext2_compute_sb_data_error,
 		    "first data block out of range");
 		return (EINVAL);

@@ -284,7 +284,8 @@ donice(struct thread *td, struct proc *p, int n)
 
 static int unprivileged_idprio;
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_idprio, CTLFLAG_RW,
-    &unprivileged_idprio, 0, "Allow non-root users to set an idle priority");
+    &unprivileged_idprio, 0,
+    "Allow non-root users to set an idle priority (deprecated)");
 
 /*
  * Set realtime priority for LWP.
@@ -350,13 +351,13 @@ sys_rtprio_thread(struct thread *td, struct rtprio_thread_args *uap)
 		 * easier to lock a resource indefinitely, but it is not the
 		 * only thing that makes it possible.
 		 */
-		if (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_REALTIME ||
-		    (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_IDLE &&
-		    unprivileged_idprio == 0)) {
-			error = priv_check(td, PRIV_SCHED_RTPRIO);
-			if (error)
-				break;
-		}
+		if (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_REALTIME &&
+		    (error = priv_check(td, PRIV_SCHED_RTPRIO)) != 0)
+			break;
+		if (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_IDLE &&
+		    unprivileged_idprio == 0 &&
+		    (error = priv_check(td, PRIV_SCHED_IDPRIO)) != 0)
+			break;
 		error = rtp_to_pri(&rtp, td1);
 		break;
 	default:
@@ -440,13 +441,13 @@ sys_rtprio(struct thread *td, struct rtprio_args *uap)
 		 * See the comment in sys_rtprio_thread about idprio
 		 * threads holding a lock.
 		 */
-		if (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_REALTIME ||
-		    (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_IDLE &&
-		    !unprivileged_idprio)) {
-			error = priv_check(td, PRIV_SCHED_RTPRIO);
-			if (error)
-				break;
-		}
+		if (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_REALTIME &&
+		    (error = priv_check(td, PRIV_SCHED_RTPRIO)) != 0)
+			break;
+		if (RTP_PRIO_BASE(rtp.type) == RTP_PRIO_IDLE &&
+		    unprivileged_idprio == 0 &&
+		    (error = priv_check(td, PRIV_SCHED_IDPRIO)) != 0)
+			break;
 
 		/*
 		 * If we are setting our own priority, set just our
@@ -592,13 +593,13 @@ ogetrlimit(struct thread *td, struct ogetrlimit_args *uap)
 #endif /* COMPAT_43 */
 
 #ifndef _SYS_SYSPROTO_H_
-struct __setrlimit_args {
+struct setrlimit_args {
 	u_int	which;
 	struct	rlimit *rlp;
 };
 #endif
 int
-sys_setrlimit(struct thread *td, struct __setrlimit_args *uap)
+sys_setrlimit(struct thread *td, struct setrlimit_args *uap)
 {
 	struct rlimit alim;
 	int error;
@@ -670,9 +671,6 @@ kern_proc_setrlimit(struct thread *td, struct proc *p, u_int which,
 		limp->rlim_cur = RLIM_INFINITY;
 	if (limp->rlim_max < 0)
 		limp->rlim_max = RLIM_INFINITY;
-
-	if (which == RLIMIT_STACK && limp->rlim_cur != RLIM_INFINITY)
-		limp->rlim_cur += p->p_vmspace->vm_stkgap;
 
 	oldssiz.rlim_cur = 0;
 	newlim = lim_alloc();
@@ -782,14 +780,14 @@ kern_proc_setrlimit(struct thread *td, struct proc *p, u_int which,
 }
 
 #ifndef _SYS_SYSPROTO_H_
-struct __getrlimit_args {
+struct getrlimit_args {
 	u_int	which;
 	struct	rlimit *rlp;
 };
 #endif
 /* ARGSUSED */
 int
-sys_getrlimit(struct thread *td, struct __getrlimit_args *uap)
+sys_getrlimit(struct thread *td, struct getrlimit_args *uap)
 {
 	struct rlimit rlim;
 	int error;
@@ -1017,7 +1015,7 @@ calcru1(struct proc *p, struct rusage_ext *ruxp, struct timeval *up,
 		uu = ruxp->rux_uu;
 		su = ruxp->rux_su;
 		tu = ruxp->rux_tu;
-	} else { /* tu < ruxp->rux_tu */
+	} else if (vm_guest == VM_GUEST_NO) {  /* tu < ruxp->rux_tu */
 		/*
 		 * What happened here was likely that a laptop, which ran at
 		 * a reduced clock frequency at boot, kicked into high gear.

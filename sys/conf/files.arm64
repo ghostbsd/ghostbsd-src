@@ -22,6 +22,7 @@ arm/arm/gic_acpi.c				optional acpi
 arm/arm/gic_fdt.c				optional fdt
 arm/arm/gic_if.m				standard
 arm/arm/pmu.c					standard
+arm/arm/pmu_acpi.c				optional acpi
 arm/arm/pmu_fdt.c				optional fdt
 arm64/acpica/acpi_iort.c			optional acpi
 arm64/acpica/acpi_machdep.c			optional acpi
@@ -55,7 +56,6 @@ arm64/arm64/gic_v3.c				standard
 arm64/arm64/gic_v3_acpi.c			optional acpi
 arm64/arm64/gic_v3_fdt.c			optional fdt
 arm64/arm64/identcpu.c				standard
-arm64/arm64/in_cksum.c				optional inet | inet6
 arm64/arm64/locore.S				standard no-obj
 arm64/arm64/machdep.c				standard
 arm64/arm64/machdep_boot.c			standard
@@ -66,8 +66,11 @@ arm64/arm64/minidump_machdep.c			standard
 arm64/arm64/mp_machdep.c			optional smp
 arm64/arm64/nexus.c				standard
 arm64/arm64/ofw_machdep.c			optional fdt
+arm64/arm64/ptrauth.c				standard \
+	compile-with	"${NORMAL_C:N-mbranch-protection*}"
 arm64/arm64/pmap.c				standard
 arm64/arm64/ptrace_machdep.c			standard
+arm64/arm64/sigtramp.S				standard
 arm64/arm64/stack_machdep.c			optional ddb | stack
 arm64/arm64/support.S				standard
 arm64/arm64/swtch.S				standard
@@ -114,8 +117,8 @@ armv8_crypto_wrap.o				optional armv8crypto	\
 	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ ${WERROR} ${NO_WCAST_QUAL} -march=armv8-a+crypto ${.IMPSRC}" \
 	no-implicit-rule						\
 	clean		"armv8_crypto_wrap.o"
-aesv8-armx.o					optional armv8crypto	\
-	dependency	"$S/crypto/openssl/aarch64/aesv8-armx.S"	\
+aesv8-armx.o					optional armv8crypto | ossl	\
+	dependency	"$S/crypto/openssl/aarch64/aesv8-armx.S"		\
 	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ ${WERROR} ${NO_WCAST_QUAL} -march=armv8-a+crypto ${.IMPSRC}" \
 	no-implicit-rule						\
 	clean		"aesv8-armx.o"
@@ -136,6 +139,8 @@ crypto/openssl/aarch64/sha1-armv8.S		optional ossl		\
 crypto/openssl/aarch64/sha256-armv8.S		optional ossl		\
 	compile-with	"${CC} -c ${CFLAGS:N-mgeneral-regs-only} ${WERROR} ${.IMPSRC}"
 crypto/openssl/aarch64/sha512-armv8.S		optional ossl		\
+	compile-with	"${CC} -c ${CFLAGS:N-mgeneral-regs-only} ${WERROR} ${.IMPSRC}"
+crypto/openssl/aarch64/vpaes-armv8.S		optional ossl		\
 	compile-with	"${CC} -c ${CFLAGS:N-mgeneral-regs-only} ${WERROR} ${.IMPSRC}"
 
 dev/acpica/acpi_bus_if.m			optional acpi
@@ -176,8 +181,7 @@ dev/cpufreq/cpufreq_dt.c			optional cpufreq fdt
 dev/dwc/if_dwc.c				optional fdt dwc_rk soc_rockchip_rk3328 | fdt dwc_rk soc_rockchip_rk3399 | fdt dwc_socfpga soc_intel_stratix10
 dev/dwc/if_dwc_if.m				optional fdt dwc_rk soc_rockchip_rk3328 | fdt dwc_rk soc_rockchip_rk3399 | fdt dwc_socfpga soc_intel_stratix10
 
-dev/enetc/enetc_mdio.c				optional enetc soc_nxp_ls | enetc_mdio soc_nxp_ls
-dev/enetc/enetc_mdio_pci.c			optional enetc_mdio pci soc_nxp_ls
+dev/enetc/enetc_mdio.c				optional enetc soc_nxp_ls
 dev/enetc/if_enetc.c				optional enetc iflib pci fdt soc_nxp_ls
 
 dev/etherswitch/felix/felix.c			optional enetc etherswitch fdt felix pci soc_nxp_ls
@@ -322,8 +326,8 @@ arm/allwinner/a64/sun50i_a64_acodec.c		optional fdt sound a64_codec
 arm/allwinner/sunxi_dma_if.m			optional a31_dmac
 arm/allwinner/aw_cir.c				optional evdev aw_cir fdt
 arm/allwinner/aw_dwc3.c				optional aw_dwc3 fdt
-arm/allwinner/aw_i2s.c				optional fdt sound aw_i2s
 arm/allwinner/aw_gpio.c				optional gpio aw_gpio fdt
+arm/allwinner/aw_i2s.c				optional fdt sound aw_i2s
 arm/allwinner/aw_mmc.c				optional mmc aw_mmc fdt | mmccam aw_mmc fdt
 arm/allwinner/aw_nmi.c				optional aw_nmi fdt \
 	compile-with "${NORMAL_C} -I$S/contrib/device-tree/include"
@@ -454,6 +458,8 @@ dev/ffec/if_ffec.c				optional ffec
 arm/mv/a37x0_gpio.c				optional a37x0_gpio gpio fdt
 arm/mv/a37x0_iic.c				optional a37x0_iic iicbus fdt
 arm/mv/a37x0_spi.c				optional a37x0_spi spibus fdt
+arm/mv/clk/a37x0_tbg.c				optional a37x0_tbg clk fdt syscon
+arm/mv/clk/a37x0_xtal.c				optional a37x0_xtal clk fdt syscon
 arm/mv/armada38x/armada38x_rtc.c		optional mv_rtc fdt
 arm/mv/gpio.c					optional mv_gpio fdt
 arm/mv/mvebu_gpio.c				optional mv_gpio fdt
@@ -465,6 +471,15 @@ arm/mv/mv_cp110_clock.c				optional SOC_MARVELL_8K fdt
 arm/mv/mv_cp110_icu.c				optional mv_cp110_icu fdt
 arm/mv/mv_cp110_icu_bus.c			optional mv_cp110_icu fdt
 arm/mv/mv_thermal.c				optional SOC_MARVELL_8K mv_thermal fdt
+arm/mv/clk/a37x0_tbg_pll.c			optional a37x0_tbg clk fdt syscon
+arm/mv/clk/a37x0_periph_clk_driver.c		optional a37x0_nb_periph a37x0_sb_periph clk fdt syscon
+arm/mv/clk/a37x0_nb_periph_clk_driver.c		optional a37x0_nb_periph clk fdt syscon
+arm/mv/clk/a37x0_sb_periph_clk_driver.c		optional a37x0_sb_periph clk fdt syscon
+arm/mv/clk/periph.c				optional a37x0_nb_periph a37x0_sb_periph clk fdt syscon
+arm/mv/clk/periph_clk_d.c			optional a37x0_nb_periph a37x0_sb_periph clk fdt syscon
+arm/mv/clk/periph_clk_fixed.c			optional a37x0_nb_periph a37x0_sb_periph clk fdt syscon
+arm/mv/clk/periph_clk_gate.c			optional a37x0_nb_periph a37x0_sb_periph clk fdt syscon
+arm/mv/clk/periph_clk_mux_gate.c		optional a37x0_nb_periph a37x0_sb_periph clk fdt syscon
 
 # NVidia
 arm/nvidia/tegra_abpmisc.c			optional fdt soc_nvidia_tegra210
@@ -518,23 +533,33 @@ tegra210_xusb.fw				optional tegra210_xusb_fw	\
 # NXP
 arm/freescale/vybrid/vf_i2c.c			optional vf_i2c iicbus SOC_NXP_LS
 arm64/qoriq/qoriq_dw_pci.c			optional pci fdt SOC_NXP_LS
+arm64/qoriq/qoriq_gpio_pic.c			optional gpio fdt SOC_NXP_LS
 arm64/qoriq/qoriq_therm.c			optional pci fdt SOC_NXP_LS
 arm64/qoriq/qoriq_therm_if.m			optional pci fdt SOC_NXP_LS
 arm64/qoriq/clk/ls1028a_clkgen.c		optional clk SOC_NXP_LS
+arm64/qoriq/clk/ls1028a_flexspi_clk.c		optional clk SOC_NXP_LS
 arm64/qoriq/clk/ls1046a_clkgen.c		optional clk SOC_NXP_LS
 arm64/qoriq/clk/lx2160a_clkgen.c		optional clk SOC_NXP_LS
 arm64/qoriq/clk/qoriq_clk_pll.c			optional clk SOC_NXP_LS
 arm64/qoriq/clk/qoriq_clkgen.c			optional clk SOC_NXP_LS
 dev/ahci/ahci_fsl_fdt.c				optional SOC_NXP_LS ahci fdt
+dev/flash/flexspi/flex_spi.c    		optional clk flex_spi SOC_NXP_LS fdt
 
 # Qualcomm
 arm64/qualcomm/qcom_gcc.c			optional qcom_gcc fdt
 
 # RockChip Drivers
+arm64/rockchip/rk3328_codec.c			optional fdt rk3328codec soc_rockchip_rk3328
 arm64/rockchip/rk3399_emmcphy.c			optional fdt rk_emmcphy soc_rockchip_rk3399
 arm64/rockchip/rk_dwc3.c			optional fdt rk_dwc3 soc_rockchip_rk3399
 arm64/rockchip/rk_i2c.c				optional fdt rk_i2c soc_rockchip_rk3328 | fdt rk_i2c soc_rockchip_rk3399
-arm64/rockchip/rk805.c				optional fdt rk805 soc_rockchip_rk3328 | fdt rk805 soc_rockchip_rk3399
+arm64/rockchip/rk_i2s.c				optional fdt sound soc_rockchip_rk3328 | fdt sound soc_rockchip_rk3399
+dev/iicbus/pmic/rockchip/rk8xx.c		optional fdt rk805 soc_rockchip_rk3328 | fdt rk805 soc_rockchip_rk3399
+dev/iicbus/pmic/rockchip/rk805.c		optional fdt rk805 soc_rockchip_rk3328
+dev/iicbus/pmic/rockchip/rk808.c		optional fdt rk805 soc_rockchip_rk3399
+dev/iicbus/pmic/rockchip/rk8xx_clocks.c		optional fdt rk805 soc_rockchip_rk3328 | fdt rk805 soc_rockchip_rk3399
+dev/iicbus/pmic/rockchip/rk8xx_regulators.c	optional fdt rk805 soc_rockchip_rk3328 | fdt rk805 soc_rockchip_rk3399
+dev/iicbus/pmic/rockchip/rk8xx_rtc.c		optional fdt rk805 soc_rockchip_rk3328 | fdt rk805 soc_rockchip_rk3399
 arm64/rockchip/rk_grf.c				optional fdt soc_rockchip_rk3328 | fdt soc_rockchip_rk3399
 arm64/rockchip/rk_pinctrl.c			optional fdt rk_pinctrl soc_rockchip_rk3328 | fdt rk_pinctrl soc_rockchip_rk3399
 arm64/rockchip/rk_gpio.c			optional fdt rk_gpio soc_rockchip_rk3328 | fdt rk_gpio soc_rockchip_rk3399

@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd October 12, 2021
+.Dd January 20, 2022
 .Dt KQUEUE 2
 .Os
 .Sh NAME
@@ -390,8 +390,8 @@ For eventfds,
 will contain the maximum value that can be added to the counter
 without blocking.
 .Pp
-For BPF devices, the filter always indicates that it is possible to
-write and
+For BPF devices, when the descriptor is attached to an interface the filter
+always indicates that it is possible to write and
 .Va data
 will contain the MTU size of the underlying interface.
 .It Dv EVFILT_EMPTY
@@ -479,7 +479,9 @@ The events to monitor are:
 .It Dv NOTE_EXIT
 The process has exited.
 The exit status will be stored in
-.Va data .
+.Va data
+in the same format as the status returned by
+.Xr wait 2 .
 .It Dv NOTE_FORK
 The process has called
 .Fn fork .

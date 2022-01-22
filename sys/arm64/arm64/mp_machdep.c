@@ -58,6 +58,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 
 #include <machine/machdep.h>
+#include <machine/cpu.h>
 #include <machine/debug_monitor.h>
 #include <machine/intr.h>
 #include <machine/smp.h>
@@ -208,6 +209,8 @@ init_secondary(uint64_t cpu)
 	pmap_t pmap0;
 	u_int mpidr;
 
+	ptrauth_mp_start(cpu);
+
 	/*
 	 * Verify that the value passed in 'cpu' argument (aka context_id) is
 	 * valid. Some older U-Boot based PSCI implementations are buggy,
@@ -255,6 +258,7 @@ init_secondary(uint64_t cpu)
 	/* Initialize curthread */
 	KASSERT(PCPU_GET(idlethread) != NULL, ("no idle thread"));
 	pcpup->pc_curthread = pcpup->pc_idlethread;
+	schedinit_ap();
 
 	/* Initialize curpmap to match TTBR0's current setting. */
 	pmap0 = vmspace_pmap(&vmspace0);
@@ -292,7 +296,7 @@ init_secondary(uint64_t cpu)
 	MPASS(PCPU_GET(curpcb) == NULL);
 
 	/* Enter the scheduler */
-	sched_throw(NULL);
+	sched_ap_entry();
 
 	panic("scheduler returned us to init_secondary");
 	/* NOTREACHED */
@@ -569,7 +573,7 @@ madt_handler(ACPI_SUBTABLE_HEADER *entry, void *arg)
 		domain = 0;
 #ifdef NUMA
 		if (vm_ndomains > 1)
-			domain = acpi_pxm_get_cpu_locality(*cpuid);
+			domain = acpi_pxm_get_cpu_locality(intr->Uid);
 #endif
 		if (start_cpu(id, intr->ArmMpidr, domain)) {
 			MPASS(cpuid_to_pcpu[id] != NULL);
@@ -709,12 +713,10 @@ cpu_mp_announce(void)
 static void
 cpu_count_acpi_handler(ACPI_SUBTABLE_HEADER *entry, void *arg)
 {
-	ACPI_MADT_GENERIC_INTERRUPT *intr;
 	u_int *cores = arg;
 
 	switch(entry->Type) {
 	case ACPI_MADT_TYPE_GENERIC_INTERRUPT:
-		intr = (ACPI_MADT_GENERIC_INTERRUPT *)entry;
 		(*cores)++;
 		break;
 	default:

@@ -273,7 +273,7 @@ void	tablefull(const char *);
 extern int (*lkpi_alloc_current)(struct thread *, int);
 int linux_alloc_current_noop(struct thread *, int);
 
-#if defined(KLD_MODULE) || defined(KTR_CRITICAL) || !defined(_KERNEL) || defined(GENOFFSET)
+#if (defined(KLD_MODULE) && !defined(KLD_TIED)) || defined(KTR_CRITICAL) || !defined(_KERNEL) || defined(GENOFFSET)
 #define critical_enter() critical_enter_KBI()
 #define critical_exit() critical_exit_KBI()
 #else
@@ -467,11 +467,10 @@ int	SAN_INTERCEPTOR(casueword)(volatile u_long *p, u_long oldval,
 
 void	realitexpire(void *);
 
-int	sysbeep(int hertz, int period);
+int	sysbeep(int hertz, sbintime_t duration);
 
 void	hardclock(int cnt, int usermode);
 void	hardclock_sync(int cpu);
-void	softclock(void *);
 void	statclock(int cnt, int usermode);
 void	profclock(int cnt, int usermode, uintfptr_t pc);
 
