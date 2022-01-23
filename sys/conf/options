@@ -158,6 +158,7 @@ MAC_NONE	opt_dontuse.h
 MAC_NTPD	opt_dontuse.h
 MAC_PARTITION	opt_dontuse.h
 MAC_PORTACL	opt_dontuse.h
+MAC_PRIORITY	opt_dontuse.h
 MAC_SEEOTHERUIDS	opt_dontuse.h
 MAC_STATIC	opt_mac.h
 MAC_STUB	opt_dontuse.h
@@ -229,8 +230,10 @@ ZSTDIO		opt_zstdio.h
 
 # Sanitizers
 COVERAGE	opt_global.h
+KASAN		opt_global.h
 KCOV
 KCSAN		opt_global.h
+KMSAN		opt_global.h
 KUBSAN		opt_global.h
 
 # POSIX kernel options
@@ -1006,6 +1009,7 @@ EKCD		opt_ekcd.h
 
 # NVME options
 NVME_USE_NVD	opt_nvme.h
+NVME_2X_RESET	opt_nvme.h
 
 # amdsbwd options
 AMDSBWD_DEBUG	opt_amdsbwd.h

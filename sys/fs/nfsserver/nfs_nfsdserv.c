@@ -91,6 +91,14 @@ SYSCTL_STRING(_vfs_nfsd, OID_AUTO, owner_major, CTLFLAG_RWTUN,
 static uint64_t nfsrv_owner_minor;
 SYSCTL_U64(_vfs_nfsd, OID_AUTO, owner_minor, CTLFLAG_RWTUN,
     &nfsrv_owner_minor, 0, "Server owner minor");
+/*
+ * Only enable this if all your exported file systems
+ * (or pNFS DSs for the pNFS case) support VOP_ALLOCATE.
+ */
+static bool	nfsrv_doallocate = false;
+SYSCTL_BOOL(_vfs_nfsd, OID_AUTO, enable_v42allocate, CTLFLAG_RW,
+    &nfsrv_doallocate, 0,
+    "Enable NFSv4.2 Allocate operation");
 
 /*
  * This list defines the GSS mechanisms supported.
@@ -4558,9 +4566,10 @@ nfsrvd_sequence(struct nfsrv_descript *nd, __unused int isdgram,
 		cache_this = 1;
 	else
 		cache_this = 0;
-	nd->nd_flag |= ND_HASSEQUENCE;
 	nd->nd_repstat = nfsrv_checksequence(nd, sequenceid, &highest_slotid,
 	    &target_highest_slotid, cache_this, &sflags, p);
+	if (nd->nd_repstat != NFSERR_BADSLOT)
+		nd->nd_flag |= ND_HASSEQUENCE;
 	if (nd->nd_repstat == 0) {
 		NFSM_BUILD(tl, uint32_t *, NFSX_V4SESSIONID);
 		NFSBCOPY(nd->nd_sessionid, tl, NFSX_V4SESSIONID);
@@ -4951,6 +4960,12 @@ nfsrvd_layoutreturn(struct nfsrv_descript *nd, __unused int isdgram,
 		}
 
 		maxcnt = fxdr_unsigned(int, *tl);
+		/*
+		 * There is no fixed upper bound defined in the RFCs,
+		 * but 128Kbytes should be more than sufficient.
+		 */
+		if (maxcnt < 0 || maxcnt > 131072)
+			maxcnt = 0;
 		if (maxcnt > 0) {
 			layp = malloc(maxcnt + 1, M_TEMP, M_WAITOK);
 			error = nfsrv_mtostr(nd, (char *)layp, maxcnt);
@@ -5038,11 +5053,16 @@ nfsrvd_layouterror(struct nfsrv_descript *nd, __unused int isdgram,
 		opnum = fxdr_unsigned(int, *tl);
 		NFSD_DEBUG(4, "nfsrvd_layouterr op=%d stat=%d\n", opnum, stat);
 		/*
-		 * Except for NFSERR_ACCES and NFSERR_STALE errors,
-		 * disable the mirror.
+		 * Except for NFSERR_ACCES, NFSERR_STALE and NFSERR_NOSPC
+		 * errors, disable the mirror.
 		 */
-		if (stat != NFSERR_ACCES && stat != NFSERR_STALE)
+		if (stat != NFSERR_ACCES && stat != NFSERR_STALE &&
+		    stat != NFSERR_NOSPC)
 			nfsrv_delds(devid, curthread);
+
+		/* For NFSERR_NOSPC, mark all deviceids and layouts. */
+		if (stat == NFSERR_NOSPC)
+			nfsrv_marknospc(devid, true);
 	}
 nfsmout:
 	vput(vp);
@@ -5324,6 +5344,16 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 	nfsquad_t clientid;
 	nfsattrbit_t attrbits;
 
+	if (!nfsrv_doallocate) {
+		/*
+		 * If any exported file system, such as a ZFS one, cannot
+		 * do VOP_ALLOCATE(), this operation cannot be supported
+		 * for NFSv4.2.  This cannot be done 'per filesystem', but
+		 * must be for the entire nfsd NFSv4.2 service.
+		 */
+		nd->nd_repstat = NFSERR_NOTSUPP;
+		goto nfsmout;
+	}
 	gotproxystateid = 0;
 	NFSM_DISSECT(tl, uint32_t *, NFSX_STATEID + 2 * NFSX_HYPER);
 	stp->ls_flags = (NFSLCK_CHECK | NFSLCK_WRITEACCESS);
@@ -5390,9 +5420,13 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 		nd->nd_repstat = nfsrv_lockctrl(vp, &stp, &lop, NULL, clientid,
 		    &stateid, exp, nd, curthread);
 
+	NFSD_DEBUG(4, "nfsrvd_allocate: off=%jd len=%jd stat=%d\n",
+	    (intmax_t)off, (intmax_t)len, nd->nd_repstat);
 	if (nd->nd_repstat == 0)
 		nd->nd_repstat = nfsvno_allocate(vp, off, len, nd->nd_cred,
 		    curthread);
+	NFSD_DEBUG(4, "nfsrvd_allocate: aft nfsvno_allocate=%d\n",
+	    nd->nd_repstat);
 	vput(vp);
 	NFSEXITCODE2(0, nd);
 	return (0);
@@ -5957,10 +5991,12 @@ nfsrvd_listxattr(struct nfsrv_descript *nd, __unused int isdgram,
 		if (cookie2 < cookie)
 			nd->nd_repstat = NFSERR_BADXDR;
 	}
+	retlen = NFSX_HYPER + 2 * NFSX_UNSIGNED;
+	if (nd->nd_repstat == 0 && len2 < retlen)
+		nd->nd_repstat = NFSERR_TOOSMALL;
 	if (nd->nd_repstat == 0) {
 		/* Now copy the entries out. */
-		retlen = NFSX_HYPER + 2 * NFSX_UNSIGNED;
-		if (len == 0 && retlen <= len2) {
+		if (len == 0) {
 			/* The cookie was at eof. */
 			NFSM_BUILD(tl, uint32_t *, NFSX_HYPER + 2 *
 			    NFSX_UNSIGNED);

@@ -44,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
+#include <sys/sysctl.h>
 #include <sys/vnode.h>
 
 #include <machine/elf.h>
@@ -131,7 +132,11 @@ static int	link_elf_link_preload_finish(linker_file_t);
 static int	link_elf_load_file(linker_class_t, const char *, linker_file_t *);
 static int	link_elf_lookup_symbol(linker_file_t, const char *,
 		    c_linker_sym_t *);
+static int	link_elf_lookup_debug_symbol(linker_file_t, const char *,
+		    c_linker_sym_t *);
 static int	link_elf_symbol_values(linker_file_t, c_linker_sym_t,
+		    linker_symval_t *);
+static int	link_elf_debug_symbol_values(linker_file_t, c_linker_sym_t,
 		    linker_symval_t *);
 static int	link_elf_search_symbol(linker_file_t, caddr_t value,
 		    c_linker_sym_t *sym, long *diffp);
@@ -153,7 +158,9 @@ static int	elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps,
 
 static kobj_method_t link_elf_methods[] = {
 	KOBJMETHOD(linker_lookup_symbol,	link_elf_lookup_symbol),
+	KOBJMETHOD(linker_lookup_debug_symbol,	link_elf_lookup_debug_symbol),
 	KOBJMETHOD(linker_symbol_values,	link_elf_symbol_values),
+	KOBJMETHOD(linker_debug_symbol_values,	link_elf_debug_symbol_values),
 	KOBJMETHOD(linker_search_symbol,	link_elf_search_symbol),
 	KOBJMETHOD(linker_unload,		link_elf_unload_file),
 	KOBJMETHOD(linker_load_file,		link_elf_load_file),
@@ -176,6 +183,11 @@ static struct linker_class link_elf_class = {
 #endif
 	link_elf_methods, sizeof(struct elf_file)
 };
+
+static bool link_elf_obj_leak_locals = true;
+SYSCTL_BOOL(_debug, OID_AUTO, link_elf_obj_leak_locals,
+    CTLFLAG_RWTUN, &link_elf_obj_leak_locals, 0,
+    "Allow local symbols to participate in global module symbol resolution");
 
 static int	relocate_file(elf_file_t ef);
 static void	elf_obj_cleanup_globals_cache(elf_file_t);
@@ -1321,7 +1333,7 @@ findbase(elf_file_t ef, int sec)
 }
 
 static int
-relocate_file(elf_file_t ef)
+relocate_file1(elf_file_t ef, bool ifuncs)
 {
 	const Elf_Rel *rellim;
 	const Elf_Rel *rel;
@@ -1353,6 +1365,9 @@ relocate_file(elf_file_t ef)
 			sym = ef->ddbsymtab + symidx;
 			/* Local relocs are already done */
 			if (ELF_ST_BIND(sym->st_info) == STB_LOCAL)
+				continue;
+			if ((ELF_ST_TYPE(sym->st_info) == STT_GNU_IFUNC ||
+			    elf_is_ifunc_reloc(rel->r_info)) != ifuncs)
 				continue;
 			if (elf_reloc(&ef->lf, base, rel, ELF_RELOC_REL,
 			    elf_obj_lookup)) {
@@ -1386,6 +1401,9 @@ relocate_file(elf_file_t ef)
 			/* Local relocs are already done */
 			if (ELF_ST_BIND(sym->st_info) == STB_LOCAL)
 				continue;
+			if ((ELF_ST_TYPE(sym->st_info) == STT_GNU_IFUNC ||
+			    elf_is_ifunc_reloc(rela->r_info)) != ifuncs)
+				continue;
 			if (elf_reloc(&ef->lf, base, rela, ELF_RELOC_RELA,
 			    elf_obj_lookup)) {
 				symname = symbol_name(ef, rela->r_info);
@@ -1407,9 +1425,21 @@ relocate_file(elf_file_t ef)
 }
 
 static int
-link_elf_lookup_symbol(linker_file_t lf, const char *name, c_linker_sym_t *sym)
+relocate_file(elf_file_t ef)
 {
-	elf_file_t ef = (elf_file_t) lf;
+	int error;
+
+	error = relocate_file1(ef, false);
+	if (error == 0)
+		error = relocate_file1(ef, true);
+	return (error);
+}
+
+static int
+link_elf_lookup_symbol1(linker_file_t lf, const char *name, c_linker_sym_t *sym,
+    bool see_local)
+{
+	elf_file_t ef = (elf_file_t)lf;
 	const Elf_Sym *symp;
 	const char *strp;
 	int i;
@@ -1417,16 +1447,34 @@ link_elf_lookup_symbol(linker_file_t lf, const char *name, c_linker_sym_t *sym)
 	for (i = 0, symp = ef->ddbsymtab; i < ef->ddbsymcnt; i++, symp++) {
 		strp = ef->ddbstrtab + symp->st_name;
 		if (symp->st_shndx != SHN_UNDEF && strcmp(name, strp) == 0) {
-			*sym = (c_linker_sym_t) symp;
-			return 0;
+			if (see_local ||
+			    ELF_ST_BIND(symp->st_info) == STB_GLOBAL) {
+				*sym = (c_linker_sym_t) symp;
+				return (0);
+			}
+			return (ENOENT);
 		}
 	}
-	return ENOENT;
+	return (ENOENT);
 }
 
 static int
-link_elf_symbol_values(linker_file_t lf, c_linker_sym_t sym,
-    linker_symval_t *symval)
+link_elf_lookup_symbol(linker_file_t lf, const char *name, c_linker_sym_t *sym)
+{
+	return (link_elf_lookup_symbol1(lf, name, sym,
+	    link_elf_obj_leak_locals));
+}
+
+static int
+link_elf_lookup_debug_symbol(linker_file_t lf, const char *name,
+    c_linker_sym_t *sym)
+{
+	return (link_elf_lookup_symbol1(lf, name, sym, true));
+}
+
+static int
+link_elf_symbol_values1(linker_file_t lf, c_linker_sym_t sym,
+    linker_symval_t *symval, bool see_local)
 {
 	elf_file_t ef;
 	const Elf_Sym *es;
@@ -1436,23 +1484,40 @@ link_elf_symbol_values(linker_file_t lf, c_linker_sym_t sym,
 	es = (const Elf_Sym*) sym;
 	val = (caddr_t)es->st_value;
 	if (es >= ef->ddbsymtab && es < (ef->ddbsymtab + ef->ddbsymcnt)) {
+		if (!see_local && ELF_ST_BIND(es->st_info) == STB_LOCAL)
+			return (ENOENT);
 		symval->name = ef->ddbstrtab + es->st_name;
 		val = (caddr_t)es->st_value;
 		if (ELF_ST_TYPE(es->st_info) == STT_GNU_IFUNC)
 			val = ((caddr_t (*)(void))val)();
 		symval->value = val;
 		symval->size = es->st_size;
-		return 0;
+		return (0);
 	}
-	return ENOENT;
+	return (ENOENT);
+}
+
+static int
+link_elf_symbol_values(linker_file_t lf, c_linker_sym_t sym,
+    linker_symval_t *symval)
+{
+	return (link_elf_symbol_values1(lf, sym, symval,
+	    link_elf_obj_leak_locals));
+}
+
+static int
+link_elf_debug_symbol_values(linker_file_t lf, c_linker_sym_t sym,
+    linker_symval_t *symval)
+{
+	return (link_elf_symbol_values1(lf, sym, symval, true));
 }
 
 static int
 link_elf_search_symbol(linker_file_t lf, caddr_t value,
     c_linker_sym_t *sym, long *diffp)
 {
-	elf_file_t ef = (elf_file_t) lf;
-	u_long off = (uintptr_t) (void *) value;
+	elf_file_t ef = (elf_file_t)lf;
+	u_long off = (uintptr_t)(void *)value;
 	u_long diff = off;
 	u_long st_value;
 	const Elf_Sym *es;
@@ -1480,7 +1545,7 @@ link_elf_search_symbol(linker_file_t lf, caddr_t value,
 		*diffp = diff;
 	*sym = (c_linker_sym_t) best;
 
-	return 0;
+	return (0);
 }
 
 /*
@@ -1541,7 +1606,7 @@ link_elf_each_function_nameval(linker_file_t file,
 {
 	linker_symval_t symval;
 	elf_file_t ef = (elf_file_t)file;
-	const Elf_Sym* symp;
+	const Elf_Sym *symp;
 	int i, error;
 
 	/* Exhaustive search */
@@ -1549,12 +1614,11 @@ link_elf_each_function_nameval(linker_file_t file,
 		if (symp->st_value != 0 &&
 		    (ELF_ST_TYPE(symp->st_info) == STT_FUNC ||
 		    ELF_ST_TYPE(symp->st_info) == STT_GNU_IFUNC)) {
-			error = link_elf_symbol_values(file,
+			error = link_elf_debug_symbol_values(file,
 			    (c_linker_sym_t)symp, &symval);
-			if (error)
-				return (error);
-			error = callback(file, i, &symval, opaque);
-			if (error)
+			if (error == 0)
+				error = callback(file, i, &symval, opaque);
+			if (error != 0)
 				return (error);
 		}
 	}
@@ -1779,25 +1843,21 @@ link_elf_reloc_local(linker_file_t lf, bool ifuncs)
 static long
 link_elf_symtab_get(linker_file_t lf, const Elf_Sym **symtab)
 {
-    elf_file_t ef = (elf_file_t)lf;
-    
-    *symtab = ef->ddbsymtab;
-    
-    if (*symtab == NULL)
-        return (0);
+	elf_file_t ef = (elf_file_t)lf;
 
-    return (ef->ddbsymcnt);
+	*symtab = ef->ddbsymtab;
+	if (*symtab == NULL)
+		return (0);
+	return (ef->ddbsymcnt);
 }
     
 static long
 link_elf_strtab_get(linker_file_t lf, caddr_t *strtab)
 {
-    elf_file_t ef = (elf_file_t)lf;
+	elf_file_t ef = (elf_file_t)lf;
 
-    *strtab = ef->ddbstrtab;
-
-    if (*strtab == NULL)
-        return (0);
-
-    return (ef->ddbstrcnt);
+	*strtab = ef->ddbstrtab;
+	if (*strtab == NULL)
+		return (0);
+	return (ef->ddbstrcnt);
 }

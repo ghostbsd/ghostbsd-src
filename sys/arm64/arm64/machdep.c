@@ -102,7 +102,20 @@ __FBSDID("$FreeBSD$");
 
 enum arm64_bus arm64_bus_method = ARM64_BUS_NONE;
 
-struct pcpu __pcpu[MAXCPU];
+/*
+ * XXX: The .bss is assumed to be in the boot CPU NUMA domain. If not we
+ * could relocate this, but will need to keep the same virtual address as
+ * it's reverenced by the EARLY_COUNTER macro.
+ */
+struct pcpu pcpu0;
+
+#if defined(PERTHREAD_SSP)
+/*
+ * The boot SSP canary. Will be replaced with a per-thread canary when
+ * scheduling has started.
+ */
+uintptr_t boot_canary = 0x49a2d892bc05a0b1ul;
+#endif
 
 static struct trapframe proc0_tf;
 
@@ -130,6 +143,16 @@ void pagezero_cache(void *);
 void (*pagezero)(void *p) = pagezero_simple;
 
 int (*apei_nmi)(void);
+
+#if defined(PERTHREAD_SSP_WARNING)
+static void
+print_ssp_warning(void *data __unused)
+{
+	printf("WARNING: Per-thread SSP is enabled but the compiler is too old to support it\n");
+}
+SYSINIT(ssp_warn, SI_SUB_COPYRIGHT, SI_ORDER_ANY, print_ssp_warning, NULL);
+SYSINIT(ssp_warn2, SI_SUB_LAST, SI_ORDER_ANY, print_ssp_warning, NULL);
+#endif
 
 static void
 pan_setup(void)
@@ -334,11 +357,17 @@ makectx(struct trapframe *tf, struct pcb *pcb)
 static void
 init_proc0(vm_offset_t kstack)
 {
-	struct pcpu *pcpup = &__pcpu[0];
+	struct pcpu *pcpup;
+
+	pcpup = cpuid_to_pcpu[0];
+	MPASS(pcpup != NULL);
 
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
 	thread0.td_kstack_pages = KSTACK_PAGES;
+#if defined(PERTHREAD_SSP)
+	thread0.td_md.md_canary = boot_canary;
+#endif
 	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
 	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
 	thread0.td_pcb->pcb_fpflags = 0;
@@ -352,6 +381,42 @@ init_proc0(vm_offset_t kstack)
 	 * or other hardware error.
 	 */
 	serror_enable();
+}
+
+/*
+ * Get an address to be used to write to kernel data that may be mapped
+ * read-only, e.g. to patch kernel code.
+ */
+bool
+arm64_get_writable_addr(vm_offset_t addr, vm_offset_t *out)
+{
+	vm_paddr_t pa;
+
+	/* Check if the page is writable */
+	if (PAR_SUCCESS(arm64_address_translate_s1e1w(addr))) {
+		*out = addr;
+		return (true);
+	}
+
+	/*
+	 * Find the physical address of the given page.
+	 */
+	if (!pmap_klookup(addr, &pa)) {
+		return (false);
+	}
+
+	/*
+	 * If it is within the DMAP region and is writable use that.
+	 */
+	if (PHYS_IN_DMAP(pa)) {
+		addr = PHYS_TO_DMAP(pa);
+		if (PAR_SUCCESS(arm64_address_translate_s1e1w(addr))) {
+			*out = addr;
+			return (true);
+		}
+	}
+
+	return (false);
 }
 
 typedef struct {
@@ -528,7 +593,9 @@ try_load_dtb(caddr_t kmdp)
 #endif
 
 	if (dtbp == (vm_offset_t)NULL) {
+#ifndef TSLOG
 		printf("ERROR loading DTB\n");
+#endif
 		return;
 	}
 
@@ -678,6 +745,8 @@ initarm(struct arm64_bootparams *abp)
 	caddr_t kmdp;
 	bool valid;
 
+	TSRAW(&thread0, TS_ENTER, __func__, NULL);
+
 	boot_el = abp->boot_el;
 
 	/* Parse loader or FDT boot parametes. Determine last used address. */
@@ -722,7 +791,7 @@ initarm(struct arm64_bootparams *abp)
 		    EXFLAG_NOALLOC);
 
 	/* Set the pcpu data, this is needed by pmap_bootstrap */
-	pcpup = &__pcpu[0];
+	pcpup = &pcpu0;
 	pcpu_init(pcpup, 0, sizeof(struct pcpu));
 
 	/*
@@ -733,6 +802,7 @@ initarm(struct arm64_bootparams *abp)
 	    "mov x18, %0 \n"
 	    "msr tpidr_el1, %0" :: "r"(pcpup));
 
+	/* locore.S sets sp_el0 to &thread0 so no need to set it here. */
 	PCPU_SET(curthread, &thread0);
 	PCPU_SET(midr, get_midr());
 
@@ -808,6 +878,8 @@ initarm(struct arm64_bootparams *abp)
 	}
 
 	early_boot = 0;
+
+	TSEXIT();
 }
 
 void

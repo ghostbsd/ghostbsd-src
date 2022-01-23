@@ -2863,9 +2863,9 @@ daregister(struct cam_periph *periph, void *arg)
 	 * ordered tag to a device.
 	 */
 	callout_init_mtx(&softc->sendordered_c, cam_periph_mtx(periph), 0);
-	callout_reset(&softc->sendordered_c,
-	    (da_default_timeout * hz) / DA_ORDEREDTAG_INTERVAL,
-	    dasendorderedtag, periph);
+	callout_reset_sbt(&softc->sendordered_c,
+	    SBT_1S / DA_ORDEREDTAG_INTERVAL * da_default_timeout, 0,
+	    dasendorderedtag, periph, C_PREL(1));
 
 	cam_periph_unlock(periph);
 	/*
@@ -2990,9 +2990,10 @@ daregister(struct cam_periph *periph, void *arg)
 	callout_init_mtx(&softc->mediapoll_c, cam_periph_mtx(periph), 0);
 	if ((softc->flags & DA_FLAG_PACK_REMOVABLE) &&
 	    (cgd->inq_flags & SID_AEN) == 0 &&
-	    da_poll_period != 0)
-		callout_reset(&softc->mediapoll_c, da_poll_period * hz,
-		    damediapoll, periph);
+	    da_poll_period != 0) {
+		callout_reset_sbt(&softc->mediapoll_c, da_poll_period * SBT_1S,
+		    0, damediapoll, periph, C_PREL(1));
+	}
 
 	xpt_schedule(periph, CAM_PRIORITY_DEV);
 
@@ -4516,13 +4517,11 @@ dadone(struct cam_periph *periph, union ccb *done_ccb)
 	struct bio *bp, *bp1;
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
 	da_ccb_state state;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone\n"));
 
 	softc = (struct da_softc *)periph->softc;
-	priority = done_ccb->ccb_h.pinfo.priority;
 	csio = &done_ccb->csio;
 
 #if defined(BUF_TRACKING) || defined(FULL_BUF_TRACKING)
@@ -5286,7 +5285,6 @@ dadone_probeata(struct cam_periph *periph, union ccb *done_ccb)
 	u_int32_t  priority;
 	int continue_probe;
 	int error;
-	int16_t *ptr;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probeata\n"));
 
@@ -5294,7 +5292,6 @@ dadone_probeata(struct cam_periph *periph, union ccb *done_ccb)
 	priority = done_ccb->ccb_h.pinfo.priority;
 	csio = &done_ccb->csio;
 	ata_params = (struct ata_params *)csio->data_ptr;
-	ptr = (uint16_t *)ata_params;
 	continue_probe = 0;
 	error = 0;
 
@@ -5879,12 +5876,10 @@ static void
 dadone_tur(struct cam_periph *periph, union ccb *done_ccb)
 {
 	struct da_softc *softc;
-	struct ccb_scsiio *csio;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_tur\n"));
 
 	softc = (struct da_softc *)periph->softc;
-	csio = &done_ccb->csio;
 
 	cam_periph_assert(periph, MA_OWNED);
 
@@ -6027,9 +6022,12 @@ damediapoll(void *arg)
 			daschedule(periph);
 		}
 	}
+
 	/* Queue us up again */
-	if (da_poll_period != 0)
-		callout_schedule(&softc->mediapoll_c, da_poll_period * hz);
+	if (da_poll_period != 0) {
+		callout_schedule_sbt(&softc->mediapoll_c,
+		    da_poll_period * SBT_1S, 0, C_PREL(1));
+	}
 }
 
 static void
@@ -6214,9 +6212,9 @@ dasendorderedtag(void *arg)
 	}
 
 	/* Queue us up again */
-	callout_reset(&softc->sendordered_c,
-	    (da_default_timeout * hz) / DA_ORDEREDTAG_INTERVAL,
-	    dasendorderedtag, periph);
+	callout_schedule_sbt(&softc->sendordered_c,
+	    SBT_1S / DA_ORDEREDTAG_INTERVAL * da_default_timeout, 0,
+	    C_PREL(1));
 }
 
 /*

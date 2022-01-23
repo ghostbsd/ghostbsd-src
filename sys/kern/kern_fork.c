@@ -391,6 +391,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	p2->p_state = PRS_NEW;		/* protect against others */
 	p2->p_pid = fork_findpid(fr->fr_flags);
 	AUDIT_ARG_PID(p2->p_pid);
+	TSFORK(p2->p_pid, p1->p_pid);
 
 	sx_xlock(&allproc_lock);
 	LIST_INSERT_HEAD(&allproc, p2, p_list);
@@ -526,6 +527,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	}
 
 	p2->p_textvp = p1->p_textvp;
+	p2->p_textdvp = p1->p_textdvp;
 	p2->p_fd = fd;
 	p2->p_fdtol = fdtol;
 	p2->p_pd = pd;
@@ -547,9 +549,16 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	PROC_UNLOCK(p1);
 	PROC_UNLOCK(p2);
 
-	/* Bump references to the text vnode (for procfs). */
-	if (p2->p_textvp)
+	/*
+	 * Bump references to the text vnode and directory, and copy
+	 * the hardlink name.
+	 */
+	if (p2->p_textvp != NULL)
 		vrefact(p2->p_textvp);
+	if (p2->p_textdvp != NULL)
+		vrefact(p2->p_textdvp);
+	p2->p_binname = p1->p_binname == NULL ? NULL :
+	    strdup(p1->p_binname, M_PARGS);
 
 	/*
 	 * Set up linkage for kernel based threading.

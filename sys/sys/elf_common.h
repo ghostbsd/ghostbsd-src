@@ -617,6 +617,9 @@ typedef struct {
 #define	DT_PREINIT_ARRAYSZ 33	/* Size in bytes of the array of
 				   pre-initialization functions. */
 #define	DT_MAXPOSTAGS	34	/* number of positive tags */
+#define	DT_RELRSZ	35	/* Total size of ElfNN_Relr relocations. */
+#define	DT_RELR		36	/* Address of ElfNN_Relr relocations. */
+#define	DT_RELRENT	37	/* Size of each ElfNN_Relr relocation. */
 #define	DT_LOOS		0x6000000d	/* First OS-specific */
 #define	DT_SUNW_AUXILIARY	0x6000000d	/* symbol auxiliary name */
 #define	DT_SUNW_RTLDINF		0x6000000e	/* ld.so.1 info (private) */
@@ -978,8 +981,9 @@ typedef struct {
 #define	AT_ENVV		31	/* Environment vector */
 #define	AT_PS_STRINGS	32	/* struct ps_strings */
 #define	AT_FXRNG	33	/* Pointer to root RNG seed version. */
+#define	AT_KPRELOAD	34	/* Base of vdso, preloaded by rtld */
 
-#define	AT_COUNT	34	/* Count of defined aux entry types. */
+#define	AT_COUNT	35	/* Count of defined aux entry types. */
 
 /*
  * Relocation types.

@@ -886,7 +886,7 @@ ipf_proxy_new(fin, nat)
 
 /* ------------------------------------------------------------------------ */
 /* Function:    ipf_proxy_check                                             */
-/* Returns:     int - -1 == error, 0 == success                             */
+/* Returns:     int - -1 == error, 1 == success                             */
 /* Parameters:  fin(I) - pointer to packet information                      */
 /*              nat(I) - pointer to current NAT session                     */
 /*                                                                          */
@@ -914,7 +914,7 @@ ipf_proxy_check(fin, nat)
 	ip_t *ip;
 	short rv;
 	int err;
-#if !defined(_KERNEL) || SOLARIS
+#if !defined(_KERNEL) || SOLARIS || defined(__FreeBSD__)
 	u_32_t s1, s2, sd;
 #endif
 
@@ -1006,7 +1006,7 @@ ipf_proxy_check(fin, nat)
 		 * packet.
 		 */
 		adjlen = APR_INC(err);
-#if !defined(_KERNEL) || SOLARIS
+#if !defined(_KERNEL) || SOLARIS || defined(__FreeBSD__)
 		s1 = LONG_SUM(fin->fin_plen - adjlen);
 		s2 = LONG_SUM(fin->fin_plen);
 		CALC_SUMD(s1, s2, sd);
@@ -1367,8 +1367,8 @@ ipf_proxy_rule_rev(nat)
 		if (ipn->in_v[0] == 4) {
 			ipn->in_snip = ntohl(nat->nat_odstaddr);
 			ipn->in_dnip = ntohl(nat->nat_osrcaddr);
-		} else {
 #ifdef USE_INET6
+		} else {
 			ipn->in_snip6 = nat->nat_odst6;
 			ipn->in_dnip6 = nat->nat_osrc6;
 #endif
@@ -1443,8 +1443,8 @@ ipf_proxy_rule_fwd(nat)
 	if (ipn->in_v[0] == 4) {
 		ipn->in_snip = ntohl(nat->nat_nsrcaddr);
 		ipn->in_dnip = ntohl(nat->nat_ndstaddr);
-	} else {
 #ifdef USE_INET6
+	} else {
 		ipn->in_snip6 = nat->nat_nsrc6;
 		ipn->in_dnip6 = nat->nat_ndst6;
 #endif

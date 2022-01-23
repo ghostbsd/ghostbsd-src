@@ -102,6 +102,11 @@ int linuxkpi_debug;
 SYSCTL_INT(_compat_linuxkpi, OID_AUTO, debug, CTLFLAG_RWTUN,
     &linuxkpi_debug, 0, "Set to enable pr_debug() prints. Clear to disable.");
 
+int linuxkpi_warn_dump_stack = 0;
+SYSCTL_INT(_compat_linuxkpi, OID_AUTO, warn_dump_stack, CTLFLAG_RWTUN,
+    &linuxkpi_warn_dump_stack, 0,
+    "Set to enable stack traces from WARN_ON(). Clear to disable.");
+
 static struct timeval lkpi_net_lastlog;
 static int lkpi_net_curpps;
 static int lkpi_net_maxpps = 99;
@@ -1822,7 +1827,7 @@ vmmap_remove(void *addr)
 	return (vmmap);
 }
 
-#if defined(__i386__) || defined(__amd64__) || defined(__powerpc__) || defined(__aarch64__)
+#if defined(__i386__) || defined(__amd64__) || defined(__powerpc__) || defined(__aarch64__) || defined(__riscv)
 void *
 _ioremap_attr(vm_paddr_t phys_addr, unsigned long size, int attr)
 {
@@ -1845,7 +1850,7 @@ iounmap(void *addr)
 	vmmap = vmmap_remove(addr);
 	if (vmmap == NULL)
 		return;
-#if defined(__i386__) || defined(__amd64__) || defined(__powerpc__) || defined(__aarch64__)
+#if defined(__i386__) || defined(__amd64__) || defined(__powerpc__) || defined(__aarch64__) || defined(__riscv)
 	pmap_unmapdev((vm_offset_t)addr, vmmap->vm_size);
 #endif
 	kfree(vmmap);

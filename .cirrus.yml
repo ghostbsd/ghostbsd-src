@@ -15,20 +15,30 @@ env:
   CIRRUS_CLONE_DEPTH: 1
 
 task:
-  name: World and kernel amd64 build and boot smoke test
+  matrix:
+  - name: World and kernel amd64 build and boot smoke test
+    env:
+      TARGET: amd64
+      TARGET_ARCH: amd64
+  - name: World and kernel arm64 build and boot smoke test
+    trigger_type: manual
+    env:
+      TARGET: arm64
+      TARGET_ARCH: aarch64
   timeout_in: 120m
   install_script:
-  - sh .cirrus-ci/pkg-install.sh qemu uefi-edk2-qemu-x86_64 llvm11
+  - sh .cirrus-ci/pkg-install.sh qemu llvm13
   setup_script:
   - uname -a
   - df -m
+  - pkg --version
   - pw useradd user
   - mkdir -p /usr/obj/$(pwd -P)
   - chown user:user /usr/obj/$(pwd -P)
   script:
-  - su user -c "make -j$(sysctl -n hw.ncpu) CROSS_TOOLCHAIN=llvm11 WITHOUT_TOOLCHAIN=yes buildworld buildkernel"
+  - su user -c "make -j$(sysctl -n hw.ncpu) CROSS_TOOLCHAIN=llvm13 WITHOUT_TOOLCHAIN=yes buildworld buildkernel"
   package_script:
-  - su user -c "make CROSS_TOOLCHAIN=llvm11 WITHOUT_TOOLCHAIN=yes PKG_FORMAT=tar packages"
+  - su user -c "make CROSS_TOOLCHAIN=llvm13 WITHOUT_TOOLCHAIN=yes PKG_FORMAT=tar packages"
   test_script:
   - sh tools/boot/ci-qemu-test.sh
   post_script:
