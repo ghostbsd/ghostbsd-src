@@ -305,8 +305,9 @@ device		ath_hal			# pci/cardbus chip support
 options 	AH_AR5416_INTERRUPT_MITIGATION # AR5416 interrupt mitigation
 options 	ATH_ENABLE_11N		# Enable 802.11n support for AR5416 and later
 device		ath_rate_sample		# SampleRate tx rate control for ath
-#device		bwi			# Broadcom BCM430x/BCM431x wireless NICs.
-#device		bwn			# Broadcom BCM43xx wireless NICs.
+options		BWN_GPL_PHY 	# Compile code that includes GPLv2.
+device		bwi			# Broadcom BCM430x/BCM431x wireless NICs.
+device		bwn			# Broadcom BCM43xx wireless NICs.
 device		ipw			# Intel 2100 wireless NICs.
 device		iwi			# Intel 2200BG/2225BG/2915ABG wireless NICs.
 device		iwn			# Intel 4965/1000/5000/6000 wireless NICs.
