@@ -1,8 +1,8 @@
 # $GhostBSD$
 
-PACKAGE=	pkg-bootstrap
+PACKAGE=	ghostbsd-cert
 
-FILES=	pkg.freebsd.org.2013102301
+FILES=	ghostbsd.cert
 
 FILESDIR=	${SHAREDIR}/keys/ssl/certs
 FILESMODE=	644
