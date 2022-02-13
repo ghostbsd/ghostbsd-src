@@ -1,5 +1,6 @@
 # $FreeBSD$
 
-SUBDIR= pkg
+SUBDIR= pkg \
+	ssl
 
 .include <bsd.subdir.mk>
