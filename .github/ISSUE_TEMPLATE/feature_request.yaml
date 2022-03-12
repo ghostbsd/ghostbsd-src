@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         ### Please read this first
-        Before reporting an issue, make sure your issue is not in our [Development Mangement](https://github.com/orgs/ghostbsd/projects/4/views/12).
+        Before requesting an a new feature, enhancement, make sure it is not in our [Development Management](https://github.com/orgs/ghostbsd/projects/4/views/12).
 
         Follow these tips to help us understand your request.
         * Only one feature or enhancement per request
@@ -16,7 +16,7 @@ body:
         * Be concise and clear on each field
         * Make sure your request is understandable after reading it
 
-        **Note:** If we have a problem understanding your request, we might close the request.
+        **Note:** If we have a problem understanding the request, we might close the request.
   - type: textarea
     id: describe
     attributes:
