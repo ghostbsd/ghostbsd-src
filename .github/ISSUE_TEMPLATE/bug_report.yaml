@@ -6,14 +6,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        ### Read This first Please
+        ### Please read this first
         Before reporting an issue, make sure your issue is not in our [Development Mangement](https://github.com/orgs/ghostbsd/projects/4/views/12).
 
-        Please follow these tips to help us understand your issue.
-        * Only one issue per ticket
-        * Make sure your title is descriptive of your issue
-        * Be concise and clear describe the issue and how to reproduce the issue
-        * Make sure your problem is understandable after reading it
+        Follow these tips to help us understand your issue.
+        * Only one issue per report
+        * The title is describe the issue
+        * Follow the information of each field
+        * Be concise and clear on each field
+        * Make sure your issue is understandable after reading it
 
         **Note:** If we have a problem understanding your issue, we might close your issue.
   - type: input
