@@ -1,36 +1,54 @@
 name: Bug Report
-description: File a bug report
-title: "[Bug]: "
+description: |
+  Report a bug or issue here.
+  For question or comment use [Telegram](https://t.me/ghostbsd), [Element](https://app.element.io/#/room/#ghostbsd:matrix.org), or [Forums](https://forums.ghostbsd.org) instead.
+title: "[BUG] <title>"
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to fill out this bug report!
-        For question or comment use [Telegram](https://t.me/ghostbsd), [Element](https://app.element.io/#/room/#ghostbsd:matrix.org), the [Forums](https://forums.ghostbsd.org) or [GitHub Discussions](https://github.com/ghostbsd/networkmgr/discussions).
-        **Please make sure your title is descriptive**
-        **Please add details as mush popsible and be concise and clear.**
+        ## Read This first Please
+        Before reporting an issue, make sure your issue is not in our [Development Mangement](https://github.com/orgs/ghostbsd/projects/4/views/12).
+        Please follow these tips to help us understand your issue.
+        * Only one issue per ticket
+        * Make sure your title is descriptive of your issue
+        * Be concise and clear describe the issue and how to reproduce the issue
+        * Make sure your problem is understandable after reading it
+        **Note:** If we have a problem understanding your issue, we might close your issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Use ghostbsd-version -v or go to App menu > System Tools > Mate System Monitor and on the System Monitor window click System Tab
+      placeholder: "Example: 22.03.11"
+    validations:
+      required: true
   - type: textarea
     id: describe
     attributes:
-      label: Describe the bug
-      description: A clear and concise description of what the bug is.
-      placeholder: What happen? Please be concise and clear.
+      label: Explain the issue and what happens
+      description: What is the issue, and what happened?
     validations:
       required: true
   - type: textarea
     id: reproduce
     attributes:
-      label: How to reproduce the bug?
-      description: The steps to reproduce the behavior.
-      placeholder: What are the steps to reproduce the behavior? Please be concise and clear.
+      label: Explain how to reproduce the bug?
+      description: What are the steps to reproduce this issue?
     validations:
       required: true
   - type: textarea
     id: behavior
     attributes:
-      label: Expected behavior
-      description: A clear and concise description of what you expected to happen
-      placeholder: What you expected to happen? Please be concise and clear.
+      label: What is the Expected behavior (if applicable)
+      description: What do you expect to happen?
     validations:
-      required: true
+      required: false
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context (if applicable)
+      description: Added your Terminal ouput or logs here with context
+    validations:
+      required: false
