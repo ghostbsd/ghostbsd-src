@@ -1,5 +1,5 @@
 name: Bug Report
-description: "Report a bug or issue here. \nFor question or comment use [Telegram](https://t.me/ghostbsd), [Element](https://app.element.io/#/room/#ghostbsd:matrix.org), or [Forums](https://forums.ghostbsd.org) instead."
+description: Report a bug or issue here.
 title: "[BUG] <title>"
 labels: [bug]
 body:
