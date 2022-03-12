@@ -1,0 +1,40 @@
+name: Security issue
+description: Report a security issue or vulnerability here.
+title: "[Security] <title>"
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Please read this first
+        Before reporting a security issue or vulnerability, make sure it is not in our [Development Management](https://github.com/orgs/ghostbsd/projects/4/views/12).
+
+        Follow these tips to help us understand your security issue
+        * Only one security issue or vulnerability per report
+        * The title describes the security issue or vulnerability
+        * Follow the information of each field
+        * Be concise and clear on each field
+        * Make sure your security issue or vulnerability is understandable after reading it
+
+        **Note:** If we have a problem understanding the security issue, we might close this report.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Use ghostbsd-version -v or go to App menu > System Tools > Mate System Monitor and on the System Monitor window click System Tab
+      placeholder: "22.03.11"
+    validations:
+      required: true
+  - type: textarea
+    id: describe
+    attributes:
+      label: What is the security issue or vulnerability?
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Security issue or vulnerability information
+      description: Added your pkg audit -F output, CVE information or concerns here
+    validations:
+      required: true
