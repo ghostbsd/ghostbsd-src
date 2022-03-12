@@ -11,12 +11,12 @@ body:
 
         Follow these tips to help us understand your issue.
         * Only one issue per report
-        * The title describe the issue
+        * The title describes the issue
         * Follow the information of each field
         * Be concise and clear on each field
         * Make sure your issue is understandable after reading it
 
-        **Note:** If we have a problem understanding your issue, we might close your issue.
+        **Note:** If we have a problem understanding your issue, we might close the issue.
   - type: input
     id: version
     attributes:

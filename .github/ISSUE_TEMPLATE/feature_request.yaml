@@ -1,36 +1,33 @@
 name: Feature Request
-description: Request new feature, enhancement to improve GhostBSD
-title: "[Feature]: "
+description: Request a new feature, enhancement to improve GhostBSD
+title: "[Feature] <title>"
 labels: [feature]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for taking the time to fill this request form!
-        For question or comment use [Telegram](https://t.me/ghostbsd), [Element](https://app.element.io/#/room/#ghostbsd:matrix.org), the [Forums](https://forums.ghostbsd.org) or [GitHub Discussions](https://github.com/ghostbsd/networkmgr/discussions).
-        **Please make sure your title is descriptive**
-        **Please be concise and clear.**
+        ### Please read this first
+        Before reporting an issue, make sure your issue is not in our [Development Mangement](https://github.com/orgs/ghostbsd/projects/4/views/12).
+
+        Follow these tips to help us understand your request.
+        * Only one feature or enhancement per request
+        * The title describes the request
+        * Follow the information of each field
+        * Be concise and clear on each field
+        * Make sure your request is understandable after reading it
+
+        **Note:** If we have a problem understanding your request, we might close the request.
   - type: textarea
     id: describe
     attributes:
-      label: Describe the feature or enhancement request
-      description: A clear and concise description of the request or new behavior.
-      placeholder: Please be concise and clear.
+      label: Describe the feature or enhancement
+      description: A clear and concise description of the feature or enhancement.
     validations:
       required: true
   - type: textarea
     id: why
     attributes:
       label: Why this request?
-      description: A clear and concise description of why this feature or enhancement request.
-      placeholder: Please be concise and clear.
+      description: Why this feature or enhancement request.
     validations:
       required: true
-  - type: textarea
-    id: additional
-    attributes:
-      label: Additional context
-      description: Add any other context about the enhancement request here.
-      placeholder: Please be concise and clear.
-    validations:
-      required: false
