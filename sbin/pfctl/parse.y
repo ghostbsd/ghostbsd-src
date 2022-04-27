@@ -852,7 +852,7 @@ pfa_anchor	: '{'
 			char ta[PF_ANCHOR_NAME_SIZE];
 			struct pfctl_ruleset *rs;
 
-			/* steping into a brace anchor */
+			/* stepping into a brace anchor */
 			pf->asd++;
 			pf->bn++;
 
@@ -4544,6 +4544,10 @@ route_host	: STRING			{
 			$$ = calloc(1, sizeof(struct node_host));
 			if ($$ == NULL)
 				err(1, "route_host: calloc");
+			if (strlen($1) >= IFNAMSIZ) {
+				yyerror("interface name too long");
+				YYERROR;
+			}
 			$$->ifname = strdup($1);
 			set_ipmask($$, 128);
 			$$->next = NULL;
@@ -4553,8 +4557,13 @@ route_host	: STRING			{
 			struct node_host *n;
 
 			$$ = $3;
-			for (n = $3; n != NULL; n = n->next)
+			for (n = $3; n != NULL; n = n->next) {
+				if (strlen($2) >= IFNAMSIZ) {
+					yyerror("interface name too long");
+					YYERROR;
+				}
 				n->ifname = strdup($2);
+			}
 		}
 		;
 

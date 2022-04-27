@@ -1,6 +1,6 @@
 /*-
- * Copyright (c) 2020-2021 The FreeBSD Foundation
- * Copyright (c) 2021 Bjoern A. Zeeb
+ * Copyright (c) 2020-2022 The FreeBSD Foundation
+ * Copyright (c) 2021-2022 Bjoern A. Zeeb
  *
  * This software was developed by Björn Zeeb under sponsorship from
  * the FreeBSD Foundation.
@@ -38,13 +38,31 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_ddb.h"
+
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/sysctl.h>
+
+#ifdef DDB
+#include <ddb/ddb.h>
+#endif
 
 #include <linux/skbuff.h>
 #include <linux/slab.h>
+#include <linux/gfp.h>
+
+#ifdef SKB_DEBUG
+SYSCTL_DECL(_compat_linuxkpi);
+SYSCTL_NODE(_compat_linuxkpi, OID_AUTO, skb, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "LinuxKPI skbuff");
+
+int linuxkpi_debug_skb;
+SYSCTL_INT(_compat_linuxkpi_skb, OID_AUTO, debug, CTLFLAG_RWTUN,
+    &linuxkpi_debug_skb, 0, "SKB debug level");
+#endif
 
 static MALLOC_DEFINE(M_LKPISKB, "lkpiskb", "Linux KPI skbuff compat");
 
@@ -56,29 +74,86 @@ linuxkpi_alloc_skb(size_t size, gfp_t gfp)
 
 	len = sizeof(*skb) + size + sizeof(struct skb_shared_info);
 	/*
-	 * Using or own type here not backing my kmalloc.
+	 * Using our own type here not backing my kmalloc.
 	 * We assume no one calls kfree directly on the skb.
 	 */
 	skb = malloc(len, M_LKPISKB, linux_check_m_flags(gfp) | M_ZERO);
 	if (skb == NULL)
 		return (skb);
-	skb->_alloc_len = size;
+	skb->_alloc_len = len;
 	skb->truesize = size;
 
 	skb->head = skb->data = skb->tail = (uint8_t *)(skb+1);
 	skb->end = skb->head + size;
 
+	skb->prev = skb->next = skb;
+
 	skb->shinfo = (struct skb_shared_info *)(skb->end);
 
-	SKB_TRACE_FMT(skb, "data %p size %zu", skb->data, size);
+	SKB_TRACE_FMT(skb, "data %p size %zu", (skb) ? skb->data : NULL, size);
 	return (skb);
+}
+
+struct sk_buff *
+linuxkpi_dev_alloc_skb(size_t size, gfp_t gfp)
+{
+	struct sk_buff *skb;
+	size_t len;
+
+	len = size + NET_SKB_PAD;
+	skb = linuxkpi_alloc_skb(len, gfp);
+
+	if (skb != NULL)
+		skb_reserve(skb, NET_SKB_PAD);
+
+	SKB_TRACE_FMT(skb, "data %p size %zu len %zu",
+	    (skb) ? skb->data : NULL, size, len);
+	return (skb);
+}
+
+struct sk_buff *
+linuxkpi_skb_copy(struct sk_buff *skb, gfp_t gfp)
+{
+	struct sk_buff *new;
+	struct skb_shared_info *shinfo;
+	size_t len;
+	unsigned int headroom;
+
+	/* Full buffer size + any fragments. */
+	len = skb->end - skb->head + skb->data_len;
+
+	new = linuxkpi_alloc_skb(len, gfp);
+	if (new == NULL)
+		return (NULL);
+
+	headroom = skb_headroom(skb);
+	/* Fixup head and end. */
+	skb_reserve(new, headroom);	/* data and tail move headroom forward. */
+	skb_put(new, skb->len);		/* tail and len get adjusted */
+
+	/* Copy data. */
+	memcpy(new->head, skb->data - headroom, headroom + skb->len);
+
+	/* Deal with fragments. */
+	shinfo = skb->shinfo;
+	if (shinfo->nr_frags > 0) {
+		printf("%s:%d: NOT YET SUPPORTED; missing %d frags\n",
+		    __func__, __LINE__, shinfo->nr_frags);
+		SKB_TODO();
+	}
+
+	/* Deal with header fields. */
+	memcpy(new->cb, skb->cb, sizeof(skb->cb));
+	SKB_IMPROVE("more header fields to copy?");
+
+	return (new);
 }
 
 void
 linuxkpi_kfree_skb(struct sk_buff *skb)
 {
 	struct skb_shared_info *shinfo;
-	uint16_t fragno;
+	uint16_t fragno, count;
 
 	SKB_TRACE(skb);
 	if (skb == NULL)
@@ -103,11 +178,81 @@ linuxkpi_kfree_skb(struct sk_buff *skb)
 	    ("%s: skb %p m %p != NULL\n", __func__, skb, skb->m));
 
 	shinfo = skb->shinfo;
-	for (fragno = 0; fragno < nitems(shinfo->frags); fragno++) {
+	for (count = fragno = 0;
+	    count < shinfo->nr_frags && fragno < nitems(shinfo->frags);
+	    fragno++) {
 
-		if (shinfo->frags[fragno].page != NULL)
-			__free_page(shinfo->frags[fragno].page);
+		if (shinfo->frags[fragno].page != NULL) {
+			struct page *p;
+
+			p = shinfo->frags[fragno].page;
+			shinfo->frags[fragno].size = 0;
+			shinfo->frags[fragno].offset = 0;
+			shinfo->frags[fragno].page = NULL;
+			__free_page(p);
+			count++;
+		}
 	}
 
 	free(skb, M_LKPISKB);
 }
+
+#ifdef DDB
+DB_SHOW_COMMAND(skb, db_show_skb)
+{
+	struct sk_buff *skb;
+	int i;
+
+	if (!have_addr) {
+		db_printf("usage: show skb <addr>\n");
+			return;
+	}
+
+	skb = (struct sk_buff *)addr;
+
+	db_printf("skb %p\n", skb);
+	db_printf("\tnext %p prev %p\n", skb->next, skb->prev);
+	db_printf("\tlist %d\n", skb->list);
+	db_printf("\t_alloc_len %u len %u data_len %u truesize %u mac_len %u\n",
+	    skb->_alloc_len, skb->len, skb->data_len, skb->truesize,
+	    skb->mac_len);
+	db_printf("\tcsum %#06x l3hdroff %u l4hdroff %u priority %u qmap %u\n",
+	    skb->csum, skb->l3hdroff, skb->l4hdroff, skb->priority, skb->qmap);
+	db_printf("\tpkt_type %d dev %p sk %p\n",
+	    skb->pkt_type, skb->dev, skb->sk);
+	db_printf("\tcsum_offset %d csum_start %d ip_summed %d protocol %d\n",
+	    skb->csum_offset, skb->csum_start, skb->ip_summed, skb->protocol);
+	db_printf("\thead %p data %p tail %p end %p\n",
+	    skb->head, skb->data, skb->tail, skb->end);
+	db_printf("\tshinfo %p m %p m_free_func %p\n",
+	    skb->shinfo, skb->m, skb->m_free_func);
+
+	if (skb->shinfo != NULL) {
+		struct skb_shared_info *shinfo;
+
+		shinfo = skb->shinfo;
+		db_printf("\t\tgso_type %d gso_size %u nr_frags %u\n",
+		    shinfo->gso_type, shinfo->gso_size, shinfo->nr_frags);
+		for (i = 0; i < nitems(shinfo->frags); i++) {
+			struct skb_frag *frag;
+
+			frag = &shinfo->frags[i];
+			if (frag == NULL || frag->page == NULL)
+				continue;
+			db_printf("\t\t\tfrag %p fragno %d page %p %p "
+			    "offset %ju size %zu\n",
+			    frag, i, frag->page, linux_page_address(frag->page),
+			    (uintmax_t)frag->offset, frag->size);
+		}
+	}
+	db_printf("\tcb[] %p {", skb->cb);
+	for (i = 0; i < nitems(skb->cb); i++) {
+		db_printf("%#04x%s",
+		    skb->cb[i], (i < (nitems(skb->cb)-1)) ? ", " : "");
+	}
+	db_printf("}\n");
+
+	db_printf("\t_spareu16_0 %#06x __scratch[0] %p\n",
+	    skb->_spareu16_0, skb->__scratch);
+};
+#endif

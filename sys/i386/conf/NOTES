@@ -294,7 +294,7 @@ device		isa
 #
 # AUTO_EOI_2 enables the `automatic EOI' feature for the slave 8259A
 # interrupt controller.  This saves about 0.7-1.25 usec for each interrupt.
-# Automatic EOI is documented not to work for for the slave with the
+# Automatic EOI is documented not to work for the slave with the
 # original i8259A, but it works for some clones and some integrated
 # versions.
 #
@@ -526,9 +526,6 @@ device		cp
 envvar		hint.cs.0.at="isa"
 envvar		hint.cs.0.port="0x300"
 #options 	NETGRAPH_CRONYX		# Enable NETGRAPH support for Cronyx adapter(s)
-options 	ED_3C503
-options 	ED_HPP
-options 	ED_SIC
 envvar		hint.ed.0.at="isa"
 envvar		hint.ed.0.port="0x280"
 envvar		hint.ed.0.irq="5"

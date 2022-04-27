@@ -932,3 +932,28 @@ METHOD int reset_child {
 	device_t _child;
 	int _flags;
 };
+
+/**
+ * @brief Gets child's specific property
+ *
+ * The bus_get_property can be used to access device
+ * specific properties stored on the bus. If _propvalue
+ * is NULL or _size is 0, then method only returns size
+ * of the property.
+ *
+ * @param _dev			the bus device
+ * @param _child		the child device
+ * @param _propname		property name
+ * @param _propvalue	property value destination
+ * @param _size			property value size
+ *
+ * @returns size of property if successful otherwise -1
+ */
+METHOD ssize_t get_property {
+	device_t _dev;
+	device_t _child;
+	const char *_propname;
+	void *_propvalue;
+	size_t _size;
+	device_property_type_t type;
+} DEFAULT bus_generic_get_property;

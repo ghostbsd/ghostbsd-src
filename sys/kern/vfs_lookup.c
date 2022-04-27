@@ -288,10 +288,8 @@ static int
 namei_setup(struct nameidata *ndp, struct vnode **dpp, struct pwd **pwdp)
 {
 	struct componentname *cnp;
-	struct file *dfp;
 	struct thread *td;
 	struct pwd *pwd;
-	cap_rights_t rights;
 	int error;
 	bool startdir_used;
 
@@ -352,56 +350,12 @@ namei_setup(struct nameidata *ndp, struct vnode **dpp, struct pwd **pwdp)
 			*dpp = pwd->pwd_cdir;
 			vrefact(*dpp);
 		} else {
-			rights = *ndp->ni_rightsneeded;
-			cap_rights_set_one(&rights, CAP_LOOKUP);
-
 			if (cnp->cn_flags & AUDITVNODE1)
 				AUDIT_ARG_ATFD1(ndp->ni_dirfd);
 			if (cnp->cn_flags & AUDITVNODE2)
 				AUDIT_ARG_ATFD2(ndp->ni_dirfd);
-			/*
-			 * Effectively inlined fgetvp_rights, because
-			 * we need to inspect the file as well as
-			 * grabbing the vnode.  No check for O_PATH,
-			 * files to implement its semantic.
-			 */
-			error = fget_cap(td, ndp->ni_dirfd, &rights,
-			    &dfp, &ndp->ni_filecaps);
-			if (error != 0) {
-				/*
-				 * Preserve the error; it should either be EBADF
-				 * or capability-related, both of which can be
-				 * safely returned to the caller.
-				 */
-			} else {
-				if (dfp->f_ops == &badfileops) {
-					error = EBADF;
-				} else if (dfp->f_vnode == NULL) {
-					error = ENOTDIR;
-				} else {
-					*dpp = dfp->f_vnode;
-					vref(*dpp);
 
-					if ((dfp->f_flag & FSEARCH) != 0)
-						cnp->cn_flags |= NOEXECCHECK;
-				}
-				fdrop(dfp, td);
-			}
-#ifdef CAPABILITIES
-			/*
-			 * If file descriptor doesn't have all rights,
-			 * all lookups relative to it must also be
-			 * strictly relative.
-			 */
-			CAP_ALL(&rights);
-			if (!cap_rights_contains(&ndp->ni_filecaps.fc_rights,
-			    &rights) ||
-			    ndp->ni_filecaps.fc_fcntls != CAP_FCNTL_ALL ||
-			    ndp->ni_filecaps.fc_nioctls != -1) {
-				ndp->ni_lcf |= NI_LCF_STRICTRELATIVE;
-				ndp->ni_resflags |= NIRES_STRICTREL;
-			}
-#endif
+			error = fgetvp_lookup(ndp->ni_dirfd, ndp, dpp);
 		}
 		if (error == 0 && (*dpp)->v_type != VDIR &&
 		    (cnp->cn_pnbuf[0] != '\0' ||
@@ -464,13 +418,6 @@ namei_getpath(struct nameidata *ndp)
 
 	if (__predict_false(error != 0))
 		return (error);
-
-	/*
-	 * Don't allow empty pathnames unless EMPTYPATH is specified.
-	 * Caller checks for ENOENT as an indication for the empty path.
-	 */
-	if (__predict_false(*cnp->cn_pnbuf == '\0'))
-		return (ENOENT);
 
 	cnp->cn_nameptr = cnp->cn_pnbuf;
 	return (0);
@@ -602,8 +549,6 @@ namei(struct nameidata *ndp)
 
 	error = namei_getpath(ndp);
 	if (__predict_false(error != 0)) {
-		if (error == ENOENT && (cnp->cn_flags & EMPTYPATH) != 0) 
-			return (namei_emptypath(ndp));
 		namei_cleanup_cnp(cnp);
 		SDT_PROBE4(vfs, namei, lookup, return, error, NULL,
 		    false, ndp);
@@ -646,6 +591,15 @@ namei(struct nameidata *ndp)
 	case CACHE_FPL_STATUS_ABORTED:
 		TAILQ_INIT(&ndp->ni_cap_tracker);
 		MPASS(ndp->ni_lcf == 0);
+		if (*cnp->cn_pnbuf == '\0') {
+			if ((cnp->cn_flags & EMPTYPATH) != 0) {
+				return (namei_emptypath(ndp));
+			}
+			namei_cleanup_cnp(cnp);
+			SDT_PROBE4(vfs, namei, lookup, return, ENOENT, NULL,
+			    false, ndp);
+			return (ENOENT);
+		}
 		error = namei_setup(ndp, &dp, &pwd);
 		if (error != 0) {
 			namei_cleanup_cnp(cnp);
@@ -1645,7 +1599,7 @@ NDVALIDATE(struct nameidata *ndp)
 	case DELETE:
 	case RENAME:
 		/*
-		 * Some filesystems set SAVENAME to provoke HASBUF, accomodate
+		 * Some filesystems set SAVENAME to provoke HASBUF, accommodate
 		 * for it until it gets fixed.
 		 */
 		orig &= NDMODIFYINGFLAGS;

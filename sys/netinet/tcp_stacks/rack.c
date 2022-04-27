@@ -1499,13 +1499,13 @@ rack_init_sysctls(void)
 	    SYSCTL_CHILDREN(rack_attack),
 	    OID_AUTO, "move_none", CTLFLAG_RD,
 	    &rack_move_none,
-	    "Total number of SACK index reuse of postions under threshold");
+	    "Total number of SACK index reuse of positions under threshold");
 	rack_move_some = counter_u64_alloc(M_WAITOK);
 	SYSCTL_ADD_COUNTER_U64(&rack_sysctl_ctx,
 	    SYSCTL_CHILDREN(rack_attack),
 	    OID_AUTO, "move_some", CTLFLAG_RD,
 	    &rack_move_some,
-	    "Total number of SACK index reuse of postions over threshold");
+	    "Total number of SACK index reuse of positions over threshold");
 	rack_sack_attacks_detected = counter_u64_alloc(M_WAITOK);
 	SYSCTL_ADD_COUNTER_U64(&rack_sysctl_ctx,
 	    SYSCTL_CHILDREN(rack_attack),
@@ -6093,7 +6093,7 @@ rack_clone_rsm(struct tcp_rack *rack, struct rack_sendmap *nrsm,
 	 * Now we need to find nrsm's new location in the mbuf chain
 	 * we basically calculate a new offset, which is soff +
 	 * how much is left in original rsm. Then we walk out the mbuf
-	 * chain to find the righ postion, it may be the same mbuf
+	 * chain to find the righ position, it may be the same mbuf
 	 * or maybe not.
 	 */
 	KASSERT(((rsm->m != NULL) ||
@@ -8406,7 +8406,7 @@ do_rest_ofb:
 			} else {
 				/*
 				 * The end goes beyond this guy
-				 * repostion the start to the
+				 * reposition the start to the
 				 * next block.
 				 */
 				start = rsm->r_end;
@@ -12126,7 +12126,7 @@ rack_init(struct tcpcb *tp)
 	if (tp->t_fb_ptr == NULL) {
 		/*
 		 * We need to allocate memory but cant. The INP and INP_INFO
-		 * locks and they are recusive (happens during setup. So a
+		 * locks and they are recursive (happens during setup. So a
 		 * scheme to drop the locks fails :(
 		 *
 		 */
@@ -12665,7 +12665,7 @@ rack_timer_audit(struct tcpcb *tp, struct tcp_rack *rack, struct sockbuf *sb)
 				return;
 		} else if (sbavail(&tp->t_inpcb->inp_socket->so_snd) && (tmr_up == PACE_TMR_RXT)) {
 			/*
-			 * if we hit enobufs then we would expect the possiblity
+			 * if we hit enobufs then we would expect the possibility
 			 * of nothing outstanding and the RXT up (and the hptsi timer).
 			 */
 			return;

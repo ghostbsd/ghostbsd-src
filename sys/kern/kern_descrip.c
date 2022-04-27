@@ -115,6 +115,8 @@ static void	fdgrowtable(struct filedesc *fdp, int nfd);
 static void	fdgrowtable_exp(struct filedesc *fdp, int nfd);
 static void	fdunused(struct filedesc *fdp, int fd);
 static void	fdused(struct filedesc *fdp, int fd);
+static int	fget_unlocked_seq(struct filedesc *fdp, int fd,
+		    cap_rights_t *needrightsp, struct file **fpp, seqc_t *seqp);
 static int	getmaxfd(struct thread *td);
 static u_long	*filecaps_copy_prep(const struct filecaps *src);
 static void	filecaps_copy_finish(const struct filecaps *src,
@@ -1398,23 +1400,39 @@ kern_close(struct thread *td, int fd)
 	return (closefp(fdp, fd, fp, td, true, true));
 }
 
-int
-kern_close_range(struct thread *td, u_int lowfd, u_int highfd)
+static int
+close_range_cloexec(struct thread *td, u_int lowfd, u_int highfd)
+{
+	struct filedesc *fdp;
+	struct fdescenttbl *fdt;
+	struct filedescent *fde;
+	int fd;
+
+	fdp = td->td_proc->p_fd;
+	FILEDESC_XLOCK(fdp);
+	fdt = atomic_load_ptr(&fdp->fd_files);
+	highfd = MIN(highfd, fdt->fdt_nfiles - 1);
+	fd = lowfd;
+	if (__predict_false(fd > highfd)) {
+		goto out_locked;
+	}
+	for (; fd <= highfd; fd++) {
+		fde = &fdt->fdt_ofiles[fd];
+		if (fde->fde_file != NULL)
+			fde->fde_flags |= UF_EXCLOSE;
+	}
+out_locked:
+	FILEDESC_XUNLOCK(fdp);
+	return (0);
+}
+
+static int
+close_range_impl(struct thread *td, u_int lowfd, u_int highfd)
 {
 	struct filedesc *fdp;
 	const struct fdescenttbl *fdt;
 	struct file *fp;
 	int fd;
-
-	/*
-	 * Check this prior to clamping; closefrom(3) with only fd 0, 1, and 2
-	 * open should not be a usage error.  From a close_range() perspective,
-	 * close_range(3, ~0U, 0) in the same scenario should also likely not
-	 * be a usage error as all fd above 3 are in-fact already closed.
-	 */
-	if (highfd < lowfd) {
-		return (EINVAL);
-	}
 
 	fdp = td->td_proc->p_fd;
 	FILEDESC_XLOCK(fdp);
@@ -1445,6 +1463,26 @@ out_unlocked:
 	return (0);
 }
 
+int
+kern_close_range(struct thread *td, int flags, u_int lowfd, u_int highfd)
+{
+
+	/*
+	 * Check this prior to clamping; closefrom(3) with only fd 0, 1, and 2
+	 * open should not be a usage error.  From a close_range() perspective,
+	 * close_range(3, ~0U, 0) in the same scenario should also likely not
+	 * be a usage error as all fd above 3 are in-fact already closed.
+	 */
+	if (highfd < lowfd) {
+		return (EINVAL);
+	}
+
+	if ((flags & CLOSE_RANGE_CLOEXEC) != 0)
+		return (close_range_cloexec(td, lowfd, highfd));
+
+	return (close_range_impl(td, lowfd, highfd));
+}
+
 #ifndef _SYS_SYSPROTO_H_
 struct close_range_args {
 	u_int	lowfd;
@@ -1460,10 +1498,9 @@ sys_close_range(struct thread *td, struct close_range_args *uap)
 	AUDIT_ARG_CMD(uap->highfd);
 	AUDIT_ARG_FFLAGS(uap->flags);
 
-	/* No flags currently defined */
-	if (uap->flags != 0)
+	if ((uap->flags & ~(CLOSE_RANGE_CLOEXEC)) != 0)
 		return (EINVAL);
-	return (kern_close_range(td, uap->lowfd, uap->highfd));
+	return (kern_close_range(td, uap->flags, uap->lowfd, uap->highfd));
 }
 
 #ifdef COMPAT_FREEBSD12
@@ -1488,7 +1525,7 @@ freebsd12_closefrom(struct thread *td, struct freebsd12_closefrom_args *uap)
 	 * closefrom(0) which closes all files.
 	 */
 	lowfd = MAX(0, uap->lowfd);
-	return (kern_close_range(td, lowfd, ~0U));
+	return (kern_close_range(td, 0, lowfd, ~0U));
 }
 #endif	/* COMPAT_FREEBSD12 */
 
@@ -1762,11 +1799,19 @@ filecaps_fill(struct filecaps *fcaps)
 /*
  * Free memory allocated within filecaps structure.
  */
+static void
+filecaps_free_ioctl(struct filecaps *fcaps)
+{
+
+	free(fcaps->fc_ioctls, M_FILECAPS);
+	fcaps->fc_ioctls = NULL;
+}
+
 void
 filecaps_free(struct filecaps *fcaps)
 {
 
-	free(fcaps->fc_ioctls, M_FILECAPS);
+	filecaps_free_ioctl(fcaps);
 	bzero(fcaps, sizeof(*fcaps));
 }
 
@@ -1801,9 +1846,14 @@ filecaps_validate(const struct filecaps *fcaps, const char *func)
 	KASSERT(fcaps->fc_fcntls == 0 ||
 	    cap_rights_is_set(&fcaps->fc_rights, CAP_FCNTL),
 	    ("%s: fcntls without CAP_FCNTL", func));
+	/*
+	 * open calls without WANTIOCTLCAPS free caps but leave the counter
+	 */
+#if 0
 	KASSERT(fcaps->fc_ioctls != NULL ? fcaps->fc_nioctls > 0 :
 	    (fcaps->fc_nioctls == -1 || fcaps->fc_nioctls == 0),
 	    ("%s: invalid ioctls", func));
+#endif
 	KASSERT(fcaps->fc_nioctls == 0 ||
 	    cap_rights_is_set(&fcaps->fc_rights, CAP_IOCTL),
 	    ("%s: ioctls without CAP_IOCTL", func));
@@ -2931,6 +2981,7 @@ fget_cap_locked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 
 	FILEDESC_LOCK_ASSERT(fdp);
 
+	*fpp = NULL;
 	fde = fdeget_locked(fdp, fd);
 	if (fde == NULL) {
 		error = EBADF;
@@ -3031,7 +3082,7 @@ fgetvp_lookup_smr(int fd, struct nameidata *ndp, struct vnode **vpp, bool *fsear
 		return (EAGAIN);
 	*fsearch = ((fp->f_flag & FSEARCH) != 0);
 	vp = fp->f_vnode;
-	if (__predict_false(vp == NULL || vp->v_type != VDIR)) {
+	if (__predict_false(vp == NULL)) {
 		return (EAGAIN);
 	}
 	if (!filecaps_copy(&fde->fde_caps, &ndp->ni_filecaps, false)) {
@@ -3103,6 +3154,71 @@ fgetvp_lookup_smr(int fd, struct nameidata *ndp, struct vnode **vpp, bool *fsear
 #endif
 
 int
+fgetvp_lookup(int fd, struct nameidata *ndp, struct vnode **vpp)
+{
+	struct thread *td;
+	struct file *fp;
+	struct vnode *vp;
+	struct componentname *cnp;
+	cap_rights_t rights;
+	int error;
+
+	td = curthread;
+	rights = *ndp->ni_rightsneeded;
+	cap_rights_set_one(&rights, CAP_LOOKUP);
+	cnp = &ndp->ni_cnd;
+
+	error = fget_cap(td, ndp->ni_dirfd, &rights, &fp, &ndp->ni_filecaps);
+	if (__predict_false(error != 0))
+		return (error);
+	if (__predict_false(fp->f_ops == &badfileops)) {
+		error = EBADF;
+		goto out_free;
+	}
+	vp = fp->f_vnode;
+	if (__predict_false(vp == NULL)) {
+		error = ENOTDIR;
+		goto out_free;
+	}
+	vrefact(vp);
+	/*
+	 * XXX does not check for VDIR, handled by namei_setup
+	 */
+	if ((fp->f_flag & FSEARCH) != 0)
+		cnp->cn_flags |= NOEXECCHECK;
+	fdrop(fp, td);
+
+#ifdef CAPABILITIES
+	/*
+	 * If file descriptor doesn't have all rights,
+	 * all lookups relative to it must also be
+	 * strictly relative.
+	 */
+	CAP_ALL(&rights);
+	if (!cap_rights_contains(&ndp->ni_filecaps.fc_rights, &rights) ||
+	    ndp->ni_filecaps.fc_fcntls != CAP_FCNTL_ALL ||
+	    ndp->ni_filecaps.fc_nioctls != -1) {
+		ndp->ni_lcf |= NI_LCF_STRICTRELATIVE;
+		ndp->ni_resflags |= NIRES_STRICTREL;
+	}
+#endif
+
+	/*
+	 * TODO: avoid copying ioctl caps if it can be helped to begin with
+	 */
+	if ((cnp->cn_flags & WANTIOCTLCAPS) == 0)
+		filecaps_free_ioctl(&ndp->ni_filecaps);
+
+	*vpp = vp;
+	return (0);
+
+out_free:
+	filecaps_free(&ndp->ni_filecaps);
+	fdrop(fp, td);
+	return (error);
+}
+
+static int
 fget_unlocked_seq(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
     struct file **fpp, seqc_t *seqp)
 {
@@ -3200,8 +3316,10 @@ fget_unlocked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 #endif
 
 	fdt = fdp->fd_files;
-	if (__predict_false((u_int)fd >= fdt->fdt_nfiles))
+	if (__predict_false((u_int)fd >= fdt->fdt_nfiles)) {
+		*fpp = NULL;
 		return (EBADF);
+	}
 #ifdef CAPABILITIES
 	seq = seqc_read_notmodify(fd_seqc(fdt, fd));
 	fde = &fdt->fdt_ofiles[fd];
@@ -3236,6 +3354,7 @@ fget_unlocked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 out_fdrop:
 	fdrop(fp, curthread);
 out_fallback:
+	*fpp = NULL;
 	return (fget_unlocked_seq(fdp, fd, needrightsp, fpp, NULL));
 }
 
@@ -3261,6 +3380,7 @@ fget_only_user(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 
 	MPASS(FILEDESC_IS_ONLY_USER(fdp));
 
+	*fpp = NULL;
 	if (__predict_false(fd >= fdp->fd_nfiles))
 		return (EBADF);
 
@@ -3286,6 +3406,7 @@ fget_only_user(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 
 	MPASS(FILEDESC_IS_ONLY_USER(fdp));
 
+	*fpp = NULL;
 	if (__predict_false(fd >= fdp->fd_nfiles))
 		return (EBADF);
 
@@ -3480,7 +3601,7 @@ _fgetvp(struct thread *td, int fd, int flags, cap_rights_t *needrightsp,
 		error = EINVAL;
 	} else {
 		*vpp = fp->f_vnode;
-		vref(*vpp);
+		vrefact(*vpp);
 	}
 	fdrop(fp, td);
 
@@ -3516,7 +3637,7 @@ fgetvp_rights(struct thread *td, int fd, cap_rights_t *needrightsp,
 
 	*havecaps = caps;
 	*vpp = fp->f_vnode;
-	vref(*vpp);
+	vrefact(*vpp);
 	fdrop(fp, td);
 
 	return (0);
@@ -4229,6 +4350,8 @@ sysctl_kern_file(SYSCTL_HANDLER_ARGS)
 		if (fdp == NULL)
 			continue;
 		FILEDESC_SLOCK(fdp);
+		if (refcount_load(&fdp->fd_refcnt) == 0)
+			goto nextproc;
 		lastfile = fdlastfile(fdp);
 		for (n = 0; refcount_load(&fdp->fd_refcnt) > 0 && n <= lastfile;
 		    n++) {
@@ -4244,9 +4367,16 @@ sysctl_kern_file(SYSCTL_HANDLER_ARGS)
 			xf.xf_offset = foffset_get(fp);
 			xf.xf_flag = fp->f_flag;
 			error = SYSCTL_OUT(req, &xf, sizeof(xf));
-			if (error)
+
+			/*
+			 * There is no need to re-check the fdtable refcount
+			 * here since the filedesc lock is not dropped in the
+			 * loop body.
+			 */
+			if (error != 0)
 				break;
 		}
+nextproc:
 		FILEDESC_SUNLOCK(fdp);
 		fddrop(fdp);
 		if (error)
@@ -4506,8 +4636,10 @@ kern_proc_filedesc_out(struct proc *p,  struct sbuf *sb, ssize_t maxlen,
 	if (pwd != NULL)
 		pwd_drop(pwd);
 	FILEDESC_SLOCK(fdp);
+	if (refcount_load(&fdp->fd_refcnt) == 0)
+		goto skip;
 	lastfile = fdlastfile(fdp);
-	for (i = 0; refcount_load(&fdp->fd_refcnt) > 0 && i <= lastfile; i++) {
+	for (i = 0; i <= lastfile; i++) {
 		if ((fp = fdp->fd_ofiles[i].fde_file) == NULL)
 			continue;
 #ifdef CAPABILITIES
@@ -4522,9 +4654,10 @@ kern_proc_filedesc_out(struct proc *p,  struct sbuf *sb, ssize_t maxlen,
 		 * loop continues.
 		 */
 		error = export_file_to_sb(fp, i, &rights, efbuf);
-		if (error != 0)
+		if (error != 0 || refcount_load(&fdp->fd_refcnt) == 0)
 			break;
 	}
+skip:
 	FILEDESC_SUNLOCK(fdp);
 fail:
 	if (fdp != NULL)
@@ -4671,8 +4804,10 @@ sysctl_kern_proc_ofiledesc(SYSCTL_HANDLER_ARGS)
 	if (pwd != NULL)
 		pwd_drop(pwd);
 	FILEDESC_SLOCK(fdp);
+	if (refcount_load(&fdp->fd_refcnt) == 0)
+		goto skip;
 	lastfile = fdlastfile(fdp);
-	for (i = 0; refcount_load(&fdp->fd_refcnt) > 0 && i <= lastfile; i++) {
+	for (i = 0; i <= lastfile; i++) {
 		if ((fp = fdp->fd_ofiles[i].fde_file) == NULL)
 			continue;
 		export_file_to_kinfo(fp, i, NULL, kif, fdp,
@@ -4681,9 +4816,10 @@ sysctl_kern_proc_ofiledesc(SYSCTL_HANDLER_ARGS)
 		kinfo_to_okinfo(kif, okif);
 		error = SYSCTL_OUT(req, okif, sizeof(*okif));
 		FILEDESC_SLOCK(fdp);
-		if (error)
+		if (error != 0 || refcount_load(&fdp->fd_refcnt) == 0)
 			break;
 	}
+skip:
 	FILEDESC_SUNLOCK(fdp);
 	fddrop(fdp);
 	pddrop(pdp);
@@ -5079,7 +5215,7 @@ path_close(struct file *fp, struct thread *td)
 {
 	MPASS(fp->f_type == DTYPE_VNODE);
 	fp->f_ops = &badfileops;
-	vdrop(fp->f_vnode);
+	vrele(fp->f_vnode);
 	return (0);
 }
 

@@ -896,7 +896,7 @@ sys_fchdir(struct thread *td, struct fchdir_args *uap)
 	if (error != 0)
 		return (error);
 	vp = fp->f_vnode;
-	vref(vp);
+	vrefact(vp);
 	fdrop(fp, td);
 	vn_lock(vp, LK_SHARED | LK_RETRY);
 	AUDIT_ARG_VNODE1(vp);
@@ -956,6 +956,10 @@ kern_chdir(struct thread *td, const char *path, enum uio_seg pathseg)
 	return (0);
 }
 
+static int unprivileged_chroot = 0;
+SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_chroot, CTLFLAG_RW,
+    &unprivileged_chroot, 0,
+    "Unprivileged processes can use chroot(2)");
 /*
  * Change notion of root (``/'') directory.
  */
@@ -968,11 +972,20 @@ int
 sys_chroot(struct thread *td, struct chroot_args *uap)
 {
 	struct nameidata nd;
+	struct proc *p;
 	int error;
 
 	error = priv_check(td, PRIV_VFS_CHROOT);
-	if (error != 0)
-		return (error);
+	if (error != 0) {
+		p = td->td_proc;
+		PROC_LOCK(p);
+		if (unprivileged_chroot == 0 ||
+		    (p->p_flag2 & P2_NO_NEW_PRIVS) == 0) {
+			PROC_UNLOCK(p);
+			return (error);
+		}
+		PROC_UNLOCK(p);
+	}
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKSHARED | LOCKLEAF | AUDITVNODE1,
 	    UIO_USERSPACE, uap->path, td);
 	error = namei(&nd);
@@ -1140,10 +1153,11 @@ kern_openat(struct thread *td, int fd, const char *path, enum uio_seg pathseg,
 	/* Set the flags early so the finit in devfs can pick them up. */
 	fp->f_flag = flags & FMASK;
 	cmode = ((mode & ~pdp->pd_cmask) & ALLPERMS) & ~S_ISTXT;
-	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | AUDITVNODE1, pathseg, path, fd,
-	    &rights, td);
+	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | AUDITVNODE1 | WANTIOCTLCAPS,
+	    pathseg, path, fd, &rights, td);
 	td->td_dupfd = -1;		/* XXX check for fdopen */
-	error = vn_open(&nd, &flags, cmode, fp);
+	error = vn_open_cred(&nd, &flags, cmode, VN_OPEN_WANTIOCTLCAPS,
+	    td->td_ucred, fp);
 	if (error != 0) {
 		/*
 		 * If the vn_open replaced the method vector, something
@@ -1194,8 +1208,6 @@ kern_openat(struct thread *td, int fd, const char *path, enum uio_seg pathseg,
 		if ((flags & O_PATH) != 0) {
 			finit(fp, (flags & FMASK) | (fp->f_flag & FKQALLOWED),
 			    DTYPE_VNODE, NULL, &path_fileops);
-			vhold(vp);
-			vunref(vp);
 		} else {
 			finit_vnode(fp, flags, NULL, &vnops);
 		}
@@ -1223,11 +1235,10 @@ success:
 		error = finstall_refed(td, fp, &indx, flags, fcaps);
 		/* On success finstall_refed() consumes fcaps. */
 		if (error != 0) {
-			filecaps_free(&nd.ni_filecaps);
 			goto bad;
 		}
 	} else {
-		filecaps_free(&nd.ni_filecaps);
+		NDFREE_IOCTLCAPS(&nd);
 		falloc_abort(td, fp);
 	}
 
@@ -1235,6 +1246,7 @@ success:
 	return (0);
 bad:
 	KASSERT(indx == -1, ("indx=%d, should be -1", indx));
+	NDFREE_IOCTLCAPS(&nd);
 	falloc_abort(td, fp);
 	return (error);
 }
@@ -4306,6 +4318,7 @@ getvnode_path(struct thread *td, int fd, cap_rights_t *rightsp,
 	 */
 	if (fp->f_vnode == NULL || fp->f_ops == &badfileops) {
 		fdrop(fp, td);
+		*fpp = NULL;
 		return (EINVAL);
 	}
 
@@ -4331,6 +4344,7 @@ getvnode(struct thread *td, int fd, cap_rights_t *rightsp, struct file **fpp)
 	 */
 	if (error == 0 && (*fpp)->f_ops == &path_fileops) {
 		fdrop(*fpp, td);
+		*fpp = NULL;
 		error = EBADF;
 	}
 

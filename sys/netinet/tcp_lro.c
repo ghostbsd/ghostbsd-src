@@ -110,7 +110,7 @@ SYSCTL_UINT(_net_inet_tcp_lro, OID_AUTO, entries,
 static uint32_t tcp_lro_cpu_set_thresh = TCP_LRO_CPU_DECLARATION_THRESH;
 SYSCTL_UINT(_net_inet_tcp_lro, OID_AUTO, lro_cpu_threshold,
     CTLFLAG_RDTUN | CTLFLAG_MPSAFE, &tcp_lro_cpu_set_thresh, 0,
-    "Number of interrups in a row on the same CPU that will make us declare an 'affinity' cpu?");
+    "Number of interrupts in a row on the same CPU that will make us declare an 'affinity' cpu?");
 
 SYSCTL_COUNTER_U64(_net_inet_tcp_lro, OID_AUTO, fullqueue, CTLFLAG_RD,
     &tcp_inp_lro_direct_queue, "Number of lro's fully queued to transport");
@@ -574,6 +574,7 @@ tcp_lro_flush_inactive(struct lro_ctrl *lc, const struct timeval *timeout)
 	uint64_t now, tov;
 	struct bintime bt;
 
+	NET_EPOCH_ASSERT();
 	if (LIST_EMPTY(&lc->lro_active))
 		return;
 
@@ -1172,8 +1173,6 @@ tcp_lro_lookup(struct ifnet *ifp, struct lro_parser *pa)
 {
 	struct inpcb *inp;
 
-	NET_EPOCH_ASSERT();
-
 	switch (pa->data.lro_type) {
 #ifdef INET6
 	case LRO_TYPE_IPV6_TCP:
@@ -1363,7 +1362,10 @@ tcp_lro_flush(struct lro_ctrl *lc, struct lro_entry *le)
 	/* Only optimise if there are multiple packets waiting. */
 #ifdef TCPHPTS
 	int error;
+#endif
 
+	NET_EPOCH_ASSERT();
+#ifdef TCPHPTS
 	CURVNET_SET(lc->ifp->if_vnet);
 	error = tcp_lro_flush_tcphpts(lc, le);
 	CURVNET_RESTORE();
@@ -1474,6 +1476,7 @@ tcp_lro_flush_all(struct lro_ctrl *lc)
 	uint64_t nseq;
 	unsigned x;
 
+	NET_EPOCH_ASSERT();
 	/* check if no mbufs to flush */
 	if (lc->lro_mbuf_count == 0)
 		goto done;
@@ -1894,6 +1897,7 @@ tcp_lro_rx(struct lro_ctrl *lc, struct mbuf *m, uint32_t csum)
 void
 tcp_lro_queue_mbuf(struct lro_ctrl *lc, struct mbuf *mb)
 {
+	NET_EPOCH_ASSERT();
 	/* sanity checks */
 	if (__predict_false(lc->ifp == NULL || lc->lro_mbuf_data == NULL ||
 	    lc->lro_mbuf_max == 0)) {

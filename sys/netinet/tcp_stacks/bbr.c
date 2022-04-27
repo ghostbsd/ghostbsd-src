@@ -992,7 +992,7 @@ bbr_timer_audit(struct tcpcb *tp, struct tcp_bbr *bbr, uint32_t cts, struct sock
 		    (tmr_up == PACE_TMR_RXT)) {
 			/*
 			 * if we hit enobufs then we would expect the
-			 * possiblity of nothing outstanding and the RXT up
+			 * possibility of nothing outstanding and the RXT up
 			 * (and the hptsi timer).
 			 */
 			return;
@@ -1728,7 +1728,7 @@ bbr_init_sysctls(void)
 	    SYSCTL_CHILDREN(bbr_policer),
 	    OID_AUTO, "false_postive", CTLFLAG_RW,
 	    &bbr_lt_intvl_fp, 0,
-	    "What packet epoch do we do false-postive detection at (0=no)?");
+	    "What packet epoch do we do false-positive detection at (0=no)?");
 	SYSCTL_ADD_S32(&bbr_sysctl_ctx,
 	    SYSCTL_CHILDREN(bbr_policer),
 	    OID_AUTO, "loss_thresh", CTLFLAG_RW,
@@ -3169,7 +3169,7 @@ reset_all:
 			return;
 		}
 		if (bbr_lt_intvl_fp == 0) {
-			/* Not doing false-postive detection */
+			/* Not doing false-positive detection */
 			return;
 		}
 		/* False positive detection */
@@ -3896,7 +3896,7 @@ bbr_post_recovery(struct tcpcb *tp)
 			}
 		} else {
 			/*
-			 * A strict drop limit of N is is inplace
+			 * A strict drop limit of N is inplace
 			 */
 			if (newcwnd < (bbr_drop_limit * maxseg)) {
 				newcwnd = bbr_drop_limit * maxseg;
@@ -4457,7 +4457,7 @@ bbr_sack_mergable(struct bbr_sendmap *at,
 {
 	/*
 	 * Given a sack block defined by
-	 * start and end, and a current postion
+	 * start and end, and a current position
 	 * at. Return 1 if either side of at
 	 * would show that the block is mergable
 	 * to that side. A block to be mergable
@@ -10031,7 +10031,7 @@ bbr_init(struct tcpcb *tp)
 	if (tp->t_fb_ptr == NULL) {
 		/*
 		 * We need to allocate memory but cant. The INP and INP_INFO
-		 * locks and they are recusive (happens during setup. So a
+		 * locks and they are recursive (happens during setup. So a
 		 * scheme to drop the locks fails :(
 		 *
 		 */

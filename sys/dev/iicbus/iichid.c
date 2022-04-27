@@ -535,7 +535,7 @@ iichid_event_task(void *context, int pending)
 		} else
 			++sc->missing_samples;
 	} else
-		DPRINTF(sc, "read error occured: %d\n", error);
+		DPRINTF(sc, "read error occurred: %d\n", error);
 
 rearm:
 	if (sc->callout_setup && sc->sampling_rate_slow > 0) {
@@ -589,7 +589,7 @@ iichid_intr(void *context)
 				DPRINTF(sc, "no data received\n");
 		}
 	} else
-		DPRINTF(sc, "read error occured: %d\n", error);
+		DPRINTF(sc, "read error occurred: %d\n", error);
 
 	iicbus_release_bus(parent, sc->dev);
 }
@@ -1134,6 +1134,11 @@ iichid_attach(device_t dev)
 		&sc->sampling_hysteresis, 0,
 		"number of missing samples before enabling of slow mode");
 	hid_add_dynamic_quirk(&sc->hw, HQ_IICHID_SAMPLING);
+
+	if (sc->sampling_rate_slow >= 0) {
+		pause("iichid", (hz + 999) / 1000);
+		(void)iichid_cmd_read(sc, NULL, 0, NULL);
+	}
 #endif /* IICHID_SAMPLING */
 
 	child = device_add_child(dev, "hidbus", -1);
