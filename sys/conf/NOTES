@@ -151,7 +151,7 @@ options 	BOOTHOWTO=RB_MULTIPLE
 # Default boot tag; may use 'kern.boot_tag' loader tunable to override.  The
 # current boot's tag is also exposed via the 'kern.boot_tag' sysctl.
 options 	BOOT_TAG=\"\"
-# Maximum boot tag size the kernel's static buffer should accomodate.  Maximum
+# Maximum boot tag size the kernel's static buffer should accommodate.  Maximum
 # size for both BOOT_TAG and the assocated tunable.
 options 	BOOT_TAG_SZ=32
 
@@ -1785,7 +1785,7 @@ device		puc
 # namely those which use MII-compliant transceivers or implement
 # transceiver control interfaces that operate like an MII.  Adding
 # "device miibus" to the kernel config pulls in support for the generic
-# miibus API, the common support for for bit-bang'ing the MII and all
+# miibus API, the common support for bit-bang'ing the MII and all
 # of the PHY drivers, including a generic one for PHYs that aren't
 # specifically handled by an individual driver.  Support for specific
 # PHYs may be built by adding "device mii", "device mii_bitbang" if

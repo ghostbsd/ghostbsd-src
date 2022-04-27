@@ -12,6 +12,11 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20220327:
+	Bump __FreeBSD_verion to 1301501 after merging LinuxKPI and
+	net80211 changes in order to help out-of-tree consumers to deal
+	accordingly.
+
 20220123:
 	For 64-bit architectures the base system is now built with Position
 	Independent Executable (PIE) support enabled by default.  It may be
@@ -553,7 +558,7 @@ and/or ports.
 	initial condition, if desired.
 
 	kern.random.initial_seeding.arc4random_bypassed_before_seeding:
-	Similar to the above, but for for arc4random(9) initial seeding.
+	Similar to the above, but for arc4random(9) initial seeding.
 
 	kern.random.initial_seeding.disable_bypass_warnings: tunable; set
 	non-zero to disable warnings in dmesg when the same conditions are

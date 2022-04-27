@@ -349,6 +349,7 @@ struct pfi_dynaddr {
 extern struct mtx_padalign pf_unlnkdrules_mtx;
 #define	PF_UNLNKDRULES_LOCK()	mtx_lock(&pf_unlnkdrules_mtx)
 #define	PF_UNLNKDRULES_UNLOCK()	mtx_unlock(&pf_unlnkdrules_mtx)
+#define	PF_UNLNKDRULES_ASSERT()	mtx_assert(&pf_unlnkdrules_mtx, MA_OWNED)
 
 extern struct rmlock pf_rules_lock;
 #define	PF_RULES_RLOCK_TRACKER	struct rm_priotracker _pf_rules_tracker
@@ -1418,7 +1419,7 @@ struct pf_divert {
 
 /*
  * The number of entries in the fragment queue must be limited
- * to avoid DoS by linear seaching.  Instead of a global limit,
+ * to avoid DoS by linear searching.  Instead of a global limit,
  * use a limit per entry point.  For large packets these sum up.
  */
 #define PF_FRAG_ENTRY_LIMIT		64

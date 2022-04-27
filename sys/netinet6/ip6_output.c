@@ -772,6 +772,8 @@ again:
 		ia = ifatoia6(nh->nh_ifa);
 		if (nh->nh_flags & NHF_GATEWAY)
 			dst->sin6_addr = nh->gw6_sa.sin6_addr;
+		else if (fwd_tag != NULL)
+			dst->sin6_addr = dst_sa.sin6_addr;
 nonh6lookup:
 		;
 	}
@@ -2488,6 +2490,7 @@ ip6_pcbopts(struct ip6_pktopts **pktopt, struct mbuf *m,
 	struct ip6_pktopts *opt = *pktopt;
 	int error = 0;
 	struct thread *td = sopt->sopt_td;
+	struct epoch_tracker et;
 
 	/* turn off any old options. */
 	if (opt) {
@@ -2515,12 +2518,15 @@ ip6_pcbopts(struct ip6_pktopts **pktopt, struct mbuf *m,
 	}
 
 	/*  set options specified by user. */
+	NET_EPOCH_ENTER(et);
 	if ((error = ip6_setpktopts(m, opt, NULL, (td != NULL) ?
 	    td->td_ucred : NULL, so->so_proto->pr_protocol)) != 0) {
 		ip6_clearpktopts(opt, -1); /* XXX: discard all options */
 		free(opt, M_IP6OPT);
+		NET_EPOCH_EXIT(et);
 		return (error);
 	}
+	NET_EPOCH_EXIT(et);
 	*pktopt = opt;
 	return (0);
 }
@@ -2572,7 +2578,7 @@ ip6_pcbopt(int optname, u_char *buf, int len, struct ip6_pktopts **pktopt,
 		pktopt = inp->in6p_outputopts;					\
 		if (pktopt && pktopt->field) {					\
 			optdatalen = min(lenexpr, sopt->sopt_valsize);		\
-			bcopy(&pktopt->field, optdata, optdatalen);		\
+			bcopy(pktopt->field, optdata, optdatalen);		\
 		} else {							\
 			free(optdata, M_TEMP);					\
 			optdata = NULL;						\
@@ -2815,6 +2821,12 @@ ip6_setpktopts(struct mbuf *control, struct ip6_pktopts *opt,
 
 	if (control == NULL || opt == NULL)
 		return (EINVAL);
+
+	/*
+	 * ip6_setpktopt can call ifnet_by_index(), so it's imperative that we are
+	 * in the net epoch here.
+	 */
+	NET_EPOCH_ASSERT();
 
 	ip6_initpktopts(opt);
 	if (stickyopt) {

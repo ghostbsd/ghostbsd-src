@@ -2650,6 +2650,37 @@ device_verbose(device_t dev)
 	dev->flags &= ~DF_QUIET;
 }
 
+ssize_t
+device_get_property(device_t dev, const char *prop, void *val, size_t sz,
+    device_property_type_t type)
+{
+	device_t bus = device_get_parent(dev);
+
+	switch (type) {
+	case DEVICE_PROP_ANY:
+	case DEVICE_PROP_BUFFER:
+		break;
+	case DEVICE_PROP_UINT32:
+		if (sz % 4 != 0)
+			return (-1);
+		break;
+	case DEVICE_PROP_UINT64:
+		if (sz % 8 != 0)
+			return (-1);
+		break;
+	default:
+		return (-1);
+	}
+
+	return (BUS_GET_PROPERTY(bus, dev, prop, val, sz, type));
+}
+
+bool
+device_has_property(device_t dev, const char *prop)
+{
+	return (device_get_property(dev, prop, NULL, 0, DEVICE_PROP_ANY) >= 0);
+}
+
 /**
  * @brief Return non-zero if the DF_QUIET_CHIDLREN flag is set on the device
  */
@@ -4046,6 +4077,23 @@ bus_generic_write_ivar(device_t dev, device_t child, int index,
     uintptr_t value)
 {
 	return (ENOENT);
+}
+
+/**
+ * @brief Helper function for implementing BUS_GET_PROPERTY().
+ *
+ * This simply calls the BUS_GET_PROPERTY of the parent of dev,
+ * until a non-default implementation is found.
+ */
+ssize_t
+bus_generic_get_property(device_t dev, device_t child, const char *propname,
+    void *propvalue, size_t size, device_property_type_t type)
+{
+	if (device_get_parent(dev) != NULL)
+		return (BUS_GET_PROPERTY(device_get_parent(dev), child,
+		    propname, propvalue, size, type));
+
+	return (-1);
 }
 
 /**

@@ -63,16 +63,15 @@ static struct cdevsw g_ctl_cdevsw = {
 	.d_name =	"g_ctl",
 };
 
+CTASSERT(GCTL_PARAM_RD == VM_PROT_READ);
+CTASSERT(GCTL_PARAM_WR == VM_PROT_WRITE);
+
 void
 g_ctl_init(void)
 {
 
 	make_dev_credf(MAKEDEV_ETERNAL, &g_ctl_cdevsw, 0, NULL,
 	    UID_ROOT, GID_OPERATOR, 0640, PATH_GEOM_CTL);
-	KASSERT(GCTL_PARAM_RD == VM_PROT_READ,
-		("GCTL_PARAM_RD != VM_PROT_READ"));
-	KASSERT(GCTL_PARAM_WR == VM_PROT_WRITE,
-		("GCTL_PARAM_WR != VM_PROT_WRITE"));
 }
 
 /*
@@ -169,14 +168,18 @@ gctl_copyin(struct gctl_req *req)
 			gctl_error(req, "negative param length");
 			break;
 		}
-		p = geom_alloc_copyin(req, ap[i].value, ap[i].len);
-		if (p == NULL)
-			break;
-		if ((ap[i].flag & GCTL_PARAM_ASCII) &&
-		    p[ap[i].len - 1] != '\0') {
-			gctl_error(req, "unterminated param value");
-			g_free(p);
-			break;
+		if (ap[i].flag & GCTL_PARAM_RD) {
+			p = geom_alloc_copyin(req, ap[i].value, ap[i].len);
+			if (p == NULL)
+				break;
+			if ((ap[i].flag & GCTL_PARAM_ASCII) &&
+			    p[ap[i].len - 1] != '\0') {
+				gctl_error(req, "unterminated param value");
+				g_free(p);
+				break;
+			}
+		} else {
+			p = g_malloc(ap[i].len, M_WAITOK | M_ZERO);
 		}
 		ap[i].kvalue = p;
 		ap[i].flag |= GCTL_PARAM_VALUEKERNEL;
@@ -226,13 +229,13 @@ gctl_free(struct gctl_req *req)
 }
 
 static void
-gctl_dump(struct gctl_req *req)
+gctl_dump(struct gctl_req *req, const char *what)
 {
 	struct gctl_req_arg *ap;
 	u_int i;
 	int j;
 
-	printf("Dump of gctl request at %p:\n", req);
+	printf("Dump of gctl %s at %p:\n", what, req);
 	if (req->nerror > 0) {
 		printf("  nerror:\t%d\n", req->nerror);
 		if (sbuf_len(req->serror) > 0)
@@ -484,10 +487,14 @@ g_ctl_ioctl_ctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct th
 		gctl_copyin(req);
 
 		if (g_debugflags & G_F_CTLDUMP)
-			gctl_dump(req);
+			gctl_dump(req, "request");
 
 		if (!req->nerror) {
 			g_waitfor_event(g_ctl_req, req, M_WAITOK, NULL);
+
+			if (g_debugflags & G_F_CTLDUMP)
+				gctl_dump(req, "result");
+
 			gctl_copyout(req);
 		}
 	}

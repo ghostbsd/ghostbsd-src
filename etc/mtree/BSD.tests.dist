@@ -404,6 +404,8 @@
         ..
         libsbuf
         ..
+        libsysdecode
+        ..
         libthr
             dlopen
             ..
@@ -441,6 +443,8 @@
         md5
         ..
         mdconfig
+        ..
+        newfs_msdos
         ..
         nvmecontrol
         ..
@@ -1003,6 +1007,8 @@
         du
         ..
         file2c
+        ..
+        file
         ..
         find
         ..

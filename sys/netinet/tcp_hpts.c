@@ -1165,7 +1165,7 @@ static uint16_t
 hpts_cpuid(struct inpcb *inp, int *failed)
 {
 	u_int cpuid;
-#if !defined(RSS) && defined(NUMA)
+#ifdef NUMA
 	struct hpts_domain_info *di;
 #endif
 
@@ -1197,7 +1197,7 @@ hpts_cpuid(struct inpcb *inp, int *failed)
 		return (hpts_random_cpu(inp));
 	else
 		return (cpuid);
-#else
+#endif
 	/*
 	 * We don't have a flowid -> cpuid mapping, so cheat and just map
 	 * unknown cpuids to curcpu.  Not the best, but apparently better
@@ -1220,7 +1220,6 @@ hpts_cpuid(struct inpcb *inp, int *failed)
 		cpuid = inp->inp_flowid % mp_ncpus;
 	counter_u64_add(cpu_uses_flowid, 1);
 	return (cpuid);
-#endif
 }
 
 static void
@@ -1460,7 +1459,7 @@ again:
 		 * p_prev_slot, so that needs to be the last slot
 		 * we run. The next slot after that should be our
 		 * reserved first slot for new, and then starts
-		 * the running postion. Now the problem is the
+		 * the running position. Now the problem is the
 		 * reserved "not to yet" place does not exist
 		 * and there may be inp's in there that need
 		 * running. We can merge those into the

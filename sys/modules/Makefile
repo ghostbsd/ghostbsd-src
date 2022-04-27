@@ -151,6 +151,7 @@ SUBDIR=	\
 	${_ice_ddp} \
 	${_ida} \
 	if_bridge \
+	${_if_cgem} \
 	if_disc \
 	if_edsc \
 	${_if_enc} \
@@ -578,11 +579,16 @@ _rtwnfw=	rtwnfw
 _cxgbe=		cxgbe
 .endif
 
-.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "arm64"
+.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "arm64" || ${MACHINE_ARCH:Mpowerpc64*}
 _ice=		ice
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ice_ddp=	ice_ddp
 .endif
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
+	${MACHINE_CPUARCH} == "riscv"
+_if_cgem=	if_cgem
 .endif
 
 # These rely on 64bit atomics
