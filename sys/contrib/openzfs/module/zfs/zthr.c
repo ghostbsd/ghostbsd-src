@@ -231,7 +231,7 @@ struct zthr {
 	const char	*zthr_name;
 };
 
-static void
+static __attribute__((noreturn)) void
 zthr_procedure(void *arg)
 {
 	zthr_t *t = arg;
@@ -467,6 +467,12 @@ zthr_iscancelled(zthr_t *t)
 	boolean_t cancelled = t->zthr_cancel;
 	mutex_exit(&t->zthr_state_lock);
 	return (cancelled);
+}
+
+boolean_t
+zthr_iscurthread(zthr_t *t)
+{
+	return (t->zthr_thread == curthread);
 }
 
 /*

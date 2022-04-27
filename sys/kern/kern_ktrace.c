@@ -524,7 +524,7 @@ ktr_get_tracevp(struct proc *p, bool ref)
 }
 
 void
-ktrsyscall(int code, int narg, register_t args[])
+ktrsyscall(int code, int narg, syscallarg_t args[])
 {
 	struct ktr_request *req;
 	struct ktr_syscall *ktp;
@@ -1028,7 +1028,7 @@ sys_ktrace(struct thread *td, struct ktrace_args *uap)
 		error = vn_open(&nd, &flags, 0, NULL);
 		if (error)
 			return (error);
-		NDFREE(&nd, NDF_ONLY_PNBUF);
+		NDFREE_PNBUF(&nd);
 		vp = nd.ni_vp;
 		VOP_UNLOCK(vp);
 		if (vp->v_type != VREG) {

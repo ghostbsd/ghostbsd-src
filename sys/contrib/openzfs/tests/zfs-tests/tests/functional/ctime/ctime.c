@@ -38,7 +38,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <strings.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
@@ -303,9 +302,8 @@ static timetest_t timetest_table[] = {
 
 #define	NCOMMAND (sizeof (timetest_table) / sizeof (timetest_table[0]))
 
-/* ARGSUSED */
 int
-main(int argc, char *argv[])
+main(void)
 {
 	int i, ret, fd;
 	char *penv[] = {"TESTDIR", "TESTFILE0"};

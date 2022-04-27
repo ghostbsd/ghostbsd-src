@@ -117,7 +117,7 @@ unsigned long zfs_wrlog_data_max = 0;
  * zfs_dirty_data_max), push out a txg.  This should be less than
  * zfs_vdev_async_write_active_min_dirty_percent.
  */
-int zfs_dirty_data_sync_percent = 20;
+static int zfs_dirty_data_sync_percent = 20;
 
 /*
  * Once there is this amount of dirty data, the dmu_tx_delay() will kick in
@@ -144,7 +144,7 @@ unsigned long zfs_delay_scale = 1000 * 1000 * 1000 / 2000;
 /*
  * This determines the number of threads used by the dp_sync_taskq.
  */
-int zfs_sync_taskq_batch_pct = 75;
+static int zfs_sync_taskq_batch_pct = 75;
 
 /*
  * These tunables determine the behavior of how zil_itxg_clean() is
@@ -172,9 +172,9 @@ int zfs_sync_taskq_batch_pct = 75;
  * Additionally, the number of threads used by the taskq can be
  * configured via the "zfs_zil_clean_taskq_nthr_pct" tunable.
  */
-int zfs_zil_clean_taskq_nthr_pct = 100;
-int zfs_zil_clean_taskq_minalloc = 1024;
-int zfs_zil_clean_taskq_maxalloc = 1024 * 1024;
+static int zfs_zil_clean_taskq_nthr_pct = 100;
+static int zfs_zil_clean_taskq_minalloc = 1024;
+static int zfs_zil_clean_taskq_maxalloc = 1024 * 1024;
 
 int
 dsl_pool_open_special_dir(dsl_pool_t *dp, const char *name, dsl_dir_t **ddp)
@@ -476,8 +476,8 @@ dsl_pool_destroy_obsolete_bpobj(dsl_pool_t *dp, dmu_tx_t *tx)
 }
 
 dsl_pool_t *
-dsl_pool_create(spa_t *spa, nvlist_t *zplprops, dsl_crypto_params_t *dcp,
-    uint64_t txg)
+dsl_pool_create(spa_t *spa, nvlist_t *zplprops __attribute__((unused)),
+    dsl_crypto_params_t *dcp, uint64_t txg)
 {
 	int err;
 	dsl_pool_t *dp = dsl_pool_open_impl(spa, txg);
@@ -664,6 +664,9 @@ dsl_early_sync_task_verify(dsl_pool_t *dp, uint64_t txg)
 
 	return (B_TRUE);
 }
+#else
+#define	dsl_early_sync_task_verify(dp, txg) \
+	((void) sizeof (dp), (void) sizeof (txg), B_TRUE)
 #endif
 
 void
@@ -947,6 +950,12 @@ dsl_pool_unreserved_space(dsl_pool_t *dp, zfs_space_check_t slop_policy)
 	return (quota);
 }
 
+uint64_t
+dsl_pool_deferred_space(dsl_pool_t *dp)
+{
+	return (metaslab_class_get_deferred(spa_normal_class(dp->dp_spa)));
+}
+
 boolean_t
 dsl_pool_need_dirty_delay(dsl_pool_t *dp)
 {
@@ -1007,7 +1016,6 @@ dsl_pool_undirty_space(dsl_pool_t *dp, int64_t space, uint64_t txg)
 	mutex_exit(&dp->dp_lock);
 }
 
-/* ARGSUSED */
 static int
 upgrade_clones_cb(dsl_pool_t *dp, dsl_dataset_t *hds, void *arg)
 {
@@ -1098,7 +1106,6 @@ dsl_pool_upgrade_clones(dsl_pool_t *dp, dmu_tx_t *tx)
 	    tx, DS_FIND_CHILDREN | DS_FIND_SERIALIZE));
 }
 
-/* ARGSUSED */
 static int
 upgrade_dir_clones_cb(dsl_pool_t *dp, dsl_dataset_t *ds, void *arg)
 {
@@ -1444,7 +1451,6 @@ dsl_pool_config_held_writer(dsl_pool_t *dp)
 EXPORT_SYMBOL(dsl_pool_config_enter);
 EXPORT_SYMBOL(dsl_pool_config_exit);
 
-/* BEGIN CSTYLED */
 /* zfs_dirty_data_max_percent only applied at module load in arc_init(). */
 ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_max_percent, INT, ZMOD_RD,
 	"Max percent of RAM allowed to be dirty");
@@ -1483,4 +1489,3 @@ ZFS_MODULE_PARAM(zfs_zil, zfs_zil_, clean_taskq_minalloc, INT, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs_zil, zfs_zil_, clean_taskq_maxalloc, INT, ZMOD_RW,
 	"Max number of taskq entries that are cached");
-/* END CSTYLED */

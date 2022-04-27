@@ -3056,7 +3056,12 @@ static int
 iwm_get_noise(struct iwm_softc *sc,
     const struct iwm_statistics_rx_non_phy *stats)
 {
-	int i, total, nbant, noise;
+	int i, noise;
+#ifdef IWM_DEBUG
+	int nbant, total;
+#else
+	int nbant __unused, total __unused;
+#endif
 
 	total = nbant = noise = 0;
 	for (i = 0; i < 3; i++) {
@@ -5487,12 +5492,14 @@ iwm_handle_rxb(struct iwm_softc *sc, struct mbuf *m)
 			break;
 
 		case IWM_SCAN_ITERATION_COMPLETE_UMAC: {
+#ifdef IWM_DEBUG
 			struct iwm_umac_scan_iter_complete_notif *notif;
 			notif = (void *)pkt->data;
 
 			IWM_DPRINTF(sc, IWM_DEBUG_SCAN, "UMAC scan iteration "
 			    "complete, status=0x%x, %d channels scanned\n",
 			    notif->status, notif->scanned_channels);
+#endif
 			break;
 		}
 
@@ -5522,6 +5529,7 @@ iwm_handle_rxb(struct iwm_softc *sc, struct mbuf *m)
 			break;
 
 		case IWM_SCD_QUEUE_CFG: {
+#ifdef IWM_DEBUG
 			struct iwm_scd_txq_cfg_rsp *rsp;
 			rsp = (void *)pkt->data;
 
@@ -5530,6 +5538,7 @@ iwm_handle_rxb(struct iwm_softc *sc, struct mbuf *m)
 			    "tid=%d scd_queue=%d\n",
 			    rsp->token, rsp->sta_id, rsp->tid,
 			    rsp->scd_queue);
+#endif
 			break;
 		}
 
@@ -5620,7 +5629,7 @@ iwm_intr(void *arg)
 {
 	struct iwm_softc *sc = arg;
 	int handled = 0;
-	int r1, r2, rv = 0;
+	int r1, r2;
 	int isperiodic = 0;
 
 	IWM_LOCK(sc);
@@ -5712,7 +5721,6 @@ iwm_intr(void *arg)
 		handled |= IWM_CSR_INT_BIT_HW_ERR;
 		device_printf(sc->sc_dev, "hardware error, stopping device\n");
 		iwm_stop(sc);
-		rv = 1;
 		goto out;
 	}
 
@@ -5757,8 +5765,6 @@ iwm_intr(void *arg)
 	if (__predict_false(r1 & ~handled))
 		IWM_DPRINTF(sc, IWM_DEBUG_INTR,
 		    "%s: unhandled interrupts: %x\n", __func__, r1);
-	rv = 1;
-
  out_ena:
 	iwm_restore_interrupts(sc);
  out:
@@ -5893,9 +5899,9 @@ iwm_pci_attach(device_t dev)
 	}
 	error = bus_setup_intr(dev, sc->sc_irq, INTR_TYPE_NET | INTR_MPSAFE,
 	    NULL, iwm_intr, sc, &sc->sc_ih);
-	if (sc->sc_ih == NULL) {
+	if (error != 0) {
 		device_printf(dev, "can't establish interrupt");
-			return (ENXIO);
+		return (error);
 	}
 	sc->sc_dmat = bus_get_dma_tag(sc->sc_dev);
 

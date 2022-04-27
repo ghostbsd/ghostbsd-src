@@ -889,10 +889,10 @@ abd_copy_from_buf_off(abd_t *abd, const void *buf, size_t off, size_t size)
 	    &ba_ptr);
 }
 
-/*ARGSUSED*/
 static int
 abd_zero_off_cb(void *buf, size_t size, void *private)
 {
+	(void) private;
 	(void) memset(buf, 0, size);
 	return (0);
 }
@@ -967,10 +967,10 @@ abd_iterate_func2(abd_t *dabd, abd_t *sabd, size_t doff, size_t soff,
 	return (ret);
 }
 
-/*ARGSUSED*/
 static int
 abd_copy_off_cb(void *dbuf, void *sbuf, size_t size, void *private)
 {
+	(void) private;
 	(void) memcpy(dbuf, sbuf, size);
 	return (0);
 }
@@ -985,10 +985,10 @@ abd_copy_off(abd_t *dabd, abd_t *sabd, size_t doff, size_t soff, size_t size)
 	    abd_copy_off_cb, NULL);
 }
 
-/*ARGSUSED*/
 static int
 abd_cmp_cb(void *bufa, void *bufb, size_t size, void *private)
 {
+	(void) private;
 	return (memcmp(bufa, bufb, size));
 }
 
@@ -1066,10 +1066,10 @@ abd_raidz_gen_iterate(abd_t **cabds, abd_t *dabd,
 		switch (parity) {
 			case 3:
 				len = MIN(caiters[2].iter_mapsize, len);
-				fallthrough;
+				zfs_fallthrough;
 			case 2:
 				len = MIN(caiters[1].iter_mapsize, len);
-				fallthrough;
+				zfs_fallthrough;
 			case 1:
 				len = MIN(caiters[0].iter_mapsize, len);
 		}
@@ -1179,11 +1179,11 @@ abd_raidz_rec_iterate(abd_t **cabds, abd_t **tabds,
 			case 3:
 				len = MIN(xiters[2].iter_mapsize, len);
 				len = MIN(citers[2].iter_mapsize, len);
-				fallthrough;
+				zfs_fallthrough;
 			case 2:
 				len = MIN(xiters[1].iter_mapsize, len);
 				len = MIN(citers[1].iter_mapsize, len);
-				fallthrough;
+				zfs_fallthrough;
 			case 1:
 				len = MIN(xiters[0].iter_mapsize, len);
 				len = MIN(citers[0].iter_mapsize, len);

@@ -400,6 +400,13 @@ sysdecode_cap_fcntlrights(FILE *fp, uint32_t rights, uint32_t *rem)
 	return (print_mask_int(fp, capfcntl, rights, rem));
 }
 
+bool
+sysdecode_close_range_flags(FILE *fp, int flags, int *rem)
+{
+
+	return (print_mask_int(fp, closerangeflags, flags, rem));
+}
+
 const char *
 sysdecode_extattrnamespace(int namespace)
 {
@@ -1164,7 +1171,8 @@ sysdecode_umtx_rwlock_flags(FILE *fp, u_long flags, u_long *rem)
 void
 sysdecode_cap_rights(FILE *fp, cap_rights_t *rightsp)
 {
-	struct name_table *t;
+	cap_rights_t diff, sum, zero;
+	const struct name_table *t;
 	int i;
 	bool comma;
 
@@ -1174,13 +1182,59 @@ sysdecode_cap_rights(FILE *fp, cap_rights_t *rightsp)
 			return;
 		}
 	}
-	comma = false;
-	for (t = caprights; t->str != NULL; t++) {
+	cap_rights_init(&sum);
+	diff = *rightsp;
+	for (t = caprights, comma = false; t->str != NULL; t++) {
 		if (cap_rights_is_set(rightsp, t->val)) {
+			cap_rights_clear(&diff, t->val);
+			if (cap_rights_is_set(&sum, t->val)) {
+				/* Don't print redundant rights. */
+				continue;
+			}
+			cap_rights_set(&sum, t->val);
+
 			fprintf(fp, "%s%s", comma ? "," : "", t->str);
 			comma = true;
 		}
 	}
+	if (!comma)
+		fprintf(fp, "CAP_NONE");
+
+	/*
+	 * Provide a breadcrumb if some of the provided rights are not included
+	 * in the table, likely due to a bug in the mktables script.
+	 */
+	CAP_NONE(&zero);
+	if (!cap_rights_contains(&zero, &diff))
+		fprintf(fp, ",unknown rights");
+}
+
+/*
+ * Pre-sort the set of rights, which has a partial ordering defined by the
+ * subset relation.  This lets sysdecode_cap_rights() print a list of minimal
+ * length with a single pass over the "caprights" table.
+ */
+static void __attribute__((constructor))
+sysdecode_cap_rights_init(void)
+{
+	cap_rights_t tr, qr;
+	struct name_table *t, *q, tmp;
+	bool swapped;
+
+	do {
+		for (t = caprights, swapped = false; t->str != NULL; t++) {
+			cap_rights_init(&tr, t->val);
+			for (q = t + 1; q->str != NULL; q++) {
+				cap_rights_init(&qr, q->val);
+				if (cap_rights_contains(&qr, &tr)) {
+					tmp = *t;
+					*t = *q;
+					*q = tmp;
+					swapped = true;
+				}
+			}
+		}
+	} while (swapped);
 }
 
 static struct name_table cmsgtypeip[] = {

@@ -21,6 +21,7 @@ SUBDIRS = \
 	deadman \
 	delegate \
 	devices \
+	dos_attributes \
 	events \
 	exec \
 	fallocate \
@@ -73,6 +74,7 @@ SUBDIRS = \
 	snapshot \
 	snapused \
 	sparse \
+	stat \
 	suid \
 	threadsappend \
 	trim \
@@ -88,5 +90,6 @@ SUBDIRS = \
 
 if BUILD_LINUX
 SUBDIRS += \
+	simd \
 	tmpfile
 endif

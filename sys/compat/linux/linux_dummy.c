@@ -112,8 +112,6 @@ DUMMY(kcmp);
 DUMMY(finit_module);
 DUMMY(sched_setattr);
 DUMMY(sched_getattr);
-/* Linux 3.17: */
-DUMMY(seccomp);
 /* Linux 3.18: */
 DUMMY(bpf);
 /* Linux 3.19: */
@@ -142,11 +140,9 @@ DUMMY(close_range);
 DUMMY(openat2);
 DUMMY(pidfd_getfd);
 DUMMY(process_madvise);
-DUMMY(epoll_pwait2);
 DUMMY(mount_setattr);
 /* Linux 4.18: */
 DUMMY(io_pgetevents);
-DUMMY(rseq);
 /* Linux 5.0: */
 DUMMY(pidfd_send_signal);
 DUMMY(io_uring_setup);

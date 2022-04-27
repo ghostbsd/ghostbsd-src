@@ -236,11 +236,13 @@ unionfs_domount(struct mount *mp)
 	if ((error = namei(ndp)))
 		return (error);
 
-	NDFREE(ndp, NDF_ONLY_PNBUF);
+	NDFREE_PNBUF(ndp);
 
 	/* get root vnodes */
 	lowerrootvp = mp->mnt_vnodecovered;
 	upperrootvp = ndp->ni_vp;
+	KASSERT(lowerrootvp != NULL, ("%s: NULL lower root vp", __func__));
+	KASSERT(upperrootvp != NULL, ("%s: NULL upper root vp", __func__));
 
 	/* create unionfs_mount */
 	ump = malloc(sizeof(struct unionfs_mount), M_UNIONFSMNT,
@@ -289,6 +291,9 @@ unionfs_domount(struct mount *mp)
 		mp->mnt_data = NULL;
 		return (error);
 	}
+	KASSERT(ump->um_rootvp != NULL, ("rootvp cannot be NULL"));
+	KASSERT((ump->um_rootvp->v_vflag & VV_ROOT) != 0,
+	    ("%s: rootvp without VV_ROOT", __func__));
 
 	lowermp = vfs_register_upper_from_vp(ump->um_lowervp, mp,
 	    &ump->um_lower_link);

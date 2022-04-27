@@ -60,6 +60,10 @@ __FBSDID("$FreeBSD$");
 #include <machine/vfp.h>
 #endif
 
+_Static_assert(sizeof(mcontext_t) == 880, "mcontext_t size incorrect");
+_Static_assert(sizeof(ucontext_t) == 960, "ucontext_t size incorrect");
+_Static_assert(sizeof(siginfo_t) == 80, "siginfo_t size incorrect");
+
 static void get_fpcontext(struct thread *td, mcontext_t *mcp);
 static void set_fpcontext(struct thread *td, mcontext_t *mcp);
 
@@ -97,7 +101,6 @@ set_regs(struct thread *td, struct reg *regs)
 	frame = td->td_frame;
 	frame->tf_sp = regs->sp;
 	frame->tf_lr = regs->lr;
-	frame->tf_spsr &= ~PSR_FLAGS;
 
 	memcpy(frame->tf_x, regs->x, sizeof(frame->tf_x));
 
@@ -109,12 +112,27 @@ set_regs(struct thread *td, struct reg *regs)
 		 * it put it.
 		 */
 		frame->tf_elr = regs->x[15];
-		frame->tf_spsr |= regs->x[16] & PSR_FLAGS;
+		frame->tf_spsr &= ~PSR_SETTABLE_32;
+		frame->tf_spsr |= regs->x[16] & PSR_SETTABLE_32;
+		/* Don't allow userspace to ask to continue single stepping.
+		 * The SPSR.SS field doesn't exist when the EL1 is AArch32.
+		 * As the SPSR.DIT field has moved in its place don't
+		 * allow userspace to set the SPSR.SS field.
+		 */
 	} else
 #endif
 	{
 		frame->tf_elr = regs->elr;
-		frame->tf_spsr |= regs->spsr & PSR_FLAGS;
+		frame->tf_spsr &= ~PSR_SETTABLE_64;
+		frame->tf_spsr |= regs->spsr & PSR_SETTABLE_64;
+		/* Enable single stepping if userspace asked fot it */
+		if ((frame->tf_spsr & PSR_SS) != 0) {
+			td->td_pcb->pcb_flags |= PCB_SINGLE_STEP;
+
+			WRITE_SPECIALREG(mdscr_el1,
+			    READ_SPECIALREG(mdscr_el1) | MDSCR_SS);
+			isb();
+		}
 	}
 	return (0);
 }
@@ -241,10 +259,10 @@ set_dbregs(struct thread *td, struct dbreg *regs)
 		 * constrained undefined behaviour. If the user mis-programs
 		 * these, there is no risk to the system.
 		 */
-		ctrl &= DBG_BCR_EN | DBG_BCR_PMC | DBG_BCR_BAS;
-		if ((ctrl & DBG_BCR_EN) != 0) {
+		ctrl &= DBGBCR_EN | DBGBCR_PMC | DBGBCR_BAS;
+		if ((ctrl & DBGBCR_EN) != 0) {
 			/* Only target EL0. */
-			if ((ctrl & DBG_BCR_PMC) != DBG_BCR_PMC_EL0)
+			if ((ctrl & DBGBCR_PMC) != DBGBCR_PMC_EL0)
 				return (EINVAL);
 
 			monitor->dbg_enable_count++;
@@ -269,24 +287,24 @@ set_dbregs(struct thread *td, struct dbreg *regs)
 		 * Some control fields are ignored, and other bits reserved.
 		 * Only unlinked watchpoints are supported.
 		 */
-		ctrl &= DBG_WCR_EN | DBG_WCR_PAC | DBG_WCR_LSC | DBG_WCR_BAS |
-		    DBG_WCR_MASK;
+		ctrl &= DBGWCR_EN | DBGWCR_PAC | DBGWCR_LSC | DBGWCR_BAS |
+		    DBGWCR_MASK;
 
-		if ((ctrl & DBG_WCR_EN) != 0) {
+		if ((ctrl & DBGWCR_EN) != 0) {
 			/* Only target EL0. */
-			if ((ctrl & DBG_WCR_PAC) != DBG_WCR_PAC_EL0)
+			if ((ctrl & DBGWCR_PAC) != DBGWCR_PAC_EL0)
 				return (EINVAL);
 
 			/* Must set at least one of the load/store bits. */
-			if ((ctrl & DBG_WCR_LSC) == 0)
+			if ((ctrl & DBGWCR_LSC) == 0)
 				return (EINVAL);
 
 			/*
 			 * When specifying the address range with BAS, the MASK
 			 * field must be zero.
 			 */
-			if ((ctrl & DBG_WCR_BAS) != DBG_WCR_BAS_MASK &&
-			    (ctrl & DBG_WCR_MASK) != 0)
+			if ((ctrl & DBGWCR_BAS) != DBGWCR_BAS &&
+			    (ctrl & DBGWCR_MASK) != 0)
 				return (EINVAL);
 
 			monitor->dbg_enable_count++;
@@ -333,8 +351,8 @@ set_regs32(struct thread *td, struct reg32 *regs)
 	tf->tf_x[13] = regs->r_sp;
 	tf->tf_x[14] = regs->r_lr;
 	tf->tf_elr = regs->r_pc;
-	tf->tf_spsr &= ~PSR_FLAGS;
-	tf->tf_spsr |= regs->r_cpsr & PSR_FLAGS;
+	tf->tf_spsr &= ~PSR_SETTABLE_32;
+	tf->tf_spsr |= regs->r_cpsr & PSR_SETTABLE_32;
 
 	return (0);
 }
@@ -450,6 +468,13 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	tf->tf_lr = mcp->mc_gpregs.gp_lr;
 	tf->tf_elr = mcp->mc_gpregs.gp_elr;
 	tf->tf_spsr = mcp->mc_gpregs.gp_spsr;
+	if ((tf->tf_spsr & PSR_SS) != 0) {
+		td->td_pcb->pcb_flags |= PCB_SINGLE_STEP;
+
+		WRITE_SPECIALREG(mdscr_el1,
+		    READ_SPECIALREG(mdscr_el1) | MDSCR_SS);
+		isb();
+	}
 	set_fpcontext(td, mcp);
 
 	return (0);
@@ -599,10 +624,17 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	tf->tf_x[0] = sig;
 	tf->tf_x[1] = (register_t)&fp->sf_si;
 	tf->tf_x[2] = (register_t)&fp->sf_uc;
-
-	tf->tf_elr = (register_t)catcher;
+	tf->tf_x[8] = (register_t)catcher;
 	tf->tf_sp = (register_t)fp;
-	tf->tf_lr = (register_t)p->p_sysent->sv_sigcode_base;
+	tf->tf_elr = (register_t)p->p_sysent->sv_sigcode_base;
+
+	/* Clear the single step flag while in the signal handler */
+	if ((td->td_pcb->pcb_flags & PCB_SINGLE_STEP) != 0) {
+		td->td_pcb->pcb_flags &= ~PCB_SINGLE_STEP;
+		WRITE_SPECIALREG(mdscr_el1,
+		    READ_SPECIALREG(mdscr_el1) & ~MDSCR_SS);
+		isb();
+	}
 
 	CTR3(KTR_SIG, "sendsig: return td=%p pc=%#x sp=%#x", td, tf->tf_elr,
 	    tf->tf_sp);

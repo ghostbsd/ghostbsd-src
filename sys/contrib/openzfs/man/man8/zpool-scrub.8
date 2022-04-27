@@ -97,10 +97,8 @@ again.
 Wait until scrub has completed before returning.
 .El
 .Sh EXAMPLES
-.Bl -tag -width "Exam"
-.It Sy Example 1 : Status of pool with ongoing scrub:
-Output:
-.Bd -literal -compact -offset Ds
+.Ss Example 1 : No Status of pool with ongoing scrub:
+.Bd -literal -compact
 .No # Nm zpool Cm status
   ...
   scan: scrub in progress since Sun Jul 25 16:07:49 2021
@@ -108,16 +106,33 @@ Output:
         0B repaired, 16.91% done, 00:00:04 to go
   ...
 .Ed
-Where:
-.Bl -dash -offset indent
-.It
-Metadata which references 403M of file data has been
+.Pp
+Where metadata which references 403M of file data has been
 scanned at 100M/s, and 68.4M of that file data has been
 scrubbed sequentially at 10.0M/s.
-.El
+.Sh PERIODIC SCRUB
+On machines using systemd, scrub timers can be enabled on per-pool basis.
+.Nm weekly
+and
+.Nm monthly
+timer units are provided.
+.Bl -tag -width Ds
+.It Xo
+.Xc
+.Nm systemctl
+.Cm enable
+.Cm zfs-scrub-\fIweekly\fB@\fIrpool\fB.timer
+.Cm --now
+.It Xo
+.Xc
+.Nm systemctl
+.Cm enable
+.Cm zfs-scrub-\fImonthly\fB@\fIotherpool\fB.timer
+.Cm --now
 .El
 .
 .Sh SEE ALSO
+.Xr systemd.timer 5 ,
 .Xr zpool-iostat 8 ,
 .Xr zpool-resilver 8 ,
 .Xr zpool-status 8

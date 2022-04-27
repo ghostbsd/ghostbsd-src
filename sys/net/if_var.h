@@ -192,7 +192,8 @@ struct m_snd_tag;
 #define	IF_SND_TAG_TYPE_UNLIMITED 1
 #define	IF_SND_TAG_TYPE_TLS 2
 #define	IF_SND_TAG_TYPE_TLS_RATE_LIMIT 3
-#define	IF_SND_TAG_TYPE_MAX 4
+#define	IF_SND_TAG_TYPE_TLS_RX 4
+#define	IF_SND_TAG_TYPE_MAX 5
 
 struct if_snd_tag_alloc_header {
 	uint32_t type;		/* send tag type, see IF_SND_TAG_XXX */
@@ -214,6 +215,13 @@ struct if_snd_tag_alloc_tls {
 	const struct ktls_session *tls;
 };
 
+struct if_snd_tag_alloc_tls_rx {
+	struct if_snd_tag_alloc_header hdr;
+	struct inpcb *inp;
+	const struct ktls_session *tls;
+	uint16_t vlan_id;	/* valid if non-zero */
+};
+
 struct if_snd_tag_alloc_tls_rate_limit {
 	struct if_snd_tag_alloc_header hdr;
 	struct inpcb *inp;
@@ -229,11 +237,26 @@ struct if_snd_tag_rate_limit_params {
 	uint32_t flags;		/* M_NOWAIT or M_WAITOK */
 };
 
+struct if_snd_tag_modify_tls_rx {
+	/* TCP sequence number of TLS header in host endian format */
+	uint32_t tls_hdr_tcp_sn;
+
+	/*
+	 * TLS record length, including all headers, data and trailers.
+	 * If the tls_rec_length is zero, it means HW encryption resumed.
+	 */
+	uint32_t tls_rec_length;
+
+	/* TLS sequence number in host endian format */
+	uint64_t tls_seq_number;
+};
+
 union if_snd_tag_alloc_params {
 	struct if_snd_tag_alloc_header hdr;
 	struct if_snd_tag_alloc_rate_limit rate_limit;
 	struct if_snd_tag_alloc_rate_limit unlimited;
 	struct if_snd_tag_alloc_tls tls;
+	struct if_snd_tag_alloc_tls_rx tls_rx;
 	struct if_snd_tag_alloc_tls_rate_limit tls_rate_limit;
 };
 
@@ -241,6 +264,7 @@ union if_snd_tag_modify_params {
 	struct if_snd_tag_rate_limit_params rate_limit;
 	struct if_snd_tag_rate_limit_params unlimited;
 	struct if_snd_tag_rate_limit_params tls_rate_limit;
+	struct if_snd_tag_modify_tls_rx tls_rx;
 };
 
 union if_snd_tag_query_params {
@@ -310,7 +334,7 @@ struct ifnet {
 	const char *if_dname;		/* driver name */
 	int	if_dunit;		/* unit or IF_DUNIT_NONE */
 	u_short	if_index;		/* numeric abbreviation for this if  */
-	short	if_index_reserved;	/* spare space to grow if_index */
+	u_short	if_idxgen;		/* ... and its generation count */
 	char	if_xname[IFNAMSIZ];	/* external name (name + unit) */
 	char	*if_description;	/* interface description */
 
@@ -349,7 +373,7 @@ struct ifnet {
 		 * addresses which store the link-level address and the name
 		 * of the interface.
 		 * However, access to the AF_LINK address through this
-		 * field is deprecated. Use if_addr or ifaddr_byindex() instead.
+		 * field is deprecated. Use if_addr instead.
 		 */
 	struct	ifaddrhead if_addrhead;	/* linked list of addresses per if */
 	struct	ifmultihead if_multiaddrs; /* multicast addresses configured */
@@ -621,11 +645,11 @@ struct ifnet	*ifnet_byindex(u_int);
 struct ifnet	*ifnet_byindex_ref(u_int);
 
 /*
- * Given the index, ifaddr_byindex() returns the one and only
- * link-level ifaddr for the interface. You are not supposed to use
- * it to traverse the list of addresses associated to the interface.
+ * ifnet_byindexgen() looks up ifnet by index and generation count,
+ * attempting to restore a weak pointer that had been stored across
+ * the epoch.
  */
-struct ifaddr	*ifaddr_byindex(u_short idx);
+struct ifnet   *ifnet_byindexgen(uint16_t idx, uint16_t gen);
 
 VNET_DECLARE(struct ifnethead, ifnet);
 VNET_DECLARE(struct ifgrouphead, ifg_head);

@@ -716,6 +716,15 @@ check_startmsgs()
 }
 
 #
+# startmsg
+#	Preferred method to use when displaying start messages in lieu of echo.
+#
+startmsg()
+{
+	check_startmsgs && echo "$@"
+}
+
+#
 # run_rc_command argument
 #	Search for argument in the list of supported commands, which is:
 #		"start stop restart rcvar status poll ${extra_commands}"
@@ -1111,7 +1120,7 @@ run_rc_command()
 
 					# setup the full command to run
 					#
-			check_startmsgs && echo "Starting ${name}."
+			startmsg "Starting ${name}."
 			if [ -n "$_chroot" ]; then
 				_cd=
 				_doit="\
@@ -1411,7 +1420,9 @@ run_rc_script()
 		;;
 	*)				# run in subshell
 		if [ -x $_file ]; then
-			if [ -n "$rc_fast_and_loose" ]; then
+			if [ -n "$rc_boottrace" ]; then
+				boottrace_fn "$_file" "$_arg"
+			elif [ -n "$rc_fast_and_loose" ]; then
 				set $_arg; . $_file
 			else
 				( trap "echo Script $_file interrupted >&2 ; kill -QUIT $$" 3
@@ -1422,6 +1433,26 @@ run_rc_script()
 		fi
 		;;
 	esac
+}
+
+boottrace_fn()
+{
+	local _file _arg
+	_file=$1
+	_arg=$2
+
+	if [ -n "$rc_fast_and_loose" ]; then
+		boottrace_sysctl "$_file start"
+		set $_arg; . $_file
+		boottrace_sysctl "$_file done"
+	else
+		$boottrace_cmd "$_file" "$_arg"
+	fi
+}
+
+boottrace_sysctl()
+{
+	${SYSCTL} kern.boottrace.boottrace="$1"
 }
 
 #
@@ -2194,4 +2225,9 @@ _echoonce()
 # since it would undo what we've done here.
 if kenv -q rc.debug > /dev/null ; then
 	rc_debug=YES
+fi
+
+boottrace_cmd=`command -v boottrace`
+if [ -n "$boottrace_cmd" ] && [ "`${SYSCTL_N} -q kern.boottrace.enabled`" = "1" ]; then
+	rc_boottrace=YES
 fi

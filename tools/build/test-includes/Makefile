@@ -16,7 +16,7 @@
 LIB=	test-includes
 INTERNALLIB=	This is a compile-only test
 MAN=
-HDRS!=	(cd ${SRCTOP}/sys; ls sys/[^_]*.h | sort ; ls net*/[^_]*.h | sort)
+HDRS!=	(cd ${SRCTOP}/sys; ls sys/[!_]*.h | sort ; ls net*/[!_]*.h | sort)
 NO_PIC=	yes
 
 # Some files have to be clean for extra defines too...
@@ -24,11 +24,11 @@ CFLAGS.event.c=	-D_WANT_KEVENT32 -D_WANT_FREEBSD11_KEVENT
 
 .include "badfiles.inc"
 
-.for h in ${HDRS}
+.for h c in ${HDRS:@x@$x ${x:S,/,_,g:R}.c@}
 .if !${BADHDRS:M${h}}
-SRCS+=	${h:R}.c
-CLEANFILES+=${h:R}.c
-${h:R}.c:
+SRCS+= $c
+CLEANFILES+=$c
+$c:
 	echo "#include <$h>" > ${.TARGET}
 .endif
 .endfor

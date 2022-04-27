@@ -751,11 +751,8 @@ out:
  * later).
  */
 static int
-nfs_directio_write(vp, uiop, cred, ioflag)
-	struct vnode *vp;
-	struct uio *uiop;
-	struct ucred *cred;
-	int ioflag;
+nfs_directio_write(struct vnode *vp, struct uio *uiop, struct ucred *cred,
+    int ioflag)
 {
 	int error;
 	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
@@ -780,7 +777,7 @@ do_sync:
 			uio.uio_iovcnt = 1;
 			uio.uio_offset = uiop->uio_offset;
 			uio.uio_resid = size;
-			uio.uio_segflg = UIO_USERSPACE;
+			uio.uio_segflg = uiop->uio_segflg;
 			uio.uio_rw = UIO_WRITE;
 			uio.uio_td = td;
 			iomode = NFSWRITE_FILESYNC;

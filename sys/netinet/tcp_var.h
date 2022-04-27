@@ -88,7 +88,7 @@ struct tseg_qent {
 	struct  mbuf   *tqe_last;	/* last mbuf in chain */
 	tcp_seq tqe_start;		/* TCP Sequence number start */
 	int	tqe_len;		/* TCP segment data length */
-	uint32_t tqe_flags;		/* The flags from the th->th_flags */
+	uint32_t tqe_flags;		/* The flags from tcp_get_flags() */
 	uint32_t tqe_mbuf_cnt;		/* Count of mbuf overhead */
 };
 TAILQ_HEAD(tsegqe_head, tseg_qent);
@@ -249,6 +249,8 @@ struct tcpcb {
 	int	t_dupacks;		/* consecutive dup acks recd */
 	int	t_lognum;		/* Number of log entries */
 	int	t_loglimit;		/* Maximum number of log entries */
+	uint32_t r_cep;			/* Number of received CE marked packets */
+	uint32_t s_cep;			/* Synced number of delivered CE packets */
 	int64_t	t_pacing_rate;		/* bytes / sec, -1 => unlimited */
 	struct tcp_log_stailq t_logs;	/* Log buffer */
 	struct tcp_log_id_node *t_lin;
@@ -358,8 +360,7 @@ struct tcp_function_block {
 			    struct socket *, struct tcpcb *,
 			    int, int, uint8_t,
 			    int, struct timeval *);
-	int     (*tfb_tcp_ctloutput)(struct socket *so, struct sockopt *sopt,
-			    struct inpcb *inp, struct tcpcb *tp);
+	int     (*tfb_tcp_ctloutput)(struct inpcb *inp, struct sockopt *sopt);
 	/* Optional memory allocation/free routine */
 	int	(*tfb_tcp_fb_init)(struct tcpcb *);
 	void	(*tfb_tcp_fb_fini)(struct tcpcb *, int);
@@ -506,7 +507,11 @@ tcp_unlock_or_drop(struct tcpcb *tp, int tcp_output_retval)
 #define	TF_NEEDSYN	0x00000400	/* send SYN (implicit state) */
 #define	TF_NEEDFIN	0x00000800	/* send FIN (implicit state) */
 #define	TF_NOPUSH	0x00001000	/* don't push */
-#define	TF_PREVVALID	0x00002000	/* saved values for bad rxmit valid */
+#define	TF_PREVVALID	0x00002000	/* saved values for bad rxmit valid
+					 * Note: accessing and restoring from
+					 * these may only be done in the 1st
+					 * RTO recovery round (t_rxtshift == 1)
+					 */
 #define	TF_WAKESOR	0x00004000	/* wake up receive socket */
 #define	TF_GPUTINPROG	0x00008000	/* Goodput measurement in progress */
 #define	TF_MORETOCOME	0x00010000	/* More data to be appended to sock */
@@ -559,7 +564,7 @@ tcp_unlock_or_drop(struct tcpcb *tp, int tcp_output_retval)
 #define	TF2_PLPMTU_PMTUD	0x00000002 /* Allowed to attempt PLPMTUD. */
 #define	TF2_PLPMTU_MAXSEGSNT	0x00000004 /* Last seg sent was full seg. */
 #define	TF2_LOG_AUTO		0x00000008 /* Session is auto-logging. */
-#define TF2_DROP_AF_DATA 	0x00000010 /* Drop after all data ack'd */
+#define	TF2_DROP_AF_DATA	0x00000010 /* Drop after all data ack'd */
 #define	TF2_ECN_PERMIT		0x00000020 /* connection ECN-ready */
 #define	TF2_ECN_SND_CWR		0x00000040 /* ECN CWR in queue */
 #define	TF2_ECN_SND_ECE		0x00000080 /* ECN ECE in queue */
@@ -815,7 +820,13 @@ struct	tcpstat {
 	uint64_t tcps_tw_resets;	/* Times time-wait sent a reset. */
 	uint64_t tcps_tw_responds;	/* Times time-wait sent a valid ack. */
 
-	uint64_t _pad[6];		/* 3 UTO, 3 TBD */
+	/* Accurate ECN Handshake stats */
+	uint64_t tcps_ace_nect;		/* ACE SYN packet with Non-ECT */
+	uint64_t tcps_ace_ect1;		/* ACE SYN packet with ECT1 */
+	uint64_t tcps_ace_ect0;		/* ACE SYN packet with ECT0 */
+	uint64_t tcps_ace_ce;		/* ACE SYN packet with CE */
+
+	uint64_t _pad[6];		/* 6 TBD placeholder for STABLE */
 };
 
 #define	tcps_rcvmemdrop	tcps_rcvreassfull	/* compat */
@@ -1065,7 +1076,6 @@ VNET_DECLARE(struct hhook_head *, tcp_hhh[HHOOK_TCP_LAST + 1]);
 #endif
 
 int	 tcp_addoptions(struct tcpopt *, u_char *);
-int	 tcp_ccalgounload(struct cc_algo *unload_algo);
 struct tcpcb *
 	 tcp_close(struct tcpcb *);
 void	 tcp_discardcb(struct tcpcb *);
@@ -1077,9 +1087,9 @@ int	 tcp_ctloutput(struct socket *, struct sockopt *);
 void 	 tcp_ctlinput_viaudp(int, struct sockaddr *, void *, void *);
 void	 tcp_drain(void);
 void	 tcp_fini(void *);
-char	*tcp_log_addrs(struct in_conninfo *, struct tcphdr *, void *,
+char	*tcp_log_addrs(struct in_conninfo *, struct tcphdr *, const void *,
 	    const void *);
-char	*tcp_log_vain(struct in_conninfo *, struct tcphdr *, void *,
+char	*tcp_log_vain(struct in_conninfo *, struct tcphdr *, const void *,
 	    const void *);
 int	 tcp_reass(struct tcpcb *, struct tcphdr *, tcp_seq *, int *,
 	    struct mbuf *);
@@ -1124,7 +1134,8 @@ int find_tcp_function_alias(struct tcp_function_block *blk, struct tcp_function_
 void tcp_switch_back_to_default(struct tcpcb *tp);
 struct tcp_function_block *
 find_and_ref_tcp_fb(struct tcp_function_block *fs);
-int tcp_default_ctloutput(struct socket *so, struct sockopt *sopt, struct inpcb *inp, struct tcpcb *tp);
+int tcp_default_ctloutput(struct inpcb *inp, struct sockopt *sopt);
+int tcp_ctloutput_set(struct inpcb *inp, struct sockopt *sopt);
 
 extern counter_u64_t tcp_inp_lro_direct_queue;
 extern counter_u64_t tcp_inp_lro_wokeup_queue;
@@ -1252,6 +1263,19 @@ tcp_fields_to_net(struct tcphdr *th)
 	th->th_ack = htonl(th->th_ack);
 	th->th_win = htons(th->th_win);
 	th->th_urp = htons(th->th_urp);
+}
+
+static inline uint16_t
+tcp_get_flags(const struct tcphdr *th)
+{
+        return (((uint16_t)th->th_x2 << 8) | th->th_flags);
+}
+
+static inline void
+tcp_set_flags(struct tcphdr *th, uint16_t flags)
+{
+        th->th_x2    = (flags >> 8) & 0x0f;
+        th->th_flags = flags & 0xff;
 }
 
 static inline void

@@ -8,11 +8,10 @@
  *   <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+#include <bsddialog.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-
-#include <bsddialog.h>
 
 int main()
 {
@@ -28,23 +27,22 @@ int main()
 	mm = localtm->tm_min;
 	ss = localtm->tm_sec;
 
+	if (bsddialog_init() == BSDDIALOG_ERROR) {
+		printf("Error: %s\n", bsddialog_geterror());
+		return (1);
+	}
+
 	bsddialog_initconf(&conf);
 	conf.title = "timebox";
-	conf.bottomtitle = "Press TAB and arrows";
-	
-	if (bsddialog_init() < 0)
-		return -1;
+	output = bsddialog_timebox(&conf,
+	    "TAB / RIGHT / LEFT to move,\nUP / DOWN to select time", 10, 35,
+	    &hh, &mm, &ss);
 
-	output = bsddialog_timebox(&conf, "Example", 10, 50, &hh, &mm, &ss);
-	
 	bsddialog_end();
 
 	switch (output) {
 	case BSDDIALOG_OK:
 		printf("Time: [%u:%u:%u]\n", hh, mm, ss);
-		break;
-	case BSDDIALOG_ESC:
-		printf("ESC\n");
 		break;
 	case BSDDIALOG_CANCEL:
 		printf("Cancel\n");
@@ -54,5 +52,5 @@ int main()
 		break;
 	}
 
-	return output;
+	return (output);
 }

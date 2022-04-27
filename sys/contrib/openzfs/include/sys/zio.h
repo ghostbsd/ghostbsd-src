@@ -125,7 +125,7 @@ enum zio_checksum {
 #define	ZIO_COMPRESS_LEGACY_ON_VALUE	ZIO_COMPRESS_LZJB
 #define	ZIO_COMPRESS_LZ4_ON_VALUE	ZIO_COMPRESS_LZ4
 
-#define	ZIO_COMPRESS_DEFAULT		ZIO_COMPRESS_OFF
+#define	ZIO_COMPRESS_DEFAULT		ZIO_COMPRESS_ON
 
 #define	BOOTFS_COMPRESS_VALID(compress)			\
 	((compress) == ZIO_COMPRESS_LZJB ||		\
@@ -264,7 +264,7 @@ typedef void zio_done_func_t(zio_t *zio);
 
 extern int zio_exclude_metadata;
 extern int zio_dva_throttle_enabled;
-extern const char *zio_type_name[ZIO_TYPES];
+extern const char *const zio_type_name[ZIO_TYPES];
 
 /*
  * A bookmark is a four-tuple <objset, object, level, blkid> that uniquely

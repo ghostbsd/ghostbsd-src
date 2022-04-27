@@ -25,6 +25,9 @@
  * $FreeBSD$
  */
 
+#include "opt_rss.h"
+#include "opt_ratelimit.h"
+
 #include <rdma/ib_user_verbs.h>
 #include <rdma/ib_verbs.h>
 #include <rdma/uverbs_types.h>
@@ -35,7 +38,7 @@
 #include <rdma/uverbs_std_types.h>
 #include <dev/mlx5/driver.h>
 #include <dev/mlx5/fs.h>
-#include "mlx5_ib.h"
+#include <dev/mlx5/mlx5_ib/mlx5_ib.h>
 
 #include <sys/priv.h>
 

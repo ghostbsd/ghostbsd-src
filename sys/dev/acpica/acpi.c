@@ -145,7 +145,7 @@ static void	acpi_delete_resource(device_t bus, device_t child, int type,
 static uint32_t	acpi_isa_get_logicalid(device_t dev);
 static int	acpi_isa_get_compatid(device_t dev, uint32_t *cids, int count);
 static ssize_t acpi_bus_get_prop(device_t bus, device_t child, const char *propname,
-		    void *propvalue, size_t size);
+		    void *propvalue, size_t size, device_property_type_t type);
 static int	acpi_device_id_probe(device_t bus, device_t dev, char **ids, char **match);
 static ACPI_STATUS acpi_device_eval_obj(device_t bus, device_t dev,
 		    ACPI_STRING pathname, ACPI_OBJECT_LIST *parameters,
@@ -187,6 +187,8 @@ static int	acpi_child_location_method(device_t acdev, device_t child,
 		    struct sbuf *sb);
 static int	acpi_child_pnpinfo_method(device_t acdev, device_t child,
 		    struct sbuf *sb);
+static int	acpi_get_device_path(device_t bus, device_t child,
+		    const char *locator, struct sbuf *sb);
 static void	acpi_enable_pcie(void);
 static void	acpi_hint_device_unit(device_t acdev, device_t child,
 		    const char *name, int *unitp);
@@ -226,6 +228,7 @@ static device_method_t acpi_methods[] = {
     DEVMETHOD(bus_get_cpus,		acpi_get_cpus),
     DEVMETHOD(bus_get_domain,		acpi_get_domain),
     DEVMETHOD(bus_get_property,		acpi_bus_get_prop),
+    DEVMETHOD(bus_get_device_path,	acpi_get_device_path),
 
     /* ACPI bus */
     DEVMETHOD(acpi_id_probe,		acpi_device_id_probe),
@@ -929,6 +932,83 @@ acpi_child_pnpinfo_method(device_t cbdev, device_t child, struct sbuf *sb)
 }
 
 /*
+ * Note: the check for ACPI locator may be reduntant. However, this routine is
+ * suitable for both busses whose only locator is ACPI and as a building block
+ * for busses that have multiple locators to cope with.
+ */
+int
+acpi_get_acpi_device_path(device_t bus, device_t child, const char *locator, struct sbuf *sb)
+{
+	if (strcmp(locator, BUS_LOCATOR_ACPI) == 0) {
+		ACPI_HANDLE *handle = acpi_get_handle(child);
+
+		if (handle != NULL)
+			sbuf_printf(sb, "%s", acpi_name(handle));
+		return (0);
+	}
+
+	return (bus_generic_get_device_path(bus, child, locator, sb));
+}
+
+static int
+acpi_get_device_path(device_t bus, device_t child, const char *locator, struct sbuf *sb)
+{
+	struct acpi_device *dinfo = device_get_ivars(child);
+
+	if (strcmp(locator, BUS_LOCATOR_ACPI) == 0)
+		return (acpi_get_acpi_device_path(bus, child, locator, sb));
+
+	if (strcmp(locator, BUS_LOCATOR_UEFI) == 0) {
+		ACPI_DEVICE_INFO *adinfo;
+		if (!ACPI_FAILURE(AcpiGetObjectInfo(dinfo->ad_handle, &adinfo)) &&
+		    dinfo->ad_handle != 0 && (adinfo->Valid & ACPI_VALID_HID)) {
+			const char *hid = adinfo->HardwareId.String;
+			u_long uid = (adinfo->Valid & ACPI_VALID_UID) ?
+			    strtoul(adinfo->UniqueId.String, NULL, 10) : 0UL;
+			u_long hidval;
+
+			/*
+			 * In UEFI Stanard Version 2.6, Section 9.6.1.6 Text
+			 * Device Node Reference, there's an insanely long table
+			 * 98. This implements the relevant bits from that
+			 * table. Newer versions appear to have not required
+			 * anything new. The EDK2 firmware presents both PciRoot
+			 * and PcieRoot as PciRoot. Follow the EDK2 standard.
+			 */
+			if (strncmp("PNP", hid, 3) != 0)
+				goto nomatch;
+			hidval = strtoul(hid + 3, NULL, 16);
+			switch (hidval) {
+			case 0x0301:
+				sbuf_printf(sb, "Keyboard(0x%lx)", uid);
+				break;
+			case 0x0401:
+				sbuf_printf(sb, "ParallelPort(0x%lx)", uid);
+				break;
+			case 0x0501:
+				sbuf_printf(sb, "Serial(0x%lx)", uid);
+				break;
+			case 0x0604:
+				sbuf_printf(sb, "Floppy(0x%lx)", uid);
+				break;
+			case 0x0a03:
+			case 0x0a08:
+				sbuf_printf(sb, "PciRoot(0x%lx)", uid);
+				break;
+			default: /* Everything else gets a generic encode */
+			nomatch:
+				sbuf_printf(sb, "Acpi(%s,0x%lx)", hid, uid);
+				break;
+			}
+		}
+		/* Not handled: AcpiAdr... unsure how to know it's one */
+	}
+
+	/* For the rest, punt to the default handler */
+	return (bus_generic_get_device_path(bus, child, locator, sb));
+}
+
+/*
  * Handle device deletion.
  */
 static void
@@ -1045,27 +1125,14 @@ acpi_match_resource_hint(device_t dev, int type, long value)
 }
 
 /*
- * Wire device unit numbers based on resource matches in hints.
+ * Does this device match because the resources match?
  */
-static void
-acpi_hint_device_unit(device_t acdev, device_t child, const char *name,
-    int *unitp)
+static bool
+acpi_hint_device_matches_resources(device_t child, const char *name,
+    int unit)
 {
-    const char *s;
-    long value;
-    int line, matches, unit;
-
-    /*
-     * Iterate over all the hints for the devices with the specified
-     * name to see if one's resources are a subset of this device.
-     */
-    line = 0;
-    while (resource_find_dev(&line, name, &unit, "at", NULL) == 0) {
-	/* Must have an "at" for acpi or isa. */
-	resource_string_value(name, unit, "at", &s);
-	if (!(strcmp(s, "acpi0") == 0 || strcmp(s, "acpi") == 0 ||
-	    strcmp(s, "isa0") == 0 || strcmp(s, "isa") == 0))
-	    continue;
+	long value;
+	bool matches;
 
 	/*
 	 * Check for matching resources.  We must have at least one match.
@@ -1075,53 +1142,92 @@ acpi_hint_device_unit(device_t acdev, device_t child, const char *name,
 	 * XXX: We may want to revisit this to be more lenient and wire
 	 * as long as it gets one match.
 	 */
-	matches = 0;
+	matches = false;
 	if (resource_long_value(name, unit, "port", &value) == 0) {
-	    /*
-	     * Floppy drive controllers are notorious for having a
-	     * wide variety of resources not all of which include the
-	     * first port that is specified by the hint (typically
-	     * 0x3f0) (see the comment above fdc_isa_alloc_resources()
-	     * in fdc_isa.c).  However, they do all seem to include
-	     * port + 2 (e.g. 0x3f2) so for a floppy device, look for
-	     * 'value + 2' in the port resources instead of the hint
-	     * value.
-	     */
-	    if (strcmp(name, "fdc") == 0)
-		value += 2;
-	    if (acpi_match_resource_hint(child, SYS_RES_IOPORT, value))
-		matches++;
-	    else
-		continue;
+		/*
+		 * Floppy drive controllers are notorious for having a
+		 * wide variety of resources not all of which include the
+		 * first port that is specified by the hint (typically
+		 * 0x3f0) (see the comment above fdc_isa_alloc_resources()
+		 * in fdc_isa.c).  However, they do all seem to include
+		 * port + 2 (e.g. 0x3f2) so for a floppy device, look for
+		 * 'value + 2' in the port resources instead of the hint
+		 * value.
+		 */
+		if (strcmp(name, "fdc") == 0)
+			value += 2;
+		if (acpi_match_resource_hint(child, SYS_RES_IOPORT, value))
+			matches = true;
+		else
+			return false;
 	}
 	if (resource_long_value(name, unit, "maddr", &value) == 0) {
-	    if (acpi_match_resource_hint(child, SYS_RES_MEMORY, value))
-		matches++;
-	    else
-		continue;
-	}
-	if (matches > 0)
-	    goto matched;
-	if (resource_long_value(name, unit, "irq", &value) == 0) {
-	    if (acpi_match_resource_hint(child, SYS_RES_IRQ, value))
-		matches++;
-	    else
-		continue;
-	}
-	if (resource_long_value(name, unit, "drq", &value) == 0) {
-	    if (acpi_match_resource_hint(child, SYS_RES_DRQ, value))
-		matches++;
-	    else
-		continue;
+		if (acpi_match_resource_hint(child, SYS_RES_MEMORY, value))
+			matches = true;
+		else
+			return false;
 	}
 
-    matched:
-	if (matches > 0) {
+	/*
+	 * If either the I/O address and/or the memory address matched, then
+	 * assumed this devices matches and that any mismatch in other resources
+	 * will be resolved by siltently ignoring those other resources. Otherwise
+	 * all further resources must match.
+	 */
+	if (matches) {
+		return (true);
+	}
+	if (resource_long_value(name, unit, "irq", &value) == 0) {
+		if (acpi_match_resource_hint(child, SYS_RES_IRQ, value))
+			matches = true;
+		else
+			return false;
+	}
+	if (resource_long_value(name, unit, "drq", &value) == 0) {
+		if (acpi_match_resource_hint(child, SYS_RES_DRQ, value))
+			matches = true;
+		else
+			return false;
+	}
+	return matches;
+}
+
+
+/*
+ * Wire device unit numbers based on resource matches in hints.
+ */
+static void
+acpi_hint_device_unit(device_t acdev, device_t child, const char *name,
+    int *unitp)
+{
+    device_location_cache_t *cache;
+    const char *s;
+    int line, unit;
+    bool matches;
+
+    /*
+     * Iterate over all the hints for the devices with the specified
+     * name to see if one's resources are a subset of this device.
+     */
+    line = 0;
+    cache = dev_wired_cache_init();
+    while (resource_find_dev(&line, name, &unit, "at", NULL) == 0) {
+	/* Must have an "at" for acpi or isa. */
+	resource_string_value(name, unit, "at", &s);
+	matches = false;
+	if (strcmp(s, "acpi0") == 0 || strcmp(s, "acpi") == 0 ||
+	    strcmp(s, "isa0") == 0 || strcmp(s, "isa") == 0)
+	    matches = acpi_hint_device_matches_resources(child, name, unit);
+	else
+	    matches = dev_wired_cache_match(cache, child, s);
+
+	if (matches) {
 	    /* We have a winner! */
 	    *unitp = unit;
 	    break;
 	}
     }
+    dev_wired_cache_fini(cache);
 }
 
 /*
@@ -1822,7 +1928,7 @@ acpi_find_dsd(device_t bus, device_t dev)
 
 static ssize_t
 acpi_bus_get_prop(device_t bus, device_t child, const char *propname,
-    void *propvalue, size_t size)
+    void *propvalue, size_t size, device_property_type_t type)
 {
 	ACPI_STATUS status;
 	const ACPI_OBJECT *obj;
@@ -1832,13 +1938,32 @@ acpi_bus_get_prop(device_t bus, device_t child, const char *propname,
 	if (ACPI_FAILURE(status))
 		return (-1);
 
+	switch (type) {
+	case DEVICE_PROP_ANY:
+	case DEVICE_PROP_BUFFER:
+	case DEVICE_PROP_UINT32:
+	case DEVICE_PROP_UINT64:
+		break;
+	default:
+		return (-1);
+	}
+
 	switch (obj->Type) {
 	case ACPI_TYPE_INTEGER:
+		if (type == DEVICE_PROP_UINT32) {
+			if (propvalue != NULL && size >= sizeof(uint32_t))
+				*((uint32_t *)propvalue) = obj->Integer.Value;
+			return (sizeof(uint32_t));
+		}
 		if (propvalue != NULL && size >= sizeof(uint64_t))
 			*((uint64_t *) propvalue) = obj->Integer.Value;
 		return (sizeof(uint64_t));
 
 	case ACPI_TYPE_STRING:
+		if (type != DEVICE_PROP_ANY &&
+		    type != DEVICE_PROP_BUFFER)
+			return (-1);
+
 		if (propvalue != NULL && size > 0)
 			memcpy(propvalue, obj->String.Pointer,
 			    MIN(size, obj->String.Length));

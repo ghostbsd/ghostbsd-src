@@ -146,12 +146,12 @@ struct sleepqueue_chain {
 } __aligned(CACHE_LINE_SIZE);
 
 #ifdef SLEEPQUEUE_PROFILING
-u_int sleepq_max_depth;
 static SYSCTL_NODE(_debug, OID_AUTO, sleepq, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "sleepq profiling");
 static SYSCTL_NODE(_debug_sleepq, OID_AUTO, chains,
     CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "sleepq chain stats");
+static u_int sleepq_max_depth;
 SYSCTL_UINT(_debug_sleepq, OID_AUTO, max_depth, CTLFLAG_RD, &sleepq_max_depth,
     0, "maxmimum depth achieved of a single chain");
 
@@ -833,7 +833,8 @@ sleepq_remove_thread(struct sleepqueue *sq, struct thread *td)
 		td->td_sleepqueue = LIST_FIRST(&sq->sq_free);
 	LIST_REMOVE(td->td_sleepqueue, sq_hash);
 
-	if ((td->td_flags & TDF_TIMEOUT) == 0 && td->td_sleeptimo != 0)
+	if ((td->td_flags & TDF_TIMEOUT) == 0 && td->td_sleeptimo != 0 &&
+	    td->td_lock == &sc->sc_lock) {
 		/*
 		 * We ignore the situation where timeout subsystem was
 		 * unable to stop our callout.  The struct thread is
@@ -843,8 +844,16 @@ sleepq_remove_thread(struct sleepqueue *sq, struct thread *td)
 		 * sleepq_timeout() ensure that the thread does not
 		 * get spurious wakeups, even if the callout was reset
 		 * or thread reused.
+		 *
+		 * We also cannot safely stop the callout if a scheduler
+		 * lock is held since softclock_thread() forces a lock
+		 * order of callout lock -> scheduler lock.  The thread
+		 * lock will be a scheduler lock only if the thread is
+		 * preparing to go to sleep, so this is hopefully a rare
+		 * scenario.
 		 */
 		callout_stop(&td->td_slpcallout);
+	}
 
 	td->td_wmesg = NULL;
 	td->td_wchan = NULL;

@@ -70,6 +70,8 @@
 #ifdef _KERNEL
 #include <opencrypto/_cryptodev.h>
 #include <sys/_task.h>
+#include <sys/libkern.h>
+#include <sys/time.h>
 #endif
 
 /* Some initial values */
@@ -603,7 +605,9 @@ const struct crypto_session_params *crypto_get_params(
 const struct auth_hash *crypto_auth_hash(const struct crypto_session_params *csp);
 const struct enc_xform *crypto_cipher(const struct crypto_session_params *csp);
 
+#ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_CRYPTO_DATA);
+#endif
 
 int	crypto_newsession(crypto_session_t *cses,
     const struct crypto_session_params *params, int crid);
@@ -680,6 +684,13 @@ void	crypto_cursor_copydata(struct crypto_buffer_cursor *cc, int size,
 	    void *vdst);
 void	crypto_cursor_copydata_noadv(struct crypto_buffer_cursor *cc, int size,
 	    void *vdst);
+
+static __inline void
+crypto_cursor_copy(const struct crypto_buffer_cursor *fromc,
+    struct crypto_buffer_cursor *toc)
+{
+	memcpy(toc, fromc, sizeof(*toc));
+}
 
 static __inline void
 crypto_read_iv(struct cryptop *crp, void *iv)

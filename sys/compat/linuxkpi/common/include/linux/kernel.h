@@ -150,6 +150,7 @@ extern int linuxkpi_warn_dump_stack;
 
 #undef	ALIGN
 #define	ALIGN(x, y)		roundup2((x), (y))
+#define	ALIGN_DOWN(x, y)	rounddown2(x, y)
 #undef PTR_ALIGN
 #define	PTR_ALIGN(p, a)		((__typeof(p))ALIGN((uintptr_t)(p), (a)))
 #define	IS_ALIGNED(x, a)	(((x) & ((__typeof(x))(a) - 1)) == 0)
@@ -510,6 +511,36 @@ kstrtobool_from_user(const char __user *s, size_t count, bool *res)
 }
 
 static inline int
+kstrtoint_from_user(const char __user *s, size_t count, unsigned int base,
+    int *p)
+{
+	char buf[36] = {};
+
+	if (count > (sizeof(buf) - 1))
+		count = (sizeof(buf) - 1);
+
+	if (copy_from_user(buf, s, count))
+		return (-EFAULT);
+
+	return (kstrtoint(buf, base, p));
+}
+
+static inline int
+kstrtouint_from_user(const char __user *s, size_t count, unsigned int base,
+    int *p)
+{
+	char buf[36] = {};
+
+	if (count > (sizeof(buf) - 1))
+		count = (sizeof(buf) - 1);
+
+	if (copy_from_user(buf, s, count))
+		return (-EFAULT);
+
+	return (kstrtouint(buf, base, p));
+}
+
+static inline int
 kstrtou8_from_user(const char __user *s, size_t count, unsigned int base,
     u8 *p)
 {
@@ -683,6 +714,9 @@ hex2bin(uint8_t *bindst, const char *hexsrc, size_t binlen)
 
 	return (0);
 }
+
+#define	DECLARE_FLEX_ARRAY(_t, _n)					\
+    struct { struct { } __dummy_ ## _n; _t _n[0]; }
 
 /*
  * Checking if an option is defined would be easy if we could do CPP inside CPP.

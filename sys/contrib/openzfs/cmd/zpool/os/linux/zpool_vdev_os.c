@@ -81,7 +81,6 @@
 #include <scsi/sg.h>
 #include <sys/efi_partition.h>
 #include <sys/stat.h>
-#include <sys/vtoc.h>
 #include <sys/mntent.h>
 #include <uuid/uuid.h>
 #include <blkid/blkid.h>
@@ -409,6 +408,7 @@ check_device(const char *path, boolean_t force,
 void
 after_zpool_upgrade(zpool_handle_t *zhp)
 {
+	(void) zhp;
 }
 
 int

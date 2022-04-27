@@ -456,10 +456,10 @@ zfsctl_common_open(struct vop_open_args *ap)
 /*
  * Common close routine.  Nothing to do here.
  */
-/* ARGSUSED */
 static int
 zfsctl_common_close(struct vop_close_args *ap)
 {
+	(void) ap;
 	return (0);
 }
 
@@ -496,7 +496,7 @@ zfsctl_common_getattr(vnode_t *vp, vattr_t *vap)
 	 */
 	vap->va_blksize = 0;
 	vap->va_nblocks = 0;
-	vap->va_seq = 0;
+	vap->va_gen = 0;
 	vn_fsid(vp, vap);
 	vap->va_mode = zfsctl_ctldir_mode;
 	vap->va_type = VDIR;
@@ -685,7 +685,8 @@ zfsctl_root_readdir(struct vop_readdir_args *ap)
 	if (zfs_uio_offset(&uio) != dots_offset)
 		return (SET_ERROR(EINVAL));
 
-	CTASSERT(sizeof (node->snapdir->sn_name) <= sizeof (entry.d_name));
+	_Static_assert(sizeof (node->snapdir->sn_name) <= sizeof (entry.d_name),
+	    "node->snapdir->sn_name too big for entry.d_name");
 	entry.d_fileno = node->snapdir->sn_id;
 	entry.d_type = DT_DIR;
 	strcpy(entry.d_name, node->snapdir->sn_name);
@@ -720,7 +721,7 @@ zfsctl_root_vptocnp(struct vop_vptocnp_args *ap)
 	VOP_UNLOCK1(dvp);
 	*ap->a_vpp = dvp;
 	*ap->a_buflen -= sizeof (dotzfs_name);
-	bcopy(dotzfs_name, ap->a_buf + *ap->a_buflen, sizeof (dotzfs_name));
+	memcpy(ap->a_buf + *ap->a_buflen, dotzfs_name, sizeof (dotzfs_name));
 	return (0);
 }
 
@@ -1213,7 +1214,7 @@ zfsctl_snapshot_vptocnp(struct vop_vptocnp_args *ap)
 		VOP_UNLOCK1(dvp);
 		*ap->a_vpp = dvp;
 		*ap->a_buflen -= len;
-		bcopy(node->sn_name, ap->a_buf + *ap->a_buflen, len);
+		memcpy(ap->a_buf + *ap->a_buflen, node->sn_name, len);
 	}
 	vfs_unbusy(mp);
 #if __FreeBSD_version >= 1300045

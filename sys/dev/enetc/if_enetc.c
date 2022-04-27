@@ -364,7 +364,6 @@ enetc_setup_phy(struct enetc_softc *sc)
 static int
 enetc_attach_pre(if_ctx_t ctx)
 {
-	struct ifnet *ifp;
 	if_softc_ctx_t scctx;
 	struct enetc_softc *sc;
 	int error, rid;
@@ -374,7 +373,6 @@ enetc_attach_pre(if_ctx_t ctx)
 	sc->ctx = ctx;
 	sc->dev = iflib_get_dev(ctx);
 	sc->shared = scctx;
-	ifp = iflib_get_ifp(ctx);
 
 	mtx_init(&sc->mii_lock, "enetc_mdio", NULL, MTX_DEF);
 
@@ -503,8 +501,7 @@ enetc_tx_queues_alloc(if_ctx_t ctx, caddr_t *vaddrs, uint64_t *paddrs,
 		queue->sc = sc;
 		queue->ring = (union enetc_tx_bd*)(vaddrs[i]);
 		queue->ring_paddr = paddrs[i];
-		queue->next_to_clean = 0;
-		queue->ring_full = false;
+		queue->cidx = 0;
 	}
 
 	return (0);
@@ -933,7 +930,7 @@ enetc_init(if_ctx_t ctx)
 		ENETC_PORT_WR4(sc, ENETC_PSIPVMR,
 		    ENETC_PSIPVMR_SET_VUTA(1));
 
-	sc->rbmr = ENETC_RBMR_EN | ENETC_RBMR_AL;
+	sc->rbmr = ENETC_RBMR_EN;
 
 	if (if_getcapenable(ifp) & IFCAP_VLAN_HWTAGGING)
 		sc->rbmr |= ENETC_RBMR_VTE;
@@ -960,6 +957,29 @@ enetc_init(if_ctx_t ctx)
 }
 
 static void
+enetc_disable_txq(struct enetc_softc *sc, int qid)
+{
+	qidx_t cidx, pidx;
+	int timeout = 10000;	/* this * DELAY(100) = 1s */
+
+	/* At this point iflib shouldn't be enquing any more frames. */
+	pidx = ENETC_TXQ_RD4(sc, qid, ENETC_TBPIR);
+	cidx = ENETC_TXQ_RD4(sc, qid, ENETC_TBCIR);
+
+	while (pidx != cidx && timeout--) {
+		DELAY(100);
+		cidx = ENETC_TXQ_RD4(sc, qid, ENETC_TBCIR);
+	}
+
+	if (timeout == 0)
+		device_printf(sc->dev,
+		    "Timeout while waiting for txq%d to stop transmitting packets\n",
+		    qid);
+
+	ENETC_TXQ_WR4(sc, qid, ENETC_TBMR, 0);
+}
+
+static void
 enetc_stop(if_ctx_t ctx)
 {
 	struct enetc_softc *sc;
@@ -967,11 +987,11 @@ enetc_stop(if_ctx_t ctx)
 
 	sc = iflib_get_softc(ctx);
 
-	for (i = 0; i < sc->tx_num_queues; i++)
-		ENETC_TXQ_WR4(sc, i, ENETC_TBMR, 0);
-
 	for (i = 0; i < sc->rx_num_queues; i++)
 		ENETC_RXQ_WR4(sc, i, ENETC_RBMR, 0);
+
+	for (i = 0; i < sc->tx_num_queues; i++)
+		enetc_disable_txq(sc, i);
 }
 
 static int
@@ -1125,8 +1145,6 @@ enetc_isc_txd_encap(void *data, if_pkt_info_t ipi)
 
 	desc->flags |= ENETC_TXBD_FLAGS_F;
 	ipi->ipi_new_pidx = pidx;
-	if (pidx == queue->next_to_clean)
-		queue->ring_full = true;
 
 	return (0);
 }
@@ -1144,28 +1162,35 @@ enetc_isc_txd_credits_update(void *data, uint16_t qid, bool clear)
 {
 	struct enetc_softc *sc = data;
 	struct enetc_tx_queue *queue;
-	qidx_t next_to_clean, next_to_process;
-	int clean_count;
+	int cidx, hw_cidx, count;
 
 	queue = &sc->tx_queues[qid];
-	next_to_process =
-	    ENETC_TXQ_RD4(sc, qid, ENETC_TBCIR) & ENETC_TBCIR_IDX_MASK;
-	next_to_clean = queue->next_to_clean;
+	hw_cidx = ENETC_TXQ_RD4(sc, qid, ENETC_TBCIR) & ENETC_TBCIR_IDX_MASK;
+	cidx = queue->cidx;
 
-	if (next_to_clean == next_to_process && !queue->ring_full)
+	/*
+	 * RM states that the ring can hold at most ring_size - 1 descriptors.
+	 * Thanks to that we can assume that the ring is empty if cidx == pidx.
+	 * This requirement is guaranteed implicitly by iflib as it will only
+	 * encap a new frame if we have at least nfrags + 2 descriptors available
+	 * on the ring. This driver uses at most one additional descriptor for
+	 * VLAN tag insertion.
+	 * Also RM states that the TBCIR register is only updated once all
+	 * descriptors in the chain have been processed.
+	 */
+	if (cidx == hw_cidx)
 		return (0);
 
 	if (!clear)
 		return (1);
 
-	clean_count = next_to_process - next_to_clean;
-	if (clean_count <= 0)
-		clean_count += sc->tx_queue_size;
+	count = hw_cidx - cidx;
+	if (count < 0)
+		count += sc->tx_queue_size;
 
-	queue->next_to_clean = next_to_process;
-	queue->ring_full = false;
+	queue->cidx = hw_cidx;
 
-	return (clean_count);
+	return (count);
 }
 
 static int
@@ -1255,8 +1280,7 @@ enetc_isc_rxd_pkt_get(void *data, if_rxd_info_t ri)
 		desc = &queue->ring[cidx];
 	}
 	ri->iri_nfrags = i + 1;
-	ri->iri_len = pkt_size + ENETC_RX_IP_ALIGN;
-	ri->iri_pad = ENETC_RX_IP_ALIGN;
+	ri->iri_len = pkt_size;
 
 	MPASS(desc->r.lstatus & ENETC_RXBD_LSTATUS_F);
 	if (status & ENETC_RXBD_LSTATUS(ENETC_RXBD_ERR_MASK))

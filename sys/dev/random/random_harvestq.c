@@ -349,7 +349,8 @@ static const char *random_source_descr[ENTROPYSOURCE] = {
 	[RANDOM_INTERRUPT] = "INTERRUPT",
 	[RANDOM_SWI] = "SWI",
 	[RANDOM_FS_ATIME] = "FS_ATIME",
-	[RANDOM_UMA] = "UMA", /* ENVIRONMENTAL_END */
+	[RANDOM_UMA] = "UMA",
+	[RANDOM_CALLOUT] = "CALLOUT", /* ENVIRONMENTAL_END */
 	[RANDOM_PURE_OCTEON] = "PURE_OCTEON", /* PURE_START */
 	[RANDOM_PURE_SAFE] = "PURE_SAFE",
 	[RANDOM_PURE_GLXSB] = "PURE_GLXSB",
@@ -486,6 +487,14 @@ random_harvestq_prime(void *unused __unused)
 			    size);
 		else
 			printf("random: no preloaded entropy cache\n");
+	}
+	size = random_prime_loader_file(RANDOM_PLATFORM_BOOT_ENTROPY_MODULE);
+	if (bootverbose) {
+		if (size > 0)
+			printf("random: read %zu bytes from platform bootloader\n",
+			    size);
+		else
+			printf("random: no platform bootloader entropy\n");
 	}
 }
 SYSINIT(random_device_prime, SI_SUB_RANDOM, SI_ORDER_MIDDLE, random_harvestq_prime, NULL);

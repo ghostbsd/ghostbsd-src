@@ -48,6 +48,10 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 
+_Static_assert(sizeof(mcontext32_t) == 208, "mcontext32_t size incorrect");
+_Static_assert(sizeof(ucontext32_t) == 260, "ucontext32_t size incorrect");
+_Static_assert(sizeof(struct siginfo32) == 64, "struct siginfo32 size incorrect");
+
 extern void freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask);
 
 /*
@@ -56,10 +60,6 @@ extern void freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask);
  * when copying out contexts.
  */
 #define UC32_COPY_SIZE  offsetof(ucontext32_t, uc_link)
-
-#ifdef VFP
-static void get_fpcontext32(struct thread *td, mcontext32_vfp_t *);
-#endif
 
 /*
  * Stubs for machine dependent 32-bits system calls.
@@ -123,35 +123,39 @@ freebsd32_sysarch(struct thread *td, struct freebsd32_sysarch_args *uap)
 }
 
 #ifdef VFP
-static void
+void
 get_fpcontext32(struct thread *td, mcontext32_vfp_t *mcp)
 {
-	struct pcb *curpcb;
+	struct pcb *pcb;
 	int i;
 
-	critical_enter();
-	curpcb = curthread->td_pcb;
+	KASSERT(td == curthread || TD_IS_SUSPENDED(td) ||
+	    P_SHOULDSTOP(td->td_proc),
+	    ("not suspended thread %p", td));
 
-	if ((curpcb->pcb_fpflags & PCB_FP_STARTED) != 0) {
+	memset(mcp, 0, sizeof(*mcp));
+	pcb = td->td_pcb;
+
+	if ((pcb->pcb_fpflags & PCB_FP_STARTED) != 0) {
 		/*
 		 * If we have just been running VFP instructions we will
 		 * need to save the state to memcpy it below.
 		 */
-		vfp_save_state(td, curpcb);
+		if (td == curthread)
+			vfp_save_state(td, pcb);
 
-		KASSERT(curpcb->pcb_fpusaved == &curpcb->pcb_fpustate,
-				("Called get_fpcontext while the kernel is using the VFP"));
-		KASSERT((curpcb->pcb_fpflags & ~PCB_FP_USERMASK) == 0,
-				("Non-userspace FPU flags set in get_fpcontext"));
+		KASSERT(pcb->pcb_fpusaved == &pcb->pcb_fpustate,
+		    ("Called get_fpcontext32 while the kernel is using the VFP"));
+		KASSERT((pcb->pcb_fpflags & ~PCB_FP_USERMASK) == 0,
+		    ("Non-userspace FPU flags set in get_fpcontext32"));
 		for (i = 0; i < 32; i++)
-			mcp->mcv_reg[i] = (uint64_t)curpcb->pcb_fpustate.vfp_regs[i];
-		mcp->mcv_fpscr = VFP_FPSCR_FROM_SRCR(curpcb->pcb_fpustate.vfp_fpcr,
-				curpcb->pcb_fpustate.vfp_fpsr);
+			mcp->mcv_reg[i] = (uint64_t)pcb->pcb_fpustate.vfp_regs[i];
+		mcp->mcv_fpscr = VFP_FPSCR_FROM_SRCR(pcb->pcb_fpustate.vfp_fpcr,
+		    pcb->pcb_fpustate.vfp_fpsr);
 	}
- critical_exit();
 }
 
-static void
+void
 set_fpcontext32(struct thread *td, mcontext32_vfp_t *mcp)
 {
 	struct pcb *pcb;
@@ -168,6 +172,7 @@ set_fpcontext32(struct thread *td, mcontext32_vfp_t *mcp)
 	critical_exit();
 }
 #endif
+
 static void
 get_mcontext32(struct thread *td, mcontext32_t *mcp, int flags)
 {
@@ -198,14 +203,34 @@ set_mcontext32(struct thread *td, mcontext32_t *mcp)
 {
 	struct trapframe *tf;
 	mcontext32_vfp_t mc_vfp;
+	uint32_t spsr;
 	int i;
 
 	tf = td->td_frame;
 
+	spsr = mcp->mc_gregset[16];
+	/*
+	 * There is no PSR_SS in the 32-bit kernel so ignore it if it's set
+	 * as we will set it later if needed.
+	 */
+	if ((spsr & ~(PSR_SETTABLE_32 | PSR_SS)) !=
+	    (tf->tf_spsr & ~(PSR_SETTABLE_32 | PSR_SS)))
+		return (EINVAL);
+
+	spsr &= PSR_SETTABLE_32;
+	spsr |= tf->tf_spsr & ~PSR_SETTABLE_32;
+
+	if ((td->td_dbgflags & TDB_STEP) != 0) {
+		spsr |= PSR_SS;
+		td->td_pcb->pcb_flags |= PCB_SINGLE_STEP;
+		WRITE_SPECIALREG(mdscr_el1,
+		    READ_SPECIALREG(mdscr_el1) | MDSCR_SS);
+	}
+
 	for (i = 0; i < 15; i++)
 		tf->tf_x[i] = mcp->mc_gregset[i];
 	tf->tf_elr = mcp->mc_gregset[15];
-	tf->tf_spsr = mcp->mc_gregset[16];
+	tf->tf_spsr = spsr;
 #ifdef VFP
 	if (mcp->mc_vfp_size == sizeof(mc_vfp) && mcp->mc_vfp_ptr != 0) {
 		if (copyin((void *)(uintptr_t)mcp->mc_vfp_ptr, &mc_vfp,
@@ -403,6 +428,14 @@ freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		tf->tf_spsr |= PSR_T;
 	else
 		tf->tf_spsr &= ~PSR_T;
+
+	/* Clear the single step flag while in the signal handler */
+	if ((td->td_pcb->pcb_flags & PCB_SINGLE_STEP) != 0) {
+		td->td_pcb->pcb_flags &= ~PCB_SINGLE_STEP;
+		WRITE_SPECIALREG(mdscr_el1,
+		    READ_SPECIALREG(mdscr_el1) & ~MDSCR_SS);
+		isb();
+	}
 
 	CTR3(KTR_SIG, "sendsig: return td=%p pc=%#x sp=%#x", td, tf->tf_x[14],
 	    tf->tf_x[13]);

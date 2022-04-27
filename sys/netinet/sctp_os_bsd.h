@@ -313,9 +313,8 @@ typedef struct callout sctp_os_timer_t;
 /*************************/
 /*      MTU              */
 /*************************/
-#define SCTP_GATHER_MTU_FROM_IFN_INFO(ifn, ifn_index, af) ((struct ifnet *)ifn)->if_mtu
+#define SCTP_GATHER_MTU_FROM_IFN_INFO(ifn, ifn_index) ((ifn != NULL) ? ((struct ifnet *)ifn)->if_mtu : 0)
 #define SCTP_GATHER_MTU_FROM_ROUTE(sctp_ifa, sa, nh) ((uint32_t)((nh != NULL) ? nh->nh_mtu : 0))
-#define SCTP_GATHER_MTU_FROM_INTFC(sctp_ifn) ((sctp_ifn->ifn_p != NULL) ? ((struct ifnet *)(sctp_ifn->ifn_p))->if_mtu : 0)
 
 /*************************/
 /* These are for logging */
@@ -429,9 +428,11 @@ typedef struct route sctp_route_t;
 	                                                                     \
 	m_clrprotoflags(o_pak);                                              \
 	if (local_inp != NULL) {                                             \
+		INP_RLOCK(&local_inp->ip_inp.inp);                           \
 		result = ip6_output(o_pak,                                   \
 		                    local_inp->ip_inp.inp.in6p_outputopts,   \
 		                    (ro), 0, 0, ifp, NULL);                  \
+		INP_RUNLOCK(&local_inp->ip_inp.inp);                         \
 	} else {                                                             \
 		result = ip6_output(o_pak, NULL, (ro), 0, 0, ifp, NULL);     \
 	}                                                                    \

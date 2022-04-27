@@ -12,6 +12,8 @@ SRCS=	linux_compat.c \
 	linux_hrtimer.c \
 	linux_idr.c \
 	linux_interrupt.c \
+	linux_i2c.c \
+	linux_i2cbb.c \
 	linux_kmod.c \
 	linux_kthread.c \
 	linux_lock.c \
@@ -36,6 +38,7 @@ SRCS=	linux_compat.c \
 SRCS+=	opt_acpi.h acpi_if.h linux_acpi.c
 .endif
 
+SRCS+=	opt_ddb.h
 SRCS+=	${LINUXKPI_GENSRCS}
 
 CFLAGS+= -I${SRCTOP}/sys/compat/linuxkpi/common/include

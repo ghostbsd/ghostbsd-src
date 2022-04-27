@@ -57,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
+#include <sys/random.h>
 #include <sys/sched.h>
 #include <sys/sdt.h>
 #include <sys/sleepqueue.h>
@@ -392,7 +393,7 @@ start_softclock(void *dummy)
 		cc->cc_thread = td;
 		thread_lock(td);
 		sched_class(td, PRI_ITHD);
-		sched_prio(td, PI_SWI(SWI_CLOCK));
+		sched_prio(td, PI_SOFTCLOCK);
 		TD_SET_IWAIT(td);
 		thread_lock_set(td, (struct mtx *)&cc->cc_lock);
 		thread_unlock(td);
@@ -430,6 +431,11 @@ callout_get_bucket(sbintime_t sbt)
 void
 callout_process(sbintime_t now)
 {
+	struct callout_entropy {
+		struct callout_cpu *cc;
+		struct thread *td;
+		sbintime_t now;
+	} entropy;
 	struct callout *tmp, *tmpn;
 	struct callout_cpu *cc;
 	struct callout_list *sc;
@@ -545,6 +551,11 @@ next:
 	avg_lockcalls_dir += (lockcalls_dir * 1000 - avg_lockcalls_dir) >> 8;
 #endif
 	if (!TAILQ_EMPTY(&cc->cc_expireq)) {
+		entropy.cc = cc;
+		entropy.td = curthread;
+		entropy.now = now;
+		random_harvest_queue(&entropy, sizeof(entropy), RANDOM_CALLOUT);
+
 		td = cc->cc_thread;
 		if (TD_AWAITING_INTR(td)) {
 			thread_lock_block_wait(td);
@@ -655,7 +666,7 @@ softclock_call_cc(struct callout *c, struct callout_cpu *cc,
 	    ("softclock_call_cc: act %p %x", c, c->c_flags));
 	class = (c->c_lock != NULL) ? LOCK_CLASS(c->c_lock) : NULL;
 	lock_status = 0;
-	if (c->c_flags & CALLOUT_SHAREDLOCK) {
+	if (c->c_iflags & CALLOUT_SHAREDLOCK) {
 		if (class == &lock_class_rm)
 			lock_status = (uintptr_t)&tracker;
 		else
@@ -1298,7 +1309,7 @@ again:
 				cc_exec_drain(cc, direct) = drain;
 			}
 			CC_UNLOCK(cc);
-			return ((flags & CS_EXECUTING) != 0);
+			return (0);
 		} else {
 			CTR3(KTR_CALLOUT, "failed to stop %p func %p arg %p",
 			    c, c->c_func, c->c_arg);
@@ -1310,7 +1321,7 @@ again:
 			}
 		}
 		KASSERT(!sq_locked, ("sleepqueue chain still locked"));
-		cancelled = ((flags & CS_EXECUTING) != 0);
+		cancelled = 0;
 	} else
 		cancelled = 1;
 

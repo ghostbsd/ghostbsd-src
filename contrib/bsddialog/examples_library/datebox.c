@@ -8,11 +8,10 @@
  *   <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+#include <bsddialog.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-
-#include <bsddialog.h>
 
 int main()
 {
@@ -28,23 +27,22 @@ int main()
 	mm = localtm->tm_mon + 1;
 	dd = localtm->tm_mday;
 
+	if (bsddialog_init() == BSDDIALOG_ERROR) {
+		printf("Error: %s\n", bsddialog_geterror());
+		return (1);
+	}
+
 	bsddialog_initconf(&conf);
 	conf.title = "datebox";
-	conf.bottomtitle = "Press TAB and arrows";
-	
-	if (bsddialog_init() < 0)
-		return -1;
+	output = bsddialog_datebox(&conf,
+	    "TAB / RIGHT / LEFT to move,\nUP / DOWN to select time", 10, 35,
+	    &yy, &mm, &dd);
 
-	output = bsddialog_datebox(&conf, "Example", 10, 50, &yy, &mm, &dd);
-	
 	bsddialog_end();
 
 	switch (output) {
 	case BSDDIALOG_OK:
 		printf("Date: %u/%u/%u", yy, mm, dd);
-		break;
-	case BSDDIALOG_ESC:
-		printf("ESC\n");
 		break;
 	case BSDDIALOG_CANCEL:
 		printf("Cancel");
@@ -55,5 +53,5 @@ int main()
 	}
 	printf("\n");
 
-	return output;
+	return (output);
 }

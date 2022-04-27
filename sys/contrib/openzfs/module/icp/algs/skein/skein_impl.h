@@ -25,7 +25,7 @@
 #define	_SKEIN_IMPL_H_
 
 #include <sys/skein.h>
-#include <sys/strings.h>
+#include <sys/string.h>
 #include "skein_impl.h"
 #include "skein_port.h"
 
@@ -263,8 +263,6 @@ extern const uint64_t SKEIN_256_IV_128[];
 extern const uint64_t SKEIN_256_IV_160[];
 extern const uint64_t SKEIN_256_IV_224[];
 extern const uint64_t SKEIN_256_IV_256[];
-extern const uint64_t SKEIN_512_IV_128[];
-extern const uint64_t SKEIN_512_IV_160[];
 extern const uint64_t SKEIN_512_IV_224[];
 extern const uint64_t SKEIN_512_IV_256[];
 extern const uint64_t SKEIN_512_IV_384[];

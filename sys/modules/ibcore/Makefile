@@ -56,4 +56,5 @@ EXPORT_SYMS=	YES
 
 .include <bsd.kmod.mk>
 
-CWARNFLAGS+= -Wno-cast-qual -Wno-pointer-arith -Wno-redundant-decls
+CWARNFLAGS+= -Wno-cast-qual -Wno-pointer-arith
+CWARNFLAGS+=	${NO_WUNUSED_BUT_SET_VARIABLE}

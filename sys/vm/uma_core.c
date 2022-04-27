@@ -1223,10 +1223,12 @@ zone_timeout(uma_zone_t zone, void *unused)
 
 trim:
 	/* Trim caches not used for a long time. */
-	for (int i = 0; i < vm_ndomains; i++) {
-		if (bucket_cache_reclaim_domain(zone, false, false, i) &&
-		    (zone->uz_flags & UMA_ZFLAG_CACHE) == 0)
-			keg_drain(zone->uz_keg, i);
+	if ((zone->uz_flags & UMA_ZONE_UNMANAGED) == 0) {
+		for (int i = 0; i < vm_ndomains; i++) {
+			if (bucket_cache_reclaim_domain(zone, false, false, i) &&
+			    (zone->uz_flags & UMA_ZFLAG_CACHE) == 0)
+				keg_drain(zone->uz_keg, i);
+		}
 	}
 }
 
@@ -1733,24 +1735,6 @@ zone_reclaim(uma_zone_t zone, int domain, int waitok, bool drain)
 	if (zone->uz_reclaimers == 0)
 		wakeup(zone);
 	ZONE_UNLOCK(zone);
-}
-
-static void
-zone_drain(uma_zone_t zone, void *arg)
-{
-	int domain;
-
-	domain = (int)(uintptr_t)arg;
-	zone_reclaim(zone, domain, M_NOWAIT, true);
-}
-
-static void
-zone_trim(uma_zone_t zone, void *arg)
-{
-	int domain;
-
-	domain = (int)(uintptr_t)arg;
-	zone_reclaim(zone, domain, M_NOWAIT, false);
 }
 
 /*
@@ -3510,6 +3494,9 @@ item_domain(void *item)
 #endif
 
 #if defined(INVARIANTS) || defined(DEBUG_MEMGUARD) || defined(WITNESS)
+#if defined(INVARIANTS) && (defined(DDB) || defined(STACK))
+#include <sys/stack.h>
+#endif
 #define	UMA_ZALLOC_DEBUG
 static int
 uma_zalloc_debug(uma_zone_t zone, void **itemp, void *udata, int flags)
@@ -3531,6 +3518,31 @@ uma_zalloc_debug(uma_zone_t zone, void **itemp, void *udata, int flags)
 	    ("uma_zalloc_debug: called within spinlock or critical section"));
 	KASSERT((zone->uz_flags & UMA_ZONE_PCPU) == 0 || (flags & M_ZERO) == 0,
 	    ("uma_zalloc_debug: allocating from a pcpu zone with M_ZERO"));
+
+	_Static_assert(M_NOWAIT != 0 && M_WAITOK != 0,
+	    "M_NOWAIT and M_WAITOK must be non-zero for this assertion:");
+#if 0
+	/*
+	 * Give the #elif clause time to find problems, then remove it
+	 * and enable this.  (Remove <sys/stack.h> above, too.)
+	 */
+	KASSERT((flags & (M_NOWAIT|M_WAITOK)) == M_NOWAIT ||
+	    (flags & (M_NOWAIT|M_WAITOK)) == M_WAITOK,
+	    ("uma_zalloc_debug: must pass one of M_NOWAIT or M_WAITOK"));
+#elif defined(DDB) || defined(STACK)
+	if (__predict_false((flags & (M_NOWAIT|M_WAITOK)) != M_NOWAIT &&
+	    (flags & (M_NOWAIT|M_WAITOK)) != M_WAITOK)) {
+		static int stack_count;
+		struct stack st;
+
+		if (stack_count < 10) {
+			++stack_count;
+			printf("uma_zalloc* called with bad WAIT flags:\n");
+			stack_save(&st);
+			stack_print(&st);
+		}
+	}
+#endif
 #endif
 
 #ifdef DEBUG_MEMGUARD
@@ -3548,7 +3560,8 @@ uma_zalloc_debug(uma_zone_t zone, void **itemp, void *udata, int flags)
 			    zone->uz_ctor(item, zone->uz_size, udata,
 			    flags) != 0) {
 				counter_u64_add(zone->uz_fails, 1);
-			    	zone->uz_fini(item, zone->uz_size);
+				if (zone->uz_fini != NULL)
+					zone->uz_fini(item, zone->uz_size);
 				*itemp = NULL;
 				return (error);
 			}
@@ -3803,12 +3816,6 @@ uma_zalloc_domain(uma_zone_t zone, void *udata, int domain, int flags)
 	CTR4(KTR_UMA, "uma_zalloc_domain zone %s(%p) domain %d flags %d",
 	    zone->uz_name, zone, domain, flags);
 
-	if (flags & M_WAITOK) {
-		WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,
-		    "uma_zalloc_domain: zone \"%s\"", zone->uz_name);
-	}
-	KASSERT(curthread->td_critnest == 0 || SCHEDULER_STOPPED(),
-	    ("uma_zalloc_domain: called with spinlock or critical section held"));
 	KASSERT((zone->uz_flags & UMA_ZONE_SMR) == 0,
 	    ("uma_zalloc_domain: called with SMR zone."));
 #ifdef NUMA
@@ -3817,6 +3824,11 @@ uma_zalloc_domain(uma_zone_t zone, void *udata, int domain, int flags)
 
 	if (vm_ndomains == 1)
 		return (uma_zalloc_arg(zone, udata, flags));
+
+#ifdef UMA_ZALLOC_DEBUG
+	if (uma_zalloc_debug(zone, &item, udata, flags) == EJUSTRETURN)
+		return (item);
+#endif
 
 	/*
 	 * Try to allocate from the bucket cache before falling back to the keg.
@@ -4251,7 +4263,7 @@ zone_alloc_bucket(uma_zone_t zone, void *udata, int domain, int flags)
 	else
 		maxbucket = zone->uz_bucket_size;
 	if (maxbucket == 0)
-		return (false);
+		return (NULL);
 
 	/* Don't wait for buckets, preserve caller's NOVM setting. */
 	bucket = bucket_alloc(zone, udata, M_NOWAIT | (flags & M_NOVM));
@@ -4382,7 +4394,10 @@ uma_zfree_smr(uma_zone_t zone, void *item)
 {
 	uma_cache_t cache;
 	uma_cache_bucket_t bucket;
-	int itemdomain, uz_flags;
+	int itemdomain;
+#ifdef NUMA
+	int uz_flags;
+#endif
 
 	CTR3(KTR_UMA, "uma_zfree_smr zone %s(%p) item %p",
 	    zone->uz_name, zone, item);
@@ -4396,9 +4411,9 @@ uma_zfree_smr(uma_zone_t zone, void *item)
 		return;
 #endif
 	cache = &zone->uz_cpu[curcpu];
-	uz_flags = cache_uz_flags(cache);
 	itemdomain = 0;
 #ifdef NUMA
+	uz_flags = cache_uz_flags(cache);
 	if ((uz_flags & UMA_ZONE_FIRSTTOUCH) != 0)
 		itemdomain = item_domain(item);
 #endif
@@ -4868,6 +4883,8 @@ uma_zone_set_max(uma_zone_t zone, int nitems)
 	 * way to clear a limit.
 	 */
 	ZONE_LOCK(zone);
+	if (zone->uz_max_items == 0)
+		ZONE_ASSERT_COLD(zone);
 	zone->uz_max_items = nitems;
 	zone->uz_flags |= UMA_ZFLAG_LIMIT;
 	zone_update_caches(zone);
@@ -5202,6 +5219,21 @@ uma_zone_memory(uma_zone_t zone)
 	return (sz * PAGE_SIZE);
 }
 
+struct uma_reclaim_args {
+	int	domain;
+	int	req;
+};
+
+static void
+uma_reclaim_domain_cb(uma_zone_t zone, void *arg)
+{
+	struct uma_reclaim_args *args;
+
+	args = arg;
+	if ((zone->uz_flags & UMA_ZONE_UNMANAGED) == 0)
+		uma_zone_reclaim_domain(zone, args->req, args->domain);
+}
+
 /* See uma.h */
 void
 uma_reclaim(int req)
@@ -5212,23 +5244,23 @@ uma_reclaim(int req)
 void
 uma_reclaim_domain(int req, int domain)
 {
-	void *arg;
+	struct uma_reclaim_args args;
 
 	bucket_enable();
 
-	arg = (void *)(uintptr_t)domain;
+	args.domain = domain;
+	args.req = req;
+
 	sx_slock(&uma_reclaim_lock);
 	switch (req) {
 	case UMA_RECLAIM_TRIM:
-		zone_foreach(zone_trim, arg);
-		break;
 	case UMA_RECLAIM_DRAIN:
-		zone_foreach(zone_drain, arg);
+		zone_foreach(uma_reclaim_domain_cb, &args);
 		break;
 	case UMA_RECLAIM_DRAIN_CPU:
-		zone_foreach(zone_drain, arg);
+		zone_foreach(uma_reclaim_domain_cb, &args);
 		pcpu_cache_drain_safe(NULL);
-		zone_foreach(zone_drain, arg);
+		zone_foreach(uma_reclaim_domain_cb, &args);
 		break;
 	default:
 		panic("unhandled reclamation request %d", req);
@@ -5239,8 +5271,8 @@ uma_reclaim_domain(int req, int domain)
 	 * we visit again so that we can free pages that are empty once other
 	 * zones are drained.  We have to do the same for buckets.
 	 */
-	zone_drain(slabzones[0], arg);
-	zone_drain(slabzones[1], arg);
+	uma_zone_reclaim_domain(slabzones[0], UMA_RECLAIM_DRAIN, domain);
+	uma_zone_reclaim_domain(slabzones[1], UMA_RECLAIM_DRAIN, domain);
 	bucket_zone_drain(domain);
 	sx_sunlock(&uma_reclaim_lock);
 }
@@ -5283,19 +5315,16 @@ uma_zone_reclaim(uma_zone_t zone, int req)
 void
 uma_zone_reclaim_domain(uma_zone_t zone, int req, int domain)
 {
-	void *arg;
-
-	arg = (void *)(uintptr_t)domain;
 	switch (req) {
 	case UMA_RECLAIM_TRIM:
-		zone_trim(zone, arg);
+		zone_reclaim(zone, domain, M_NOWAIT, false);
 		break;
 	case UMA_RECLAIM_DRAIN:
-		zone_drain(zone, arg);
+		zone_reclaim(zone, domain, M_NOWAIT, true);
 		break;
 	case UMA_RECLAIM_DRAIN_CPU:
 		pcpu_cache_drain_safe(zone);
-		zone_drain(zone, arg);
+		zone_reclaim(zone, domain, M_NOWAIT, true);
 		break;
 	default:
 		panic("unhandled reclamation request %d", req);

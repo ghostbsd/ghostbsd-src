@@ -601,12 +601,17 @@ ndaoninvalidate(struct cam_periph *periph)
 #endif
 
 	/*
-	 * Return all queued I/O with ENXIO.
-	 * XXX Handle any transactions queued to the card
-	 *     with XPT_ABORT_CCB.
+	 * Return all queued I/O with ENXIO. Transactions may be queued up here
+	 * for retry (since we are called while there's other transactions
+	 * pending). Any requests in the hardware will drain before ndacleanup
+	 * is called.
 	 */
 	cam_iosched_flush(softc->cam_iosched, NULL, ENXIO);
 
+	/*
+	 * Tell GEOM that we've gone away, we'll get a callback when it is
+	 * done cleaning up its resources.
+	 */
 	disk_gone(softc->disk);
 }
 
@@ -693,9 +698,9 @@ ndaasync(void *callback_arg, u_int32_t code,
 	}
 	case AC_LOST_DEVICE:
 	default:
-		cam_periph_async(periph, code, path, arg);
 		break;
 	}
+	cam_periph_async(periph, code, path, arg);
 }
 
 static void
@@ -930,10 +935,12 @@ ndaregister(struct cam_periph *periph, void *arg)
 	 * d_ident and d_descr are both far bigger than the length of either
 	 *  the serial or model number strings.
 	 */
-	cam_strvis(disk->d_descr, cd->mn,
-	    NVME_MODEL_NUMBER_LENGTH, sizeof(disk->d_descr));
-	cam_strvis(disk->d_ident, cd->sn,
-	    NVME_SERIAL_NUMBER_LENGTH, sizeof(disk->d_ident));
+	cam_strvis_flag(disk->d_descr, cd->mn, NVME_MODEL_NUMBER_LENGTH,
+	    sizeof(disk->d_descr), CAM_STRVIS_FLAG_NONASCII_SPC);
+
+	cam_strvis_flag(disk->d_ident, cd->sn, NVME_SERIAL_NUMBER_LENGTH,
+	    sizeof(disk->d_ident), CAM_STRVIS_FLAG_NONASCII_SPC);
+
 	disk->d_hba_vendor = cpi.hba_vendor;
 	disk->d_hba_device = cpi.hba_device;
 	disk->d_hba_subvendor = cpi.hba_subvendor;
@@ -1315,7 +1322,7 @@ ndaflush(void)
 
 		if (SCHEDULER_STOPPED()) {
 			/*
-			 * If we paniced with the lock held or the periph is not
+			 * If we panicked with the lock held or the periph is not
 			 * open, do not recurse.  Otherwise, call ndadump since
 			 * that avoids the sleeping cam_periph_getccb does if no
 			 * CCBs are available.
@@ -1351,6 +1358,9 @@ ndaflush(void)
 static void
 ndashutdown(void *arg, int howto)
 {
+
+	if ((howto & RB_NOSYNC) != 0)
+		return;
 
 	ndaflush();
 }

@@ -147,6 +147,7 @@ SUBDIR=	\
 	${_ice_ddp} \
 	${_ida} \
 	if_bridge \
+	${_if_cgem} \
 	if_disc \
 	if_edsc \
 	${_if_enc} \
@@ -222,6 +223,7 @@ SUBDIR=	\
 	mac_none \
 	mac_ntpd \
 	mac_partition \
+	mac_pimd \
 	mac_portacl \
 	mac_priority \
 	mac_seeotheruids \
@@ -319,6 +321,8 @@ SUBDIR=	\
 	rl \
 	${_rockchip} \
 	rtsx \
+	${_rtw88} \
+	${_rtw88fw} \
 	rtwn \
 	rtwn_pci \
 	rtwn_usb \
@@ -529,6 +533,10 @@ _mlx4ib=	mlx4ib
 _mlx5ib=	mlx5ib
 .endif
 _ossl=		ossl
+_rtw88=		rtw88
+.if ${MK_SOURCELESS_UCODE} != "no"
+_rtw88fw=	rtw88fw
+.endif
 _vmware=	vmware
 .endif
 
@@ -569,6 +577,11 @@ _ice_ddp=	ice_ddp
 .endif
 .endif
 
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
+	${MACHINE_CPUARCH} == "riscv"
+_if_cgem=	if_cgem
+.endif
+
 # These rely on 64bit atomics
 .if ${MACHINE_ARCH} != "powerpc" && ${MACHINE_ARCH} != "powerpcspe"
 _mps=		mps
@@ -588,7 +601,6 @@ SUBDIR+=	zfs
 _syscons=	syscons
 .endif
 
-# intr_disable() is a macro, causes problems
 .if ${MK_SOURCELESS_UCODE} != "no"
 _cxgb=		cxgb
 .endif

@@ -43,7 +43,7 @@
 
 #include "dma.h"
 
-#define MAX_LINE_RFC822	1000
+#define MAX_LINE_RFC822	999 /* 998 characters plus \n */
 
 void
 bounce(struct qitem *it, const char *reason)
@@ -378,7 +378,7 @@ readmail(struct queue *queue, int nodot, int recp_from_header)
 	char *line = NULL;
 	ssize_t linelen;
 	size_t linecap = 0;
-	char newline[MAX_LINE_RFC822];
+	char newline[MAX_LINE_RFC822 + 1];
 	size_t error;
 	int had_headers = 0;
 	int had_from = 0;
@@ -405,10 +405,8 @@ readmail(struct queue *queue, int nodot, int recp_from_header)
 	if ((ssize_t)error < 0)
 		return (-1);
 
-	while (!feof(stdin)) {
+	while ((linelen = getline(&line, &linecap, stdin)) > 0) {
 		newline[0] = '\0';
-		if ((linelen = getline(&line, &linecap, stdin)) <= 0)
-			break;
 		if (had_last_line)
 			errlogx(EX_DATAERR, "bad mail input format:"
 				" from %s (uid %d) (envelope-from %s)",
@@ -510,8 +508,8 @@ readmail(struct queue *queue, int nodot, int recp_from_header)
 			}
 		}
 	}
-
-	ret = 0;
+	if (ferror(stdin) == 0)
+		ret = 0;
 fail:
 	free(line);
 	return (ret);

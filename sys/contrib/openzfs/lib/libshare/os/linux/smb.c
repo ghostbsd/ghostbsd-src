@@ -50,7 +50,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -254,7 +253,7 @@ smb_enable_share_one(const char *sharename, const char *sharepath)
 	argv[5] = (char *)name;
 	argv[6] = (char *)sharepath;
 	argv[7] = (char *)comment;
-	argv[8] = "Everyone:F";
+	argv[8] = (char *)"Everyone:F";
 	argv[9] = NULL;
 
 	rc = libzfs_run_process(argv[0], argv, 0);

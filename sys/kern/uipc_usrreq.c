@@ -642,7 +642,7 @@ restart:
 		goto error;
 	vp = nd.ni_vp;
 	if (vp != NULL || vn_start_write(nd.ni_dvp, &mp, V_NOWAIT) != 0) {
-		NDFREE(&nd, NDF_ONLY_PNBUF);
+		NDFREE_PNBUF(&nd);
 		if (nd.ni_dvp == vp)
 			vrele(nd.ni_dvp);
 		else
@@ -666,7 +666,7 @@ restart:
 #endif
 	if (error == 0)
 		error = VOP_CREATE(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &vattr);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_PNBUF(&nd);
 	if (error) {
 		VOP_VPUT_PAIR(nd.ni_dvp, NULL, true);
 		vn_finished_write(mp);
@@ -1062,7 +1062,7 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 			control = NULL;
 		} else {
 			soroverflow_locked(so2);
-			error = ENOBUFS;
+			error = (so->so_state & SS_NBIO) ? EAGAIN : ENOBUFS;
 		}
 		if (nam != NULL)
 			unp_disconnect(unp, unp2);
@@ -2262,7 +2262,7 @@ unp_internalize(struct mbuf **controlp, struct thread *td)
 			fdp = data;
 			FILEDESC_SLOCK(fdesc);
 			for (i = 0; i < oldfds; i++, fdp++) {
-				fp = fget_locked(fdesc, *fdp);
+				fp = fget_noref(fdesc, *fdp);
 				if (fp == NULL) {
 					FILEDESC_SUNLOCK(fdesc);
 					error = EBADF;

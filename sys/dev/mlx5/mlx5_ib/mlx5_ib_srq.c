@@ -25,6 +25,9 @@
  * $FreeBSD$
  */
 
+#include "opt_rss.h"
+#include "opt_ratelimit.h"
+
 #include <linux/module.h>
 #include <dev/mlx5/qp.h>
 #include <dev/mlx5/srq.h>
@@ -33,7 +36,7 @@
 #include <rdma/ib_user_verbs.h>
 #include <rdma/uverbs_ioctl.h>
 
-#include "mlx5_ib.h"
+#include <dev/mlx5/mlx5_ib/mlx5_ib.h>
 
 static void *get_wqe(struct mlx5_ib_srq *srq, int n)
 {

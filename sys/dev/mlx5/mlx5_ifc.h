@@ -339,7 +339,7 @@ struct mlx5_ifc_flow_table_fields_supported_bits {
 	u8         outer_dmac[0x1];
 	u8         outer_smac[0x1];
 	u8         outer_ether_type[0x1];
-	u8         reserved_0[0x1];
+	u8         outer_ip_version[0x1];
 	u8         outer_first_prio[0x1];
 	u8         outer_first_cfi[0x1];
 	u8         outer_first_vid[0x1];
@@ -372,7 +372,7 @@ struct mlx5_ifc_flow_table_fields_supported_bits {
 	u8         inner_dmac[0x1];
 	u8         inner_smac[0x1];
 	u8         inner_ether_type[0x1];
-	u8         reserved_3[0x1];
+	u8         inner_ip_version[0x1];
 	u8         inner_first_prio[0x1];
 	u8         inner_first_cfi[0x1];
 	u8         inner_first_vid[0x1];
@@ -562,7 +562,7 @@ struct mlx5_ifc_fte_match_set_lyr_2_4_bits {
 	u8         cvlan_tag[0x1];
 	u8         svlan_tag[0x1];
 	u8         frag[0x1];
-	u8         reserved_1[0x4];
+	u8         ip_version[0x4];
 	u8         tcp_flags[0x9];
 
 	u8         tcp_sport[0x10];
@@ -736,7 +736,9 @@ struct mlx5_ifc_qos_cap_bits {
 	u8         packet_pacing_typical_size[0x1];
 	u8         reserved_at_7[0x19];
 
-	u8         reserved_at_20[0x20];
+	u8 	   reserved_at_20[0xA];
+	u8	   qos_remap_pp[0x1];
+	u8         reserved_at_2b[0x15];
 
 	u8         packet_pacing_max_rate[0x20];
 
@@ -926,8 +928,9 @@ struct mlx5_ifc_per_protocol_networking_offload_caps_bits {
 	u8         multi_pkt_send_wqe[0x2];
 	u8         wqe_inline_mode[0x2];
 	u8         rss_ind_tbl_cap[0x4];
+	u8	   reg_umr_sq[0x1];
 	u8         scatter_fcs[0x1];
-	u8         reserved_1[0x2];
+	u8	   enhanced_multi_pkt_send_wqe[0x1];
 	u8         tunnel_lso_const_out_ip_id[0x1];
 	u8         tunnel_lro_gre[0x1];
 	u8         tunnel_lro_vxlan[0x1];
@@ -1339,8 +1342,9 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 	u8         log_max_wq_sz[0x5];
 
 	u8         nic_vport_change_event[0x1];
-	u8         disable_local_lb[0x1];
-	u8         reserved_59[0x9];
+	u8         disable_local_lb_uc[0x1];
+	u8         disable_local_lb_mc[0x1];
+	u8         reserved_59[0x8];
 	u8         log_max_vlan_list[0x5];
 	u8         reserved_60[0x3];
 	u8         log_max_current_mc_list[0x5];
@@ -1362,7 +1366,7 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 
 	u8         reserved_at_480[0x1];
 	u8         tls_tx[0x1];
-	u8         reserved_at_482[0x1];
+	u8         tls_rx[0x1];
 	u8         log_max_l2_table[0x5];
 	u8         reserved_64[0x8];
 	u8         log_uar_page_sz[0x10];
@@ -2477,7 +2481,9 @@ struct mlx5_ifc_sqc_bits {
 	u8         state[0x4];
 	u8         reg_umr[0x1];
 	u8         allow_swp[0x1];
-	u8         reserved_at_e[0xc];
+	u8         reserved_at_e[0x4];
+	u8	   qos_remap_en[0x1];
+	u8	   reserved_at_d[0x7];
 	u8         ts_format[0x2];
 	u8         reserved_at_1c[0x4];
 
@@ -2493,14 +2499,56 @@ struct mlx5_ifc_sqc_bits {
 	u8         packet_pacing_rate_limit_index[0x10];
 
 	u8         tis_lst_sz[0x10];
-	u8         reserved_4[0x10];
+	u8         qos_queue_group_id[0x10];
 
-	u8         reserved_5[0x40];
+	u8	   reserved_4[0x8];
+	u8	   queue_handle[0x18];
+
+	u8         reserved_5[0x20];
 
 	u8         reserved_6[0x8];
 	u8         tis_num_0[0x18];
 
 	struct mlx5_ifc_wq_bits wq;
+};
+
+struct mlx5_ifc_query_pp_rate_limit_in_bits {
+	u8	   opcode[0x10];
+	u8	   uid[0x10];
+
+	u8	   reserved1[0x10];
+	u8         op_mod[0x10];
+
+	u8         reserved2[0x10];
+        u8         rate_limit_index[0x10];
+
+	u8         reserved_3[0x20];
+};
+
+struct mlx5_ifc_pp_context_bits {
+	u8	   rate_limit[0x20];
+
+	u8	   burst_upper_bound[0x20];
+
+	u8	   reserved_1[0xc];
+	u8	   rate_mode[0x4];
+	u8	   typical_packet_size[0x10];
+
+	u8	   reserved_2[0x8];
+	u8	   qos_handle[0x18];
+
+	u8	   reserved_3[0x40];
+};
+
+struct mlx5_ifc_query_pp_rate_limit_out_bits {
+        u8	   status[0x8];
+	u8         reserved_1[0x18];
+
+        u8         syndrome[0x20];
+
+        u8         reserved_2[0x40];
+
+	struct mlx5_ifc_pp_context_bits pp_context;
 };
 
 enum {
@@ -5745,6 +5793,14 @@ struct mlx5_ifc_modify_rqt_out_bits {
 	u8         reserved_1[0x40];
 };
 
+struct mlx5_ifc_rqt_bitmask_bits {
+	u8         reserved_at_0[0x20];
+
+	u8         reserved_at_20[0x1f];
+	u8         rqn_list[0x1];
+};
+
+
 struct mlx5_ifc_modify_rqt_in_bits {
 	u8         opcode[0x10];
 	u8         uid[0x10];
@@ -5757,7 +5813,7 @@ struct mlx5_ifc_modify_rqt_in_bits {
 
 	u8         reserved_3[0x20];
 
-	u8         modify_bitmask[0x40];
+	struct mlx5_ifc_rqt_bitmask_bits bitmask;
 
 	u8         reserved_4[0x40];
 

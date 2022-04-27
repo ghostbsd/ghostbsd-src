@@ -974,9 +974,8 @@ static uint32_t
 cdce_m_crc32(struct mbuf *m, uint32_t src_offset, uint32_t src_len)
 {
 	uint32_t crc = 0xFFFFFFFF;
-	int error;
 
-	error = m_apply(m, src_offset, src_len, cdce_m_crc32_cb, &crc);
+	(void)m_apply(m, src_offset, src_len, cdce_m_crc32_cb, &crc);
 	return (crc ^ 0xFFFFFFFF);
 }
 
@@ -1591,7 +1590,7 @@ cdce_ncm_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct usb_page_cache *pc = usbd_xfer_get_frame(xfer, 0);
 	struct ifnet *ifp = uether_getifp(&sc->sc_ue);
 	struct mbuf *m;
-	int sumdata;
+	int sumdata __usbdebug_used;
 	int sumlen;
 	int actlen;
 	int aframes;

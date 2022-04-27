@@ -113,6 +113,8 @@ static void	vn_seqc_init(struct vnode *);
 static void	vn_seqc_write_end_free(struct vnode *vp);
 static void	vgonel(struct vnode *);
 static bool	vhold_recycle_free(struct vnode *);
+static void	vdropl_recycle(struct vnode *vp);
+static void	vdrop_recycle(struct vnode *vp);
 static void	vfs_knllock(void *arg);
 static void	vfs_knlunlock(void *arg);
 static void	vfs_knl_assert_lock(void *arg, int what);
@@ -460,7 +462,12 @@ SYSCTL_PROC(_debug, OID_AUTO, ftry_reclaim_vnode,
     "Try to reclaim a vnode by its file descriptor");
 
 /* Shift count for (uintptr_t)vp to initialize vp->v_hash. */
-static int vnsz2log;
+#define vnsz2log 8
+#ifndef DEBUG_LOCKS
+_Static_assert(sizeof(struct vnode) >= 1UL << vnsz2log &&
+    sizeof(struct vnode) < 1UL << (vnsz2log + 1),
+    "vnsz2log needs to be updated");
+#endif
 
 /*
  * Support for the bufobj clean & dirty pctrie.
@@ -657,7 +664,6 @@ vntblinit(void *dummy __unused)
 	uma_ctor ctor;
 	uma_dtor dtor;
 	int cpu, physvnodes, virtvnodes;
-	u_int i;
 
 	/*
 	 * Desiredvnodes is a function of the physical memory size and the
@@ -731,9 +737,6 @@ vntblinit(void *dummy __unused)
 	syncer_maxdelay = syncer_mask + 1;
 	mtx_init(&sync_mtx, "Syncer mtx", NULL, MTX_DEF);
 	cv_init(&sync_wakeup, "syncer");
-	for (i = 1; i <= sizeof(struct vnode); i <<= 1)
-		vnsz2log++;
-	vnsz2log--;
 
 	CPU_FOREACH(cpu) {
 		vd = DPCPU_ID_PTR((cpu), vd);
@@ -1206,11 +1209,11 @@ restart:
 		mtx_unlock(&vnode_list_mtx);
 
 		if (vn_start_write(vp, &mp, V_NOWAIT) != 0) {
-			vdrop(vp);
+			vdrop_recycle(vp);
 			goto next_iter_unlocked;
 		}
 		if (VOP_LOCK(vp, LK_EXCLUSIVE|LK_NOWAIT) != 0) {
-			vdrop(vp);
+			vdrop_recycle(vp);
 			vn_finished_write(mp);
 			goto next_iter_unlocked;
 		}
@@ -1221,14 +1224,14 @@ restart:
 		    (vp->v_object != NULL && vp->v_object->handle == vp &&
 		    vp->v_object->resident_page_count > trigger)) {
 			VOP_UNLOCK(vp);
-			vdropl(vp);
+			vdropl_recycle(vp);
 			vn_finished_write(mp);
 			goto next_iter_unlocked;
 		}
 		counter_u64_add(recycles_count, 1);
 		vgonel(vp);
 		VOP_UNLOCK(vp);
-		vdropl(vp);
+		vdropl_recycle(vp);
 		vn_finished_write(mp);
 		done++;
 next_iter_unlocked:
@@ -1308,8 +1311,29 @@ vnlru_free_impl(int count, struct vfsops *mnt_op, struct vnode *mvp)
 		TAILQ_REMOVE(&vnode_list, mvp, v_vnodelist);
 		TAILQ_INSERT_AFTER(&vnode_list, vp, mvp, v_vnodelist);
 		mtx_unlock(&vnode_list_mtx);
-		if (vtryrecycle(vp) == 0)
-			count--;
+		/*
+		 * FIXME: ignores the return value, meaning it may be nothing
+		 * got recycled but it claims otherwise to the caller.
+		 *
+		 * Originally the value started being ignored in 2005 with
+		 * 114a1006a8204aa156e1f9ad6476cdff89cada7f .
+		 *
+		 * Respecting the value can run into significant stalls if most
+		 * vnodes belong to one file system and it has writes
+		 * suspended.  In presence of many threads and millions of
+		 * vnodes they keep contending on the vnode_list_mtx lock only
+		 * to find vnodes they can't recycle.
+		 *
+		 * The solution would be to pre-check if the vnode is likely to
+		 * be recycle-able, but it needs to happen with the
+		 * vnode_list_mtx lock held. This runs into a problem where
+		 * VOP_GETWRITEMOUNT (currently needed to find out about if
+		 * writes are frozen) can take locks which LOR against it.
+		 *
+		 * Check nullfs for one example (null_getwritemount).
+		 */
+		vtryrecycle(vp);
+		count--;
 		mtx_lock(&vnode_list_mtx);
 		vp = mvp;
 	}
@@ -1541,7 +1565,7 @@ vnlru_proc(void)
 		if (usevnodes <= 0)
 			usevnodes = 1;
 		/*
-		 * The trigger value is is chosen to give a conservatively
+		 * The trigger value is chosen to give a conservatively
 		 * large value to ensure that it alone doesn't prevent
 		 * making progress.  The value can easily be so large that
 		 * it is effectively infinite in some congested and
@@ -1612,7 +1636,7 @@ vtryrecycle(struct vnode *vp)
 		CTR2(KTR_VFS,
 		    "%s: impossible to recycle, vp %p lock is already held",
 		    __func__, vp);
-		vdrop(vp);
+		vdrop_recycle(vp);
 		return (EWOULDBLOCK);
 	}
 	/*
@@ -1623,7 +1647,7 @@ vtryrecycle(struct vnode *vp)
 		CTR2(KTR_VFS,
 		    "%s: impossible to recycle, cannot start the write for %p",
 		    __func__, vp);
-		vdrop(vp);
+		vdrop_recycle(vp);
 		return (EBUSY);
 	}
 	/*
@@ -1635,7 +1659,7 @@ vtryrecycle(struct vnode *vp)
 	VI_LOCK(vp);
 	if (vp->v_usecount) {
 		VOP_UNLOCK(vp);
-		vdropl(vp);
+		vdropl_recycle(vp);
 		vn_finished_write(vnmp);
 		CTR2(KTR_VFS,
 		    "%s: impossible to recycle, %p is already referenced",
@@ -1647,7 +1671,7 @@ vtryrecycle(struct vnode *vp)
 		vgonel(vp);
 	}
 	VOP_UNLOCK(vp);
-	vdropl(vp);
+	vdropl_recycle(vp);
 	vn_finished_write(vnmp);
 	return (0);
 }
@@ -1934,28 +1958,20 @@ delmntque(struct vnode *vp)
 	MNT_IUNLOCK(mp);
 }
 
-static void
-insmntque_stddtr(struct vnode *vp, void *dtr_arg)
-{
-
-	vp->v_data = NULL;
-	vp->v_op = &dead_vnodeops;
-	vgone(vp);
-	vput(vp);
-}
-
-/*
- * Insert into list of vnodes for the new mount point, if available.
- */
-int
-insmntque1(struct vnode *vp, struct mount *mp,
-	void (*dtr)(struct vnode *, void *), void *dtr_arg)
+static int
+insmntque1_int(struct vnode *vp, struct mount *mp, bool dtr)
 {
 
 	KASSERT(vp->v_mount == NULL,
 		("insmntque: vnode already on per mount vnode list"));
 	VNASSERT(mp != NULL, vp, ("Don't call insmntque(foo, NULL)"));
-	ASSERT_VOP_ELOCKED(vp, "insmntque: non-locked vp");
+	if ((mp->mnt_kern_flag & MNTK_UNLOCKED_INSMNTQUE) == 0) {
+		ASSERT_VOP_ELOCKED(vp, "insmntque: non-locked vp");
+	} else {
+		KASSERT(!dtr,
+		    ("%s: can't have MNTK_UNLOCKED_INSMNTQUE and cleanup",
+		    __func__));
+	}
 
 	/*
 	 * We acquire the vnode interlock early to ensure that the
@@ -1974,8 +1990,12 @@ insmntque1(struct vnode *vp, struct mount *mp,
 	    (vp->v_vflag & VV_FORCEINSMQ) == 0) {
 		VI_UNLOCK(vp);
 		MNT_IUNLOCK(mp);
-		if (dtr != NULL)
-			dtr(vp, dtr_arg);
+		if (dtr) {
+			vp->v_data = NULL;
+			vp->v_op = &dead_vnodeops;
+			vgone(vp);
+			vput(vp);
+		}
 		return (EBUSY);
 	}
 	vp->v_mount = mp;
@@ -1989,11 +2009,21 @@ insmntque1(struct vnode *vp, struct mount *mp,
 	return (0);
 }
 
+/*
+ * Insert into list of vnodes for the new mount point, if available.
+ * insmntque() reclaims the vnode on insertion failure, insmntque1()
+ * leaves handling of the vnode to the caller.
+ */
 int
 insmntque(struct vnode *vp, struct mount *mp)
 {
+	return (insmntque1_int(vp, mp, true));
+}
 
-	return (insmntque1(vp, mp, insmntque_stddtr, NULL));
+int
+insmntque1(struct vnode *vp, struct mount *mp)
+{
+	return (insmntque1_int(vp, mp, false));
 }
 
 /*
@@ -3597,8 +3627,8 @@ vdrop(struct vnode *vp)
 	vdropl(vp);
 }
 
-void
-vdropl(struct vnode *vp)
+static void __always_inline
+vdropl_impl(struct vnode *vp, bool enqueue)
 {
 
 	ASSERT_VI_LOCKED(vp, __func__);
@@ -3618,12 +3648,51 @@ vdropl(struct vnode *vp)
 	if (vp->v_mflag & VMP_LAZYLIST) {
 		vunlazy(vp);
 	}
+
+	if (!enqueue) {
+		VI_UNLOCK(vp);
+		return;
+	}
+
 	/*
 	 * Also unlocks the interlock. We can't assert on it as we
 	 * released our hold and by now the vnode might have been
 	 * freed.
 	 */
 	vdbatch_enqueue(vp);
+}
+
+void
+vdropl(struct vnode *vp)
+{
+
+	vdropl_impl(vp, true);
+}
+
+/*
+ * vdrop a vnode when recycling
+ *
+ * This is a special case routine only to be used when recycling, differs from
+ * regular vdrop by not requeieing the vnode on LRU.
+ *
+ * Consider a case where vtryrecycle continuously fails with all vnodes (due to
+ * e.g., frozen writes on the filesystem), filling the batch and causing it to
+ * be requeued. Then vnlru will end up revisiting the same vnodes. This is a
+ * loop which can last for as long as writes are frozen.
+ */
+static void
+vdropl_recycle(struct vnode *vp)
+{
+
+	vdropl_impl(vp, false);
+}
+
+static void
+vdrop_recycle(struct vnode *vp)
+{
+
+	VI_LOCK(vp);
+	vdropl_recycle(vp);
 }
 
 /*
@@ -3879,7 +3948,7 @@ vgone(struct vnode *vp)
  * Notify upper mounts about reclaimed or unlinked vnode.
  */
 void
-vfs_notify_upper(struct vnode *vp, int event)
+vfs_notify_upper(struct vnode *vp, enum vfs_notify_upper_type event)
 {
 	struct mount *mp;
 	struct mount_upper_node *ump;
@@ -3902,9 +3971,6 @@ vfs_notify_upper(struct vnode *vp, int event)
 			break;
 		case VFS_NOTIFY_UPPER_UNLINK:
 			VFS_UNLINK_LOWERVP(ump->mp, vp);
-			break;
-		default:
-			KASSERT(0, ("invalid event %d", event));
 			break;
 		}
 		MNT_ILOCK(mp);
@@ -4335,6 +4401,7 @@ DB_SHOW_COMMAND(mount, db_show_mount)
 	MNT_KERN_FLAG(MNTK_UNMOUNTF);
 	MNT_KERN_FLAG(MNTK_ASYNC);
 	MNT_KERN_FLAG(MNTK_SOFTDEP);
+	MNT_KERN_FLAG(MNTK_NOMSYNC);
 	MNT_KERN_FLAG(MNTK_DRAINING);
 	MNT_KERN_FLAG(MNTK_REFEXPIRE);
 	MNT_KERN_FLAG(MNTK_EXTENDED_SHARED);
@@ -4342,8 +4409,9 @@ DB_SHOW_COMMAND(mount, db_show_mount)
 	MNT_KERN_FLAG(MNTK_NO_IOPF);
 	MNT_KERN_FLAG(MNTK_RECURSE);
 	MNT_KERN_FLAG(MNTK_UPPER_WAITER);
-	MNT_KERN_FLAG(MNTK_LOOKUP_EXCL_DOTDOT);
+	MNT_KERN_FLAG(MNTK_UNLOCKED_INSMNTQUE);
 	MNT_KERN_FLAG(MNTK_USES_BCACHE);
+	MNT_KERN_FLAG(MNTK_VMSETSIZE_BUG);
 	MNT_KERN_FLAG(MNTK_FPLOOKUP);
 	MNT_KERN_FLAG(MNTK_TASKQUEUE_WAITER);
 	MNT_KERN_FLAG(MNTK_NOASYNC);
@@ -4352,6 +4420,7 @@ DB_SHOW_COMMAND(mount, db_show_mount)
 	MNT_KERN_FLAG(MNTK_SUSPEND);
 	MNT_KERN_FLAG(MNTK_SUSPEND2);
 	MNT_KERN_FLAG(MNTK_SUSPENDED);
+	MNT_KERN_FLAG(MNTK_NULL_NOCACHE);
 	MNT_KERN_FLAG(MNTK_LOOKUP_SHARED);
 #undef MNT_KERN_FLAG
 	if (flags != 0) {
@@ -4974,7 +5043,7 @@ vfs_allocate_syncvnode(struct mount *mp)
 	vp->v_type = VNON;
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	vp->v_vflag |= VV_FORCEINSMQ;
-	error = insmntque(vp, mp);
+	error = insmntque1(vp, mp);
 	if (error != 0)
 		panic("vfs_allocate_syncvnode: insmntque() failed");
 	vp->v_vflag &= ~VV_FORCEINSMQ;
@@ -5059,10 +5128,7 @@ sync_fsync(struct vop_fsync_args *ap)
 	 */
 	if (vfs_busy(mp, MBF_NOWAIT) != 0)
 		return (0);
-	if (vn_start_write(NULL, &mp, V_NOWAIT) != 0) {
-		vfs_unbusy(mp);
-		return (0);
-	}
+	VOP_UNLOCK(syncvp);
 	save = curthread_pflags_set(TDP_SYNCIO);
 	/*
 	 * The filesystem at hand may be idle with free vnodes stored in the
@@ -5071,7 +5137,7 @@ sync_fsync(struct vop_fsync_args *ap)
 	vfs_periodic(mp, MNT_NOWAIT);
 	error = VFS_SYNC(mp, MNT_LAZY);
 	curthread_pflags_restore(save);
-	vn_finished_write(mp);
+	vn_lock(syncvp, LK_EXCLUSIVE | LK_RETRY);
 	vfs_unbusy(mp);
 	return (error);
 }
@@ -5914,6 +5980,7 @@ vop_rmdir_post(void *ap, int rc)
 	vn_seqc_write_end(dvp);
 	vn_seqc_write_end(vp);
 	if (!rc) {
+		vp->v_vflag |= VV_UNLINKED;
 		VFS_KNOTE_LOCKED(dvp, NOTE_WRITE | NOTE_LINK);
 		VFS_KNOTE_LOCKED(vp, NOTE_DELETE);
 	}

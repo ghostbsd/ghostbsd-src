@@ -400,28 +400,20 @@ bsd_to_linux_sockaddr(const struct sockaddr *sa, struct l_sockaddr **lsa,
     socklen_t len)
 {
 	struct l_sockaddr *kosa;
-	int error, bdom;
+	int bdom;
 
 	*lsa = NULL;
 	if (len < 2 || len > UCHAR_MAX)
 		return (EINVAL);
+	bdom = bsd_to_linux_domain(sa->sa_family);
+	if (bdom == -1)
+		return (EAFNOSUPPORT);
 
 	kosa = malloc(len, M_SONAME, M_WAITOK);
 	bcopy(sa, kosa, len);
-
-	bdom = bsd_to_linux_domain(sa->sa_family);
-	if (bdom == -1) {
-		error = EAFNOSUPPORT;
-		goto out;
-	}
-
 	kosa->sa_family = bdom;
 	*lsa = kosa;
 	return (0);
-
-out:
-	free(kosa, M_SONAME);
-	return (error);
 }
 
 int
@@ -633,8 +625,6 @@ void
 linux_to_bsd_poll_events(struct thread *td, int fd, short lev,
     short *bev)
 {
-	struct proc *p = td->td_proc;
-	struct filedesc *fdp;
 	struct file *fp;
 	int error;
 	short bits = 0;
@@ -666,8 +656,7 @@ linux_to_bsd_poll_events(struct thread *td, int fd, short lev,
 		 * on non-socket file descriptors unlike FreeBSD, where
 		 * events bits is more strictly checked (POLLSTANDARD).
 		 */
-		fdp = p->p_fd;
-		error = fget_unlocked(fdp, fd, &cap_no_rights, &fp);
+		error = fget_unlocked(td, fd, &cap_no_rights, &fp);
 		if (error == 0) {
 			/*
 			 * XXX. On FreeBSD POLLRDHUP applies only to

@@ -175,6 +175,7 @@ static int mapacct_ufs2(struct vnode *, ufs2_daddr_t *, ufs2_daddr_t *,
     struct fs *, ufs_lbn_t, int);
 static int readblock(struct vnode *vp, struct buf *, ufs2_daddr_t);
 static void try_free_snapdata(struct vnode *devvp);
+static void revert_snaplock(struct vnode *, struct vnode *, struct snapdata *);
 static struct snapdata *ffs_snapdata_acquire(struct vnode *devvp);
 static int ffs_bp_snapblk(struct vnode *, struct buf *);
 
@@ -275,7 +276,7 @@ restart:
 	if (nd.ni_dvp->v_mount != mp)
 		error = EXDEV;
 	if (error) {
-		NDFREE(&nd, NDF_ONLY_PNBUF);
+		NDFREE_PNBUF(&nd);
 		if (nd.ni_dvp == nd.ni_vp)
 			vrele(nd.ni_dvp);
 		else
@@ -292,7 +293,7 @@ restart:
 		panic("ffs_snapshot: mount mismatch");
 	vfs_rel(wrtmp);
 	if (vn_start_write(NULL, &wrtmp, V_NOWAIT) != 0) {
-		NDFREE(&nd, NDF_ONLY_PNBUF);
+		NDFREE_PNBUF(&nd);
 		vput(nd.ni_dvp);
 		if ((error = vn_start_write(NULL, &wrtmp,
 		    V_XSLEEP | PCATCH)) != 0)
@@ -302,7 +303,7 @@ restart:
 	error = VOP_CREATE(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &vat);
 	if (error) {
 		VOP_VPUT_PAIR(nd.ni_dvp, NULL, true);
-		NDFREE(&nd, NDF_ONLY_PNBUF);
+		NDFREE_PNBUF(&nd);
 		vn_finished_write(wrtmp);
 		if (error == ERELOOKUP)
 			goto restart;
@@ -865,7 +866,7 @@ done:
 	free(copy_fs, M_UFSMNT);
 	copy_fs = NULL;
 out:
-	NDFREE(&nd, NDF_ONLY_PNBUF);
+	NDFREE_PNBUF(&nd);
 	if (saved_nice > 0) {
 		struct proc *p;
 
@@ -1651,7 +1652,7 @@ ffs_snapremove(vp)
 	struct buf *ibp;
 	struct fs *fs;
 	ufs2_daddr_t numblks, blkno, dblk;
-	int error, i, last, loc;
+	int error, last, loc;
 	struct snapdata *sn;
 
 	ip = VTOI(vp);
@@ -1669,20 +1670,10 @@ ffs_snapremove(vp)
 		sn = devvp->v_rdev->si_snapdata;
 		TAILQ_REMOVE(&sn->sn_head, ip, i_nextsnap);
 		ip->i_nextsnap.tqe_prev = 0;
-		VI_UNLOCK(devvp);
-		lockmgr(&vp->v_lock, LK_EXCLUSIVE, NULL);
-		for (i = 0; i < sn->sn_lock.lk_recurse; i++)
-			lockmgr(&vp->v_lock, LK_EXCLUSIVE, NULL);
-		KASSERT(vp->v_vnlock == &sn->sn_lock,
-			("ffs_snapremove: lost lock mutation")); 
-		vp->v_vnlock = &vp->v_lock;
-		VI_LOCK(devvp);
-		while (sn->sn_lock.lk_recurse > 0)
-			lockmgr(&sn->sn_lock, LK_RELEASE, NULL);
-		lockmgr(&sn->sn_lock, LK_RELEASE, NULL);
+		revert_snaplock(vp, devvp, sn);
 		try_free_snapdata(devvp);
-	} else
-		VI_UNLOCK(devvp);
+	}
+	VI_UNLOCK(devvp);
 	/*
 	 * Clear all BLK_NOCOPY fields. Pass any block claims to other
 	 * snapshots that want them (see ffs_snapblkfree below).
@@ -1809,9 +1800,15 @@ retry:
 		VI_UNLOCK(devvp);
 		return (0);
 	}
+
+	/*
+	 * Use LK_SLEEPFAIL because sn might be freed under us while
+	 * both devvp interlock and snaplk are not owned.
+	 */
 	if (lockmgr(&sn->sn_lock, LK_INTERLOCK | LK_EXCLUSIVE | LK_SLEEPFAIL,
 	    VI_MTX(devvp)) != 0)
 		goto retry;
+
 	TAILQ_FOREACH(ip, &sn->sn_head, i_nextsnap) {
 		vp = ITOV(ip);
 		if (DOINGSOFTDEP(vp))
@@ -2152,27 +2149,18 @@ ffs_snapshot_unmount(mp)
 		xp->i_nextsnap.tqe_prev = 0;
 		lockmgr(&sn->sn_lock, LK_INTERLOCK | LK_EXCLUSIVE,
 		    VI_MTX(devvp));
-		/*
-		 * Avoid LOR with above snapshot lock. The LK_NOWAIT should
-		 * never fail as the lock is currently unused. Rather than
-		 * panic, we recover by doing the blocking lock.
-		 */
-		if (lockmgr(&vp->v_lock, LK_EXCLUSIVE | LK_NOWAIT, NULL) != 0) {
-			printf("ffs_snapshot_unmount: Unexpected LK_NOWAIT "
-			    "failure\n");
-			lockmgr(&vp->v_lock, LK_EXCLUSIVE, NULL);
-		}
-		KASSERT(vp->v_vnlock == &sn->sn_lock,
-		("ffs_snapshot_unmount: lost lock mutation")); 
-		vp->v_vnlock = &vp->v_lock;
-		lockmgr(&vp->v_lock, LK_RELEASE, NULL);
-		lockmgr(&sn->sn_lock, LK_RELEASE, NULL);
-		if (xp->i_effnlink > 0)
-			vrele(vp);
 		VI_LOCK(devvp);
+		revert_snaplock(vp, devvp, sn);
+		lockmgr(&vp->v_lock, LK_RELEASE, NULL);
+		if (xp->i_effnlink > 0) {
+			VI_UNLOCK(devvp);
+			vrele(vp);
+			VI_LOCK(devvp);
+		}
 		sn = devvp->v_rdev->si_snapdata;
 	}
 	try_free_snapdata(devvp);
+	VI_UNLOCK(devvp);
 }
 
 /*
@@ -2676,10 +2664,8 @@ try_free_snapdata(struct vnode *devvp)
 	sn = devvp->v_rdev->si_snapdata;
 
 	if (sn == NULL || TAILQ_FIRST(&sn->sn_head) != NULL ||
-	    (devvp->v_vflag & VV_COPYONWRITE) == 0) {
-		VI_UNLOCK(devvp);
+	    (devvp->v_vflag & VV_COPYONWRITE) == 0)
 		return;
-	}
 
 	devvp->v_rdev->si_snapdata = NULL;
 	devvp->v_vflag &= ~VV_COPYONWRITE;
@@ -2691,6 +2677,46 @@ try_free_snapdata(struct vnode *devvp)
 	if (snapblklist != NULL)
 		free(snapblklist, M_UFSMNT);
 	ffs_snapdata_free(sn);
+	VI_LOCK(devvp);
+}
+
+/*
+ * Revert a vnode lock from using the snapshot lock back to its own lock.
+ *
+ * Aquire a lock on the vnode's own lock and release the lock on the
+ * snapshot lock. If there are any recursions on the snapshot lock
+ * get the same number of recursions on the vnode's own lock.
+ */
+static void
+revert_snaplock(vp, devvp, sn)
+	struct vnode *vp;
+	struct vnode *devvp;
+	struct snapdata *sn;
+{
+	int i;
+
+	ASSERT_VI_LOCKED(devvp, "revert_snaplock");
+	/*
+	 * Avoid LOR with snapshot lock. The LK_NOWAIT should
+	 * never fail as the lock is currently unused. Rather than
+	 * panic, we recover by doing the blocking lock.
+	 */
+	for (i = 0; i <= sn->sn_lock.lk_recurse; i++) {
+		if (lockmgr(&vp->v_lock, LK_EXCLUSIVE | LK_NOWAIT |
+		    LK_INTERLOCK, VI_MTX(devvp)) != 0) {
+			printf("revert_snaplock: Unexpected LK_NOWAIT "
+			    "failure\n");
+			lockmgr(&vp->v_lock, LK_EXCLUSIVE | LK_INTERLOCK,
+			    VI_MTX(devvp));
+		}
+		VI_LOCK(devvp);
+	}
+	KASSERT(vp->v_vnlock == &sn->sn_lock,
+	    ("revert_snaplock: lost lock mutation")); 
+	vp->v_vnlock = &vp->v_lock;
+	while (sn->sn_lock.lk_recurse > 0)
+		lockmgr(&sn->sn_lock, LK_RELEASE, NULL);
+	lockmgr(&sn->sn_lock, LK_RELEASE, NULL);
 }
 
 static struct snapdata *

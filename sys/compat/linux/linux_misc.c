@@ -289,7 +289,7 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 		goto cleanup;
 
 	vp = ni.ni_vp;
-	NDFREE(&ni, NDF_ONLY_PNBUF);
+	NDFREE_PNBUF(&ni);
 
 	/*
 	 * From here on down, we have a locked vnode that must be unlocked.
@@ -720,6 +720,11 @@ linux_newuname(struct thread *td, struct linux_newuname_args *args)
 	 * the string returned by getauxval(AT_PLATFORM) needs
 	 * to remain "i686", though.
 	 */
+#if defined(COMPAT_LINUX32)
+	if (linux32_emulate_i386)
+		strlcpy(utsname.machine, "i686", LINUX_MAX_UTSNAME);
+	else
+#endif
 	strlcpy(utsname.machine, "x86_64", LINUX_MAX_UTSNAME);
 #elif defined(__aarch64__)
 	strlcpy(utsname.machine, "aarch64", LINUX_MAX_UTSNAME);
@@ -988,35 +993,18 @@ linux_futimesat(struct thread *td, struct linux_futimesat_args *args)
 #endif
 
 static int
-linux_common_wait(struct thread *td, int pid, int *statusp,
-    int options, struct __wrusage *wrup)
+linux_common_wait(struct thread *td, idtype_t idtype, int id, int *statusp,
+    int options, void *rup, l_siginfo_t *infop)
 {
+	l_siginfo_t lsi;
 	siginfo_t siginfo;
-	idtype_t idtype;
-	id_t id;
-	int error, status, tmpstat;
+	struct __wrusage wru;
+	int error, status, tmpstat, sig;
 
-	if (pid == WAIT_ANY) {
-		idtype = P_ALL;
-		id = 0;
-	} else if (pid < 0) {
-		idtype = P_PGID;
-		id = (id_t)-pid;
-	} else {
-		idtype = P_PID;
-		id = (id_t)pid;
-	}
+	error = kern_wait6(td, idtype, id, &status, options,
+	    rup != NULL ? &wru : NULL, &siginfo);
 
-	/*
-	 * For backward compatibility we implicitly add flags WEXITED
-	 * and WTRAPPED here.
-	 */
-	options |= WEXITED | WTRAPPED;
-	error = kern_wait6(td, idtype, id, &status, options, wrup, &siginfo);
-	if (error)
-		return (error);
-
-	if (statusp) {
+	if (error == 0 && statusp) {
 		tmpstat = status & 0xffff;
 		if (WIFSIGNALED(tmpstat)) {
 			tmpstat = (tmpstat & 0xffffff80) |
@@ -1034,6 +1022,13 @@ linux_common_wait(struct thread *td, int pid, int *statusp,
 			tmpstat = 0xffff;
 		}
 		error = copyout(&tmpstat, statusp, sizeof(int));
+	}
+	if (error == 0 && rup != NULL)
+		error = linux_copyout_rusage(&wru.wru_self, rup);
+	if (error == 0 && infop != NULL && td->td_retval[0] != 0) {
+		sig = bsd_to_linux_signal(siginfo.si_signo);
+		siginfo_to_lsiginfo(&siginfo, &lsi, sig);
+		error = copyout(&lsi, infop, sizeof(lsi));
 	}
 
 	return (error);
@@ -1057,46 +1052,74 @@ linux_waitpid(struct thread *td, struct linux_waitpid_args *args)
 int
 linux_wait4(struct thread *td, struct linux_wait4_args *args)
 {
-	int error, options;
-	struct __wrusage wru, *wrup;
+	struct proc *p;
+	int options, id, idtype;
 
 	if (args->options & ~(LINUX_WUNTRACED | LINUX_WNOHANG |
 	    LINUX_WCONTINUED | __WCLONE | __WNOTHREAD | __WALL))
 		return (EINVAL);
 
-	options = WEXITED;
+	/* -INT_MIN is not defined. */
+	if (args->pid == INT_MIN)
+		return (ESRCH);
+
+	options = 0;
 	linux_to_bsd_waitopts(args->options, &options);
 
-	if (args->rusage != NULL)
-		wrup = &wru;
-	else
-		wrup = NULL;
-	error = linux_common_wait(td, args->pid, args->status, options, wrup);
-	if (error != 0)
-		return (error);
-	if (args->rusage != NULL)
-		error = linux_copyout_rusage(&wru.wru_self, args->rusage);
-	return (error);
+	/*
+	 * For backward compatibility we implicitly add flags WEXITED
+	 * and WTRAPPED here.
+	 */
+	options |= WEXITED | WTRAPPED;
+
+	/*
+	 * As FreeBSD does not have __WALL option bit analogue explicitly set all
+	 * possible option bits to emulate Linux __WALL wait option bit. The same
+	 * for waitid system call.
+	 */
+	if ((args->options & __WALL) != 0)
+		options |= WUNTRACED | WCONTINUED | WLINUXCLONE;
+
+	if (args->pid == WAIT_ANY) {
+		idtype = P_ALL;
+		id = 0;
+	} else if (args->pid < 0) {
+		idtype = P_PGID;
+		id = (id_t)-args->pid;
+	} else if (args->pid == 0) {
+		idtype = P_PGID;
+		p = td->td_proc;
+		PROC_LOCK(p);
+		id = p->p_pgid;
+		PROC_UNLOCK(p);
+	} else {
+		idtype = P_PID;
+		id = (id_t)args->pid;
+	}
+
+	return (linux_common_wait(td, idtype, id, args->status, options,
+	    args->rusage, NULL));
 }
 
 int
 linux_waitid(struct thread *td, struct linux_waitid_args *args)
 {
-	int status, options, sig;
-	struct __wrusage wru;
-	siginfo_t siginfo;
-	l_siginfo_t lsi;
 	idtype_t idtype;
-	int error;
+	int error, options;
+	struct proc *p;
+	pid_t id;
+
+	if (args->options & ~(LINUX_WNOHANG | LINUX_WNOWAIT | LINUX_WEXITED |
+	    LINUX_WSTOPPED | LINUX_WCONTINUED | __WCLONE | __WNOTHREAD | __WALL))
+		return (EINVAL);
 
 	options = 0;
 	linux_to_bsd_waitopts(args->options, &options);
+	if ((args->options & __WALL) != 0)
+		options |= WEXITED | WTRAPPED | WUNTRACED |
+		    WCONTINUED | WLINUXCLONE;
 
-	if (options & ~(WNOHANG | WNOWAIT | WEXITED | WUNTRACED | WCONTINUED))
-		return (EINVAL);
-	if (!(options & (WEXITED | WUNTRACED | WCONTINUED)))
-		return (EINVAL);
-
+	id = args->id;
 	switch (args->idtype) {
 	case LINUX_P_ALL:
 		idtype = P_ALL;
@@ -1107,32 +1130,24 @@ linux_waitid(struct thread *td, struct linux_waitid_args *args)
 		idtype = P_PID;
 		break;
 	case LINUX_P_PGID:
-		if (args->id <= 0)
+		if (linux_use54(td) && args->id == 0) {
+			p = td->td_proc;
+			PROC_LOCK(p);
+			id = p->p_pgid;
+			PROC_UNLOCK(p);
+		} else if (args->id <= 0)
 			return (EINVAL);
 		idtype = P_PGID;
 		break;
+	case LINUX_P_PIDFD:
+		LINUX_RATELIMIT_MSG("unsupported waitid P_PIDFD idtype");
+		return (ENOSYS);
 	default:
 		return (EINVAL);
 	}
 
-	error = kern_wait6(td, idtype, args->id, &status, options,
-	    &wru, &siginfo);
-	if (error != 0)
-		return (error);
-	if (args->rusage != NULL) {
-		error = linux_copyout_rusage(&wru.wru_children,
-		    args->rusage);
-		if (error != 0)
-			return (error);
-	}
-	if (args->info != NULL) {
-		bzero(&lsi, sizeof(lsi));
-		if (td->td_retval[0] != 0) {
-			sig = bsd_to_linux_signal(siginfo.si_signo);
-			siginfo_to_lsiginfo(&siginfo, &lsi, sig);
-		}
-		error = copyout(&lsi, args->info, sizeof(lsi));
-	}
+	error = linux_common_wait(td, idtype, id, NULL, options,
+	    args->rusage, args->info);
 	td->td_retval[0] = 0;
 
 	return (error);
@@ -2364,7 +2379,7 @@ linux_pselect6(struct thread *td, struct linux_pselect6_args *args)
 {
 	struct l_timespec lts;
 	struct timespec ts, *tsp;
-	int error;
+	int error, error2;
 
 	if (args->tsp != NULL) {
 		error = copyin(args->tsp, &lts, sizeof(lts));
@@ -2379,13 +2394,11 @@ linux_pselect6(struct thread *td, struct linux_pselect6_args *args)
 
 	error = linux_common_pselect6(td, args->nfds, args->readfds,
 	    args->writefds, args->exceptfds, tsp, args->sig);
-	if (error != 0)
-		return (error);
 
 	if (args->tsp != NULL) {
-		error = native_to_linux_timespec(&lts, tsp);
-		if (error == 0)
-			error = copyout(&lts, args->tsp, sizeof(lts));
+		error2 = native_to_linux_timespec(&lts, tsp);
+		if (error2 == 0)
+			copyout(&lts, args->tsp, sizeof(lts));
 	}
 	return (error);
 }
@@ -2437,21 +2450,17 @@ linux_common_pselect6(struct thread *td, l_int nfds, l_fd_set *readfds,
 	error = kern_pselect(td, nfds, readfds, writefds,
 	    exceptfds, tvp, ssp, LINUX_NFDBITS);
 
-	if (error == 0 && tsp != NULL) {
-		if (td->td_retval[0] != 0) {
-			/*
-			 * Compute how much time was left of the timeout,
-			 * by subtracting the current time and the time
-			 * before we started the call, and subtracting
-			 * that result from the user-supplied value.
-			 */
-
-			microtime(&tv1);
-			timevalsub(&tv1, &tv0);
-			timevalsub(&utv, &tv1);
-			if (utv.tv_sec < 0)
-				timevalclear(&utv);
-		} else
+	if (tsp != NULL) {
+		/*
+		 * Compute how much time was left of the timeout,
+		 * by subtracting the current time and the time
+		 * before we started the call, and subtracting
+		 * that result from the user-supplied value.
+		 */
+		microtime(&tv1);
+		timevalsub(&tv1, &tv0);
+		timevalsub(&utv, &tv1);
+		if (utv.tv_sec < 0)
 			timevalclear(&utv);
 		TIMEVAL_TO_TIMESPEC(&utv, tsp);
 	}
@@ -2465,7 +2474,7 @@ linux_pselect6_time64(struct thread *td,
 {
 	struct l_timespec64 lts;
 	struct timespec ts, *tsp;
-	int error;
+	int error, error2;
 
 	if (args->tsp != NULL) {
 		error = copyin(args->tsp, &lts, sizeof(lts));
@@ -2480,13 +2489,11 @@ linux_pselect6_time64(struct thread *td,
 
 	error = linux_common_pselect6(td, args->nfds, args->readfds,
 	    args->writefds, args->exceptfds, tsp, args->sig);
-	if (error != 0)
-		return (error);
 
 	if (args->tsp != NULL) {
-		error = native_to_linux_timespec64(&lts, tsp);
-		if (error == 0)
-			error = copyout(&lts, args->tsp, sizeof(lts));
+		error2 = native_to_linux_timespec64(&lts, tsp);
+		if (error2 == 0)
+			copyout(&lts, args->tsp, sizeof(lts));
 	}
 	return (error);
 }
@@ -2695,34 +2702,34 @@ linux_tdfind(struct thread *td, lwpid_t tid, pid_t pid)
 
 	tdt = NULL;
 	if (tid == 0 || tid == td->td_tid) {
-		tdt = td;
-		PROC_LOCK(tdt->td_proc);
+		if (pid != -1 && td->td_proc->p_pid != pid)
+			return (NULL);
+		PROC_LOCK(td->td_proc);
+		return (td);
 	} else if (tid > PID_MAX)
-		tdt = tdfind(tid, pid);
-	else {
-		/*
-		 * Initial thread where the tid equal to the pid.
-		 */
-		p = pfind(tid);
-		if (p != NULL) {
-			if (SV_PROC_ABI(p) != SV_ABI_LINUX) {
-				/*
-				 * p is not a Linuxulator process.
-				 */
-				PROC_UNLOCK(p);
-				return (NULL);
-			}
-			FOREACH_THREAD_IN_PROC(p, tdt) {
-				em = em_find(tdt);
-				if (tid == em->em_tid)
-					return (tdt);
-			}
-			PROC_UNLOCK(p);
-		}
-		return (NULL);
-	}
+		return (tdfind(tid, pid));
 
-	return (tdt);
+	/*
+	 * Initial thread where the tid equal to the pid.
+	 */
+	p = pfind(tid);
+	if (p != NULL) {
+		if (SV_PROC_ABI(p) != SV_ABI_LINUX ||
+		    (pid != -1 && tid != pid)) {
+			/*
+			 * p is not a Linuxulator process.
+			 */
+			PROC_UNLOCK(p);
+			return (NULL);
+		}
+		FOREACH_THREAD_IN_PROC(p, tdt) {
+			em = em_find(tdt);
+			if (tid == em->em_tid)
+				return (tdt);
+		}
+		PROC_UNLOCK(p);
+	}
+	return (NULL);
 }
 
 void
@@ -2880,3 +2887,19 @@ linux_poll(struct thread *td, struct linux_poll_args *args)
 	    tsp, NULL, 0));
 }
 #endif /* __i386__ || __amd64__ */
+
+int
+linux_seccomp(struct thread *td, struct linux_seccomp_args *args)
+{
+
+	switch (args->op) {
+	case LINUX_SECCOMP_GET_ACTION_AVAIL:
+		return (EOPNOTSUPP);
+	default:
+		/*
+		 * Ignore unknown operations, just like Linux kernel built
+		 * without CONFIG_SECCOMP.
+		 */
+		return (EINVAL);
+	}
+}

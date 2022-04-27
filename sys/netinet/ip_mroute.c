@@ -300,7 +300,7 @@ VNET_DEFINE_STATIC(struct ifnet *, multicast_register_if);
 static u_long	X_ip_mcast_src(int);
 static int	X_ip_mforward(struct ip *, struct ifnet *, struct mbuf *,
 		    struct ip_moptions *);
-static int	X_ip_mrouter_done(void *);
+static int	X_ip_mrouter_done(void);
 static int	X_ip_mrouter_get(struct socket *, struct sockopt *);
 static int	X_ip_mrouter_set(struct socket *, struct sockopt *);
 static int	X_legal_vif_num(int);
@@ -316,7 +316,7 @@ static void	bw_upcalls_send(void);
 static int	del_bw_upcall(struct bw_upcall *);
 static int	del_mfc(struct mfcctl2 *);
 static int	del_vif(vifi_t);
-static int	del_vif_locked(vifi_t);
+static int	del_vif_locked(vifi_t, struct ifnet **);
 static void	expire_bw_upcalls_send(void *);
 static void	expire_mfc(struct mfc *);
 static void	expire_upcalls(void *);
@@ -431,7 +431,7 @@ X_ip_mrouter_set(struct socket *so, struct sockopt *sopt)
 	break;
 
     case MRT_DONE:
-	error = ip_mrouter_done(NULL);
+	error = ip_mrouter_done();
 	break;
 
     case MRT_ADD_VIF:
@@ -621,7 +621,8 @@ static void
 if_detached_event(void *arg __unused, struct ifnet *ifp)
 {
     vifi_t vifi;
-    u_long i;
+    u_long i, vifi_cnt = 0;
+    struct ifnet *free_ptr;
 
     MRW_WLOCK();
 
@@ -650,10 +651,20 @@ if_detached_event(void *arg __unused, struct ifnet *ifp)
 			}
 		}
 	}
-	del_vif_locked(vifi);
+	del_vif_locked(vifi, &free_ptr);
+	if (free_ptr != NULL)
+		vifi_cnt++;
     }
 
     MRW_WUNLOCK();
+
+    /*
+     * Free IFP. We don't have to use free_ptr here as it is the same
+     * that ifp. Perform free as many times as required in case
+     * refcount is greater than 1.
+     */
+    for (i = 0; i < vifi_cnt; i++)
+	    if_free(ifp);
 }
 
 static void
@@ -734,20 +745,16 @@ ip_mrouter_init(struct socket *so, int version)
  * Disable multicast forwarding.
  */
 static int
-X_ip_mrouter_done(void *locked)
+X_ip_mrouter_done(void)
 {
-    struct ifnet *ifp;
+    struct ifnet **ifps;
+    int nifp;
     u_long i;
     vifi_t vifi;
     struct bw_upcall *bu;
 
-    if (V_ip_mrouter == NULL) {
-	if (locked) {
-		struct epoch_tracker *mrouter_et = locked;
-		MROUTER_RUNLOCK_PARAM(mrouter_et);
-	}
-	return EINVAL;
-    }
+    if (V_ip_mrouter == NULL)
+	return (EINVAL);
 
     /*
      * Detach/disable hooks to the reset of the system.
@@ -756,18 +763,19 @@ X_ip_mrouter_done(void *locked)
     atomic_subtract_int(&ip_mrouter_cnt, 1);
     V_mrt_api_config = 0;
 
-    if (locked) {
-	struct epoch_tracker *mrouter_et = locked;
-	MROUTER_RUNLOCK_PARAM(mrouter_et);
-    }
-
-    MROUTER_WAIT();
+    /*
+     * Wait for all epoch sections to complete to ensure
+     * V_ip_mrouter = NULL is visible to others.
+     */
+    epoch_wait_preempt(net_epoch_preempt);
 
     /* Stop and drain task queue */
     taskqueue_block(V_task_queue);
     while (taskqueue_cancel(V_task_queue, &V_task, NULL)) {
     	taskqueue_drain(V_task_queue, &V_task);
     }
+
+    ifps = malloc(MAXVIFS * sizeof(*ifps), M_TEMP, M_WAITOK);
 
     MRW_WLOCK();
     taskqueue_cancel(V_task_queue, &V_task, NULL);
@@ -780,14 +788,17 @@ X_ip_mrouter_done(void *locked)
     mtx_destroy(&V_bw_upcalls_ring_mtx);
 
     /*
-     * For each phyint in use, disable promiscuous reception of all IP
-     * multicasts.
+     * For each phyint in use, prepare to disable promiscuous reception
+     * of all IP multicasts.  Defer the actual call until the lock is released;
+     * just record the list of interfaces while locked.  Some interfaces use
+     * sx locks in their ioctl routines, which is not allowed while holding
+     * a non-sleepable lock.
      */
-    for (vifi = 0; vifi < V_numvifs; vifi++) {
+    KASSERT(V_numvifs <= MAXVIFS, ("More vifs than possible"));
+    for (vifi = 0, nifp = 0; vifi < V_numvifs; vifi++) {
 	if (!in_nullhost(V_viftable[vifi].v_lcl_addr) &&
 		!(V_viftable[vifi].v_flags & (VIFF_TUNNEL | VIFF_REGISTER))) {
-	    ifp = V_viftable[vifi].v_ifp;
-	    if_allmulti(ifp, 0);
+	    ifps[nifp++] = V_viftable[vifi].v_ifp;
 	}
     }
     bzero((caddr_t)V_viftable, sizeof(*V_viftable) * MAXVIFS);
@@ -818,6 +829,14 @@ X_ip_mrouter_done(void *locked)
     mtx_destroy(&V_buf_ring_mtx);
 
     MRW_WUNLOCK();
+
+    /*
+     * Now drop our claim on promiscuous multicast on the interfaces recorded
+     * above.  This is safe to do now because ALLMULTI is reference counted.
+     */
+    for (vifi = 0; vifi < nifp; vifi++)
+	    if_allmulti(ifps[vifi], 0);
+    free(ifps, M_TEMP);
 
     CTR1(KTR_IPMF, "%s: done", __func__);
 
@@ -988,9 +1007,11 @@ add_vif(struct vifctl *vifcp)
  * Delete a vif from the vif table
  */
 static int
-del_vif_locked(vifi_t vifi)
+del_vif_locked(vifi_t vifi, struct ifnet **ifp_free)
 {
     struct vif *vifp;
+
+    *ifp_free = NULL;
 
     MRW_WLOCK_ASSERT();
 
@@ -1010,7 +1031,7 @@ del_vif_locked(vifi_t vifi)
 	if (vifp->v_ifp) {
 	    if (vifp->v_ifp == V_multicast_register_if)
 	        V_multicast_register_if = NULL;
-	    if_free(vifp->v_ifp);
+	    *ifp_free = vifp->v_ifp;
 	}
     }
 
@@ -1033,10 +1054,14 @@ static int
 del_vif(vifi_t vifi)
 {
     int cc;
+    struct ifnet *free_ptr;
 
     MRW_WLOCK();
-    cc = del_vif_locked(vifi);
+    cc = del_vif_locked(vifi, &free_ptr);
     MRW_WUNLOCK();
+
+    if (free_ptr)
+	    if_free(free_ptr);
 
     return cc;
 }
@@ -1113,6 +1138,7 @@ add_mfc(struct mfcctl2 *mfccp)
     struct rtdetq *rte;
     u_long hash = 0;
     u_short nstl;
+    struct epoch_tracker et;
 
     MRW_WLOCK();
     rt = mfc_find(&mfccp->mfcc_origin, &mfccp->mfcc_mcastgrp);
@@ -1133,6 +1159,7 @@ add_mfc(struct mfcctl2 *mfccp)
      */
     nstl = 0;
     hash = MFCHASH(mfccp->mfcc_origin, mfccp->mfcc_mcastgrp);
+    NET_EPOCH_ENTER(et);
     LIST_FOREACH(rt, &V_mfchashtbl[hash], mfc_hash) {
 	if (in_hosteq(rt->mfc_origin, mfccp->mfcc_origin) &&
 	    in_hosteq(rt->mfc_mcastgrp, mfccp->mfcc_mcastgrp) &&
@@ -1160,6 +1187,7 @@ add_mfc(struct mfcctl2 *mfccp)
 		}
 	}
     }
+    NET_EPOCH_EXIT(et);
 
     /*
      * It is possible that an entry is being inserted without an upcall
@@ -1537,6 +1565,7 @@ ip_mdq(struct mbuf *m, struct ifnet *ifp, struct mfc *rt, vifi_t xmt_vif)
     int plen = ntohs(ip->ip_len);
 
     MRW_LOCK_ASSERT();
+    NET_EPOCH_ASSERT();
 
     /*
      * If xmt_vif is not -1, send on only the requested vif.
@@ -1741,6 +1770,7 @@ send_packet(struct vif *vifp, struct mbuf *m)
 	int error __unused;
 
 	MRW_LOCK_ASSERT();
+	NET_EPOCH_ASSERT();
 
 	imo.imo_multicast_ifp  = vifp->v_ifp;
 	imo.imo_multicast_ttl  = mtod(m, struct ip *)->ip_ttl - 1;
@@ -2711,18 +2741,23 @@ static SYSCTL_NODE(_net_inet_ip, OID_AUTO, mfctable,
 static int
 sysctl_viflist(SYSCTL_HANDLER_ARGS)
 {
-	int error;
+	int error, i;
 
 	if (req->newptr)
 		return (EPERM);
 	if (V_viftable == NULL)		/* XXX unlocked */
 		return (0);
-	error = sysctl_wire_old_buffer(req, sizeof(*V_viftable) * MAXVIFS);
+	error = sysctl_wire_old_buffer(req, MROUTE_VIF_SYSCTL_LEN * MAXVIFS);
 	if (error)
 		return (error);
 
 	MRW_RLOCK();
-	error = SYSCTL_OUT(req, V_viftable, sizeof(*V_viftable) * MAXVIFS);
+	/* Copy out user-visible portion of vif entry. */
+	for (i = 0; i < MAXVIFS; i++) {
+		error = SYSCTL_OUT(req, &V_viftable[i], MROUTE_VIF_SYSCTL_LEN);
+		if (error)
+			break;
+	}
 	MRW_RUNLOCK();
 	return (error);
 }

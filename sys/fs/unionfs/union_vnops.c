@@ -76,8 +76,8 @@
 #endif
 
 #define KASSERT_UNIONFS_VNODE(vp) \
-	KASSERT(((vp)->v_op == &unionfs_vnodeops), \
-	    ("unionfs: it is not unionfs-vnode"))
+	VNASSERT(((vp)->v_op == &unionfs_vnodeops), vp, \
+	    ("%s: non-unionfs vnode", __func__))
 
 static int
 unionfs_lookup(struct vop_cachedlookup_args *ap)
@@ -1764,33 +1764,52 @@ unionfs_readlink(struct vop_readlink_args *ap)
 static int
 unionfs_getwritemount(struct vop_getwritemount_args *ap)
 {
+	struct unionfs_node *unp;
 	struct vnode   *uvp;
-	struct vnode   *vp;
+	struct vnode   *vp, *ovp;
 	int		error;
 
 	UNIONFS_INTERNAL_DEBUG("unionfs_getwritemount: enter\n");
 
 	error = 0;
 	vp = ap->a_vp;
+	uvp = NULLVP;
 
-	if (vp == NULLVP || (vp->v_mount->mnt_flag & MNT_RDONLY))
-		return (EACCES);
+	VI_LOCK(vp);
+	unp = VTOUNIONFS(vp);
+	if (unp != NULL)
+		uvp = unp->un_uppervp;
 
-	KASSERT_UNIONFS_VNODE(vp);
-
-	uvp = UNIONFSVPTOUPPERVP(vp);
-	if (uvp == NULLVP && VREG == vp->v_type)
-		uvp = UNIONFSVPTOUPPERVP(VTOUNIONFS(vp)->un_dvp);
-
-	if (uvp != NULLVP)
-		error = VOP_GETWRITEMOUNT(uvp, ap->a_mpp);
-	else {
+	/*
+	 * If our node has no upper vnode, check the parent directory.
+	 * We may be initiating a write operation that will produce a
+	 * new upper vnode through CoW.
+	 */
+	if (uvp == NULLVP && unp != NULL) {
+		ovp = vp;
+		vp = unp->un_dvp;
+		/*
+		 * Only the root vnode should have an empty parent, but it
+		 * should not have an empty uppervp, so we shouldn't get here.
+		 */
+		VNASSERT(vp != NULL, ovp, ("%s: NULL parent vnode", __func__));
+		VI_UNLOCK(ovp);
 		VI_LOCK(vp);
-		if (vp->v_holdcnt == 0)
-			error = EOPNOTSUPP;
-		else
+		unp = VTOUNIONFS(vp);
+		if (unp != NULL)
+			uvp = unp->un_uppervp;
+		if (uvp == NULLVP)
 			error = EACCES;
+	}
+
+	if (uvp != NULLVP) {
+		vholdnz(uvp);
 		VI_UNLOCK(vp);
+		error = VOP_GETWRITEMOUNT(uvp, ap->a_mpp);
+		vdrop(uvp);
+	} else {
+		VI_UNLOCK(vp);
+		*(ap->a_mpp) = NULL;
 	}
 
 	UNIONFS_INTERNAL_DEBUG("unionfs_getwritemount: leave (%d)\n", error);
@@ -1908,8 +1927,6 @@ unionfs_revlock(struct vnode *vp, int flags)
 static int
 unionfs_lock(struct vop_lock1_args *ap)
 {
-	struct mount   *mp;
-	struct unionfs_mount *ump;
 	struct unionfs_node *unp;
 	struct vnode   *vp;
 	struct vnode   *uvp;
@@ -1919,8 +1936,6 @@ unionfs_lock(struct vop_lock1_args *ap)
 	int		revlock;
 	int		interlock;
 	int		uhold;
-
-	KASSERT_UNIONFS_VNODE(ap->a_vp);
 
 	/*
 	 * TODO: rework the unionfs locking scheme.
@@ -1944,30 +1959,27 @@ unionfs_lock(struct vop_lock1_args *ap)
 	if ((flags & LK_INTERLOCK) == 0)
 		VI_LOCK(vp);
 
-	mp = vp->v_mount;
-	if (mp == NULL)
+	unp = VTOUNIONFS(vp);
+	if (unp == NULL)
 		goto unionfs_lock_null_vnode;
 
-	ump = MOUNTTOUNIONFSMOUNT(mp);
-	unp = VTOUNIONFS(vp);
-	if (ump == NULL || unp == NULL)
-		goto unionfs_lock_null_vnode;
+	KASSERT_UNIONFS_VNODE(ap->a_vp);
+
 	lvp = unp->un_lowervp;
 	uvp = unp->un_uppervp;
 
 	if ((revlock = unionfs_get_llt_revlock(vp, flags)) == 0)
 		panic("unknown lock type: 0x%x", flags & LK_TYPE_MASK);
 
-	if ((flags & LK_TYPE_MASK) != LK_DOWNGRADE &&
-	    (vp->v_iflag & VI_OWEINACT) != 0)
-		flags |= LK_NOWAIT;
-
 	/*
-	 * Sometimes, lower or upper is already exclusive locked.
-	 * (ex. vfs_domount: mounted vnode is already locked.)
+	 * During unmount, the root vnode lock may be taken recursively,
+	 * because it may share the same v_vnlock field as the vnode covered by
+	 * the unionfs mount.  The covered vnode is locked across VFS_UNMOUNT(),
+	 * and the same lock may be taken recursively here during vflush()
+	 * issued by unionfs_unmount().
 	 */
 	if ((flags & LK_TYPE_MASK) == LK_EXCLUSIVE &&
-	    vp == ump->um_rootvp)
+	    (vp->v_vflag & VV_ROOT) != 0)
 		flags |= LK_CANRECURSE;
 
 	if (lvp != NULLVP) {
@@ -2582,7 +2594,7 @@ unionfs_add_writecount(struct vop_add_writecount_args *ap)
 {
 	struct vnode *tvp, *vp;
 	struct unionfs_node *unp;
-	int error, writerefs;
+	int error, writerefs __diagused;
 
 	vp = ap->a_vp;
 	unp = VTOUNIONFS(vp);

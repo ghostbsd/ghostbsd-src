@@ -82,7 +82,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip_options.h>
-#include <netinet/ip_mroute.h>
 
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
@@ -239,6 +238,7 @@ ip_output_send(struct inpcb *inp, struct ifnet *ifp, struct mbuf *m,
 		 * packet.
 		 */
 		if (mst == NULL) {
+			m_freem(m);
 			error = EAGAIN;
 			goto done;
 		}
@@ -263,6 +263,7 @@ ip_output_send(struct inpcb *inp, struct ifnet *ifp, struct mbuf *m,
 		KASSERT(m->m_pkthdr.rcvif == NULL,
 		    ("trying to add a send tag to a forwarded packet"));
 		if (mst->ifp != ifp) {
+			m_freem(m);
 			error = EAGAIN;
 			goto done;
 		}
@@ -319,7 +320,6 @@ int
 ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
     struct ip_moptions *imo, struct inpcb *inp)
 {
-	MROUTER_RLOCK_TRACKER;
 	struct ip *ip;
 	struct ifnet *ifp = NULL;	/* keep compiler happy */
 	struct mbuf *m0;
@@ -513,7 +513,7 @@ again:
 	} else {
 		struct nhop_object *nh;
 
-		nh = fib4_lookup(M_GETFIB(m), ip->ip_dst, 0, NHR_NONE,
+		nh = fib4_lookup(M_GETFIB(m), dst->sin_addr, 0, NHR_NONE,
 		    m->m_pkthdr.flowid);
 		if (nh == NULL) {
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
@@ -607,7 +607,6 @@ again:
 			 * above, will be forwarded by the ip_input() routine,
 			 * if necessary.
 			 */
-			MROUTER_RLOCK();
 			if (V_ip_mrouter && (flags & IP_FORWARDING) == 0) {
 				/*
 				 * If rsvp daemon is not running, do not
@@ -619,12 +618,10 @@ again:
 					imo = NULL;
 				if (ip_mforward &&
 				    ip_mforward(ip, ifp, m, imo) != 0) {
-					MROUTER_RUNLOCK();
 					m_freem(m);
 					goto done;
 				}
 			}
-			MROUTER_RUNLOCK();
 		}
 
 		/*

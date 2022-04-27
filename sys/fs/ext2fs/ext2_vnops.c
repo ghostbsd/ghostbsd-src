@@ -339,7 +339,7 @@ ext2_access(struct vop_access_args *ap)
 	}
 
 	/* If immutable bit set, nobody gets to write it. */
-	if ((accmode & VWRITE) && (ip->i_flags & (SF_IMMUTABLE | SF_SNAPSHOT)))
+	if ((accmode & VWRITE) && (ip->i_flags & SF_IMMUTABLE))
 		return (EPERM);
 
 	error = vaccess(vp->v_type, ip->i_mode, ip->i_uid, ip->i_gid,
@@ -919,7 +919,7 @@ abortit:
 		if (error)
 			goto out;
 		VREF(tdvp);
-		error = relookup(tdvp, &tvp, tcnp);
+		error = vfs_relookup(tdvp, &tvp, tcnp);
 		if (error)
 			goto out;
 		vrele(tdvp);
@@ -1045,7 +1045,7 @@ abortit:
 	fcnp->cn_flags &= ~MODMASK;
 	fcnp->cn_flags |= LOCKPARENT | LOCKLEAF;
 	VREF(fdvp);
-	error = relookup(fdvp, &fvp, fcnp);
+	error = vfs_relookup(fdvp, &fvp, fcnp);
 	if (error == 0)
 		vrele(fdvp);
 	if (fvp != NULL) {

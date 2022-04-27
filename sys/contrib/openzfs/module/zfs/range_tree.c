@@ -78,7 +78,7 @@
 static inline void
 rs_copy(range_seg_t *src, range_seg_t *dest, range_tree_t *rt)
 {
-	ASSERT3U(rt->rt_type, <=, RANGE_SEG_NUM_TYPES);
+	ASSERT3U(rt->rt_type, <, RANGE_SEG_NUM_TYPES);
 	size_t size = 0;
 	switch (rt->rt_type) {
 	case RANGE_SEG32:
@@ -91,9 +91,9 @@ rs_copy(range_seg_t *src, range_seg_t *dest, range_tree_t *rt)
 		size = sizeof (range_seg_gap_t);
 		break;
 	default:
-		VERIFY(0);
+		__builtin_unreachable();
 	}
-	bcopy(src, dest, size);
+	memcpy(dest, src, size);
 }
 
 void
@@ -188,8 +188,8 @@ range_tree_seg_gap_compare(const void *x1, const void *x2)
 }
 
 range_tree_t *
-range_tree_create_impl(range_tree_ops_t *ops, range_seg_type_t type, void *arg,
-    uint64_t start, uint64_t shift,
+range_tree_create_impl(const range_tree_ops_t *ops, range_seg_type_t type,
+    void *arg, uint64_t start, uint64_t shift,
     int (*zfs_btree_compare) (const void *, const void *),
     uint64_t gap)
 {
@@ -232,7 +232,7 @@ range_tree_create_impl(range_tree_ops_t *ops, range_seg_type_t type, void *arg,
 }
 
 range_tree_t *
-range_tree_create(range_tree_ops_t *ops, range_seg_type_t type,
+range_tree_create(const range_tree_ops_t *ops, range_seg_type_t type,
     void *arg, uint64_t start, uint64_t shift)
 {
 	return (range_tree_create_impl(ops, type, arg, start, shift, NULL, 0));
@@ -701,7 +701,7 @@ range_tree_vacate(range_tree_t *rt, range_tree_func_t *func, void *arg)
 		zfs_btree_clear(&rt->rt_root);
 	}
 
-	bzero(rt->rt_histogram, sizeof (rt->rt_histogram));
+	memset(rt->rt_histogram, 0, sizeof (rt->rt_histogram));
 	rt->rt_space = 0;
 }
 
@@ -741,7 +741,6 @@ range_tree_is_empty(range_tree_t *rt)
 	return (range_tree_space(rt) == 0);
 }
 
-/* ARGSUSED */
 void
 rt_btree_create(range_tree_t *rt, void *arg)
 {
@@ -764,35 +763,34 @@ rt_btree_create(range_tree_t *rt, void *arg)
 	zfs_btree_create(size_tree, rt->rt_btree_compare, size);
 }
 
-/* ARGSUSED */
 void
 rt_btree_destroy(range_tree_t *rt, void *arg)
 {
+	(void) rt;
 	zfs_btree_t *size_tree = arg;
 	ASSERT0(zfs_btree_numnodes(size_tree));
 
 	zfs_btree_destroy(size_tree);
 }
 
-/* ARGSUSED */
 void
 rt_btree_add(range_tree_t *rt, range_seg_t *rs, void *arg)
 {
+	(void) rt;
 	zfs_btree_t *size_tree = arg;
 
 	zfs_btree_add(size_tree, rs);
 }
 
-/* ARGSUSED */
 void
 rt_btree_remove(range_tree_t *rt, range_seg_t *rs, void *arg)
 {
+	(void) rt;
 	zfs_btree_t *size_tree = arg;
 
 	zfs_btree_remove(size_tree, rs);
 }
 
-/* ARGSUSED */
 void
 rt_btree_vacate(range_tree_t *rt, void *arg)
 {
@@ -803,7 +801,7 @@ rt_btree_vacate(range_tree_t *rt, void *arg)
 	rt_btree_create(rt, arg);
 }
 
-range_tree_ops_t rt_btree_ops = {
+const range_tree_ops_t rt_btree_ops = {
 	.rtop_create = rt_btree_create,
 	.rtop_destroy = rt_btree_destroy,
 	.rtop_add = rt_btree_add,

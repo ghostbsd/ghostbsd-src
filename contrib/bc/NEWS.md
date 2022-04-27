@@ -1,5 +1,28 @@
 # News
 
+## 5.2.4
+
+This is a production release that fixes two bugs in history:
+
+* Without prompt, the cursor could not be placed on the first character in a
+  line.
+* Home and End key handling in `tmux` was fixed.
+
+Any users that do not care about these improvements do not need to upgrade.
+
+## 5.2.3
+
+This is a production release that fixes one bug, a parse error when passing a
+file to `bc` using `-f` if that file had a multiline comment or string in it.
+
+## 5.2.2
+
+This is a production release that fixes one bug, a segmentation fault if
+`argv[0]` equals `NULL`.
+
+This is not a critical bug; there will be no vulnerability as far as I can tell.
+There is no need to update if you do not wish to.
+
 ## 5.2.1
 
 This is a production release that fixes two parse bugs when in POSIX standard

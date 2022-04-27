@@ -256,9 +256,8 @@ unionfs_rem_cached_vnode(struct unionfs_node *unp, struct vnode *dvp)
  * This function will return with the caller's locks and references undone.
  */
 static void
-unionfs_nodeget_cleanup(struct vnode *vp, void *arg)
+unionfs_nodeget_cleanup(struct vnode *vp, struct unionfs_node *unp)
 {
-	struct unionfs_node *unp;
 
 	/*
 	 * Lock and reset the default vnode lock; vgone() expects a locked
@@ -278,7 +277,6 @@ unionfs_nodeget_cleanup(struct vnode *vp, void *arg)
 	vgone(vp);
 	vput(vp);
 
-	unp = arg;
 	if (unp->un_dvp != NULLVP)
 		vrele(unp->un_dvp);
 	if (unp->un_uppervp != NULLVP)
@@ -336,12 +334,6 @@ unionfs_nodeget(struct mount *mp, struct vnode *uppervp,
 		}
 	}
 
-	if ((uppervp == NULLVP || ump->um_uppervp != uppervp) ||
-	    (lowervp == NULLVP || ump->um_lowervp != lowervp)) {
-		/* dvp will be NULLVP only in case of root vnode. */
-		if (dvp == NULLVP)
-			return (EINVAL);
-	}
 	unp = malloc(sizeof(struct unionfs_node),
 	    M_UNIONFSNODE, M_WAITOK | M_ZERO);
 
@@ -383,14 +375,25 @@ unionfs_nodeget(struct mount *mp, struct vnode *uppervp,
 	vp->v_type = vt;
 	vp->v_data = unp;
 
-	if ((uppervp != NULLVP && ump->um_uppervp == uppervp) &&
-	    (lowervp != NULLVP && ump->um_lowervp == lowervp))
+	/*
+	 * TODO: This is an imperfect check, as there's no guarantee that
+	 * the underlying filesystems will always return vnode pointers
+	 * for the root inodes that match our cached values.  To reduce
+	 * the likelihood of failure, for example in the case where either
+	 * vnode has been forcibly doomed, we check both pointers and set
+	 * VV_ROOT if either matches.
+	 */
+	if (ump->um_uppervp == uppervp || ump->um_lowervp == lowervp)
 		vp->v_vflag |= VV_ROOT;
+	KASSERT(dvp != NULL || (vp->v_vflag & VV_ROOT) != 0,
+	    ("%s: NULL dvp for non-root vp %p", __func__, vp));
 
 	vn_lock_pair(lowervp, false, uppervp, false); 
-	error = insmntque1(vp, mp, unionfs_nodeget_cleanup, unp);
-	if (error != 0)
+	error = insmntque1(vp, mp);
+	if (error != 0) {
+		unionfs_nodeget_cleanup(vp, unp);
 		return (error);
+	}
 	if (lowervp != NULL && VN_IS_DOOMED(lowervp)) {
 		vput(lowervp);
 		unp->un_lowervp = NULL;
@@ -439,7 +442,16 @@ unionfs_noderem(struct vnode *vp)
 	int		count;
 	int		writerefs;
 
-	KASSERT(vp->v_vnlock->lk_recurse == 0,
+	/*
+	 * The root vnode lock may be recursed during unmount, because
+	 * it may share the same lock as the unionfs mount's covered vnode,
+	 * which is locked across VFS_UNMOUNT().  This lock will then be
+	 * recursively taken during the vflush() issued by unionfs_unmount().
+	 * But we still only need to lock the unionfs lock once, because only
+	 * one of those lock operations was taken against a unionfs vnode and
+	 * will be undone against a unionfs vnode.
+	 */
+	KASSERT(vp->v_vnlock->lk_recurse == 0 || (vp->v_vflag & VV_ROOT) != 0,
 	    ("%s: vnode %p locked recursively", __func__, vp));
 	if (lockmgr(&vp->v_lock, LK_EXCLUSIVE | LK_NOWAIT, NULL) != 0)
 		panic("%s: failed to acquire lock for vnode lock", __func__);
@@ -669,7 +681,7 @@ unionfs_relookup(struct vnode *dvp, struct vnode **vpp,
 	vref(dvp);
 	VOP_UNLOCK(dvp);
 
-	if ((error = relookup(dvp, vpp, cn))) {
+	if ((error = vfs_relookup(dvp, vpp, cn))) {
 		vn_lock(dvp, LK_EXCLUSIVE | LK_RETRY);
 	} else
 		vrele(dvp);
@@ -818,7 +830,7 @@ unionfs_node_update(struct unionfs_node *unp, struct vnode *uvp,
 	VNASSERT(vp->v_writecount == 0, vp,
 	    ("%s: non-zero writecount", __func__));
 	/*
-	 * Uppdate the upper vnode's lock state to match the lower vnode,
+	 * Update the upper vnode's lock state to match the lower vnode,
 	 * and then switch the unionfs vnode's lock to the upper vnode.
 	 */
 	lockrec = lvp->v_vnlock->lk_recurse;
@@ -1016,7 +1028,7 @@ unionfs_vn_create_on_upper(struct vnode **vpp, struct vnode *udvp,
 	NDPREINIT(&nd);
 
 	vref(udvp);
-	if ((error = relookup(udvp, &vp, &nd.ni_cnd)) != 0)
+	if ((error = vfs_relookup(udvp, &vp, &nd.ni_cnd)) != 0)
 		goto unionfs_vn_create_on_upper_free_out2;
 	vrele(udvp);
 

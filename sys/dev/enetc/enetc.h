@@ -52,8 +52,7 @@ struct enetc_tx_queue {
 	union enetc_tx_bd	*ring;
 	uint64_t		ring_paddr;
 
-	qidx_t			next_to_clean;
-	bool			ring_full;
+	qidx_t			cidx;
 
 	struct if_irq		irq;
 };
@@ -140,7 +139,7 @@ struct enetc_softc {
 
 /*
  * Up to 4096 transmit/receive descriptors are supported,
- * their number has to be a multple of 64.
+ * their number has to be a multiple of 64.
  */
 #define ENETC_MIN_DESC		64
 #define ENETC_MAX_DESC		4096

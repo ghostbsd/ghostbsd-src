@@ -125,7 +125,7 @@
  * Upper region:    0xffffffffffffffff  Top of virtual memory
  *
  *                  0xfffffeffffffffff  End of DMAP
- *                  0xfffffd0000000000  Start of DMAP
+ *                  0xfffffa0000000000  Start of DMAP
  *
  *                  0xffff007fffffffff  End of KVA
  *                  0xffff000000000000  Kernel base address & start of KVA
@@ -155,6 +155,9 @@
 /* 512 GiB of kernel addresses */
 #define	VM_MIN_KERNEL_ADDRESS	(0xffff000000000000UL)
 #define	VM_MAX_KERNEL_ADDRESS	(0xffff008000000000UL)
+
+/* The address bits that hold a pointer authentication code */
+#define	PAC_ADDR_MASK		(0xff7f000000000000UL)
 
 /* If true addr is in the kernel address space */
 #define	ADDR_IS_KERNEL(addr)	(((addr) & (1ul << 55)) == (1ul << 55))

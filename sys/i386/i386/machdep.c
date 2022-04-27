@@ -188,6 +188,8 @@ struct kva_md_info kmi;
 static struct trapframe proc0_tf;
 struct pcpu __pcpu[MAXCPU];
 
+static void i386_clock_source_init(void);
+
 struct mtx icu_lock;
 
 struct mem_range_softc mem_range_softc;
@@ -198,9 +200,15 @@ extern struct sysentvec elf32_freebsd_sysvec;
 
 /* Default init_ops implementation. */
 struct init_ops init_ops = {
-	.early_clock_source_init =	i8254_init,
+	.early_clock_source_init =	i386_clock_source_init,
 	.early_delay =			i8254_delay,
 };
+
+static void
+i386_clock_source_init(void)
+{
+	i8254_init();
+}
 
 static void
 cpu_startup(dummy)
@@ -895,7 +903,7 @@ getmemsize(int first)
 	u_long memtest;
 	vm_paddr_t physmap[PHYS_AVAIL_ENTRIES];
 	quad_t dcons_addr, dcons_size, physmem_tunable;
-	int hasbrokenint12, i, res;
+	int hasbrokenint12, i, res __diagused;
 	u_int extmem;
 	struct vm86frame vmf;
 	struct vm86context vmc;
@@ -1484,13 +1492,14 @@ init386(int first)
 	r_idt.rd_base = (int) idt;
 	lidt(&r_idt);
 
+	finishidentcpu();	/* Final stage of CPU initialization */
+
 	/*
 	 * Initialize the clock before the console so that console
 	 * initialization can use DELAY().
 	 */
 	clock_init();
 
-	finishidentcpu();	/* Final stage of CPU initialization */
 	i386_setidt2();
 	pmap_set_nx();
 	initializecpu();	/* Initialize CPU registers */

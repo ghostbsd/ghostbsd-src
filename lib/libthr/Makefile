@@ -19,7 +19,6 @@ CFLAGS+=-DPTHREAD_KERNEL
 CFLAGS+=-I${SRCTOP}/lib/libc/include
 CFLAGS+=-I${SRCTOP}/lib/libc/${MACHINE_CPUARCH}
 CFLAGS+=-I${.CURDIR}/thread
-CFLAGS+=-I${SRCTOP}/include
 CFLAGS+=-I${.CURDIR}/arch/${MACHINE_CPUARCH}/include
 CFLAGS+=-I${.CURDIR}/sys
 CFLAGS+=-I${SRCTOP}/libexec/rtld-elf
@@ -34,6 +33,10 @@ CFLAGS.thr_symbols.c+=	-Wno-missing-variable-declarations
 # overflowed by handle_signal() reading from the ucontext_t argument. This
 # could be caused by ASAN not treating this function as a signal handler.
 CFLAGS.thr_sig.c+=	-fno-sanitize=address
+.endif
+
+.if ${MACHINE_CPUARCH} == "arm"
+NO_THREAD_UNWIND_STACK= yes
 .endif
 
 .ifndef NO_THREAD_UNWIND_STACK

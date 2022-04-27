@@ -61,6 +61,20 @@ typedef enum device_state {
 } device_state_t;
 
 /**
+ * @brief Device proprty types.
+ *
+ * Those are used by bus logic to encode requested properties,
+ * e.g. in DT all properties are stored as BE and need to be converted
+ * to host endianness.
+ */
+typedef enum device_property_type {
+	DEVICE_PROP_ANY = 0,
+	DEVICE_PROP_BUFFER = 1,
+	DEVICE_PROP_UINT32 = 2,
+	DEVICE_PROP_UINT64 = 3,
+} device_property_type_t;
+
+/**
  * @brief Device information exported to userspace.
  * The strings are placed one after the other, separated by NUL characters.
  * Fields should be added after the last one and order maintained for compatibility
@@ -129,6 +143,7 @@ struct devreq {
 #define	DEV_FREEZE	_IOW('D', 11, struct devreq)
 #define	DEV_THAW	_IOW('D', 12, struct devreq)
 #define	DEV_RESET	_IOW('D', 13, struct devreq)
+#define	DEV_GET_PATH	_IOWR('D', 14, struct devreq)
 
 /* Flags for DEV_DETACH and DEV_DISABLE. */
 #define	DEVF_FORCE_DETACH	0x0000001
@@ -443,6 +458,9 @@ bus_dma_tag_t
 bus_space_tag_t
 	bus_generic_get_bus_tag(device_t dev, device_t child);
 int	bus_generic_get_domain(device_t dev, device_t child, int *domain);
+ssize_t	bus_generic_get_property(device_t dev, device_t child,
+				 const char *propname, void *propvalue,
+				 size_t size, device_property_type_t type);
 struct resource_list *
 	bus_generic_get_resource_list(device_t, device_t);
 int	bus_generic_map_resource(device_t dev, device_t child, int type,
@@ -491,6 +509,8 @@ int	bus_generic_unmap_resource(device_t dev, device_t child, int type,
 				   struct resource_map *map);
 int	bus_generic_write_ivar(device_t dev, device_t child, int which,
 			       uintptr_t value);
+int	bus_generic_get_device_path(device_t bus, device_t child, const char *locator,
+				    struct sbuf *sb);
 int	bus_helper_reset_post(device_t dev, int flags);
 int	bus_helper_reset_prepare(device_t dev, int flags);
 int	bus_null_rescan(device_t dev);
@@ -631,7 +651,8 @@ int	device_set_unit(device_t dev, int unit);	/* XXX DONT USE XXX */
 int	device_shutdown(device_t dev);
 void	device_unbusy(device_t dev);
 void	device_verbose(device_t dev);
-ssize_t	device_get_property(device_t dev, const char *prop, void *val, size_t sz);
+ssize_t	device_get_property(device_t dev, const char *prop, void *val,
+    size_t sz, device_property_type_t type);
 bool device_has_property(device_t dev, const char *prop);
 
 /*
@@ -734,6 +755,10 @@ void	bus_data_generation_update(void);
 #define	BUS_PASS_ORDER_LATE	7
 #define	BUS_PASS_ORDER_LAST	9
 
+#define BUS_LOCATOR_ACPI	"ACPI"
+#define BUS_LOCATOR_FREEBSD	"FreeBSD"
+#define BUS_LOCATOR_UEFI	"UEFI"
+
 extern int bus_current_pass;
 
 void	bus_set_pass(int pass);
@@ -775,14 +800,17 @@ struct driver_module_data {
 	int		dmd_pass;
 };
 
-#define	EARLY_DRIVER_MODULE_ORDERED(name, busname, driver, devclass,	\
+#define	_DRIVER_MODULE_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, NAME, ...)	\
+	NAME
+
+#define	_EARLY_DRIVER_MODULE_ORDERED(name, busname, driver, devclass,	\
     evh, arg, order, pass)						\
 								\
 static struct driver_module_data name##_##busname##_driver_mod = {	\
 	evh, arg,							\
 	#busname,							\
 	(kobj_class_t) &driver,						\
-	&devclass,							\
+	devclass,							\
 	pass								\
 };									\
 									\
@@ -794,18 +822,57 @@ static moduledata_t name##_##busname##_mod = {				\
 DECLARE_MODULE(name##_##busname, name##_##busname##_mod,		\
 	       SI_SUB_DRIVERS, order)
 
-#define	EARLY_DRIVER_MODULE(name, busname, driver, devclass, evh, arg, pass) \
-	EARLY_DRIVER_MODULE_ORDERED(name, busname, driver, devclass,	\
+#define	EARLY_DRIVER_MODULE_ORDERED7(name, busname, driver, evh, arg,	\
+    order, pass)							\
+	_EARLY_DRIVER_MODULE_ORDERED(name, busname, driver, NULL, evh,	\
+	    arg, order, pass)
+
+#define	EARLY_DRIVER_MODULE_ORDERED8(name, busname, driver, devclass,	\
+    evh, arg, order, pass)						\
+	_EARLY_DRIVER_MODULE_ORDERED(name, busname, driver, &devclass,	\
+	    evh, arg, order, pass)
+
+#define	EARLY_DRIVER_MODULE_ORDERED(...)				\
+	_DRIVER_MODULE_MACRO(__VA_ARGS__, EARLY_DRIVER_MODULE_ORDERED8,	\
+	    EARLY_DRIVER_MODULE_ORDERED7)(__VA_ARGS__)
+
+#define	EARLY_DRIVER_MODULE7(name, busname, driver, devclass, evh, arg, pass) \
+	EARLY_DRIVER_MODULE_ORDERED8(name, busname, driver, devclass,	\
 	    evh, arg, SI_ORDER_MIDDLE, pass)
 
-#define	DRIVER_MODULE_ORDERED(name, busname, driver, devclass, evh, arg,\
+#define	EARLY_DRIVER_MODULE6(name, busname, driver, evh, arg, pass)	\
+	EARLY_DRIVER_MODULE_ORDERED7(name, busname, driver, evh, arg,	\
+	    SI_ORDER_MIDDLE, pass)
+
+#define	EARLY_DRIVER_MODULE(...)					\
+	_DRIVER_MODULE_MACRO(__VA_ARGS__, INVALID,			\
+	    EARLY_DRIVER_MODULE7, EARLY_DRIVER_MODULE6)(__VA_ARGS__)
+
+#define	DRIVER_MODULE_ORDERED7(name, busname, driver, devclass, evh, arg,\
     order)								\
-	EARLY_DRIVER_MODULE_ORDERED(name, busname, driver, devclass,	\
+	EARLY_DRIVER_MODULE_ORDERED8(name, busname, driver, devclass,	\
 	    evh, arg, order, BUS_PASS_DEFAULT)
 
-#define	DRIVER_MODULE(name, busname, driver, devclass, evh, arg)	\
-	EARLY_DRIVER_MODULE(name, busname, driver, devclass, evh, arg,	\
+#define	DRIVER_MODULE_ORDERED6(name, busname, driver, devclass, evh, arg,\
+    order)								\
+	EARLY_DRIVER_MODULE_ORDERED7(name, busname, driver, evh, arg,	\
+	    order, BUS_PASS_DEFAULT)
+
+#define	DRIVER_MODULE_ORDERED(...)					\
+	_DRIVER_MODULE_MACRO(__VA_ARGS__, INVALID,			\
+	    DRIVER_MODULE_ORDERED7, DRIVER_MODULE_ORDERED6)(__VA_ARGS__)
+
+#define	DRIVER_MODULE6(name, busname, driver, devclass, evh, arg)	\
+	EARLY_DRIVER_MODULE7(name, busname, driver, devclass, evh, arg,	\
 	    BUS_PASS_DEFAULT)
+
+#define	DRIVER_MODULE5(name, busname, driver, evh, arg)			\
+	EARLY_DRIVER_MODULE6(name, busname, driver, evh, arg,		\
+	    BUS_PASS_DEFAULT)
+
+#define	DRIVER_MODULE(...)						\
+	_DRIVER_MODULE_MACRO(__VA_ARGS__, INVALID, INVALID,		\
+	    DRIVER_MODULE6, DRIVER_MODULE5)(__VA_ARGS__)
 
 /**
  * Generic ivar accessor generation macros for bus drivers
@@ -834,6 +901,13 @@ static __inline void varp ## _set_ ## var(device_t dev, type t)		\
 	    __func__, device_get_nameunit(dev),				\
 	    device_get_nameunit(device_get_parent(dev)), e));		\
 }
+
+struct device_location_cache;
+typedef struct device_location_cache device_location_cache_t;
+device_location_cache_t *dev_wired_cache_init(void);
+void dev_wired_cache_fini(device_location_cache_t *dcp);
+bool dev_wired_cache_match(device_location_cache_t *dcp, device_t dev, const char *at);
+
 
 /**
  * Shorthand macros, taking resource argument

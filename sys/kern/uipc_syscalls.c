@@ -785,8 +785,10 @@ kern_sendit(struct thread *td, int s, struct msghdr *mp, int flags,
 	len = auio.uio_resid;
 	error = sosend(so, mp->msg_name, &auio, 0, control, flags, td);
 	if (error != 0) {
-		if (auio.uio_resid != len && (error == ERESTART ||
-		    error == EINTR || error == EWOULDBLOCK))
+		if (auio.uio_resid != len &&
+		    (so->so_proto->pr_flags & PR_ATOMIC) == 0 &&
+		    (error == ERESTART || error == EINTR ||
+		    error == EWOULDBLOCK))
 			error = 0;
 		/* Generation of SIGPIPE can be controlled per socket */
 		if (error == EPIPE && !(so->so_options & SO_NOSIGPIPE) &&
@@ -1419,7 +1421,7 @@ ogetsockname(struct thread *td, struct ogetsockname_args *uap)
 
 static int
 user_getpeername(struct thread *td, int fdes, struct sockaddr *asa,
-    socklen_t *alen, int compat)
+    socklen_t *alen, bool compat)
 {
 	struct sockaddr *sa;
 	socklen_t len;
@@ -1493,14 +1495,14 @@ done:
 int
 sys_getpeername(struct thread *td, struct getpeername_args *uap)
 {
-	return (user_getpeername(td, uap->fdes, uap->asa, uap->alen, 0));
+	return (user_getpeername(td, uap->fdes, uap->asa, uap->alen, false));
 }
 
 #ifdef COMPAT_OLDSOCK
 int
 ogetpeername(struct thread *td, struct ogetpeername_args *uap)
 {
-	return (user_getpeername(td, uap->fdes, uap->asa, uap->alen, 1));
+	return (user_getpeername(td, uap->fdes, uap->asa, uap->alen, true));
 }
 #endif /* COMPAT_OLDSOCK */
 

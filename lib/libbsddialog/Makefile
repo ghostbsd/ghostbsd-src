@@ -22,7 +22,6 @@ INCS=	bsddialog.h \
 MAN=	bsddialog.3
 
 LIBADD=	ncursesw tinfow formw
-
-WARNS=	2
+CFLAGS+=	-D_XOPEN_SOURCE_EXTENDED
 
 .include <bsd.lib.mk>

@@ -23,8 +23,7 @@ options 	INTRNG			# Include INTRNG framework
 # RISC-V SBI console
 device		rcons
 
-# EXT_RESOURCES pseudo devices
-options 	EXT_RESOURCES
+# pseudo devices
 device		clk
 device		hwreset
 device		phy
@@ -99,3 +98,8 @@ nodevice	snd_cmi
 # Don't yet have hwpmc(4)
 nodevice	hwpmc
 nooptions 	HWPMC_HOOKS
+
+# riscv doesn't yet have atomic_testandset_int and atomic_testandclear_int.
+nodevice	ccr
+nodevice	cxgbe
+nodevice	cxgbev

@@ -34,6 +34,7 @@
 #define _TCP_LRO_H_
 
 #include <sys/time.h>
+#include <netinet/in.h>
 
 #ifndef TCP_LRO_ENTRIES
 /* Define default number of LRO entries per RX queue */
@@ -42,20 +43,20 @@
 
 /*
  * Flags for ACK entry for compression
- * the bottom 8 bits has the th_flags.
+ * the bottom 12 bits has the th_x2|th_flags.
  * LRO itself adds only the TSTMP flags
  * to indicate if either of the types
  * of timestamps are filled and the
  * HAS_TSTMP option to indicate if the
  * TCP timestamp option is valid.
  *
- * The other 5 flag bits are for processing
+ * The other 1 flag bits are for processing
  * by a stack.
  *
  */
-#define TSTMP_LRO		0x0100
-#define TSTMP_HDWR		0x0200
-#define HAS_TSTMP		0x0400
+#define TSTMP_LRO		0x1000
+#define TSTMP_HDWR		0x2000
+#define HAS_TSTMP		0x4000
 /*
  * Default number of interrupts on the same cpu in a row
  * that will cause us to declare a "affinity cpu".
@@ -80,20 +81,12 @@ union lro_address {
 		uint16_t d_port;	/* destination TCP/UDP port */
 		uint32_t vxlan_vni;	/* VXLAN virtual network identifier */
 		union {
-#ifdef INET
 			struct in_addr v4;
-#endif
-#ifdef INET6
 			struct in6_addr v6;
-#endif
 		} s_addr;	/* source IPv4/IPv6 address */
 		union {
-#ifdef INET
 			struct in_addr v4;
-#endif
-#ifdef INET6
 			struct in6_addr v6;
-#endif
 		} d_addr;	/* destination IPv4/IPv6 address */
 	};
 } __aligned(sizeof(u_long));
@@ -146,9 +139,10 @@ struct lro_entry {
 	uint16_t		compressed;
 	uint16_t		uncompressed;
 	uint16_t		window;
-	uint8_t			flags;
-	uint8_t			timestamp : 1;
-	uint8_t			needs_merge : 1;
+	uint16_t		flags : 12,	/* 12 TCP header bits */
+				timestamp : 1,
+				needs_merge : 1,
+				reserved : 2;	/* unused */
 	struct bintime		alloc_time;	/* time when entry was allocated */
 };
 

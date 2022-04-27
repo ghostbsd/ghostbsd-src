@@ -605,7 +605,7 @@ hdaa_eld_dump(struct hdaa_widget *w)
 	struct hdaa_devinfo *devinfo = w->devinfo;
 	device_t dev = devinfo->dev;
 	uint8_t *sad;
-	int len, mnl, i, sadc, fmt;
+	int mnl, i, sadc, fmt;
 
 	if (w->eld == NULL || w->eld_len < 4)
 		return;
@@ -614,7 +614,6 @@ hdaa_eld_dump(struct hdaa_widget *w)
 	    w->nid, w->eld[0] >> 3, w->eld[2]);
 	if ((w->eld[0] >> 3) != 0x02)
 		return;
-	len = min(w->eld_len, (u_int)w->eld[2] * 4);
 	mnl = w->eld[4] & 0x1f;
 	device_printf(dev,
 	    "ELD nid=%d: CEA_EDID_Ver=%u MNL=%u\n",
@@ -3711,7 +3710,7 @@ hdaa_audio_adddac(struct hdaa_devinfo *devinfo, int asid)
 		    asid, as->index);
 	);
 
-	/* Find the exisitng DAC position and return if found more the one. */
+	/* Find the existing DAC position and return if found more the one. */
 	pos = -1;
 	for (i = 0; i < 16; i++) {
 		if (as->dacs[0][i] <= 0)

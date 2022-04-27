@@ -213,7 +213,8 @@ static struct {
 	{0, NULL}
 };
 
-extern int vlan_mtag_pcp;
+VNET_DECLARE(int, vlan_mtag_pcp);
+#define	V_vlan_mtag_pcp	VNET(vlan_mtag_pcp)
 
 static const char vlanname[] = "vlan";
 static MALLOC_DEFINE(M_VLAN, vlanname, "802.1Q Virtual LAN Interface");
@@ -1430,7 +1431,7 @@ vlan_input(struct ifnet *ifp, struct mbuf *m)
 		return;
 	}
 
-	if (vlan_mtag_pcp) {
+	if (V_vlan_mtag_pcp) {
 		/*
 		 * While uncommon, it is possible that we will find a 802.1q
 		 * packet encapsulated inside another packet that also had an
@@ -1937,14 +1938,18 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
 	struct ifnet *p;
 	struct ifreq *ifr;
+#ifdef INET
 	struct ifaddr *ifa;
+#endif
 	struct ifvlan *ifv;
 	struct ifvlantrunk *trunk;
 	struct vlanreq vlr;
 	int error = 0, oldmtu;
 
 	ifr = (struct ifreq *)data;
+#ifdef INET
 	ifa = (struct ifaddr *) data;
+#endif
 	ifv = ifp->if_softc;
 
 	switch (cmd) {

@@ -222,14 +222,16 @@ dev/ice/ice_nvm.c				optional ice pci \
 	compile-with "${NORMAL_C} -I$S/dev/ice"
 dev/ice/ice_sched.c				optional ice pci \
 	compile-with "${NORMAL_C} -I$S/dev/ice"
-dev/ice/ice_sriov.c				optional ice pci \
-	compile-with "${NORMAL_C} -I$S/dev/ice"
 dev/ice/ice_switch.c				optional ice pci \
 	compile-with "${NORMAL_C} -I$S/dev/ice"
-dev/ice/ice_vlan_mode.c		optional	ice pci \
+dev/ice/ice_vlan_mode.c				optional ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_fw_logging.c			optional ice pci \
+	compile-with "${NORMAL_C} -I$S/dev/ice"
+dev/ice/ice_fwlog.c				optional ice pci \
 	compile-with "${NORMAL_C} -I$S/dev/ice"
 ice_ddp.c					optional ice_ddp	\
-	compile-with	"${AWK} -f $S/tools/fw_stub.awk ice_ddp.fw:ice_ddp:0x01031800 -mice_ddp -c${.TARGET}"	\
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk ice_ddp.fw:ice_ddp:0x01031b00 -mice_ddp -c${.TARGET}"	\
 	no-ctfconvert no-implicit-rule before-depend local	\
 	clean		"ice_ddp.c"
 ice_ddp.fwo					optional ice_ddp	\
@@ -238,8 +240,8 @@ ice_ddp.fwo					optional ice_ddp	\
 	no-implicit-rule				\
 	clean		"ice_ddp.fwo"
 ice_ddp.fw					optional ice_ddp	\
-	dependency	"$S/contrib/dev/ice/ice-1.3.24.0.pkg" \
-	compile-with	"${CP} $S/contrib/dev/ice/ice-1.3.24.0.pkg ice_ddp.fw" \
+	dependency	"$S/contrib/dev/ice/ice-1.3.27.0.pkg" \
+	compile-with	"${CP} $S/contrib/dev/ice/ice-1.3.27.0.pkg ice_ddp.fw" \
 	no-obj no-implicit-rule				\
 	clean		"ice_ddp.fw"
 
@@ -298,7 +300,7 @@ dev/usb/controller/generic_ehci_fdt.c		optional ehci fdt
 dev/usb/controller/generic_ohci.c		optional ohci fdt
 dev/usb/controller/generic_usb_if.m		optional ohci fdt
 dev/usb/controller/musb_otg_allwinner.c		optional musb fdt soc_allwinner_a64
-dev/usb/controller/usb_nop_xceiv.c		optional fdt ext_resources
+dev/usb/controller/usb_nop_xceiv.c		optional fdt
 dev/usb/controller/generic_xhci.c		optional xhci
 dev/usb/controller/generic_xhci_acpi.c		optional xhci acpi
 dev/usb/controller/generic_xhci_fdt.c		optional xhci fdt
@@ -337,13 +339,13 @@ arm/allwinner/aw_rsb.c				optional aw_rsb fdt
 arm/allwinner/aw_rtc.c				optional aw_rtc fdt
 arm/allwinner/aw_sid.c				optional aw_sid nvmem fdt
 arm/allwinner/aw_spi.c				optional aw_spi fdt
-arm/allwinner/aw_syscon.c			optional aw_syscon ext_resources syscon fdt
+arm/allwinner/aw_syscon.c			optional aw_syscon syscon fdt
 arm/allwinner/aw_thermal.c			optional aw_thermal nvmem fdt
 arm/allwinner/aw_usbphy.c			optional ehci aw_usbphy fdt
 arm/allwinner/aw_usb3phy.c			optional xhci aw_usbphy fdt
 arm/allwinner/aw_wdog.c				optional aw_wdog fdt
 arm/allwinner/axp81x.c				optional axp81x fdt
-arm/allwinner/if_awg.c				optional awg ext_resources syscon aw_sid nvmem fdt
+arm/allwinner/if_awg.c				optional awg syscon aw_sid nvmem fdt
 
 # Allwinner clock driver
 arm/allwinner/clkng/aw_ccung.c			optional aw_ccu fdt

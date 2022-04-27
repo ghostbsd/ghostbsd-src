@@ -38,9 +38,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/linker.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <sys/capsicum.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <assert.h>
 #include <capsicum_helpers.h>
 #include <errno.h>
@@ -223,7 +225,6 @@ static struct iscsid_connection *
 connection_new(int iscsi_fd, const struct iscsi_daemon_request *request)
 {
 	struct iscsid_connection *conn;
-	struct iscsi_session_limits *isl;
 	struct addrinfo *from_ai, *to_ai;
 	const char *from_addr, *to_addr;
 #ifdef ICL_KERNEL_PROXY
@@ -246,38 +247,6 @@ connection_new(int iscsi_fd, const struct iscsi_daemon_request *request)
 	memcpy(&conn->conn.conn_isid, &request->idr_isid,
 	    sizeof(conn->conn.conn_isid));
 	conn->conn.conn_tsih = request->idr_tsih;
-
-	/*
-	 * Read the driver limits and provide reasonable defaults for the ones
-	 * the driver doesn't care about.  If a max_snd_dsl is not explicitly
-	 * provided by the driver then we'll make sure both conn->max_snd_dsl
-	 * and isl->max_snd_dsl are set to the rcv_dsl.  This preserves historic
-	 * behavior.
-	 */
-	isl = &conn->conn_limits;
-	memcpy(isl, &request->idr_limits, sizeof(*isl));
-	if (isl->isl_max_recv_data_segment_length == 0)
-		isl->isl_max_recv_data_segment_length = (1 << 24) - 1;
-	if (isl->isl_max_send_data_segment_length == 0)
-		isl->isl_max_send_data_segment_length =
-		    isl->isl_max_recv_data_segment_length;
-	if (isl->isl_max_burst_length == 0)
-		isl->isl_max_burst_length = (1 << 24) - 1;
-	if (isl->isl_first_burst_length == 0)
-		isl->isl_first_burst_length = (1 << 24) - 1;
-	if (isl->isl_first_burst_length > isl->isl_max_burst_length)
-		isl->isl_first_burst_length = isl->isl_max_burst_length;
-
-	/*
-	 * Limit default send length in case it won't be negotiated.
-	 * We can't do it for other limits, since they may affect both
-	 * sender and receiver operation, and we must obey defaults.
-	 */
-	if (conn->conn.conn_max_send_data_segment_length >
-	    isl->isl_max_send_data_segment_length) {
-		conn->conn.conn_max_send_data_segment_length =
-		    isl->isl_max_send_data_segment_length;
-	}
 
 	from_addr = conn->conn_conf.isc_initiator_addr;
 	to_addr = conn->conn_conf.isc_target_addr;
@@ -383,6 +352,34 @@ connection_new(int iscsi_fd, const struct iscsi_daemon_request *request)
 				    from_addr);
 		}
 	}
+	/*
+	 * Reduce TCP SYN_SENT timeout while
+	 * no connectivity exists, to allow
+	 * rapid reuse of the available slots.
+	 */
+	int keepinit = 0;
+	if (conn->conn_conf.isc_login_timeout > 0) {
+		keepinit = conn->conn_conf.isc_login_timeout;
+		log_debugx("session specific LoginTimeout at %d sec",
+			keepinit);
+	}
+	if (conn->conn_conf.isc_login_timeout == -1) {
+		int value;
+		size_t size = sizeof(value);
+		if (sysctlbyname("kern.iscsi.login_timeout",
+		    &value, &size, NULL, 0) == 0) {
+			keepinit = value;
+			log_debugx("global login_timeout at %d sec",
+				keepinit);
+		}
+	}
+	if (keepinit > 0) {
+		if (setsockopt(conn->conn.conn_socket,
+		    IPPROTO_TCP, TCP_KEEPINIT,
+		    &keepinit, sizeof(keepinit)) == -1)
+			log_warnx("setsockopt(TCP_KEEPINIT) "
+			    "failed for %s", to_addr);
+	}
 	if (from_ai != NULL) {
 		error = bind(conn->conn.conn_socket, from_ai->ai_addr,
 		    from_ai->ai_addrlen);
@@ -404,6 +401,56 @@ connection_new(int iscsi_fd, const struct iscsi_daemon_request *request)
 	freeaddrinfo(to_ai);
 
 	return (conn);
+}
+
+static void
+limits(struct iscsid_connection *conn)
+{
+	struct iscsi_daemon_limits idl;
+	struct iscsi_session_limits *isl;
+	int error;
+
+	log_debugx("fetching limits from the kernel");
+
+	memset(&idl, 0, sizeof(idl));
+	idl.idl_session_id = conn->conn_session_id;
+	idl.idl_socket = conn->conn.conn_socket;
+
+	error = ioctl(conn->conn_iscsi_fd, ISCSIDLIMITS, &idl);
+	if (error != 0)
+		log_err(1, "ISCSIDLIMITS");
+	
+	/*
+	 * Read the driver limits and provide reasonable defaults for the ones
+	 * the driver doesn't care about.  If a max_snd_dsl is not explicitly
+	 * provided by the driver then we'll make sure both conn->max_snd_dsl
+	 * and isl->max_snd_dsl are set to the rcv_dsl.  This preserves historic
+	 * behavior.
+	 */
+	isl = &conn->conn_limits;
+	memcpy(isl, &idl.idl_limits, sizeof(*isl));
+	if (isl->isl_max_recv_data_segment_length == 0)
+		isl->isl_max_recv_data_segment_length = (1 << 24) - 1;
+	if (isl->isl_max_send_data_segment_length == 0)
+		isl->isl_max_send_data_segment_length =
+		    isl->isl_max_recv_data_segment_length;
+	if (isl->isl_max_burst_length == 0)
+		isl->isl_max_burst_length = (1 << 24) - 1;
+	if (isl->isl_first_burst_length == 0)
+		isl->isl_first_burst_length = (1 << 24) - 1;
+	if (isl->isl_first_burst_length > isl->isl_max_burst_length)
+		isl->isl_first_burst_length = isl->isl_max_burst_length;
+
+	/*
+	 * Limit default send length in case it won't be negotiated.
+	 * We can't do it for other limits, since they may affect both
+	 * sender and receiver operation, and we must obey defaults.
+	 */
+	if (conn->conn.conn_max_send_data_segment_length >
+	    isl->isl_max_send_data_segment_length) {
+		conn->conn.conn_max_send_data_segment_length =
+		    isl->isl_max_send_data_segment_length;
+	}
 }
 
 static void
@@ -466,13 +513,19 @@ static void
 capsicate(struct iscsid_connection *conn)
 {
 	cap_rights_t rights;
+	const unsigned long cmds[] = {
 #ifdef ICL_KERNEL_PROXY
-	const unsigned long cmds[] = { ISCSIDCONNECT, ISCSIDSEND, ISCSIDRECEIVE,
-	    ISCSIDHANDOFF, ISCSIDFAIL, ISCSISADD, ISCSISREMOVE, ISCSISMODIFY };
-#else
-	const unsigned long cmds[] = { ISCSIDHANDOFF, ISCSIDFAIL, ISCSISADD,
-	    ISCSISREMOVE, ISCSISMODIFY };
+		ISCSIDCONNECT,
+		ISCSIDSEND,
+		ISCSIDRECEIVE,
 #endif
+		ISCSIDLIMITS,
+		ISCSIDHANDOFF,
+		ISCSIDFAIL,
+		ISCSISADD,
+		ISCSISREMOVE,
+		ISCSISMODIFY
+	};
 
 	cap_rights_init(&rights, CAP_IOCTL);
 	if (caph_rights_limit(conn->conn_iscsi_fd, &rights) < 0)
@@ -591,8 +644,9 @@ handle_request(int iscsi_fd, const struct iscsi_daemon_request *request, int tim
 	}
 
 	conn = connection_new(iscsi_fd, request);
-	set_timeout(timeout);
 	capsicate(conn);
+	limits(conn);
+	set_timeout(timeout);
 	login(conn);
 	if (conn->conn_conf.isc_discovery != 0)
 		discovery(conn);

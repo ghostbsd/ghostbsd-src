@@ -167,8 +167,8 @@ struct tls_session_params {
 #define	KTLS_RX		2
 
 struct iovec;
-struct ktls_ocf_session;
 struct ktls_ocf_encrypt_state;
+struct ktls_ocf_session;
 struct ktls_session;
 struct m_snd_tag;
 struct mbuf;
@@ -176,14 +176,6 @@ struct sockbuf;
 struct socket;
 
 struct ktls_session {
-	union {
-		int	(*sw_encrypt)(struct ktls_ocf_encrypt_state *state,
-		    struct ktls_session *tls, struct mbuf *m,
-		    struct iovec *outiov, int outiovcnt);
-		int	(*sw_decrypt)(struct ktls_session *tls,
-		    const struct tls_record_layer *hdr, struct mbuf *m,
-		    uint64_t seqno, int *trailer_len);
-	};
 	struct ktls_ocf_session *ocf_session;
 	struct m_snd_tag *snd_tag;
 	struct tls_session_params params;
@@ -213,12 +205,14 @@ int ktls_enable_tx(struct socket *so, struct tls_enable *en);
 void ktls_destroy(struct ktls_session *tls);
 void ktls_frame(struct mbuf *m, struct ktls_session *tls, int *enqueue_cnt,
     uint8_t record_type);
+bool ktls_permit_empty_frames(struct ktls_session *tls);
 void ktls_seq(struct sockbuf *sb, struct mbuf *m);
 void ktls_enqueue(struct mbuf *m, struct socket *so, int page_count);
 void ktls_enqueue_to_free(struct mbuf *m);
 int ktls_get_rx_mode(struct socket *so, int *modep);
 int ktls_set_tx_mode(struct socket *so, int mode);
 int ktls_get_tx_mode(struct socket *so, int *modep);
+int ktls_get_rx_sequence(struct inpcb *inp, uint32_t *tcpseq, uint64_t *tlsseq);
 int ktls_output_eagain(struct inpcb *inp, struct ktls_session *tls);
 #ifdef RATELIMIT
 int ktls_modify_txrtlmt(struct ktls_session *tls, uint64_t max_pacing_rate);

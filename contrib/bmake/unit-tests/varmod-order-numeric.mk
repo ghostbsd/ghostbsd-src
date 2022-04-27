@@ -1,4 +1,4 @@
-# $NetBSD: varmod-order-numeric.mk,v 1.5 2021/08/03 04:46:49 rillig Exp $
+# $NetBSD: varmod-order-numeric.mk,v 1.7 2022/02/09 21:09:24 rillig Exp $
 #
 # Tests for the variable modifiers ':On', which returns the words, sorted in
 # ascending numeric order, and for ':Orn' and ':Onr', which additionally
@@ -8,9 +8,8 @@
 # from 2021-07-30.
 
 # This list contains only 32-bit numbers since the make code needs to conform
-# to C90, which does not provide integer types larger than 32 bit.  It uses
-# 'long long' by default, but that type is overridable if necessary to support
-# older environments.
+# to C90, which does not necessarily provide integer types larger than 32 bit.
+# Make uses 'long long' for C99 or later, and 'long' for older C versions.
 #
 # To get 53-bit integers even in C90, it would be possible to switch to
 # 'double' instead, but that would allow floating-point numbers as well, which
@@ -33,7 +32,7 @@ NUMBERS=	3 5 7 1 42 -42 5K -3m 1M 1k -2G
 # Duplicate numbers are preserved in the output.  In this case the
 # equal-valued numbers are spelled the same, so they are indistinguishable in
 # the output.
-DUPLICATES=	3 1 2 2 1 1	# https://oeis.org/A034002
+DUPLICATES=	3 1 2 2 1 1	# subsequence of https://oeis.org/A034002
 .if ${DUPLICATES:On} != "1 1 1 2 2 3"
 .  error ${DUPLICATES:On}
 .endif
@@ -45,7 +44,7 @@ SAME_VALUE:=	${:U 79 80 0x0050 81 :On}
 .  error ${SAME_VALUE}
 .endif
 
-# Hexadecimal and octal numbers are supported as well.
+# Hexadecimal and octal numbers can be sorted as well.
 MIXED_BASE=	0 010 0x7 9
 .if ${MIXED_BASE:On} != "0 0x7 010 9"
 .  error ${MIXED_BASE:On}

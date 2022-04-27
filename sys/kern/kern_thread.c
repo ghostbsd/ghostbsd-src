@@ -856,19 +856,28 @@ thread_cow_update(struct thread *td)
 	struct plimit *oldlimit;
 
 	p = td->td_proc;
-	oldlimit = NULL;
 	PROC_LOCK(p);
 	oldcred = crcowsync();
-	if (td->td_limit != p->p_limit) {
-		oldlimit = td->td_limit;
-		td->td_limit = lim_hold(p->p_limit);
-	}
+	oldlimit = lim_cowsync();
 	td->td_cowgen = p->p_cowgen;
 	PROC_UNLOCK(p);
 	if (oldcred != NULL)
 		crfree(oldcred);
 	if (oldlimit != NULL)
 		lim_free(oldlimit);
+}
+
+void
+thread_cow_synced(struct thread *td)
+{
+	struct proc *p;
+
+	p = td->td_proc;
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	MPASS(td->td_cowgen != p->p_cowgen);
+	MPASS(td->td_ucred == p->p_ucred);
+	MPASS(td->td_limit == p->p_limit);
+	td->td_cowgen = p->p_cowgen;
 }
 
 /*

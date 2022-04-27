@@ -404,6 +404,8 @@
         ..
         libsbuf
         ..
+        libsysdecode
+        ..
         libthr
             dlopen
             ..
@@ -441,6 +443,8 @@
         md5
         ..
         mdconfig
+        ..
+        newfs_msdos
         ..
         nvmecontrol
         ..
@@ -873,12 +877,14 @@
         apply
         ..
         awk
-	    bugs-fixed
-	    ..
-	    netbsd
-	    ..
+            bugs-fixed
+            ..
+            netbsd
+            ..
         ..
         basename
+        ..
+        bintrans
         ..
         bmake
             archives
@@ -1008,6 +1014,8 @@
         ..
         file2c
         ..
+        file
+        ..
         find
         ..
         fold
@@ -1081,10 +1089,6 @@
         truncate
         ..
         units
-        ..
-        uudecode
-        ..
-        uuencode
         ..
         unifdef
         ..

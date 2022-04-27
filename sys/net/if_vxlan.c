@@ -363,7 +363,7 @@ static int	vxlan_encap6(struct vxlan_softc *,
 		    const union vxlan_sockaddr *, struct mbuf *);
 static int	vxlan_transmit(struct ifnet *, struct mbuf *);
 static void	vxlan_qflush(struct ifnet *);
-static void	vxlan_rcv_udp_packet(struct mbuf *, int, struct inpcb *,
+static bool	vxlan_rcv_udp_packet(struct mbuf *, int, struct inpcb *,
 		    const struct sockaddr *, void *);
 static int	vxlan_input(struct vxlan_socket *, uint32_t, struct mbuf **,
 		    const struct sockaddr *);
@@ -2758,7 +2758,7 @@ vxlan_qflush(struct ifnet *ifp __unused)
 {
 }
 
-static void
+static bool
 vxlan_rcv_udp_packet(struct mbuf *m, int offset, struct inpcb *inpcb,
     const struct sockaddr *srcsa, void *xvso)
 {
@@ -2802,6 +2802,8 @@ vxlan_rcv_udp_packet(struct mbuf *m, int offset, struct inpcb *inpcb,
 out:
 	if (m != NULL)
 		m_freem(m);
+
+	return (true);
 }
 
 static int
@@ -2814,12 +2816,16 @@ vxlan_input(struct vxlan_socket *vso, uint32_t vni, struct mbuf **m0,
 	struct ether_header *eh;
 	int error;
 
+	m = *m0;
+
+	if (m->m_pkthdr.len < ETHER_HDR_LEN)
+		return (EINVAL);
+
 	sc = vxlan_socket_lookup_softc(vso, vni);
 	if (sc == NULL)
 		return (ENOENT);
 
 	ifp = sc->vxl_ifp;
-	m = *m0;
 	eh = mtod(m, struct ether_header *);
 
 	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0) {
@@ -2859,8 +2865,9 @@ vxlan_input(struct vxlan_socket *vso, uint32_t vni, struct mbuf **m0,
 		m->m_pkthdr.csum_data = 0;
 	}
 
-	error = netisr_dispatch(NETISR_ETHER, m);
+	(*ifp->if_input)(ifp, m);
 	*m0 = NULL;
+	error = 0;
 
 out:
 	vxlan_release(sc);
@@ -3518,10 +3525,10 @@ vxlan_sysctl_setup(struct vxlan_softc *sc)
 	    OID_AUTO, "ftable", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 	SYSCTL_ADD_UINT(ctx, SYSCTL_CHILDREN(node), OID_AUTO, "count",
 	    CTLFLAG_RD, &sc->vxl_ftable_cnt, 0,
-	    "Number of entries in fowarding table");
+	    "Number of entries in forwarding table");
 	SYSCTL_ADD_UINT(ctx, SYSCTL_CHILDREN(node), OID_AUTO, "max",
 	     CTLFLAG_RD, &sc->vxl_ftable_max, 0,
-	    "Maximum number of entries allowed in fowarding table");
+	    "Maximum number of entries allowed in forwarding table");
 	SYSCTL_ADD_UINT(ctx, SYSCTL_CHILDREN(node), OID_AUTO, "timeout",
 	    CTLFLAG_RD, &sc->vxl_ftable_timeout, 0,
 	    "Number of seconds between prunes of the forwarding table");

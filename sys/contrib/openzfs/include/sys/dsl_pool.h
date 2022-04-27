@@ -60,7 +60,6 @@ struct dsl_deadlist;
 extern unsigned long zfs_dirty_data_max;
 extern unsigned long zfs_dirty_data_max_max;
 extern unsigned long zfs_wrlog_data_max;
-extern int zfs_dirty_data_sync_percent;
 extern int zfs_dirty_data_max_percent;
 extern int zfs_dirty_data_max_max_percent;
 extern int zfs_delay_min_dirty_percent;
@@ -163,6 +162,7 @@ int dsl_pool_sync_context(dsl_pool_t *dp);
 uint64_t dsl_pool_adjustedsize(dsl_pool_t *dp, zfs_space_check_t slop_policy);
 uint64_t dsl_pool_unreserved_space(dsl_pool_t *dp,
     zfs_space_check_t slop_policy);
+uint64_t dsl_pool_deferred_space(dsl_pool_t *dp);
 void dsl_pool_wrlog_count(dsl_pool_t *dp, int64_t size, uint64_t txg);
 boolean_t dsl_pool_wrlog_over_max(dsl_pool_t *dp);
 void dsl_pool_dirty_space(dsl_pool_t *dp, int64_t space, dmu_tx_t *tx);

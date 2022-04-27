@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-4-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (c) 1995-2022 Wolfram Schneider <wosch@FreeBSD.org>
  * Copyright (c) 1989, 1993
@@ -16,11 +16,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *      This product includes software developed by the University of
- *      California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -106,8 +102,8 @@ int f_icase;            /* ignore case */
 int f_stdin;            /* read database from stdin */
 int f_statistic;        /* print statistic */
 int f_silent;           /* suppress output, show only count of matches */
-int f_limit;            /* limit number of output lines, 0 == infinite */
-u_int counter;          /* counter for matches [-c] */
+long f_limit;           /* limit number of output lines, 0 == infinite */
+long counter;           /* counter for matches [-c] */
 char separator='\n';	/* line separator */
 
 u_char myctype[UCHAR_MAX + 1];
@@ -123,17 +119,18 @@ void	search_fopen(char *, char **);
 unsigned long cputime(void);
 
 extern char     **colon(char **, char*, char*);
-extern void     print_matches(u_int);
 extern int      getwm(caddr_t);
 extern int      getwf(FILE *);
 extern u_char   *tolower_word(u_char *);
 extern int	check_bigram_char(int);
 extern char 	*patprep(char *);
+extern void 	rebuild_message(char *db);
+extern int 	check_size(char *db);
 
 int
 main(int argc, char **argv)
 {
-        register int ch;
+        int ch;
         char **dbv = NULL;
 	char *path_fcodes;      /* locate database */
 #ifdef MMAP
@@ -150,7 +147,9 @@ main(int argc, char **argv)
                         f_statistic = 1;
                         break;
                 case 'l': /* limit number of output lines, 0 == infinite */
-                        f_limit = atoi(optarg);
+                        f_limit = atol(optarg);
+			if (f_limit < 0 ) 
+				errx(1, "invalid argument for -l: '%s'", optarg);
                         break;
                 case 'd':	/* database */
                         dbv = colon(dbv, optarg, _PATH_FCODES);
@@ -215,10 +214,9 @@ main(int argc, char **argv)
         }
 
         if (f_silent)
-                print_matches(counter);
+		printf("%ld\n", counter);
         exit(0);
 }
-
 
 /*
  * Arguments:
@@ -238,8 +236,16 @@ search_fopen(char *db, char **s)
 			*(s+1) = NULL;
 		}
 	} 
-	else if ((fp = fopen(db, "r")) == NULL)
-		err(1,  "`%s'", db);
+	else { 
+		if (!check_size(db))
+			exit(1);
+
+		if ((fp = fopen(db, "r")) == NULL) {
+			warn("`%s'", db);
+			rebuild_message(db);
+			exit(1);
+		}
+	}
 
 	/* count only chars or lines */
 	if (f_statistic) {
@@ -276,14 +282,20 @@ search_mmap(char *db, char **s)
         int fd;
         caddr_t p;
         off_t len;
-	if ((fd = open(db, O_RDONLY)) == -1 ||
-	    fstat(fd, &sb) == -1)
-		err(1, "`%s'", db);
+
+	if (!check_size(db))
+		exit(1);
+
+	if (stat(db, &sb) == -1)
+		err(1, "stat");
+
 	len = sb.st_size;
-	if (len < (2*NBG))
-		errx(1,
-		    "database too small: %s\nRun /usr/libexec/locate.updatedb",
-		    db);
+
+	if ((fd = open(db, O_RDONLY)) == -1) {
+		warn("%s", db);
+		rebuild_message(db);
+		exit(1);
+        }
 
 	if ((p = mmap((caddr_t)0, (size_t)len,
 		      PROT_READ, MAP_SHARED,

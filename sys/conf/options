@@ -105,7 +105,6 @@ COMPILING_LINT	opt_global.h
 CY_PCI_FASTINTR
 DEADLKRES	opt_watchdog.h
 EXPERIMENTAL	opt_global.h
-EXT_RESOURCES	opt_global.h
 DIRECTIO
 FILEMON		opt_dontuse.h
 FFCLOCK
@@ -587,7 +586,6 @@ IFMEDIA_DEBUG		opt_ifmedia.h
 
 # Fb options
 FB_DEBUG		opt_fb.h
-FB_INSTALL_CDEV		opt_fb.h
 
 # ppbus related options
 PERIPH_1284		opt_ppb_1284.h

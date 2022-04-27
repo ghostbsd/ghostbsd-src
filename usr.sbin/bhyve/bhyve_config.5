@@ -23,7 +23,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd September 25, 2021
+.Dd March 2, 2022
 .Dt BHYVE_CONFIG 5
 .Os
 .Sh NAME
@@ -448,6 +448,11 @@ The contents of this file are copied into the guest's
 memory ending just before the 4GB physical address.
 If a boot ROM is present, a firmware interface device is
 also enabled for use by the boot ROM.
+.It Va bootvars Ta path Ta Ta
+Path to boot VARS.
+The contents of this file are copied beneath the boot ROM.
+Firmware can write to it to save variables.
+All variables will be persistent even on reboots of the guest.
 .It Va com1 Ta node Ta Ta
 Settings for the COM1 serial port device.
 .It Va com2 Ta node Ta Ta
@@ -463,7 +468,7 @@ Enable the PC debug/test device.
 Each NVMe controller supports a single storage device.
 The device can be backed either by a memory disk described by the
 .Va ram
-variable, or a block device using the the block device settings described above.
+variable, or a block device using the block device settings described above.
 In addition, each controller supports the following settings:
 .Bl -column "ioslots" "Format" "Default"
 .It Sy Name Ta Sy Format Ta Sy Default Ta Sy Description
@@ -510,6 +515,8 @@ Host PCI bus address of device to pass through.
 Host PCI slot address of device to pass through.
 .It Va func Ta integer Ta Ta
 Host PCI function address of device to pass through.
+.It Va rom Ta path Ta Ta
+ROM file of the device which will be executed by OVMF to init the device.
 .El
 .Ss VirtIO 9p Settings
 Each VirtIO 9p device exposes a single filesystem from a host path.

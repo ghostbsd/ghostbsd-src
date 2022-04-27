@@ -82,6 +82,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_pcb.h>
 #include <netinet/in_systm.h>
 #include <netinet/in_var.h>
+#include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #ifdef INET6
 #include <netinet/ip6.h>
@@ -300,7 +301,9 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
 	int error = 0;
 	struct inpcb *inp;
+#ifdef KDTRACE_HOOKS
 	struct tcpcb *tp = NULL;
+#endif
 	struct sockaddr_in *sinp;
 
 	sinp = (struct sockaddr_in *)nam;
@@ -332,7 +335,9 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 		error = EINVAL;
 		goto out;
 	}
+#ifdef KDTRACE_HOOKS
 	tp = intotcpcb(inp);
+#endif
 	TCPDEBUG1();
 	INP_HASH_WLOCK(&V_tcbinfo);
 	error = in_pcbbind(inp, nam, td->td_ucred);
@@ -352,7 +357,9 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
 	int error = 0;
 	struct inpcb *inp;
+#ifdef KDTRACE_HOOKS
 	struct tcpcb *tp = NULL;
+#endif
 	struct sockaddr_in6 *sin6;
 	u_char vflagsav;
 
@@ -378,7 +385,9 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 		error = EINVAL;
 		goto out;
 	}
+#ifdef KDTRACE_HOOKS
 	tp = intotcpcb(inp);
+#endif
 	TCPDEBUG1();
 	INP_HASH_WLOCK(&V_tcbinfo);
 	inp->inp_vflag &= ~INP_IPV4;
@@ -791,7 +800,9 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 {
 	int error = 0;
 	struct inpcb *inp = NULL;
+#ifdef KDTRACE_HOOKS
 	struct tcpcb *tp = NULL;
+#endif
 	struct in_addr addr;
 	in_port_t port = 0;
 	TCPDEBUG0;
@@ -806,7 +817,9 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 		error = ECONNABORTED;
 		goto out;
 	}
+#ifdef KDTRACE_HOOKS
 	tp = intotcpcb(inp);
+#endif
 	TCPDEBUG1();
 
 	/*
@@ -833,7 +846,9 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 {
 	struct inpcb *inp = NULL;
 	int error = 0;
+#ifdef KDTRACE_HOOKS
 	struct tcpcb *tp = NULL;
+#endif
 	struct in_addr addr;
 	struct in6_addr addr6;
 	struct epoch_tracker et;
@@ -852,7 +867,9 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 		error = ECONNABORTED;
 		goto out;
 	}
+#ifdef KDTRACE_HOOKS
 	tp = intotcpcb(inp);
+#endif
 	TCPDEBUG1();
 
 	/*
@@ -1663,7 +1680,7 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 		ti->tcpi_snd_wscale = tp->snd_scale;
 		ti->tcpi_rcv_wscale = tp->rcv_scale;
 	}
-	if (tp->t_flags2 & TF2_ECN_PERMIT)
+	if (tp->t_flags2 & (TF2_ECN_PERMIT | TF2_ACE_PERMIT))
 		ti->tcpi_options |= TCPI_OPT_ECN;
 
 	ti->tcpi_rto = tp->t_rxtcur * tick;
@@ -1712,24 +1729,30 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 } while(0)
 #define INP_WLOCK_RECHECK(inp) INP_WLOCK_RECHECK_CLEANUP((inp), /* noop */)
 
-static int
+int
 tcp_ctloutput_set(struct inpcb *inp, struct sockopt *sopt)
 {
-	struct	tcpcb *tp = intotcpcb(inp);
+	struct socket *so = inp->inp_socket;
+	struct tcpcb *tp = intotcpcb(inp);
 	int error = 0;
 
 	MPASS(sopt->sopt_dir == SOPT_SET);
+	INP_WLOCK_ASSERT(inp);
+	KASSERT((inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) == 0,
+	    ("inp_flags == %x", inp->inp_flags));
+	KASSERT(so != NULL, ("inp_socket == NULL"));
 
 	if (sopt->sopt_level != IPPROTO_TCP) {
+		INP_WUNLOCK(inp);
 #ifdef INET6
 		if (inp->inp_vflag & INP_IPV6PROTO)
-			error = ip6_ctloutput(inp->inp_socket, sopt);
+			error = ip6_ctloutput(so, sopt);
 #endif
 #if defined(INET6) && defined(INET)
 		else
 #endif
 #ifdef INET
-			error = ip_ctloutput(inp->inp_socket, sopt);
+			error = ip_ctloutput(so, sopt);
 #endif
 		/*
 		 * When an IP-level socket option affects TCP, pass control
@@ -1757,6 +1780,8 @@ tcp_ctloutput_set(struct inpcb *inp, struct sockopt *sopt)
 		case IPPROTO_IP:
 			switch (sopt->sopt_name) {
 			case IP_TOS:
+				inp->inp_ip_tos &= ~IPTOS_ECN_MASK;
+				break;
 			case IP_TTL:
 				/* Notify tcp stacks that care (e.g. RACK). */
 				break;
@@ -1768,6 +1793,11 @@ tcp_ctloutput_set(struct inpcb *inp, struct sockopt *sopt)
 		default:
 			return (error);
 		}
+		INP_WLOCK(inp);
+		if (inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) {
+			INP_WUNLOCK(inp);
+			return (ECONNRESET);
+		}
 	} else if (sopt->sopt_name == TCP_FUNCTION_BLK) {
 		/*
 		 * Protect the TCP option TCP_FUNCTION_BLK so
@@ -1776,6 +1806,7 @@ tcp_ctloutput_set(struct inpcb *inp, struct sockopt *sopt)
 		struct tcp_function_set fsn;
 		struct tcp_function_block *blk;
 
+		INP_WUNLOCK(inp);
 		error = sooptcopyin(sopt, &fsn, sizeof fsn, sizeof fsn);
 		if (error)
 			return (error);
@@ -1851,8 +1882,8 @@ tcp_ctloutput_set(struct inpcb *inp, struct sockopt *sopt)
 					if((*tp->t_fb->tfb_tcp_fb_init)(tp) != 0)  {
 						/* Fall back failed, drop the connection */
 						INP_WUNLOCK(inp);
-						soabort(inp->inp_socket);
-						return(error);
+						soabort(so);
+						return (error);
 					}
 				}
 				goto err_out;
@@ -1871,44 +1902,37 @@ err_out:
 		return (error);
 	}
 
-	INP_WLOCK(inp);
-	if (inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) {
-		INP_WUNLOCK(inp);
-		return (ECONNRESET);
-	}
-	tp = intotcpcb(inp);
-
-	/* Pass in the INP locked, caller must unlock it. */
-	return (tp->t_fb->tfb_tcp_ctloutput(inp->inp_socket, sopt, inp, tp));
+	/* Pass in the INP locked, callee must unlock it. */
+	return (tp->t_fb->tfb_tcp_ctloutput(inp, sopt));
 }
 
 static int
 tcp_ctloutput_get(struct inpcb *inp, struct sockopt *sopt)
 {
-	int	error = 0;
-	struct	tcpcb *tp;
+	struct socket *so = inp->inp_socket;
+	struct tcpcb *tp = intotcpcb(inp);
+	int error = 0;
 
 	MPASS(sopt->sopt_dir == SOPT_GET);
+	INP_WLOCK_ASSERT(inp);
+	KASSERT((inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) == 0,
+	    ("inp_flags == %x", inp->inp_flags));
+	KASSERT(so != NULL, ("inp_socket == NULL"));
 
 	if (sopt->sopt_level != IPPROTO_TCP) {
+		INP_WUNLOCK(inp);
 #ifdef INET6
 		if (inp->inp_vflag & INP_IPV6PROTO)
-			error = ip6_ctloutput(inp->inp_socket, sopt);
+			error = ip6_ctloutput(so, sopt);
 #endif /* INET6 */
 #if defined(INET6) && defined(INET)
 		else
 #endif
 #ifdef INET
-			error = ip_ctloutput(inp->inp_socket, sopt);
+			error = ip_ctloutput(so, sopt);
 #endif
 		return (error);
 	}
-	INP_WLOCK(inp);
-	if (inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) {
-		INP_WUNLOCK(inp);
-		return (ECONNRESET);
-	}
-	tp = intotcpcb(inp);
 	if (((sopt->sopt_name == TCP_FUNCTION_BLK) ||
 	     (sopt->sopt_name == TCP_FUNCTION_ALIAS))) {
 		struct tcp_function_set fsn;
@@ -1928,8 +1952,8 @@ tcp_ctloutput_get(struct inpcb *inp, struct sockopt *sopt)
 		return (error);
 	}
 
-	/* Pass in the INP locked, caller must unlock it. */
-	return (tp->t_fb->tfb_tcp_ctloutput(inp->inp_socket, sopt, inp, tp));
+	/* Pass in the INP locked, callee must unlock it. */
+	return (tp->t_fb->tfb_tcp_ctloutput(inp, sopt));
 }
 
 int
@@ -1940,6 +1964,11 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("tcp_ctloutput: inp == NULL"));
 
+	INP_WLOCK(inp);
+	if (inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) {
+		INP_WUNLOCK(inp);
+		return (ECONNRESET);
+	}
 	if (sopt->sopt_dir == SOPT_SET)
 		return (tcp_ctloutput_set(inp, sopt));
 	else if (sopt->sopt_dir == SOPT_GET)
@@ -1991,10 +2020,11 @@ copyin_tls_enable(struct sockopt *sopt, struct tls_enable *tls)
 extern struct cc_algo newreno_cc_algo;
 
 static int
-tcp_congestion(struct socket *so, struct sockopt *sopt, struct inpcb *inp, struct tcpcb *tp)
+tcp_set_cc_mod(struct inpcb *inp, struct sockopt *sopt)
 {
 	struct cc_algo *algo;
 	void *ptr = NULL;
+	struct tcpcb *tp;
 	struct cc_var cc_mem;
 	char	buf[TCP_CA_NAME_MAX];
 	size_t mem_sz;
@@ -2006,7 +2036,7 @@ tcp_congestion(struct socket *so, struct sockopt *sopt, struct inpcb *inp, struc
 		return(error);
 	buf[sopt->sopt_valsize] = '\0';
 	CC_LIST_RLOCK();
-	STAILQ_FOREACH(algo, &cc_list, entries)
+	STAILQ_FOREACH(algo, &cc_list, entries) {
 		if (strncmp(buf, algo->name,
 			    TCP_CA_NAME_MAX) == 0) {
 			if (algo->flags & CC_MODULE_BEING_REMOVED) {
@@ -2015,30 +2045,24 @@ tcp_congestion(struct socket *so, struct sockopt *sopt, struct inpcb *inp, struc
 			}
 			break;
 		}
+	}
 	if (algo == NULL) {
 		CC_LIST_RUNLOCK();
 		return(ESRCH);
 	}
-do_over:
+	/* 
+	 * With a reference the algorithm cannot be removed
+	 * so we hold a reference through the change process.
+	 */
+	cc_refer(algo);
+	CC_LIST_RUNLOCK();
 	if (algo->cb_init != NULL) {
 		/* We can now pre-get the memory for the CC */
 		mem_sz = (*algo->cc_data_sz)();
 		if (mem_sz == 0) {
 			goto no_mem_needed;
 		}
-		CC_LIST_RUNLOCK();
 		ptr = malloc(mem_sz, M_CC_MEM, M_WAITOK);
-		CC_LIST_RLOCK();
-		STAILQ_FOREACH(algo, &cc_list, entries)
-			if (strncmp(buf, algo->name,
-				    TCP_CA_NAME_MAX) == 0)
-				break;
-		if (algo == NULL) {
-			if (ptr)
-				free(ptr, M_CC_MEM);
-			CC_LIST_RUNLOCK();
-			return(ESRCH);
-		}
 	} else {
 no_mem_needed:
 		mem_sz = 0;
@@ -2049,22 +2073,20 @@ no_mem_needed:
 	 * back the inplock.
 	 */
 	memset(&cc_mem, 0, sizeof(cc_mem));
-	if (mem_sz != (*algo->cc_data_sz)()) {
-		if (ptr)
-			free(ptr, M_CC_MEM);
-		goto do_over;
-	}
 	INP_WLOCK(inp);
 	if (inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) {
 		INP_WUNLOCK(inp);
+		if (ptr)
+			free(ptr, M_CC_MEM);
+		/* Release our temp reference */
+		CC_LIST_RLOCK();
+		cc_release(algo);
 		CC_LIST_RUNLOCK();
-		free(ptr, M_CC_MEM);
 		return (ECONNRESET);
 	}
 	tp = intotcpcb(inp);
 	if (ptr != NULL)
 		memset(ptr, 0, mem_sz);
-	CC_LIST_RUNLOCK();
 	cc_mem.ccvc.tcp = tp;
 	/*
 	 * We once again hold a write lock over the tcb so it's
@@ -2089,8 +2111,12 @@ no_mem_needed:
 		 */
 		if (CC_ALGO(tp)->cb_destroy != NULL)
 			CC_ALGO(tp)->cb_destroy(tp->ccv);
+		/* Detach the old CC from the tcpcb  */
+		cc_detach(tp);
+		/* Copy in our temp memory that was inited */
 		memcpy(tp->ccv, &cc_mem, sizeof(struct cc_var));
-		tp->cc_algo = algo;
+		/* Now attach the new, which takes a reference */
+		cc_attach(tp, algo);
 		/* Ok now are we where we have gotten past any conn_init? */
 		if (TCPS_HAVEESTABLISHED(tp->t_state) && (CC_ALGO(tp)->conn_init != NULL)) {
 			/* Yep run the connection init for the new CC */
@@ -2099,17 +2125,23 @@ no_mem_needed:
 	} else if (ptr)
 		free(ptr, M_CC_MEM);
 	INP_WUNLOCK(inp);
+	/* Now lets release our temp reference */
+	CC_LIST_RLOCK();
+	cc_release(algo);
+	CC_LIST_RUNLOCK();
 	return (error);
 }
 
 int
-tcp_default_ctloutput(struct socket *so, struct sockopt *sopt, struct inpcb *inp, struct tcpcb *tp)
+tcp_default_ctloutput(struct inpcb *inp, struct sockopt *sopt)
 {
+	struct tcpcb *tp = intotcpcb(inp);
 	int	error, opt, optval;
 	u_int	ui;
 	struct	tcp_info ti;
 #ifdef KERN_TLS
 	struct tls_enable tls;
+	struct socket *so = inp->inp_socket;
 #endif
 	char	*pbuf, buf[TCP_LOG_ID_LEN];
 #ifdef STATS
@@ -2118,6 +2150,9 @@ tcp_default_ctloutput(struct socket *so, struct sockopt *sopt, struct inpcb *inp
 	size_t	len;
 
 	INP_WLOCK_ASSERT(inp);
+	KASSERT((inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) == 0,
+	    ("inp_flags == %x", inp->inp_flags));
+	KASSERT(inp->inp_socket != NULL, ("inp_socket == NULL"));
 
 	switch (sopt->sopt_level) {
 #ifdef INET6
@@ -2317,7 +2352,7 @@ unlock_and_done:
 			break;
 
 		case TCP_CONGESTION:
-			error = tcp_congestion(so, sopt, inp, tp);
+			error = tcp_set_cc_mod(inp, sopt);
 			break;
 
 		case TCP_REUSPORT_LB_NUMA:
@@ -2953,6 +2988,10 @@ db_print_tflags(u_int t_flags)
 		db_printf("%sTF_NOPUSH", comma ? ", " : "");
 		comma = 1;
 	}
+	if (t_flags & TF_PREVVALID) {
+		db_printf("%sTF_PREVVALID", comma ? ", " : "");
+		comma = 1;
+	}
 	if (t_flags & TF_MORETOCOME) {
 		db_printf("%sTF_MORETOCOME", comma ? ", " : "");
 		comma = 1;
@@ -2981,6 +3020,10 @@ db_print_tflags(u_int t_flags)
 		db_printf("%sTF_WASFRECOVERY", comma ? ", " : "");
 		comma = 1;
 	}
+	if (t_flags & TF_WASCRECOVERY) {
+		db_printf("%sTF_WASCRECOVERY", comma ? ", " : "");
+		comma = 1;
+	}
 	if (t_flags & TF_SIGNATURE) {
 		db_printf("%sTF_SIGNATURE", comma ? ", " : "");
 		comma = 1;
@@ -3005,8 +3048,44 @@ db_print_tflags2(u_int t_flags2)
 	int comma;
 
 	comma = 0;
+	if (t_flags2 & TF2_PLPMTU_BLACKHOLE) {
+		db_printf("%sTF2_PLPMTU_BLACKHOLE", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_PLPMTU_PMTUD) {
+		db_printf("%sTF2_PLPMTU_PMTUD", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_PLPMTU_MAXSEGSNT) {
+		db_printf("%sTF2_PLPMTU_MAXSEGSNT", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_LOG_AUTO) {
+		db_printf("%sTF2_LOG_AUTO", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_DROP_AF_DATA) {
+		db_printf("%sTF2_DROP_AF_DATA", comma ? ", " : "");
+		comma = 1;
+	}
 	if (t_flags2 & TF2_ECN_PERMIT) {
 		db_printf("%sTF2_ECN_PERMIT", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_ECN_SND_CWR) {
+		db_printf("%sTF2_ECN_SND_CWR", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_ECN_SND_ECE) {
+		db_printf("%sTF2_ECN_SND_ECE", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_ACE_PERMIT) {
+		db_printf("%sTF2_ACE_PERMIT", comma ? ", " : "");
+		comma = 1;
+	}
+	if (t_flags2 & TF2_FBYTES_COMPLETE) {
+		db_printf("%sTF2_FBYTES_COMPLETE", comma ? ", " : "");
 		comma = 1;
 	}
 }

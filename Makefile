@@ -1,7 +1,7 @@
 #
 # $FreeBSD$
 #
-# The user-driven targets are:
+# The common user-driven targets are (for a complete list, see build(7)):
 #
 # universe            - *Really* build *everything* (buildworld and
 #                       all kernels on all architectures).  Define
@@ -148,8 +148,8 @@ __DO_KERNELS?=yes
 
 TGTS=	all all-man buildenv buildenvvars buildkernel buildworld \
 	check check-old check-old-dirs check-old-files check-old-libs \
-	checkdpadd checkworld clean cleandepend cleandir cleanworld \
-	cleanuniverse \
+	checkdpadd checkworld clean cleandepend cleandir cleankernel \
+	cleanworld cleanuniverse \
 	delete-old delete-old-dirs delete-old-files delete-old-libs \
 	depend distribute distributekernel distributekernel.debug \
 	distributeworld distrib-dirs distribution doxygen \
@@ -729,7 +729,7 @@ TARGET_ARCH_${kernel}!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 	config -m ${KERNSRCDIR}/${TARGET}/conf/${kernel} 2> /dev/null | \
 	grep -v WARNING: | cut -f 2
 .if empty(TARGET_ARCH_${kernel})
-.error "Target architecture for ${TARGET}/conf/${kernel} unknown.  config(8) likely too old."
+.error Target architecture for ${TARGET}/conf/${kernel} unknown.  config(8) likely too old.
 .endif
 universe_kernconfs_${TARGET_ARCH_${kernel}}: universe_kernconf_${TARGET}_${kernel}
 universe_kernconf_${TARGET}_${kernel}: .MAKE

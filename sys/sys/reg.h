@@ -41,6 +41,31 @@
 #include <machine/reg.h>
 
 #ifdef _KERNEL
+#include <sys/linker_set.h>
+
+struct sbuf;
+struct regset;
+
+typedef bool (regset_get)(struct regset *, struct thread *, void *,
+    size_t *);
+typedef bool (regset_set)(struct regset *, struct thread *, void *, size_t);
+
+struct regset {
+	int		note;
+	size_t		size;
+	regset_get	*get;
+	regset_set	*set;
+};
+
+#if defined(__ELF_WORD_SIZE)
+SET_DECLARE(__elfN(regset), struct regset);
+#define	ELF_REGSET(_regset)	DATA_SET(__elfN(regset), _regset)
+#endif
+#ifdef COMPAT_FREEBSD32
+SET_DECLARE(elf32_regset, struct regset);
+#define	ELF32_REGSET(_regset)	DATA_SET(elf32_regset, _regset)
+#endif
+
 int	fill_regs(struct thread *, struct reg *);
 int	set_regs(struct thread *, struct reg *);
 int	fill_fpregs(struct thread *, struct fpreg *);

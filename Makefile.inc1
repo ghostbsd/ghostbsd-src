@@ -49,7 +49,7 @@
 #		obj depend all install clean cleandepend cleanobj
 
 .if !defined(TARGET) || !defined(TARGET_ARCH)
-.error "Both TARGET and TARGET_ARCH must be defined."
+.error Both TARGET and TARGET_ARCH must be defined.
 .endif
 
 .if make(showconfig) || make(test-system-*)
@@ -138,9 +138,9 @@ TARGET_ABI=	gnueabi
 .endif
 .endif
 MACHINE_ABI?=	unknown
-MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/[hs]f$//}-${MACHINE_ABI}-freebsd14.0
+MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/sf$//}-${MACHINE_ABI}-freebsd14.0
 TARGET_ABI?=	unknown
-TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/[hs]f$//}-${TARGET_ABI}-freebsd14.0
+TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/sf$//}-${TARGET_ABI}-freebsd14.0
 KNOWN_ARCHES?=	aarch64/arm64 \
 		amd64 \
 		armv6/arm \
@@ -167,7 +167,7 @@ _t=		${TARGET_ARCH}/${TARGET}
 .if ${.MAKE.OS} != "FreeBSD"
 CROSSBUILD_HOST=${.MAKE.OS}
 .if ${.MAKE.OS} != "Linux" && ${.MAKE.OS} != "Darwin"
-.warning "Unsupported crossbuild system: ${.MAKE.OS}. Build will probably fail!"
+.warning Unsupported crossbuild system: ${.MAKE.OS}. Build will probably fail!
 .endif
 # We need to force NO_ROOT/DB_FROM_SRC builds when building on other operating
 # systems since the BSD.foo.dist specs contain users and groups that do not
@@ -522,7 +522,7 @@ OSRELDATE=	0
 .endif
 
 # Set VERSION for CTFMERGE to use via the default CTFFLAGS=-L VERSION.
-.for _V in BRANCH REVISION
+.for _V in BRANCH REVISION TYPE
 .if !defined(_${_V})
 _${_V}!=	eval $$(awk '/^${_V}=/{print}' ${SRCTOP}/sys/conf/newvers.sh); echo $$${_V}
 .export _${_V}
@@ -626,7 +626,7 @@ TMPPATH=	${STRICTTMPPATH}:${PATH}
 .if ${BUILD_WITH_STRICT_TMPPATH} != 0
 MKTEMP=${WORLDTMP}/legacy/usr/bin/mktemp
 .if !exists(${MKTEMP})
-.error "mktemp binary doesn't exist in expected location: ${MKTEMP}"
+.error mktemp binary doesn't exist in expected location: ${MKTEMP}
 .endif
 .else
 MKTEMP=mktemp
@@ -673,8 +673,8 @@ PACKAGE=	kernel
 
 BOOTSTRAPPING?=	0
 # Keep these in sync
-MINIMUM_SUPPORTED_OSREL?= 1002501
-MINIMUM_SUPPORTED_REL?= 10.3
+MINIMUM_SUPPORTED_OSREL?= 1104001
+MINIMUM_SUPPORTED_REL?= 11.4
 
 # Common environment for world related stages
 CROSSENV+=	\
@@ -1368,6 +1368,10 @@ distributeworld installworld stageworld: _installcheck_world .PHONY
 	if [ -z "${CROSSBUILD_HOST}" ] ; then \
 		libs=$$(ldd -f "%o %p\n" -f "%o %p\n" $$progs 2>/dev/null | sort -u | \
 		    while read line; do \
+			case $$line in \
+			"["*"]") \
+				continue;; \
+			esac; \
 			set -- $$line; \
 			if [ "$$2 $$3" != "not found" ]; then \
 				echo $$2; \
@@ -1882,12 +1886,10 @@ _pkgbootstrap: .PHONY
 .endif
 
 #
-# Allow overriding PKG_ABI, this allow to create kernel packages without having
-# to build world first.
-# If it's not provided resolv it from the uname binary in the world stage.
+# Determine PKG_ABI from newvers.sh if not already set.
 #
 .if !defined(PKG_ABI) && (make(create-world-packages-jobs) || make(create-kernel-packages*) || make(real-update-packages) || make(sign-packages))
-PKG_ABI!=${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/usr/bin/uname config ABI
+PKG_ABI=${_TYPE}:${_REVISION:S/\..*$//}:${TARGET_ARCH}
 .endif
 PKG_BIN_VERSION!=${PKG_CMD} --version </dev/null 2>/dev/null |\
     awk -F. '/^[0-9.]+$$/ {print $$1 * 10000 + $$2 * 100 + $$3}'
@@ -2307,18 +2309,6 @@ _crunchgen=	usr.sbin/crunch/crunchgen
 _bootstrap_tools_links+=crunchgen
 .endif
 
-# r296926 -P keymap search path, MFC to stable/10 in r298297
-# Note: kbdcontrol can not be bootstrapped on non-FreeBSD systems
-.if !defined(CROSSBUILD_HOST)
-.if (${BOOTSTRAPPING} < 1003501 || \
-	(${BOOTSTRAPPING} >= 1100000 && ${BOOTSTRAPPING} < 1100103) || \
-	(!exists(/usr/sbin/kbdcontrol)))
-_kbdcontrol=	usr.sbin/kbdcontrol
-.else
-_bootstrap_tools_links+=kbdcontrol
-.endif
-.endif
-
 # 1300102: VHDX support
 .if ${BOOTSTRAPPING} < 1201520 || \
 	(${BOOTSTRAPPING} > 1300000 && ${BOOTSTRAPPING} < 1300102)
@@ -2403,7 +2393,7 @@ _basic_bootstrap_tools_multilink+=usr.bin/awk awk,nawk
 # file2c is required for building usr.sbin/config:
 _basic_bootstrap_tools+=usr.bin/file2c
 # uuencode/uudecode required for share/tabset
-_basic_bootstrap_tools+=usr.bin/uuencode usr.bin/uudecode
+_basic_bootstrap_tools_multilink+=usr.bin/bintrans uuencode,uudecode
 # xargs is required by mkioctls
 _basic_bootstrap_tools+=usr.bin/xargs
 # cap_mkdb is required for share/termcap:
@@ -3218,7 +3208,8 @@ list-old-files: .PHONY
 	${MAKE} -f ${.CURDIR}/Makefile.inc1 ${.MAKEFLAGS} ${.TARGET} \
 	    -V OLD_FILES -V "OLD_FILES:Musr/share/*.gz:R" \
 	    -V "OLD_FILES:Mlib/*.so.*:S,^lib,usr/lib32," \
-	    -V "OLD_FILES:Musr/lib/*:S,^usr/lib,usr/lib32," | xargs -n1 | sort
+	    -V "OLD_FILES:Musr/lib/*:S,^usr/lib,usr/lib32," | \
+	    sed -E 's/[[:space:]]+/\n/g' | sort
 
 delete-old-files: .PHONY
 	@echo ">>> Removing old files (only deletes safe to delete libs)"
@@ -3285,7 +3276,7 @@ list-old-libs: .PHONY
 	    -V OLD_LIBS -V MOVED_LIBS -V "OLD_LIBS:Mlib/*:S,^lib,usr/lib32," \
 	    -V "OLD_LIBS:Musr/lib/*:S,^usr/lib,usr/lib32," \
 	    -V "OLD_LIBS:Mlib/casper/*:S,^lib/casper,usr/lib32," | \
-	    xargs -n1 | sort
+	    sed -E 's/[[:space:]]+/\n/g' | sort
 
 delete-old-libs: .PHONY
 	@echo ">>> Removing old libraries"
@@ -3326,7 +3317,7 @@ check-old-libs: .PHONY
 list-old-dirs: .PHONY
 	@cd ${.CURDIR}; \
 	${MAKE} -f ${.CURDIR}/Makefile.inc1 ${.MAKEFLAGS} ${.TARGET} \
-	    -V OLD_DIRS | xargs -n1 | sort -r
+	    -V OLD_DIRS | sed -E 's/[[:space:]]+/\n/g' | sort -r
 
 delete-old-dirs: .PHONY
 	@echo ">>> Removing old directories"
@@ -3422,18 +3413,20 @@ builddtb: .PHONY
 #
 .if make(cleanworld)
 BW_CANONICALOBJDIR:=${OBJTOP}/
+.elif make(cleankernel)
+BW_CANONICALOBJDIR:=${KRNLOBJDIR}/${KERNCONF}/
 .elif make(cleanuniverse)
 BW_CANONICALOBJDIR:=${OBJROOT}
 .if ${MK_UNIFIED_OBJDIR} == "no"
 .error ${.TARGETS} only supported with WITH_UNIFIED_OBJDIR enabled.
 .endif
 .endif
-cleanworld cleanuniverse: .PHONY
+cleanworld cleanuniverse cleankernel: .PHONY
 .if !empty(BW_CANONICALOBJDIR) && exists(${BW_CANONICALOBJDIR}) && \
     ${.CURDIR:tA} != ${BW_CANONICALOBJDIR:tA}
-	-rm -rf ${BW_CANONICALOBJDIR}*
+	-(cd ${BW_CANONICALOBJDIR} && rm -rf *)
 	-chflags -R 0 ${BW_CANONICALOBJDIR}
-	rm -rf ${BW_CANONICALOBJDIR}*
+	-(cd ${BW_CANONICALOBJDIR} && rm -rf *)
 .endif
 .if make(cleanworld) && ${MK_AUTO_OBJ} == "no" && \
     (empty(BW_CANONICALOBJDIR) || ${.CURDIR:tA} == ${BW_CANONICALOBJDIR:tA})

@@ -150,7 +150,7 @@ static const char *const zio_taskq_types[ZIO_TASKQ_TYPES] = {
  * and interrupt) and then to reserve threads for ZIO_PRIORITY_NOW I/Os that
  * need to be handled with minimum delay.
  */
-const zio_taskq_info_t zio_taskqs[ZIO_TYPES][ZIO_TASKQ_TYPES] = {
+static const zio_taskq_info_t zio_taskqs[ZIO_TYPES][ZIO_TASKQ_TYPES] = {
 	/* ISSUE	ISSUE_HIGH	INTR		INTR_HIGH */
 	{ ZTI_ONE,	ZTI_NULL,	ZTI_ONE,	ZTI_NULL }, /* NULL */
 	{ ZTI_N(8),	ZTI_NULL,	ZTI_SCALE,	ZTI_NULL }, /* READ */
@@ -167,12 +167,12 @@ static boolean_t spa_has_active_shared_spare(spa_t *spa);
 static int spa_load_impl(spa_t *spa, spa_import_type_t type, char **ereport);
 static void spa_vdev_resilver_done(spa_t *spa);
 
-uint_t		zio_taskq_batch_pct = 80;	/* 1 thread per cpu in pset */
-uint_t		zio_taskq_batch_tpq;		/* threads per taskq */
-boolean_t	zio_taskq_sysdc = B_TRUE;	/* use SDC scheduling class */
-uint_t		zio_taskq_basedc = 80;		/* base duty cycle */
+static uint_t	zio_taskq_batch_pct = 80;	  /* 1 thread per cpu in pset */
+static uint_t	zio_taskq_batch_tpq;		  /* threads per taskq */
+static const boolean_t	zio_taskq_sysdc = B_TRUE; /* use SDC scheduling class */
+static const uint_t	zio_taskq_basedc = 80;	  /* base duty cycle */
 
-boolean_t	spa_create_process = B_TRUE;	/* no process ==> no sysdc */
+static const boolean_t spa_create_process = B_TRUE; /* no process => no sysdc */
 
 /*
  * Report any spa_load_verify errors found, but do not fail spa_load.
@@ -195,7 +195,7 @@ boolean_t	spa_mode_readable_spacemaps = B_FALSE;
 /*
  * For debugging purposes: print out vdev tree during pool import.
  */
-int		spa_load_print_vdev_tree = B_FALSE;
+static int		spa_load_print_vdev_tree = B_FALSE;
 
 /*
  * A non-zero value for zfs_max_missing_tvds means that we allow importing
@@ -244,28 +244,28 @@ uint64_t	zfs_max_missing_tvds_scan = 0;
 /*
  * Debugging aid that pauses spa_sync() towards the end.
  */
-boolean_t	zfs_pause_spa_sync = B_FALSE;
+static const boolean_t	zfs_pause_spa_sync = B_FALSE;
 
 /*
  * Variables to indicate the livelist condense zthr func should wait at certain
  * points for the livelist to be removed - used to test condense/destroy races
  */
-int zfs_livelist_condense_zthr_pause = 0;
-int zfs_livelist_condense_sync_pause = 0;
+static int zfs_livelist_condense_zthr_pause = 0;
+static int zfs_livelist_condense_sync_pause = 0;
 
 /*
  * Variables to track whether or not condense cancellation has been
  * triggered in testing.
  */
-int zfs_livelist_condense_sync_cancel = 0;
-int zfs_livelist_condense_zthr_cancel = 0;
+static int zfs_livelist_condense_sync_cancel = 0;
+static int zfs_livelist_condense_zthr_cancel = 0;
 
 /*
  * Variable to track whether or not extra ALLOC blkptrs were added to a
  * livelist entry while it was being condensed (caused by the way we track
  * remapped blkptrs in dbuf_remap_impl)
  */
-int zfs_livelist_condense_new_alloc = 0;
+static int zfs_livelist_condense_new_alloc = 0;
 
 /*
  * ==========================================================================
@@ -840,7 +840,6 @@ spa_prop_clear_bootfs(spa_t *spa, uint64_t dsobj, dmu_tx_t *tx)
 	}
 }
 
-/*ARGSUSED*/
 static int
 spa_change_guid_check(void *arg, dmu_tx_t *tx)
 {
@@ -948,8 +947,8 @@ spa_get_errlists(spa_t *spa, avl_tree_t *last, avl_tree_t *scrub)
 {
 	ASSERT(MUTEX_HELD(&spa->spa_errlist_lock));
 
-	bcopy(&spa->spa_errlist_last, last, sizeof (avl_tree_t));
-	bcopy(&spa->spa_errlist_scrub, scrub, sizeof (avl_tree_t));
+	memcpy(last, &spa->spa_errlist_last, sizeof (avl_tree_t));
+	memcpy(scrub, &spa->spa_errlist_scrub, sizeof (avl_tree_t));
 
 	avl_create(&spa->spa_errlist_scrub,
 	    spa_error_entry_compare, sizeof (spa_error_entry_t),
@@ -1049,6 +1048,7 @@ spa_taskqs_init(spa_t *spa, zio_type_t t, zio_taskq_type_t q)
 			if (batch)
 				flags |= TASKQ_DC_BATCH;
 
+			(void) zio_taskq_basedc;
 			tq = taskq_create_sysdc(name, value, 50, INT_MAX,
 			    spa->spa_proc, zio_taskq_basedc, flags);
 		} else {
@@ -1250,12 +1250,12 @@ spa_activate(spa_t *spa, spa_mode_t mode)
 	spa->spa_mode = mode;
 	spa->spa_read_spacemaps = spa_mode_readable_spacemaps;
 
-	spa->spa_normal_class = metaslab_class_create(spa, zfs_metaslab_ops);
-	spa->spa_log_class = metaslab_class_create(spa, zfs_metaslab_ops);
+	spa->spa_normal_class = metaslab_class_create(spa, &zfs_metaslab_ops);
+	spa->spa_log_class = metaslab_class_create(spa, &zfs_metaslab_ops);
 	spa->spa_embedded_log_class =
-	    metaslab_class_create(spa, zfs_metaslab_ops);
-	spa->spa_special_class = metaslab_class_create(spa, zfs_metaslab_ops);
-	spa->spa_dedup_class = metaslab_class_create(spa, zfs_metaslab_ops);
+	    metaslab_class_create(spa, &zfs_metaslab_ops);
+	spa->spa_special_class = metaslab_class_create(spa, &zfs_metaslab_ops);
+	spa->spa_dedup_class = metaslab_class_create(spa, &zfs_metaslab_ops);
 
 	/* Try to create a covering process */
 	mutex_enter(&spa->spa_proc_lock);
@@ -1263,6 +1263,7 @@ spa_activate(spa_t *spa, spa_mode_t mode)
 	ASSERT(spa->spa_proc == &p0);
 	spa->spa_did = 0;
 
+	(void) spa_create_process;
 #ifdef HAVE_SPA_THREAD
 	/* Only create a process if we're going to be around a while. */
 	if (spa_create_process && strcmp(spa->spa_name, TRYIMPORT_NAME) != 0) {
@@ -1313,6 +1314,8 @@ spa_activate(spa_t *spa, spa_mode_t mode)
 	avl_create(&spa->spa_errlist_last,
 	    spa_error_entry_compare, sizeof (spa_error_entry_t),
 	    offsetof(spa_error_entry_t, se_avl));
+
+	spa_activate_os(spa);
 
 	spa_keystore_init(&spa->spa_keystore);
 
@@ -1450,6 +1453,9 @@ spa_deactivate(spa_t *spa)
 		thread_join(spa->spa_did);
 		spa->spa_did = 0;
 	}
+
+	spa_deactivate_os(spa);
+
 }
 
 /*
@@ -1596,25 +1602,33 @@ spa_unload(spa_t *spa)
 	spa_wake_waiters(spa);
 
 	/*
-	 * If the log space map feature is enabled and the pool is getting
-	 * exported (but not destroyed), we want to spend some time flushing
-	 * as many metaslabs as we can in an attempt to destroy log space
-	 * maps and save import time.
+	 * If we have set the spa_final_txg, we have already performed the
+	 * tasks below in spa_export_common(). We should not redo it here since
+	 * we delay the final TXGs beyond what spa_final_txg is set at.
 	 */
-	if (spa_should_flush_logs_on_unload(spa))
-		spa_unload_log_sm_flush_all(spa);
+	if (spa->spa_final_txg == UINT64_MAX) {
+		/*
+		 * If the log space map feature is enabled and the pool is
+		 * getting exported (but not destroyed), we want to spend some
+		 * time flushing as many metaslabs as we can in an attempt to
+		 * destroy log space maps and save import time.
+		 */
+		if (spa_should_flush_logs_on_unload(spa))
+			spa_unload_log_sm_flush_all(spa);
 
-	/*
-	 * Stop async tasks.
-	 */
-	spa_async_suspend(spa);
+		/*
+		 * Stop async tasks.
+		 */
+		spa_async_suspend(spa);
 
-	if (spa->spa_root_vdev) {
-		vdev_t *root_vdev = spa->spa_root_vdev;
-		vdev_initialize_stop_all(root_vdev, VDEV_INITIALIZE_ACTIVE);
-		vdev_trim_stop_all(root_vdev, VDEV_TRIM_ACTIVE);
-		vdev_autotrim_stop_all(spa);
-		vdev_rebuild_stop_all(spa);
+		if (spa->spa_root_vdev) {
+			vdev_t *root_vdev = spa->spa_root_vdev;
+			vdev_initialize_stop_all(root_vdev,
+			    VDEV_INITIALIZE_ACTIVE);
+			vdev_trim_stop_all(root_vdev, VDEV_TRIM_ACTIVE);
+			vdev_autotrim_stop_all(spa);
+			vdev_rebuild_stop_all(spa);
+		}
 	}
 
 	/*
@@ -2250,6 +2264,7 @@ spa_claim_notify(zio_t *zio)
 }
 
 typedef struct spa_load_error {
+	boolean_t	sle_verify_data;
 	uint64_t	sle_meta_count;
 	uint64_t	sle_data_count;
 } spa_load_error_t;
@@ -2282,15 +2297,19 @@ spa_load_verify_done(zio_t *zio)
  * Maximum number of inflight bytes is the log2 fraction of the arc size.
  * By default, we set it to 1/16th of the arc.
  */
-int spa_load_verify_shift = 4;
-int spa_load_verify_metadata = B_TRUE;
-int spa_load_verify_data = B_TRUE;
+static int spa_load_verify_shift = 4;
+static int spa_load_verify_metadata = B_TRUE;
+static int spa_load_verify_data = B_TRUE;
 
-/*ARGSUSED*/
 static int
 spa_load_verify_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
     const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
 {
+	zio_t *rio = arg;
+	spa_load_error_t *sle = rio->io_private;
+
+	(void) zilog, (void) dnp;
+
 	if (zb->zb_level == ZB_DNODE_LEVEL || BP_IS_HOLE(bp) ||
 	    BP_IS_EMBEDDED(bp) || BP_IS_REDACTED(bp))
 		return (0);
@@ -2301,12 +2320,12 @@ spa_load_verify_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	 */
 	if (!spa_load_verify_metadata)
 		return (0);
-	if (!BP_IS_METADATA(bp) && !spa_load_verify_data)
+	if (!BP_IS_METADATA(bp) &&
+	    (!spa_load_verify_data || !sle->sle_verify_data))
 		return (0);
 
 	uint64_t maxinflight_bytes =
 	    arc_target_bytes() >> spa_load_verify_shift;
-	zio_t *rio = arg;
 	size_t size = BP_GET_PSIZE(bp);
 
 	mutex_enter(&spa->spa_scrub_lock);
@@ -2322,10 +2341,11 @@ spa_load_verify_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	return (0);
 }
 
-/* ARGSUSED */
 static int
 verify_dataset_name_len(dsl_pool_t *dp, dsl_dataset_t *ds, void *arg)
 {
+	(void) dp, (void) arg;
+
 	if (dsl_dataset_namelen(ds) >= ZFS_MAX_DATASET_NAME_LEN)
 		return (SET_ERROR(ENAMETOOLONG));
 
@@ -2343,7 +2363,8 @@ spa_load_verify(spa_t *spa)
 
 	zpool_get_load_policy(spa->spa_config, &policy);
 
-	if (policy.zlp_rewind & ZPOOL_NEVER_REWIND)
+	if (policy.zlp_rewind & ZPOOL_NEVER_REWIND ||
+	    policy.zlp_maxmeta == UINT64_MAX)
 		return (0);
 
 	dsl_pool_config_enter(spa->spa_dsl_pool, FTAG);
@@ -2353,6 +2374,13 @@ spa_load_verify(spa_t *spa)
 	dsl_pool_config_exit(spa->spa_dsl_pool, FTAG);
 	if (error != 0)
 		return (error);
+
+	/*
+	 * Verify data only if we are rewinding or error limit was set.
+	 * Otherwise nothing except dbgmsg care about it to waste time.
+	 */
+	sle.sle_verify_data = (policy.zlp_rewind & ZPOOL_REWIND_MASK) ||
+	    (policy.zlp_maxdata < UINT64_MAX);
 
 	rio = zio_root(spa, NULL, &sle,
 	    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE);
@@ -2397,6 +2425,8 @@ spa_load_verify(spa_t *spa)
 		    spa->spa_load_txg_ts);
 		fnvlist_add_int64(spa->spa_load_info, ZPOOL_CONFIG_REWIND_TIME,
 		    loss);
+		fnvlist_add_uint64(spa->spa_load_info,
+		    ZPOOL_CONFIG_LOAD_META_ERRORS, sle.sle_meta_count);
 		fnvlist_add_uint64(spa->spa_load_info,
 		    ZPOOL_CONFIG_LOAD_DATA_ERRORS, sle.sle_data_count);
 	} else {
@@ -2455,10 +2485,10 @@ spa_livelist_delete_check(spa_t *spa)
 	return (spa->spa_livelists_to_delete != 0);
 }
 
-/* ARGSUSED */
 static boolean_t
 spa_livelist_delete_cb_check(void *arg, zthr_t *z)
 {
+	(void) z;
 	spa_t *spa = arg;
 	return (spa_livelist_delete_check(spa));
 }
@@ -2550,7 +2580,6 @@ livelist_delete_sync(void *arg, dmu_tx_t *tx)
  * be freed. Then, call a synctask which performs the actual frees and updates
  * the pool-wide livelist data.
  */
-/* ARGSUSED */
 static void
 spa_livelist_delete_cb(void *arg, zthr_t *z)
 {
@@ -2796,7 +2825,6 @@ spa_livelist_condense_cb(void *arg, zthr_t *t)
 		zfs_livelist_condense_zthr_cancel++;
 }
 
-/* ARGSUSED */
 /*
  * Check that there is something to condense but that a condense is not
  * already in progress and that condensing has not been cancelled.
@@ -2804,6 +2832,7 @@ spa_livelist_condense_cb(void *arg, zthr_t *t)
 static boolean_t
 spa_livelist_condense_cb_check(void *arg, zthr_t *z)
 {
+	(void) z;
 	spa_t *spa = arg;
 	if ((spa->spa_to_condense.ds != NULL) &&
 	    (spa->spa_to_condense.syncing == B_FALSE) &&
@@ -2996,6 +3025,8 @@ vdev_count_verify_zaps(vdev_t *vd)
 
 	return (total);
 }
+#else
+#define	vdev_count_verify_zaps(vd) ((void) sizeof (vd), 0)
 #endif
 
 /*
@@ -6005,6 +6036,8 @@ spa_create(const char *pool, nvlist_t *nvroot, nvlist_t *props,
 	spa->spa_minref = zfs_refcount_count(&spa->spa_refcount);
 	spa->spa_load_state = SPA_LOAD_NONE;
 
+	spa_import_os(spa);
+
 	mutex_exit(&spa_namespace_lock);
 
 	return (0);
@@ -6187,6 +6220,8 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 	mutex_exit(&spa_namespace_lock);
 
 	zvol_create_minors_recursive(pool);
+
+	spa_import_os(spa);
 
 	return (0);
 }
@@ -6409,14 +6444,34 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 		if (new_state != POOL_STATE_UNINITIALIZED && !hardforce) {
 			spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
 			spa->spa_state = new_state;
+			vdev_config_dirty(spa->spa_root_vdev);
+			spa_config_exit(spa, SCL_ALL, FTAG);
+		}
+
+		/*
+		 * If the log space map feature is enabled and the pool is
+		 * getting exported (but not destroyed), we want to spend some
+		 * time flushing as many metaslabs as we can in an attempt to
+		 * destroy log space maps and save import time. This has to be
+		 * done before we set the spa_final_txg, otherwise
+		 * spa_sync() -> spa_flush_metaslabs() may dirty the final TXGs.
+		 * spa_should_flush_logs_on_unload() should be called after
+		 * spa_state has been set to the new_state.
+		 */
+		if (spa_should_flush_logs_on_unload(spa))
+			spa_unload_log_sm_flush_all(spa);
+
+		if (new_state != POOL_STATE_UNINITIALIZED && !hardforce) {
+			spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
 			spa->spa_final_txg = spa_last_synced_txg(spa) +
 			    TXG_DEFER_SIZE + 1;
-			vdev_config_dirty(spa->spa_root_vdev);
 			spa_config_exit(spa, SCL_ALL, FTAG);
 		}
 	}
 
 export_spa:
+	spa_export_os(spa);
+
 	if (new_state == POOL_STATE_DESTROYED)
 		spa_event_notify(spa, NULL, NULL, ESC_ZFS_POOL_DESTROY);
 	else if (new_state == POOL_STATE_EXPORTED)
@@ -8084,7 +8139,7 @@ spa_async_autoexpand(spa_t *spa, vdev_t *vd)
 	spa_event_notify(vd->vdev_spa, vd, NULL, ESC_ZFS_VDEV_AUTOEXPAND);
 }
 
-static void
+static __attribute__((noreturn)) void
 spa_async_thread(void *arg)
 {
 	spa_t *spa = (spa_t *)arg;
@@ -8440,7 +8495,7 @@ spa_sync_nvlist(spa_t *spa, uint64_t obj, nvlist_t *nv, dmu_tx_t *tx)
 
 	VERIFY(nvlist_pack(nv, &packed, &nvsize, NV_ENCODE_XDR,
 	    KM_SLEEP) == 0);
-	bzero(packed + nvsize, bufsize - nvsize);
+	memset(packed + nvsize, 0, bufsize - nvsize);
 
 	dmu_write(spa->spa_meta_objset, obj, 0, bufsize, packed, tx);
 
@@ -9463,6 +9518,7 @@ spa_upgrade(spa_t *spa, uint64_t version)
 static boolean_t
 spa_has_aux_vdev(spa_t *spa, uint64_t guid, spa_aux_vdev_t *sav)
 {
+	(void) spa;
 	int i;
 	uint64_t vdev_guid;
 
@@ -9710,7 +9766,7 @@ spa_activity_in_progress(spa_t *spa, zpool_wait_activity_t activity,
 	case ZPOOL_WAIT_RESILVER:
 		if ((*in_progress = vdev_rebuild_active(spa->spa_root_vdev)))
 			break;
-		fallthrough;
+		zfs_fallthrough;
 	case ZPOOL_WAIT_SCRUB:
 	{
 		boolean_t scanning, paused, is_scrub;
@@ -9826,6 +9882,8 @@ spa_event_create(spa_t *spa, vdev_t *vd, nvlist_t *hist_nvl, const char *name)
 		ev = kmem_alloc(sizeof (sysevent_t), KM_SLEEP);
 		ev->resource = resource;
 	}
+#else
+	(void) spa, (void) vd, (void) hist_nvl, (void) name;
 #endif
 	return (ev);
 }
@@ -9838,6 +9896,8 @@ spa_event_post(sysevent_t *ev)
 		zfs_zevent_post(ev->resource, NULL, zfs_zevent_post_cb);
 		kmem_free(ev, sizeof (*ev));
 	}
+#else
+	(void) ev;
 #endif
 }
 
@@ -9913,6 +9973,7 @@ EXPORT_SYMBOL(spa_event_notify);
 ZFS_MODULE_PARAM(zfs_spa, spa_, load_verify_shift, INT, ZMOD_RW,
 	"log2 fraction of arc that can be used by inflight I/Os when "
 	"verifying pool during import");
+/* END CSTYLED */
 
 ZFS_MODULE_PARAM(zfs_spa, spa_, load_verify_metadata, INT, ZMOD_RW,
 	"Set to traverse metadata on pool import");
@@ -9929,23 +9990,29 @@ ZFS_MODULE_PARAM(zfs_zio, zio_, taskq_batch_pct, UINT, ZMOD_RD,
 ZFS_MODULE_PARAM(zfs_zio, zio_, taskq_batch_tpq, UINT, ZMOD_RD,
 	"Number of threads per IO worker taskqueue");
 
+/* BEGIN CSTYLED */
 ZFS_MODULE_PARAM(zfs, zfs_, max_missing_tvds, ULONG, ZMOD_RW,
 	"Allow importing pool with up to this number of missing top-level "
 	"vdevs (in read-only mode)");
+/* END CSTYLED */
 
-ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, zthr_pause, INT, ZMOD_RW,
-	"Set the livelist condense zthr to pause");
+ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, zthr_pause, INT,
+	ZMOD_RW, "Set the livelist condense zthr to pause");
 
-ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, sync_pause, INT, ZMOD_RW,
-	"Set the livelist condense synctask to pause");
+ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, sync_pause, INT,
+	ZMOD_RW, "Set the livelist condense synctask to pause");
 
-ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, sync_cancel, INT, ZMOD_RW,
+/* BEGIN CSTYLED */
+ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, sync_cancel,
+	INT, ZMOD_RW,
 	"Whether livelist condensing was canceled in the synctask");
 
-ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, zthr_cancel, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, zthr_cancel,
+	INT, ZMOD_RW,
 	"Whether livelist condensing was canceled in the zthr function");
 
-ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, new_alloc, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, new_alloc, INT,
+	ZMOD_RW,
 	"Whether extra ALLOC blkptrs were added to a livelist entry while it "
 	"was being condensed");
 /* END CSTYLED */

@@ -183,6 +183,8 @@ static const struct syscall_decode decoded_syscalls[] = {
 	  .args = { { Int, 0 } } },
 	{ .name = "closefrom", .ret_type = 1, .nargs = 1,
 	  .args = { { Int, 0 } } },
+	{ .name = "close_range", .ret_type = 1, .nargs = 3,
+	  .args = { { Int, 0 }, { Int, 1 }, { Closerangeflags, 2 } } },
 	{ .name = "compat11.fstat", .ret_type = 1, .nargs = 2,
 	  .args = { { Int, 0 }, { Stat11 | OUT, 1 } } },
 	{ .name = "compat11.fstatat", .ret_type = 1, .nargs = 4,
@@ -1556,7 +1558,7 @@ user_ptr32_to_psaddr(int32_t user_pointer)
  * an array of all of the system call arguments.
  */
 char *
-print_arg(struct syscall_arg *sc, unsigned long *args, register_t *retval,
+print_arg(struct syscall_arg *sc, syscallarg_t *args, syscallarg_t *retval,
     struct trussinfo *trussinfo)
 {
 	FILE *fp;
@@ -1590,10 +1592,10 @@ print_arg(struct syscall_arg *sc, unsigned long *args, register_t *retval,
 		break;
 	}
 	case LongHex:
-		fprintf(fp, "0x%lx", args[sc->offset]);
+		fprintf(fp, "0x%lx", (long)args[sc->offset]);
 		break;
 	case Long:
-		fprintf(fp, "%ld", args[sc->offset]);
+		fprintf(fp, "%ld", (long)args[sc->offset]);
 		break;
 	case Sizet:
 		fprintf(fp, "%zu", (size_t)args[sc->offset]);
@@ -1982,6 +1984,9 @@ print_arg(struct syscall_arg *sc, unsigned long *args, register_t *retval,
 		break;
 	case Fcntl:
 		print_integer_arg(sysdecode_fcntl_cmd, fp, args[sc->offset]);
+		break;
+	case Closerangeflags:
+		print_mask_arg(sysdecode_close_range_flags, fp, args[sc->offset]);
 		break;
 	case Mprot:
 		print_mask_arg(sysdecode_mmap_prot, fp, args[sc->offset]);
@@ -2729,7 +2734,7 @@ print_syscall(struct trussinfo *trussinfo)
 }
 
 void
-print_syscall_ret(struct trussinfo *trussinfo, int error, register_t *retval)
+print_syscall_ret(struct trussinfo *trussinfo, int error, syscallarg_t *retval)
 {
 	struct timespec timediff;
 	struct threadinfo *t;

@@ -2177,7 +2177,7 @@ softdep_flushfiles(oldmnt, flags, td)
 	int flags;
 	struct thread *td;
 {
-	struct ufsmount *ump;
+	struct ufsmount *ump __unused;
 #ifdef QUOTA
 	int i;
 #endif
@@ -13772,7 +13772,7 @@ softdep_request_cleanup_inactivate(struct mount *mp)
 		vholdl(vp);
 		vn_lock(vp, LK_EXCLUSIVE | LK_INTERLOCK | LK_RETRY);
 		VI_LOCK(vp);
-		if (vp->v_data != NULL && vp->v_usecount == 0) {
+		if (IS_UFS(vp) && vp->v_usecount == 0) {
 			while ((vp->v_iflag & VI_OWEINACT) != 0) {
 				error = vinactive(vp);
 				if (error != 0 && error != ERELOOKUP)
@@ -14045,7 +14045,7 @@ schedule_cleanup(struct mount *mp)
 		/*
 		 * No ast is delivered to kernel threads, so nobody
 		 * would deref the mp.  Some kernel threads
-		 * explicitely check for AST, e.g. NFS daemon does
+		 * explicitly check for AST, e.g. NFS daemon does
 		 * this in the serving loop.
 		 */
 		return;

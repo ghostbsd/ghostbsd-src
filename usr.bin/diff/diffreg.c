@@ -1419,7 +1419,8 @@ match_function(const long *f, int pos, FILE *fp)
 			strlcpy(lastbuf, buf, sizeof(lastbuf));
 			lastmatchline = pos;
 			return (lastbuf);
-		} else if (isalpha(buf[0]) || buf[0] == '_' || buf[0] == '$') {
+		} else if (isalpha(buf[0]) || buf[0] == '_' || buf[0] == '$'
+			|| buf[0] == '-' || buf[0] == '+') {
 			if (begins_with(buf, "private:")) {
 				if (!state)
 					state = " (private)";
@@ -1461,7 +1462,7 @@ dump_context_vec(FILE *f1, FILE *f2, int flags)
 
 	printf("***************");
 	if (flags & (D_PROTOTYPE | D_MATCHLAST)) {
-		f = match_function(ixold, lowa - 1, f1);
+		f = match_function(ixold, cvp->a - 1, f1);
 		if (f != NULL)
 			printf(" %s", f);
 	}
@@ -1568,7 +1569,7 @@ dump_unified_vec(FILE *f1, FILE *f2, int flags)
 	uni_range(lowc, upd);
 	printf(" @@");
 	if (flags & (D_PROTOTYPE | D_MATCHLAST)) {
-		f = match_function(ixold, lowa - 1, f1);
+		f = match_function(ixold, cvp->a - 1, f1);
 		if (f != NULL)
 			printf(" %s", f);
 	}

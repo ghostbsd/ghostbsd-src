@@ -208,6 +208,14 @@ ena_sysctl_add_stats(struct ena_adapter *adapter)
 
 		adapter->que[i].oid = queue_node;
 
+#ifdef RSS
+		/* Common stats */
+		SYSCTL_ADD_INT(ctx, queue_list, OID_AUTO, "cpu",
+		    CTLFLAG_RD, &adapter->que[i].cpu, 0, "CPU affinity");
+		SYSCTL_ADD_INT(ctx, queue_list, OID_AUTO, "domain",
+		    CTLFLAG_RD, &adapter->que[i].domain, 0, "NUMA domain");
+#endif
+
 		/* TX specific stats */
 		tx_node = SYSCTL_ADD_NODE(ctx, queue_list, OID_AUTO,
 		    "tx_ring", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "TX ring");
@@ -478,11 +486,9 @@ ena_sysctl_add_rss(struct ena_adapter *adapter)
 void
 ena_sysctl_update_queue_node_nb(struct ena_adapter *adapter, int old, int new)
 {
-	device_t dev;
 	struct sysctl_oid *oid;
 	int min, max, i;
 
-	dev = adapter->pdev;
 	min = MIN(old, new);
 	max = MIN(MAX(old, new), adapter->max_num_io_queues);
 
@@ -824,7 +830,6 @@ ena_sysctl_rss_indir_table(SYSCTL_HANDLER_ARGS)
 {
 	int num_queues, error;
 	struct ena_adapter *adapter = arg1;
-	struct ena_com_dev *ena_dev;
 	struct ena_indir *indir;
 	char *msg, *buf, *endp;
 	uint32_t idx, value;
@@ -840,7 +845,6 @@ ena_sysctl_rss_indir_table(SYSCTL_HANDLER_ARGS)
 		goto unlock;
 	}
 
-	ena_dev = adapter->ena_dev;
 	indir = adapter->rss_indir;
 	msg = indir->sysctl_buf;
 

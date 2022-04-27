@@ -265,6 +265,7 @@ struct vif {
     u_long		v_bytes_in;	/* # bytes in on interface	     */
     u_long		v_bytes_out;	/* # bytes out on interface	     */
 #ifdef _KERNEL
+#define	MROUTE_VIF_SYSCTL_LEN	__offsetof(struct vif, v_spin)
     struct mtx		v_spin;		/* Spin mutex for pkt stats          */
     char		v_spin_name[32];
 #endif
@@ -363,15 +364,8 @@ struct sockopt;
 
 extern int	(*ip_mrouter_set)(struct socket *, struct sockopt *);
 extern int	(*ip_mrouter_get)(struct socket *, struct sockopt *);
-extern int	(*ip_mrouter_done)(void *);
+extern int	(*ip_mrouter_done)(void);
 extern int	(*mrt_ioctl)(u_long, caddr_t, int);
-
-#define	MROUTER_RLOCK_TRACKER	struct epoch_tracker mrouter_et
-#define	MROUTER_RLOCK_PARAM_PTR		&mrouter_et
-#define	MROUTER_RLOCK()	epoch_enter_preempt(net_epoch_preempt, &mrouter_et)
-#define	MROUTER_RUNLOCK()	epoch_exit_preempt(net_epoch_preempt, &mrouter_et)
-#define	MROUTER_RUNLOCK_PARAM(param)	epoch_exit_preempt(net_epoch_preempt, param)
-#define	MROUTER_WAIT()	epoch_wait_preempt(net_epoch_preempt)
 
 #endif /* _KERNEL */
 

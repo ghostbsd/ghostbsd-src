@@ -391,6 +391,7 @@ enum {
 	MLX5_OPCODE_RCHECK_PSV		= 0x27,
 
 	MLX5_OPCODE_UMR			= 0x25,
+	MLX5_OPCODE_QOS_REMAP		= 0x2a,
 
 	MLX5_OPCODE_SIGNATURE_CANCELED	= (1 << 15),
 };
@@ -406,6 +407,14 @@ enum {
 	MLX5_OPCODE_MOD_PSV_TLS_TIS_PROGRESS_PARAMS = 0x1,
 	MLX5_OPCODE_MOD_PSV_TLS_TIR_PROGRESS_PARAMS = 0x2,
 };
+
+struct mlx5_wqe_tls_static_params_seg {
+	u8     ctx[MLX5_ST_SZ_BYTES(tls_static_params)];
+};
+
+struct mlx5_wqe_tls_progress_params_seg {
+	u8     ctx[MLX5_ST_SZ_BYTES(tls_progress_params)];
+} __aligned(64);
 
 enum {
 	MLX5_SET_PORT_RESET_QKEY	= 0,
@@ -749,6 +758,11 @@ static inline bool cqe_is_tunneled(struct mlx5_cqe64 *cqe)
 	return cqe->tls_outer_l3_tunneled & 0x1;
 }
 
+static inline u8 get_cqe_tls_offload(struct mlx5_cqe64 *cqe)
+{
+	return (cqe->tls_outer_l3_tunneled >> 3) & 0x3;
+}
+
 enum {
 	CQE_L4_HDR_TYPE_NONE			= 0x0,
 	CQE_L4_HDR_TYPE_TCP_NO_ACK		= 0x1,
@@ -791,6 +805,13 @@ enum {
 	CQE_L2_OK	= 1 << 0,
 	CQE_L3_OK	= 1 << 1,
 	CQE_L4_OK	= 1 << 2,
+};
+
+enum {
+	CQE_TLS_OFFLOAD_NOT_DECRYPTED		= 0x0,
+	CQE_TLS_OFFLOAD_DECRYPTED		= 0x1,
+	CQE_TLS_OFFLOAD_RESYNC			= 0x2,
+	CQE_TLS_OFFLOAD_ERROR			= 0x3,
 };
 
 struct mlx5_sig_err_cqe {
@@ -1037,6 +1058,12 @@ enum mlx5_mcam_feature_groups {
 
 #define MLX5_CAP_FLOWTABLE_MAX(mdev, cap) \
 	MLX5_GET(flow_table_nic_cap, mdev->hca_caps_max[MLX5_CAP_FLOW_TABLE], cap)
+
+#define MLX5_CAP_FLOWTABLE_NIC_RX(mdev, cap) \
+	MLX5_CAP_FLOWTABLE(mdev, flow_table_properties_nic_receive.cap)
+
+#define MLX5_CAP_FLOWTABLE_NIC_RX_MAX(mdev, cap) \
+	MLX5_CAP_FLOWTABLE_MAX(mdev, flow_table_properties_nic_receive.cap)
 
 #define MLX5_CAP_ESW_FLOWTABLE(mdev, cap) \
 	MLX5_GET(flow_table_eswitch_cap, \

@@ -1195,12 +1195,6 @@ ktls_enable_rx(struct socket *so, struct tls_enable *en)
 		return (error);
 	}
 
-#ifdef TCP_OFFLOAD
-	error = ktls_try_toe(so, tls, KTLS_RX);
-	if (error)
-#endif
-		ktls_use_sw(tls);
-
 	/* Mark the socket as using TLS offload. */
 	SOCKBUF_LOCK(&so->so_rcv);
 	so->so_rcv.sb_tls_seqno = be64dec(en->rec_seq);
@@ -1208,11 +1202,15 @@ ktls_enable_rx(struct socket *so, struct tls_enable *en)
 	so->so_rcv.sb_flags |= SB_TLS_RX;
 
 	/* Mark existing data as not ready until it can be decrypted. */
-	if (tls->mode != TCP_TLS_MODE_TOE) {
-		sb_mark_notready(&so->so_rcv);
-		ktls_check_rx(&so->so_rcv);
-	}
+	sb_mark_notready(&so->so_rcv);
+	ktls_check_rx(&so->so_rcv);
 	SOCKBUF_UNLOCK(&so->so_rcv);
+
+#ifdef TCP_OFFLOAD
+	error = ktls_try_toe(so, tls, KTLS_RX);
+	if (error)
+#endif
+		ktls_use_sw(tls);
 
 	counter_u64_add(ktls_offload_total, 1);
 
@@ -1319,6 +1317,49 @@ ktls_get_rx_mode(struct socket *so, int *modep)
 	return (0);
 }
 
+/*
+ * ktls_get_rx_sequence - get the next TCP- and TLS- sequence number.
+ *
+ * This function gets information about the next TCP- and TLS-
+ * sequence number to be processed by the TLS receive worker
+ * thread. The information is extracted from the given "inpcb"
+ * structure. The values are stored in host endian format at the two
+ * given output pointer locations. The TCP sequence number points to
+ * the beginning of the TLS header.
+ *
+ * This function returns zero on success, else a non-zero error code
+ * is returned.
+ */
+int
+ktls_get_rx_sequence(struct inpcb *inp, uint32_t *tcpseq, uint64_t *tlsseq)
+{
+	struct socket *so;
+	struct tcpcb *tp;
+
+	INP_RLOCK(inp);
+	so = inp->inp_socket;
+	if (__predict_false(so == NULL)) {
+		INP_RUNLOCK(inp);
+		return (EINVAL);
+	}
+	if (inp->inp_flags & (INP_TIMEWAIT | INP_DROPPED)) {
+		INP_RUNLOCK(inp);
+		return (ECONNRESET);
+	}
+
+	tp = intotcpcb(inp);
+	MPASS(tp != NULL);
+
+	SOCKBUF_LOCK(&so->so_rcv);
+	*tcpseq = tp->rcv_nxt - so->so_rcv.sb_tlscc;
+	*tlsseq = so->so_rcv.sb_tls_seqno;
+	SOCKBUF_UNLOCK(&so->so_rcv);
+
+	INP_RUNLOCK(inp);
+
+	return (0);
+}
+
 int
 ktls_get_tx_mode(struct socket *so, int *modep)
 {
@@ -1413,6 +1454,7 @@ ktls_set_tx_mode(struct socket *so, int mode)
 		return (EBUSY);
 	}
 
+	INP_WLOCK(inp);
 	SOCKBUF_LOCK(&so->so_snd);
 	so->so_snd.sb_tls_info = tls_new;
 	if (tls_new->mode != TCP_TLS_MODE_SW)
@@ -1434,7 +1476,6 @@ ktls_set_tx_mode(struct socket *so, int mode)
 	else
 		counter_u64_add(ktls_switch_to_sw, 1);
 
-	INP_WLOCK(inp);
 	return (0);
 }
 
@@ -1650,19 +1691,18 @@ ktls_frame(struct mbuf *top, struct ktls_session *tls, int *enq_cnt,
 		 * All mbufs in the chain should be TLS records whose
 		 * payload does not exceed the maximum frame length.
 		 *
-		 * Empty TLS records are permitted when using CBC.
+		 * Empty TLS 1.0 records are permitted when using CBC.
 		 */
-		KASSERT(m->m_len <= maxlen &&
-		    (tls->params.cipher_algorithm == CRYPTO_AES_CBC ?
-		    m->m_len >= 0 : m->m_len > 0),
-		    ("ktls_frame: m %p len %d\n", m, m->m_len));
+		KASSERT(m->m_len <= maxlen && m->m_len >= 0 &&
+		    (m->m_len > 0 || ktls_permit_empty_frames(tls)),
+		    ("ktls_frame: m %p len %d", m, m->m_len));
 
 		/*
 		 * TLS frames require unmapped mbufs to store session
 		 * info.
 		 */
 		KASSERT((m->m_flags & M_EXTPG) != 0,
-		    ("ktls_frame: mapped mbuf %p (top = %p)\n", m, top));
+		    ("ktls_frame: mapped mbuf %p (top = %p)", m, top));
 
 		tls_len = m->m_len;
 
@@ -1754,6 +1794,13 @@ ktls_frame(struct mbuf *top, struct ktls_session *tls, int *enq_cnt,
 			*enq_cnt += m->m_epg_nrdy;
 		}
 	}
+}
+
+bool
+ktls_permit_empty_frames(struct ktls_session *tls)
+{
+	return (tls->params.cipher_algorithm == CRYPTO_AES_CBC &&
+	    tls->params.tls_vminor == TLS_MINOR_VER_ZERO);
 }
 
 void
@@ -2026,7 +2073,7 @@ ktls_decrypt(struct socket *so)
 		SBCHECK(sb);
 		SOCKBUF_UNLOCK(sb);
 
-		error = tls->sw_decrypt(tls, hdr, data, seqno, &trail_len);
+		error = ktls_ocf_decrypt(tls, hdr, data, seqno, &trail_len);
 		if (error == 0) {
 			if (tls13)
 				error = tls13_find_record_type(tls, data,
@@ -2215,7 +2262,7 @@ ktls_encrypt_record(struct ktls_wq *wq, struct mbuf *m,
 
 	/* Anonymous mbufs are encrypted in place. */
 	if ((m->m_epg_flags & EPG_FLAG_ANON) != 0)
-		return (tls->sw_encrypt(state, tls, m, NULL, 0));
+		return (ktls_ocf_encrypt(state, tls, m, NULL, 0));
 
 	/*
 	 * For file-backed mbufs (from sendfile), anonymous wired
@@ -2245,7 +2292,7 @@ ktls_encrypt_record(struct ktls_wq *wq, struct mbuf *m,
 	state->dst_iov[i].iov_base = m->m_epg_trail;
 	state->dst_iov[i].iov_len = m->m_epg_trllen;
 
-	error = tls->sw_encrypt(state, tls, m, state->dst_iov, i + 1);
+	error = ktls_ocf_encrypt(state, tls, m, state->dst_iov, i + 1);
 
 	if (__predict_false(error != 0)) {
 		/* Free the anonymous pages. */

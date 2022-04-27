@@ -41,12 +41,12 @@
 #include <linux/blkdev_compat.h>
 #include <linux/task_io_accounting_ops.h>
 
-unsigned int zvol_major = ZVOL_MAJOR;
-unsigned int zvol_request_sync = 0;
-unsigned int zvol_prefetch_bytes = (128 * 1024);
-unsigned long zvol_max_discard_blocks = 16384;
-unsigned int zvol_threads = 32;
-unsigned int zvol_open_timeout_ms = 1000;
+static unsigned int zvol_major = ZVOL_MAJOR;
+static unsigned int zvol_request_sync = 0;
+static unsigned int zvol_prefetch_bytes = (128 * 1024);
+static unsigned long zvol_max_discard_blocks = 16384;
+static unsigned int zvol_threads = 32;
+static const unsigned int zvol_open_timeout_ms = 1000;
 
 struct zvol_state_os {
 	struct gendisk		*zvo_disk;	/* generic disk */
@@ -86,8 +86,8 @@ zv_request_task_free(zv_request_task_t *task)
 /*
  * Given a path, return TRUE if path is a ZVOL.
  */
-static boolean_t
-zvol_is_zvol_impl(const char *path)
+boolean_t
+zvol_os_is_zvol(const char *path)
 {
 	dev_t dev = 0;
 
@@ -496,8 +496,7 @@ zvol_open(struct block_device *bdev, fmode_t flag)
 {
 	zvol_state_t *zv;
 	int error = 0;
-	boolean_t drop_suspend = B_TRUE;
-	boolean_t drop_namespace = B_FALSE;
+	boolean_t drop_suspend = B_FALSE;
 #ifndef HAVE_BLKDEV_GET_ERESTARTSYS
 	hrtime_t timeout = MSEC2NSEC(zvol_open_timeout_ms);
 	hrtime_t start = gethrtime();
@@ -508,7 +507,7 @@ retry:
 	/*
 	 * Obtain a copy of private_data under the zvol_state_lock to make
 	 * sure that either the result of zvol free code path setting
-	 * bdev->bd_disk->private_data to NULL is observed, or zvol_free()
+	 * bdev->bd_disk->private_data to NULL is observed, or zvol_os_free()
 	 * is not called on this zv because of the positive zv_open_count.
 	 */
 	zv = bdev->bd_disk->private_data;
@@ -517,7 +516,36 @@ retry:
 		return (SET_ERROR(-ENXIO));
 	}
 
-	if (zv->zv_open_count == 0 && !mutex_owned(&spa_namespace_lock)) {
+	mutex_enter(&zv->zv_state_lock);
+	/*
+	 * Make sure zvol is not suspended during first open
+	 * (hold zv_suspend_lock) and respect proper lock acquisition
+	 * ordering - zv_suspend_lock before zv_state_lock
+	 */
+	if (zv->zv_open_count == 0) {
+		if (!rw_tryenter(&zv->zv_suspend_lock, RW_READER)) {
+			mutex_exit(&zv->zv_state_lock);
+			rw_enter(&zv->zv_suspend_lock, RW_READER);
+			mutex_enter(&zv->zv_state_lock);
+			/* check to see if zv_suspend_lock is needed */
+			if (zv->zv_open_count != 0) {
+				rw_exit(&zv->zv_suspend_lock);
+			} else {
+				drop_suspend = B_TRUE;
+			}
+		} else {
+			drop_suspend = B_TRUE;
+		}
+	}
+	rw_exit(&zvol_state_lock);
+
+	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
+
+	if (zv->zv_open_count == 0) {
+		boolean_t drop_namespace = B_FALSE;
+
+		ASSERT(RW_READ_HELD(&zv->zv_suspend_lock));
+
 		/*
 		 * In all other call paths the spa_namespace_lock is taken
 		 * before the bdev->bd_mutex lock.  However, on open(2)
@@ -542,84 +570,51 @@ retry:
 		 * the kernel so the only option is to return the error for
 		 * the caller to handle it.
 		 */
-		if (!mutex_tryenter(&spa_namespace_lock)) {
-			rw_exit(&zvol_state_lock);
+		if (!mutex_owned(&spa_namespace_lock)) {
+			if (!mutex_tryenter(&spa_namespace_lock)) {
+				mutex_exit(&zv->zv_state_lock);
+				rw_exit(&zv->zv_suspend_lock);
 
 #ifdef HAVE_BLKDEV_GET_ERESTARTSYS
-			schedule();
-			return (SET_ERROR(-ERESTARTSYS));
-#else
-			if ((gethrtime() - start) > timeout)
+				schedule();
 				return (SET_ERROR(-ERESTARTSYS));
+#else
+				if ((gethrtime() - start) > timeout)
+					return (SET_ERROR(-ERESTARTSYS));
 
-			schedule_timeout(MSEC_TO_TICK(10));
-			goto retry;
+				schedule_timeout(MSEC_TO_TICK(10));
+				goto retry;
 #endif
-		} else {
-			drop_namespace = B_TRUE;
-		}
-	}
-
-	mutex_enter(&zv->zv_state_lock);
-	/*
-	 * make sure zvol is not suspended during first open
-	 * (hold zv_suspend_lock) and respect proper lock acquisition
-	 * ordering - zv_suspend_lock before zv_state_lock
-	 */
-	if (zv->zv_open_count == 0) {
-		if (!rw_tryenter(&zv->zv_suspend_lock, RW_READER)) {
-			mutex_exit(&zv->zv_state_lock);
-			rw_enter(&zv->zv_suspend_lock, RW_READER);
-			mutex_enter(&zv->zv_state_lock);
-			/* check to see if zv_suspend_lock is needed */
-			if (zv->zv_open_count != 0) {
-				rw_exit(&zv->zv_suspend_lock);
-				drop_suspend = B_FALSE;
+			} else {
+				drop_namespace = B_TRUE;
 			}
 		}
-	} else {
-		drop_suspend = B_FALSE;
-	}
-	rw_exit(&zvol_state_lock);
 
-	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
-
-	if (zv->zv_open_count == 0) {
-		ASSERT(RW_READ_HELD(&zv->zv_suspend_lock));
 		error = -zvol_first_open(zv, !(flag & FMODE_WRITE));
-		if (error)
-			goto out_mutex;
+
+		if (drop_namespace)
+			mutex_exit(&spa_namespace_lock);
 	}
 
-	if ((flag & FMODE_WRITE) && (zv->zv_flags & ZVOL_RDONLY)) {
-		error = -EROFS;
-		goto out_open_count;
-	}
+	if (error == 0) {
+		if ((flag & FMODE_WRITE) && (zv->zv_flags & ZVOL_RDONLY)) {
+			if (zv->zv_open_count == 0)
+				zvol_last_close(zv);
 
-	zv->zv_open_count++;
+			error = SET_ERROR(-EROFS);
+		} else {
+			zv->zv_open_count++;
+		}
+	}
 
 	mutex_exit(&zv->zv_state_lock);
-	if (drop_namespace)
-		mutex_exit(&spa_namespace_lock);
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
 
-	zfs_check_media_change(bdev);
+	if (error == 0)
+		zfs_check_media_change(bdev);
 
-	return (0);
-
-out_open_count:
-	if (zv->zv_open_count == 0)
-		zvol_last_close(zv);
-
-out_mutex:
-	mutex_exit(&zv->zv_state_lock);
-	if (drop_namespace)
-		mutex_exit(&spa_namespace_lock);
-	if (drop_suspend)
-		rw_exit(&zv->zv_suspend_lock);
-
-	return (SET_ERROR(error));
+	return (error);
 }
 
 static void
@@ -752,8 +747,8 @@ zvol_revalidate_disk(struct gendisk *disk)
 	return (0);
 }
 
-static int
-zvol_update_volsize(zvol_state_t *zv, uint64_t volsize)
+int
+zvol_os_update_volsize(zvol_state_t *zv, uint64_t volsize)
 {
 	struct gendisk *disk = zv->zv_zso->zvo_disk;
 
@@ -767,8 +762,8 @@ zvol_update_volsize(zvol_state_t *zv, uint64_t volsize)
 	return (0);
 }
 
-static void
-zvol_clear_private(zvol_state_t *zv)
+void
+zvol_os_clear_private(zvol_state_t *zv)
 {
 	/*
 	 * Cleared while holding zvol_state_lock as a writer
@@ -807,7 +802,7 @@ zvol_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 	return (0);
 }
 
-static struct block_device_operations zvol_ops = {
+static const struct block_device_operations zvol_ops = {
 	.open			= zvol_open,
 	.release		= zvol_release,
 	.ioctl			= zvol_ioctl,
@@ -911,7 +906,7 @@ zvol_alloc(dev_t dev, const char *name)
 	if (volmode == ZFS_VOLMODE_DEV) {
 		/*
 		 * ZFS_VOLMODE_DEV disable partitioning on ZVOL devices: set
-		 * gendisk->minors = 1 as noted in include/linux/genhd.h.
+		 * gendisk->minors = 1 as noted in include/linux/blkdev.h.
 		 * Also disable extended partition numbers (GENHD_FL_EXT_DEVT)
 		 * and suppresses partition scanning (GENHD_FL_NO_PART_SCAN)
 		 * setting gendisk->flags accordingly.
@@ -949,8 +944,8 @@ out_kmem:
  * "del_gendisk". Thus, consumers need to be careful to account for this
  * latency when calling this function.
  */
-static void
-zvol_free(zvol_state_t *zv)
+void
+zvol_os_free(zvol_state_t *zv)
 {
 
 	ASSERT(!RW_LOCK_HELD(&zv->zv_suspend_lock));
@@ -990,7 +985,7 @@ zvol_wait_close(zvol_state_t *zv)
  * and the specified volume.  Once this function returns the block
  * device is live and ready for use.
  */
-static int
+int
 zvol_os_create_minor(const char *name)
 {
 	zvol_state_t *zv;
@@ -1115,7 +1110,11 @@ out_doi:
 		rw_enter(&zvol_state_lock, RW_WRITER);
 		zvol_insert(zv);
 		rw_exit(&zvol_state_lock);
+#ifdef HAVE_ADD_DISK_RET
+		error = add_disk(zv->zv_zso->zvo_disk);
+#else
 		add_disk(zv->zv_zso->zvo_disk);
+#endif
 	} else {
 		ida_simple_remove(&zvol_ida, idx);
 	}
@@ -1123,8 +1122,8 @@ out_doi:
 	return (error);
 }
 
-static void
-zvol_rename_minor(zvol_state_t *zv, const char *newname)
+void
+zvol_os_rename_minor(zvol_state_t *zv, const char *newname)
 {
 	int readonly = get_disk_ro(zv->zv_zso->zvo_disk);
 
@@ -1150,30 +1149,19 @@ zvol_rename_minor(zvol_state_t *zv, const char *newname)
 	set_disk_ro(zv->zv_zso->zvo_disk, readonly);
 }
 
-static void
-zvol_set_disk_ro_impl(zvol_state_t *zv, int flags)
+void
+zvol_os_set_disk_ro(zvol_state_t *zv, int flags)
 {
 
 	set_disk_ro(zv->zv_zso->zvo_disk, flags);
 }
 
-static void
-zvol_set_capacity_impl(zvol_state_t *zv, uint64_t capacity)
+void
+zvol_os_set_capacity(zvol_state_t *zv, uint64_t capacity)
 {
 
 	set_capacity(zv->zv_zso->zvo_disk, capacity);
 }
-
-const static zvol_platform_ops_t zvol_linux_ops = {
-	.zv_free = zvol_free,
-	.zv_rename_minor = zvol_rename_minor,
-	.zv_create_minor = zvol_os_create_minor,
-	.zv_update_volsize = zvol_update_volsize,
-	.zv_clear_private = zvol_clear_private,
-	.zv_is_zvol = zvol_is_zvol_impl,
-	.zv_set_disk_ro = zvol_set_disk_ro_impl,
-	.zv_set_capacity = zvol_set_capacity_impl,
-};
 
 int
 zvol_init(void)
@@ -1194,7 +1182,6 @@ zvol_init(void)
 	}
 	zvol_init_impl();
 	ida_init(&zvol_ida);
-	zvol_register_ops(&zvol_linux_ops);
 	return (0);
 }
 

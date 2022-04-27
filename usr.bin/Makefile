@@ -11,8 +11,10 @@ SUBDIR=	alias \
 	banner \
 	basename \
 	beep \
+	bintrans \
 	brandelf \
 	bsdcat \
+	bsddialog \
 	bsdiff \
 	bzip2 \
 	bzip2recover \
@@ -168,8 +170,6 @@ SUBDIR=	alias \
 	unzip \
 	units \
 	unvis \
-	uudecode \
-	uuencode \
 	vis \
 	vmstat \
 	w \

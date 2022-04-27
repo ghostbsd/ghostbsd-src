@@ -59,8 +59,11 @@
  */
 #define NVME_GLOBAL_NAMESPACE_TAG	((uint32_t)0xFFFFFFFF)
 
-/* Cap transfers by the maximum addressable by page-sized PRP (4KB -> 2MB). */
-#define NVME_MAX_XFER_SIZE		MIN(maxphys, (PAGE_SIZE/8*PAGE_SIZE))
+/* Host memory buffer sizes are always in 4096 byte chunks */
+#define	NVME_HMB_UNITS			4096
+
+/* Many items are expressed in terms of power of two times MPS */
+#define NVME_MPS_SHIFT			12
 
 /* Register field definitions */
 #define NVME_CAP_LO_REG_MQES_SHIFT			(0)
@@ -236,6 +239,35 @@
 /* Asymmetric Namespace Access Reporting */
 #define NVME_CTRLR_DATA_MIC_ANAR_SHIFT			(3)
 #define NVME_CTRLR_DATA_MIC_ANAR_MASK			(0x1)
+
+/** OAES - Optional Asynchronous Events Supported */
+/* supports Namespace Attribute Notices event */
+#define NVME_CTRLR_DATA_OAES_NS_ATTR_SHIFT		(8)
+#define NVME_CTRLR_DATA_OAES_NS_ATTR_MASK		(0x1)
+/* supports Firmware Activation Notices event */
+#define NVME_CTRLR_DATA_OAES_FW_ACTIVATE_SHIFT		(9)
+#define NVME_CTRLR_DATA_OAES_FW_ACTIVATE_MASK		(0x1)
+/* supports Asymmetric Namespace Access Change Notices event */
+#define NVME_CTRLR_DATA_OAES_ASYM_NS_CHANGE_SHIFT	(11)
+#define NVME_CTRLR_DATA_OAES_ASYM_NS_CHANGE_MASK	(0x1)
+/* supports Predictable Latency Event Aggregate Log Change Notices event */
+#define NVME_CTRLR_DATA_OAES_PREDICT_LATENCY_SHIFT	(12)
+#define NVME_CTRLR_DATA_OAES_PREDICT_LATENCY_MASK	(0x1)
+/* supports LBA Status Information Notices event */
+#define NVME_CTRLR_DATA_OAES_LBA_STATUS_SHIFT		(13)
+#define NVME_CTRLR_DATA_OAES_LBA_STATUS_MASK		(0x1)
+/* supports Endurance Group Event Aggregate Log Page Changes Notices event */
+#define NVME_CTRLR_DATA_OAES_ENDURANCE_GROUP_SHIFT	(14)
+#define NVME_CTRLR_DATA_OAES_ENDURANCE_GROUP_MASK	(0x1)
+/* supports Normal NVM Subsystem Shutdown event */
+#define NVME_CTRLR_DATA_OAES_NORMAL_SHUTDOWN_SHIFT	(15)
+#define NVME_CTRLR_DATA_OAES_NORMAL_SHUTDOWN_MASK	(0x1)
+/* supports Zone Descriptor Changed Notices event */
+#define NVME_CTRLR_DATA_OAES_ZONE_DESC_CHANGE_SHIFT	(27)
+#define NVME_CTRLR_DATA_OAES_ZONE_DESC_CHANGE_MASK	(0x1)
+/* supports Discovery Log Page Change Notification event */
+#define NVME_CTRLR_DATA_OAES_LOG_PAGE_CHANGE_SHIFT	(31)
+#define NVME_CTRLR_DATA_OAES_LOG_PAGE_CHANGE_MASK	(0x1)
 
 /** OACS - optional admin command support */
 /* supports security send/receive commands */
@@ -532,6 +564,9 @@ enum nvme_critical_warning_state {
 #define	NVME_SS_PAGE_SSTAT_PASSES_MASK			(0x1f)
 #define	NVME_SS_PAGE_SSTAT_GDE_SHIFT			(8)
 #define	NVME_SS_PAGE_SSTAT_GDE_MASK			(0x1)
+
+/* Helper macro to combine *_MASK and *_SHIFT defines */
+#define NVMEB(name)	(name##_MASK << name##_SHIFT)
 
 /* CC register SHN field values */
 enum shn_value {
@@ -1281,7 +1316,7 @@ enum nvme_log_page {
 	NVME_LOG_ENDURANCE_GROUP_INFORMATION = 0x09,
 	NVME_LOG_PREDICTABLE_LATENCY_PER_NVM_SET = 0x0a,
 	NVME_LOG_PREDICTABLE_LATENCY_EVENT_AGGREGATE = 0x0b,
-	NVME_LOG_ASYMMETRIC_NAMESPAVE_ACCESS = 0x0c,
+	NVME_LOG_ASYMMETRIC_NAMESPACE_ACCESS = 0x0c,
 	NVME_LOG_PERSISTENT_EVENT_LOG	= 0x0d,
 	NVME_LOG_LBA_STATUS_INFORMATION	= 0x0e,
 	NVME_LOG_ENDURANCE_GROUP_EVENT_AGGREGATE = 0x0f,

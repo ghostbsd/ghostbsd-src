@@ -96,6 +96,10 @@ LINUXKPI_GENSRCS+= \
 	backlight_if.h \
 	bus_if.h \
 	device_if.h \
+	iicbus_if.h \
+	iicbb_if.h \
+	lkpi_iic_if.c \
+	lkpi_iic_if.h \
 	pci_if.h \
 	pci_iov_if.h \
 	pcib_if.h \
@@ -540,8 +544,7 @@ OPENZFS_CFLAGS=     \
 	-I${SYSDIR}/cddl/contrib/opensolaris/uts/common \
 	-include ${ZINCDIR}/os/freebsd/spl/sys/ccompile.h
 OPENZFS_CWARNFLAGS= \
-	-Wno-nested-externs \
-	-Wno-redundant-decls
+	-Wno-nested-externs
 
 .include <bsd.dep.mk>
 .include <bsd.clang-analyze.mk>

@@ -854,7 +854,7 @@ static int hold_clip_addr(struct adapter *, struct t4_clip_addr *);
 static int release_clip_addr(struct adapter *, struct t4_clip_addr *);
 #ifdef TCP_OFFLOAD
 static int toe_capability(struct vi_info *, bool);
-static void t4_async_event(void *, int);
+static void t4_async_event(struct adapter *);
 #endif
 #ifdef KERN_TLS
 static int ktls_capability(struct adapter *, bool);
@@ -864,7 +864,11 @@ static int notify_siblings(device_t, int);
 static uint64_t vi_get_counter(struct ifnet *, ift_counter);
 static uint64_t cxgbe_get_counter(struct ifnet *, ift_counter);
 static void enable_vxlan_rx(struct adapter *);
-static void reset_adapter(void *, int);
+static void reset_adapter_task(void *, int);
+static void fatal_error_task(void *, int);
+static void dump_devlog(struct adapter *);
+static void dump_cim_regs(struct adapter *);
+static void dump_cimla(struct adapter *);
 
 struct {
 	uint16_t device;
@@ -1168,13 +1172,10 @@ t4_attach(device_t dev)
 
 	callout_init(&sc->ktls_tick, 1);
 
-#ifdef TCP_OFFLOAD
-	TASK_INIT(&sc->async_event_task, 0, t4_async_event, sc);
-#endif
-
 	refcount_init(&sc->vxlan_refcount, 0);
 
-	TASK_INIT(&sc->reset_task, 0, reset_adapter, sc);
+	TASK_INIT(&sc->reset_task, 0, reset_adapter_task, sc);
+	TASK_INIT(&sc->fatal_error_task, 0, fatal_error_task, sc);
 
 	sc->ctrlq_oid = SYSCTL_ADD_NODE(&sc->ctx,
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev)), OID_AUTO, "ctrlq",
@@ -1709,10 +1710,6 @@ t4_detach_common(device_t dev)
 		}
 	}
 
-#ifdef TCP_OFFLOAD
-	taskqueue_drain(taskqueue_thread, &sc->async_event_task);
-#endif
-
 	for (i = 0; i < sc->intr_count; i++)
 		t4_free_irq(sc, &sc->irq[i]);
 
@@ -1862,6 +1859,14 @@ ok_to_reset(struct adapter *sc)
 	return (true);
 }
 
+static inline int
+stop_adapter(struct adapter *sc)
+{
+	if (atomic_testandset_int(&sc->error_flags, ilog2(ADAP_STOPPED)))
+		return (1);		/* Already stopped. */
+	return (t4_shutdown_adapter(sc));
+}
+
 static int
 t4_suspend(device_t dev)
 {
@@ -1897,7 +1902,7 @@ t4_suspend(device_t dev)
 	}
 
 	/* No more DMA or interrupts. */
-	t4_shutdown_adapter(sc);
+	stop_adapter(sc);
 
 	/* Quiesce all activity. */
 	for_each_port(sc, i) {
@@ -1919,13 +1924,15 @@ t4_suspend(device_t dev)
 
 		for_each_vi(pi, j, vi) {
 			vi->xact_addr_filt = -1;
+			mtx_lock(&vi->tick_mtx);
+			vi->flags |= VI_SKIP_STATS;
+			mtx_unlock(&vi->tick_mtx);
 			if (!(vi->flags & VI_INIT_DONE))
 				continue;
 
 			ifp = vi->ifp;
 			if (ifp->if_drv_flags & IFF_DRV_RUNNING) {
 				mtx_lock(&vi->tick_mtx);
-				vi->flags |= VI_SKIP_STATS;
 				callout_stop(&vi->tick);
 				mtx_unlock(&vi->tick_mtx);
 				callout_drain(&vi->tick);
@@ -1971,12 +1978,11 @@ t4_suspend(device_t dev)
 
 	/* Mark the adapter totally off limits. */
 	mtx_lock(&sc->reg_lock);
-	sc->flags |= HW_OFF_LIMITS;
+	atomic_set_int(&sc->error_flags, HW_OFF_LIMITS);
 	sc->flags &= ~(FW_OK | MASTER_PF);
 	sc->reset_thread = NULL;
 	mtx_unlock(&sc->reg_lock);
 
-	sc->num_resets++;
 	CH_ALERT(sc, "suspend completed.\n");
 done:
 	end_synchronized_op(sc, 0);
@@ -2163,6 +2169,9 @@ t4_resume(device_t dev)
 		goto done;
 	}
 
+	/* Note that HW_OFF_LIMITS is cleared a bit later. */
+	atomic_clear_int(&sc->error_flags, ADAP_FATAL_ERR | ADAP_STOPPED);
+
 	/* Restore memory window. */
 	setup_memwin(sc);
 
@@ -2171,7 +2180,7 @@ t4_resume(device_t dev)
 		CH_ALERT(sc, "recovery mode on resume.\n");
 		rc = 0;
 		mtx_lock(&sc->reg_lock);
-		sc->flags &= ~HW_OFF_LIMITS;
+		atomic_clear_int(&sc->error_flags, HW_OFF_LIMITS);
 		mtx_unlock(&sc->reg_lock);
 		goto done;
 	}
@@ -2240,7 +2249,7 @@ t4_resume(device_t dev)
 	 * this thread is still in the middle of a synchronized_op.
 	 */
 	mtx_lock(&sc->reg_lock);
-	sc->flags &= ~HW_OFF_LIMITS;
+	atomic_clear_int(&sc->error_flags, HW_OFF_LIMITS);
 	mtx_unlock(&sc->reg_lock);
 
 	if (sc->flags & FULL_INIT_DONE) {
@@ -2256,6 +2265,9 @@ t4_resume(device_t dev)
 		for_each_port(sc, i) {
 			pi = sc->port[i];
 			for_each_vi(pi, j, vi) {
+				mtx_lock(&vi->tick_mtx);
+				vi->flags &= ~VI_SKIP_STATS;
+				mtx_unlock(&vi->tick_mtx);
 				if (!(vi->flags & VI_INIT_DONE))
 					continue;
 				rc = vi_full_init(vi);
@@ -2292,7 +2304,6 @@ t4_resume(device_t dev)
 					TXQ_UNLOCK(txq);
 				}
 				mtx_lock(&vi->tick_mtx);
-				vi->flags &= ~VI_SKIP_STATS;
 				callout_schedule(&vi->tick, hz);
 				mtx_unlock(&vi->tick_mtx);
 			}
@@ -2353,17 +2364,16 @@ t4_reset_post(device_t dev, device_t child)
 	return (0);
 }
 
-static void
-reset_adapter(void *arg, int pending)
+static int
+reset_adapter(struct adapter *sc)
 {
-	struct adapter *sc = arg;
-	int rc;
+	int rc, oldinc, error_flags;
 
 	CH_ALERT(sc, "reset requested.\n");
 
 	rc = begin_synchronized_op(sc, NULL, SLEEP_OK, "t4rst1");
 	if (rc != 0)
-		return;
+		return (EBUSY);
 
 	if (hw_off_limits(sc)) {
 		CH_ERR(sc, "adapter is suspended, use resume (not reset).\n");
@@ -2379,17 +2389,41 @@ reset_adapter(void *arg, int pending)
 	}
 
 done:
+	oldinc = sc->incarnation;
 	end_synchronized_op(sc, 0);
 	if (rc != 0)
-		return;	/* Error logged already. */
+		return (rc);	/* Error logged already. */
 
+	atomic_add_int(&sc->num_resets, 1);
 	mtx_lock(&Giant);
 	rc = BUS_RESET_CHILD(device_get_parent(sc->dev), sc->dev, 0);
 	mtx_unlock(&Giant);
 	if (rc != 0)
 		CH_ERR(sc, "bus_reset_child failed: %d.\n", rc);
-	else
-		CH_ALERT(sc, "bus_reset_child succeeded.\n");
+	else {
+		rc = begin_synchronized_op(sc, NULL, SLEEP_OK, "t4rst2");
+		if (rc != 0)
+			return (EBUSY);
+		error_flags = atomic_load_int(&sc->error_flags);
+		if (sc->incarnation > oldinc && error_flags == 0) {
+			CH_ALERT(sc, "bus_reset_child succeeded.\n");
+		} else {
+			CH_ERR(sc, "adapter did not reset properly, flags "
+			    "0x%08x, error_flags 0x%08x.\n", sc->flags,
+			    error_flags);
+			rc = ENXIO;
+		}
+		end_synchronized_op(sc, 0);
+	}
+
+	return (rc);
+}
+
+static void
+reset_adapter_task(void *arg, int pending)
+{
+	/* XXX: t4_async_event here? */
+	reset_adapter(arg);
 }
 
 static int
@@ -3165,7 +3199,7 @@ cxgbe_media_change(struct ifnet *ifp)
 		if (IFM_OPTIONS(ifm->ifm_media) & IFM_ETH_TXPAUSE)
 			lc->requested_fc |= PAUSE_TX;
 	}
-	if (pi->up_vis > 0) {
+	if (pi->up_vis > 0 && !hw_off_limits(sc)) {
 		fixup_link_config(pi);
 		rc = apply_link_config(pi);
 	}
@@ -3333,7 +3367,7 @@ cxgbe_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 		return;
 	PORT_LOCK(pi);
 
-	if (pi->up_vis == 0) {
+	if (pi->up_vis == 0 && !hw_off_limits(sc)) {
 		/*
 		 * If all the interfaces are administratively down the firmware
 		 * does not report transceiver changes.  Refresh port info here
@@ -3485,33 +3519,61 @@ delayed_panic(void *arg)
 	panic("%s: panic on fatal error", device_get_nameunit(sc->dev));
 }
 
-void
-t4_fatal_err(struct adapter *sc, bool fw_error)
+static void
+fatal_error_task(void *arg, int pending)
 {
+	struct adapter *sc = arg;
+	int rc;
 
-	t4_shutdown_adapter(sc);
-	log(LOG_ALERT, "%s: encountered fatal error, adapter stopped.\n",
-	    device_get_nameunit(sc->dev));
-	if (fw_error) {
-		if (sc->flags & CHK_MBOX_ACCESS)
-			ASSERT_SYNCHRONIZED_OP(sc);
-		sc->flags |= ADAP_ERR;
-	} else {
-		ADAPTER_LOCK(sc);
-		sc->flags |= ADAP_ERR;
-		ADAPTER_UNLOCK(sc);
-	}
 #ifdef TCP_OFFLOAD
-	taskqueue_enqueue(taskqueue_thread, &sc->async_event_task);
+	t4_async_event(sc);
 #endif
+	if (atomic_testandclear_int(&sc->error_flags, ilog2(ADAP_CIM_ERR))) {
+		dump_cim_regs(sc);
+		dump_cimla(sc);
+		dump_devlog(sc);
+	}
+
+	if (t4_reset_on_fatal_err) {
+		CH_ALERT(sc, "resetting on fatal error.\n");
+		rc = reset_adapter(sc);
+		if (rc == 0 && t4_panic_on_fatal_err) {
+			CH_ALERT(sc, "reset was successful, "
+			    "system will NOT panic.\n");
+			return;
+		}
+	}
 
 	if (t4_panic_on_fatal_err) {
 		CH_ALERT(sc, "panicking on fatal error (after 30s).\n");
 		callout_reset(&fatal_callout, hz * 30, delayed_panic, sc);
-	} else if (t4_reset_on_fatal_err) {
-		CH_ALERT(sc, "resetting on fatal error.\n");
-		taskqueue_enqueue(reset_tq, &sc->reset_task);
 	}
+}
+
+void
+t4_fatal_err(struct adapter *sc, bool fw_error)
+{
+	const bool verbose = (sc->debug_flags & DF_VERBOSE_SLOWINTR) != 0;
+
+	stop_adapter(sc);
+	if (atomic_testandset_int(&sc->error_flags, ilog2(ADAP_FATAL_ERR)))
+		return;
+	if (fw_error) {
+		/*
+		 * We are here because of a firmware error/timeout and not
+		 * because of a hardware interrupt.  It is possible (although
+		 * not very likely) that an error interrupt was also raised but
+		 * this thread ran first and inhibited t4_intr_err.  We walk the
+		 * main INT_CAUSE registers here to make sure we haven't missed
+		 * anything interesting.
+		 */
+		t4_slow_intr_handler(sc, verbose);
+		atomic_set_int(&sc->error_flags, ADAP_CIM_ERR);
+	}
+	t4_report_fw_error(sc);
+	log(LOG_ALERT, "%s: encountered fatal error, adapter stopped (%d).\n",
+	    device_get_nameunit(sc->dev), fw_error);
+	taskqueue_enqueue(reset_tq, &sc->fatal_error_task);
 }
 
 void
@@ -5035,6 +5097,17 @@ set_params__pre_init(struct adapter *sc)
 			    "failed to enable high priority filters :%d.\n",
 			    rc);
 		}
+
+		param = FW_PARAM_DEV(PPOD_EDRAM);
+		rc = -t4_query_params(sc, sc->mbox, sc->pf, 0, 1, &param, &val);
+		if (rc == 0 && val == 1) {
+			rc = -t4_set_params(sc, sc->mbox, sc->pf, 0, 1, &param,
+			    &val);
+			if (rc != 0) {
+				device_printf(sc->dev,
+				    "failed to set PPOD_EDRAM: %d.\n", rc);
+			}
+		}
 	}
 
 	/* Enable opaque VIIDs with firmwares that support it. */
@@ -5727,7 +5800,6 @@ init_link_config(struct port_info *pi)
 	struct link_config *lc = &pi->link_cfg;
 
 	PORT_LOCK_ASSERT_OWNED(pi);
-	MPASS(lc->pcaps != 0);
 
 	lc->requested_caps = 0;
 	lc->requested_speed = 0;
@@ -5753,13 +5825,12 @@ init_link_config(struct port_info *pi)
 		if (lc->requested_fec == 0)
 			lc->requested_fec = FEC_AUTO;
 	}
-	lc->force_fec = 0;
-	if (lc->pcaps & FW_PORT_CAP32_FORCE_FEC) {
-		if (t4_force_fec < 0)
-			lc->force_fec = -1;
-		else if (t4_force_fec > 0)
-			lc->force_fec = 1;
-	}
+	if (t4_force_fec < 0)
+		lc->force_fec = -1;
+	else if (t4_force_fec > 0)
+		lc->force_fec = 1;
+	else
+		lc->force_fec = 0;
 }
 
 /*
@@ -7019,7 +7090,7 @@ vi_refresh_stats(struct vi_info *vi)
 
 	mtx_assert(&vi->tick_mtx, MA_OWNED);
 
-	if (!(vi->flags & VI_INIT_DONE) || vi->flags & VI_SKIP_STATS)
+	if (vi->flags & VI_SKIP_STATS)
 		return;
 
 	getmicrotime(&tv);
@@ -8919,24 +8990,51 @@ sysctl_cim_la(SYSCTL_HANDLER_ARGS)
 	return (rc);
 }
 
-bool
-t4_os_dump_cimla(struct adapter *sc, int arg, bool verbose)
+static void
+dump_cim_regs(struct adapter *sc)
+{
+	log(LOG_DEBUG, "%s: CIM debug regs1 %08x %08x %08x %08x %08x\n",
+	    device_get_nameunit(sc->dev),
+	    t4_read_reg(sc, A_EDC_H_BIST_USER_WDATA0),
+	    t4_read_reg(sc, A_EDC_H_BIST_USER_WDATA1),
+	    t4_read_reg(sc, A_EDC_H_BIST_USER_WDATA2),
+	    t4_read_reg(sc, A_EDC_H_BIST_DATA_PATTERN),
+	    t4_read_reg(sc, A_EDC_H_BIST_STATUS_RDATA));
+	log(LOG_DEBUG, "%s: CIM debug regs2 %08x %08x %08x %08x %08x\n",
+	    device_get_nameunit(sc->dev),
+	    t4_read_reg(sc, A_EDC_H_BIST_USER_WDATA0),
+	    t4_read_reg(sc, A_EDC_H_BIST_USER_WDATA1),
+	    t4_read_reg(sc, A_EDC_H_BIST_USER_WDATA0 + 0x800),
+	    t4_read_reg(sc, A_EDC_H_BIST_USER_WDATA1 + 0x800),
+	    t4_read_reg(sc, A_EDC_H_BIST_CMD_LEN));
+}
+
+static void
+dump_cimla(struct adapter *sc)
 {
 	struct sbuf sb;
 	int rc;
 
-	if (sbuf_new(&sb, NULL, 4096, SBUF_AUTOEXTEND) != &sb)
-		return (false);
-	rc = sbuf_cim_la(sc, &sb, M_NOWAIT);
+	if (sbuf_new(&sb, NULL, 4096, SBUF_AUTOEXTEND) != &sb) {
+		log(LOG_DEBUG, "%s: failed to generate CIM LA dump.\n",
+		    device_get_nameunit(sc->dev));
+		return;
+	}
+	rc = sbuf_cim_la(sc, &sb, M_WAITOK);
 	if (rc == 0) {
 		rc = sbuf_finish(&sb);
 		if (rc == 0) {
-			log(LOG_DEBUG, "%s: CIM LA dump follows.\n%s",
+			log(LOG_DEBUG, "%s: CIM LA dump follows.\n%s\n",
 		    		device_get_nameunit(sc->dev), sbuf_data(&sb));
 		}
 	}
 	sbuf_delete(&sb);
-	return (false);
+}
+
+void
+t4_os_cim_err(struct adapter *sc)
+{
+	atomic_set_int(&sc->error_flags, ADAP_CIM_ERR);
 }
 
 static int
@@ -9352,15 +9450,18 @@ sysctl_devlog(SYSCTL_HANDLER_ARGS)
 	return (rc);
 }
 
-void
-t4_os_dump_devlog(struct adapter *sc)
+static void
+dump_devlog(struct adapter *sc)
 {
 	int rc;
 	struct sbuf sb;
 
-	if (sbuf_new(&sb, NULL, 4096, SBUF_AUTOEXTEND) != &sb)
+	if (sbuf_new(&sb, NULL, 4096, SBUF_AUTOEXTEND) != &sb) {
+		log(LOG_DEBUG, "%s: failed to generate devlog dump.\n",
+		    device_get_nameunit(sc->dev));
 		return;
-	rc = sbuf_devlog(sc, &sb, M_NOWAIT);
+	}
+	rc = sbuf_devlog(sc, &sb, M_WAITOK);
 	if (rc == 0) {
 		rc = sbuf_finish(&sb);
 		if (rc == 0) {
@@ -9566,16 +9667,23 @@ sysctl_linkdnrc(SYSCTL_HANDLER_ARGS)
 }
 
 struct mem_desc {
-	unsigned int base;
-	unsigned int limit;
-	unsigned int idx;
+	u_int base;
+	u_int limit;
+	u_int idx;
 };
 
 static int
 mem_desc_cmp(const void *a, const void *b)
 {
-	return ((const struct mem_desc *)a)->base -
-	       ((const struct mem_desc *)b)->base;
+	const u_int v1 = ((const struct mem_desc *)a)->base;
+	const u_int v2 = ((const struct mem_desc *)b)->base;
+
+	if (v1 < v2)
+		return (-1);
+	else if (v1 > v2)
+		return (1);
+
+	return (0);
 }
 
 static void
@@ -9601,7 +9709,7 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 	struct adapter *sc = arg1;
 	struct sbuf *sb;
 	int rc, i, n;
-	uint32_t lo, hi, used, alloc;
+	uint32_t lo, hi, used, free, alloc;
 	static const char *memory[] = {
 		"EDC0:", "EDC1:", "MC:", "MC0:", "MC1:", "HMA:"
 	};
@@ -9611,8 +9719,8 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 		"Tx payload:", "Rx payload:", "LE hash:", "iSCSI region:",
 		"TDDP region:", "TPT region:", "STAG region:", "RQ region:",
 		"RQUDP region:", "PBL region:", "TXPBL region:",
-		"DBVFIFO region:", "ULPRX state:", "ULPTX state:",
-		"On-chip queues:", "TLS keys:",
+		"TLSKey region:", "DBVFIFO region:", "ULPRX state:",
+		"ULPTX state:", "On-chip queues:",
 	};
 	struct mem_desc avail[4];
 	struct mem_desc mem[nitems(region) + 3];	/* up to 3 holes */
@@ -9727,6 +9835,9 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 	ulp_region(RX_RQUDP);
 	ulp_region(RX_PBL);
 	ulp_region(TX_PBL);
+	if (sc->cryptocaps & FW_CAPS_CONFIG_TLSKEYS) {
+		ulp_region(RX_TLS_KEY);
+	}
 #undef ulp_region
 
 	md->base = 0;
@@ -9765,13 +9876,6 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 		md->idx = nitems(region);  /* hide it */
 	md++;
 
-	md->base = sc->vres.key.start;
-	if (sc->vres.key.size)
-		md->limit = md->base + sc->vres.key.size - 1;
-	else
-		md->idx = nitems(region);  /* hide it */
-	md++;
-
 	/* add any address-space holes, there can be up to 3 */
 	for (n = 0; n < i - 1; n++)
 		if (avail[n].limit < avail[n + 1].base)
@@ -9780,6 +9884,7 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 		(md++)->base = avail[n].limit;
 
 	n = md - mem;
+	MPASS(n <= nitems(mem));
 	qsort(mem, n, sizeof(struct mem_desc), mem_desc_cmp);
 
 	for (lo = 0; lo < i; lo++)
@@ -9806,19 +9911,24 @@ sysctl_meminfo(SYSCTL_HANDLER_ARGS)
 	mem_region_show(sb, "uP Extmem2:", lo, hi);
 
 	lo = t4_read_reg(sc, A_TP_PMM_RX_MAX_PAGE);
-	sbuf_printf(sb, "\n%u Rx pages of size %uKiB for %u channels\n",
-		   G_PMRXMAXPAGE(lo),
+	for (i = 0, free = 0; i < 2; i++)
+		free += G_FREERXPAGECOUNT(t4_read_reg(sc, A_TP_FLM_FREE_RX_CNT));
+	sbuf_printf(sb, "\n%u Rx pages (%u free) of size %uKiB for %u channels\n",
+		   G_PMRXMAXPAGE(lo), free,
 		   t4_read_reg(sc, A_TP_PMM_RX_PAGE_SIZE) >> 10,
 		   (lo & F_PMRXNUMCHN) ? 2 : 1);
 
 	lo = t4_read_reg(sc, A_TP_PMM_TX_MAX_PAGE);
 	hi = t4_read_reg(sc, A_TP_PMM_TX_PAGE_SIZE);
-	sbuf_printf(sb, "%u Tx pages of size %u%ciB for %u channels\n",
-		   G_PMTXMAXPAGE(lo),
+	for (i = 0, free = 0; i < 4; i++)
+		free += G_FREETXPAGECOUNT(t4_read_reg(sc, A_TP_FLM_FREE_TX_CNT));
+	sbuf_printf(sb, "%u Tx pages (%u free) of size %u%ciB for %u channels\n",
+		   G_PMTXMAXPAGE(lo), free,
 		   hi >= (1 << 20) ? (hi >> 20) : (hi >> 10),
 		   hi >= (1 << 20) ? 'M' : 'K', 1 << G_PMTXNUMCHN(lo));
-	sbuf_printf(sb, "%u p-structs\n",
-		   t4_read_reg(sc, A_TP_CMM_MM_MAX_PSTRUCT));
+	sbuf_printf(sb, "%u p-structs (%u free)\n",
+		   t4_read_reg(sc, A_TP_CMM_MM_MAX_PSTRUCT),
+		   G_FREEPSTRUCTCOUNT(t4_read_reg(sc, A_TP_FLM_FREE_PS_CNT)));
 
 	for (i = 0; i < 4; i++) {
 		if (chip_id(sc) > CHELSIO_T5)
@@ -11010,14 +11120,14 @@ sysctl_reset(SYSCTL_HANDLER_ARGS)
 	u_int val;
 	int rc;
 
-	val = sc->num_resets;
+	val = atomic_load_int(&sc->num_resets);
 	rc = sysctl_handle_int(oidp, &val, 0, req);
 	if (rc != 0 || req->newptr == NULL)
 		return (rc);
 
 	if (val == 0) {
 		/* Zero out the counter that tracks reset. */
-		sc->num_resets = 0;
+		atomic_store_int(&sc->num_resets, 0);
 		return (0);
 	}
 
@@ -12482,10 +12592,9 @@ t4_deactivate_uld(struct adapter *sc, int id)
 }
 
 static void
-t4_async_event(void *arg, int n)
+t4_async_event(struct adapter *sc)
 {
 	struct uld_info *ui;
-	struct adapter *sc = (struct adapter *)arg;
 
 	if (begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK, "t4async") != 0)
 		return;
@@ -13089,45 +13198,41 @@ done_unload:
 	return (rc);
 }
 
-static devclass_t t4_devclass, t5_devclass, t6_devclass;
-static devclass_t cxgbe_devclass, cxl_devclass, cc_devclass;
-static devclass_t vcxgbe_devclass, vcxl_devclass, vcc_devclass;
-
-DRIVER_MODULE(t4nex, pci, t4_driver, t4_devclass, mod_event, 0);
+DRIVER_MODULE(t4nex, pci, t4_driver, mod_event, 0);
 MODULE_VERSION(t4nex, 1);
 MODULE_DEPEND(t4nex, firmware, 1, 1, 1);
 #ifdef DEV_NETMAP
 MODULE_DEPEND(t4nex, netmap, 1, 1, 1);
 #endif /* DEV_NETMAP */
 
-DRIVER_MODULE(t5nex, pci, t5_driver, t5_devclass, mod_event, 0);
+DRIVER_MODULE(t5nex, pci, t5_driver, mod_event, 0);
 MODULE_VERSION(t5nex, 1);
 MODULE_DEPEND(t5nex, firmware, 1, 1, 1);
 #ifdef DEV_NETMAP
 MODULE_DEPEND(t5nex, netmap, 1, 1, 1);
 #endif /* DEV_NETMAP */
 
-DRIVER_MODULE(t6nex, pci, t6_driver, t6_devclass, mod_event, 0);
+DRIVER_MODULE(t6nex, pci, t6_driver, mod_event, 0);
 MODULE_VERSION(t6nex, 1);
 MODULE_DEPEND(t6nex, firmware, 1, 1, 1);
 #ifdef DEV_NETMAP
 MODULE_DEPEND(t6nex, netmap, 1, 1, 1);
 #endif /* DEV_NETMAP */
 
-DRIVER_MODULE(cxgbe, t4nex, cxgbe_driver, cxgbe_devclass, 0, 0);
+DRIVER_MODULE(cxgbe, t4nex, cxgbe_driver, 0, 0);
 MODULE_VERSION(cxgbe, 1);
 
-DRIVER_MODULE(cxl, t5nex, cxl_driver, cxl_devclass, 0, 0);
+DRIVER_MODULE(cxl, t5nex, cxl_driver, 0, 0);
 MODULE_VERSION(cxl, 1);
 
-DRIVER_MODULE(cc, t6nex, cc_driver, cc_devclass, 0, 0);
+DRIVER_MODULE(cc, t6nex, cc_driver, 0, 0);
 MODULE_VERSION(cc, 1);
 
-DRIVER_MODULE(vcxgbe, cxgbe, vcxgbe_driver, vcxgbe_devclass, 0, 0);
+DRIVER_MODULE(vcxgbe, cxgbe, vcxgbe_driver, 0, 0);
 MODULE_VERSION(vcxgbe, 1);
 
-DRIVER_MODULE(vcxl, cxl, vcxl_driver, vcxl_devclass, 0, 0);
+DRIVER_MODULE(vcxl, cxl, vcxl_driver, 0, 0);
 MODULE_VERSION(vcxl, 1);
 
-DRIVER_MODULE(vcc, cc, vcc_driver, vcc_devclass, 0, 0);
+DRIVER_MODULE(vcc, cc, vcc_driver, 0, 0);
 MODULE_VERSION(vcc, 1);

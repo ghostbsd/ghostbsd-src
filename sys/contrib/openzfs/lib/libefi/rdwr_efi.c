@@ -29,14 +29,12 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
-#include <strings.h>
 #include <unistd.h>
 #include <uuid/uuid.h>
 #include <zlib.h>
 #include <libintl.h>
 #include <sys/types.h>
 #include <sys/dkio.h>
-#include <sys/vtoc.h>
 #include <sys/mhd.h>
 #include <sys/param.h>
 #include <sys/dktp/fdisk.h>
@@ -857,7 +855,6 @@ efi_read(int fd, struct dk_gpt *vtoc)
 	}
 
 	for (i = 0; i < vtoc->efi_nparts; i++) {
-
 		UUID_LE_CONVERT(vtoc->efi_parts[i].p_guid,
 		    efi_parts[i].efi_gpe_PartitionTypeGUID);
 
@@ -865,7 +862,7 @@ efi_read(int fd, struct dk_gpt *vtoc)
 		    j < sizeof (conversion_array)
 		    / sizeof (struct uuid_to_ptag); j++) {
 
-			if (bcmp(&vtoc->efi_parts[i].p_guid,
+			if (memcmp(&vtoc->efi_parts[i].p_guid,
 			    &conversion_array[j].uuid,
 			    sizeof (struct uuid)) == 0) {
 				vtoc->efi_parts[i].p_tag = j;
@@ -920,18 +917,17 @@ write_pmbr(int fd, struct dk_gpt *vtoc)
 	/* LINTED -- always longlong aligned */
 	dk_ioc.dki_data = (efi_gpt_t *)buf;
 	if (efi_ioctl(fd, DKIOCGETEFI, &dk_ioc) == -1) {
-		(void) memcpy(&mb, buf, sizeof (mb));
-		bzero(&mb, sizeof (mb));
+		memset(&mb, 0, sizeof (mb));
 		mb.signature = LE_16(MBB_MAGIC);
 	} else {
 		(void) memcpy(&mb, buf, sizeof (mb));
 		if (mb.signature != LE_16(MBB_MAGIC)) {
-			bzero(&mb, sizeof (mb));
+			memset(&mb, 0, sizeof (mb));
 			mb.signature = LE_16(MBB_MAGIC);
 		}
 	}
 
-	bzero(&mb.parts, sizeof (mb.parts));
+	memset(&mb.parts, 0, sizeof (mb.parts));
 	cp = (uchar_t *)&mb.parts[0];
 	/* bootable or not */
 	*cp++ = 0;
@@ -1455,8 +1451,8 @@ efi_write(int fd, struct dk_gpt *vtoc)
 			(void) uuid_generate((uchar_t *)
 			    &vtoc->efi_parts[i].p_uguid);
 		}
-		bcopy(&vtoc->efi_parts[i].p_uguid,
-		    &efi_parts[i].efi_gpe_UniquePartitionGUID,
+		memcpy(&efi_parts[i].efi_gpe_UniquePartitionGUID,
+		    &vtoc->efi_parts[i].p_uguid,
 		    sizeof (uuid_t));
 	}
 	efi->efi_gpt_PartitionEntryArrayCRC32 =
@@ -1539,33 +1535,6 @@ void
 efi_free(struct dk_gpt *ptr)
 {
 	free(ptr);
-}
-
-/*
- * Input: File descriptor
- * Output: 1 if disk has an EFI label, or > 2TB with no VTOC or legacy MBR.
- * Otherwise 0.
- */
-int
-efi_type(int fd)
-{
-#if 0
-	struct vtoc vtoc;
-	struct extvtoc extvtoc;
-
-	if (ioctl(fd, DKIOCGEXTVTOC, &extvtoc) == -1) {
-		if (errno == ENOTSUP)
-			return (1);
-		else if (errno == ENOTTY) {
-			if (ioctl(fd, DKIOCGVTOC, &vtoc) == -1)
-				if (errno == ENOTSUP)
-					return (1);
-		}
-	}
-	return (0);
-#else
-	return (ENOSYS);
-#endif
 }
 
 void

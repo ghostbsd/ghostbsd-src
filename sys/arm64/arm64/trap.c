@@ -134,7 +134,7 @@ int
 cpu_fetch_syscall_args(struct thread *td)
 {
 	struct proc *p;
-	register_t *ap, *dst_ap;
+	syscallarg_t *ap, *dst_ap;
 	struct syscall_args *sa;
 
 	p = td->td_proc;
@@ -159,7 +159,7 @@ cpu_fetch_syscall_args(struct thread *td)
 	KASSERT(sa->callp->sy_narg <= nitems(sa->args),
 	    ("Syscall %d takes too many arguments", sa->code));
 
-	memcpy(dst_ap, ap, (nitems(sa->args) - 1) * sizeof(register_t));
+	memcpy(dst_ap, ap, (nitems(sa->args) - 1) * sizeof(*dst_ap));
 
 	td->td_retval[0] = 0;
 	td->td_retval[1] = 0;
@@ -318,8 +318,16 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 		ftype = VM_PROT_EXECUTE;
 		break;
 	default:
-		ftype = (esr & ISS_DATA_WnR) == 0 ? VM_PROT_READ :
-		    VM_PROT_WRITE;
+		/*
+		 * If the exception was because of a read or cache operation
+		 * pass a read fault type into the vm code. Cache operations
+		 * need read permission but will set the WnR flag when the
+		 * memory is unmapped.
+		 */
+		if ((esr & ISS_DATA_WnR) == 0 || (esr & ISS_DATA_CM) != 0)
+			ftype = VM_PROT_READ;
+		else
+			ftype = VM_PROT_WRITE;
 		break;
 	}
 
@@ -492,6 +500,8 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_UNKNOWN:
 		if (undef_insn(1, frame))
 			break;
+		printf("Undefined instruction: %08x\n",
+		    *(uint32_t *)frame->tf_elr);
 		/* FALLTHROUGH */
 	default:
 		print_registers(frame);
@@ -620,10 +630,14 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		userret(td, frame);
 		break;
 	case EXCP_SOFTSTP_EL0:
-		td->td_frame->tf_spsr &= ~PSR_SS;
-		td->td_pcb->pcb_flags &= ~PCB_SINGLE_STEP;
-		WRITE_SPECIALREG(mdscr_el1,
-		    READ_SPECIALREG(mdscr_el1) & ~DBG_MDSCR_SS);
+		PROC_LOCK(td->td_proc);
+		if ((td->td_dbgflags & TDB_STEP) != 0) {
+			td->td_frame->tf_spsr &= ~PSR_SS;
+			td->td_pcb->pcb_flags &= ~PCB_SINGLE_STEP;
+			WRITE_SPECIALREG(mdscr_el1,
+			    READ_SPECIALREG(mdscr_el1) & ~MDSCR_SS);
+		}
+		PROC_UNLOCK(td->td_proc);
 		call_trapsignal(td, SIGTRAP, TRAP_TRACE,
 		    (void *)frame->tf_elr, exception);
 		userret(td, frame);
