@@ -90,8 +90,6 @@ struct bounce_page {
 	STAILQ_ENTRY(bounce_page) links;
 };
 
-int busdma_swi_pending;
-
 struct bounce_zone {
 	STAILQ_ENTRY(bounce_zone) links;
 	STAILQ_HEAD(bp_list, bounce_page) bounce_page_list;
@@ -114,6 +112,7 @@ static struct mtx bounce_lock;
 static int total_bpages;
 static int busdma_zonecount;
 static STAILQ_HEAD(, bounce_zone) bounce_zone_list;
+static void *busdma_ih;
 
 static SYSCTL_NODE(_hw, OID_AUTO, busdma, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "Busdma parameters");
@@ -267,6 +266,18 @@ bounce_bus_dma_tag_create(bus_dma_tag_t parent, bus_size_t alignment,
 
 	if ((flags & BUS_DMA_COHERENT) != 0) {
 		newtag->bounce_flags |= BF_COHERENT;
+	}
+
+	if (parent != NULL) {
+		if ((newtag->common.filter != NULL ||
+		    (parent->bounce_flags & BF_COULD_BOUNCE) != 0))
+			newtag->bounce_flags |= BF_COULD_BOUNCE;
+
+		/* Copy some flags from the parent */
+		newtag->bounce_flags |= parent->bounce_flags & BF_COHERENT;
+	}
+
+	if ((newtag->bounce_flags & BF_COHERENT) != 0) {
 		newtag->alloc_alignment = newtag->common.alignment;
 		newtag->alloc_size = newtag->common.maxsize;
 	} else {
@@ -280,15 +291,6 @@ bounce_bus_dma_tag_create(bus_dma_tag_t parent, bus_size_t alignment,
 		    dcache_line_size);
 		newtag->alloc_size = roundup2(newtag->common.maxsize,
 		    dcache_line_size);
-	}
-
-	if (parent != NULL) {
-		if ((newtag->common.filter != NULL ||
-		    (parent->bounce_flags & BF_COULD_BOUNCE) != 0))
-			newtag->bounce_flags |= BF_COULD_BOUNCE;
-
-		/* Copy some flags from the parent */
-		newtag->bounce_flags |= parent->bounce_flags & BF_COHERENT;
 	}
 
 	if (newtag->common.lowaddr < ptoa((vm_paddr_t)Maxmem) ||
@@ -1411,6 +1413,7 @@ free_bounce_page(bus_dma_tag_t dmat, struct bounce_page *bpage)
 {
 	struct bus_dmamap *map;
 	struct bounce_zone *bz;
+	bool schedule_swi;
 
 	bz = dmat->bounce_zone;
 	bpage->datavaddr = 0;
@@ -1425,6 +1428,7 @@ free_bounce_page(bus_dma_tag_t dmat, struct bounce_page *bpage)
 		bpage->busaddr &= ~PAGE_MASK;
 	}
 
+	schedule_swi = false;
 	mtx_lock(&bounce_lock);
 	STAILQ_INSERT_HEAD(&bz->bounce_page_list, bpage, links);
 	bz->free_bpages++;
@@ -1434,16 +1438,17 @@ free_bounce_page(bus_dma_tag_t dmat, struct bounce_page *bpage)
 			STAILQ_REMOVE_HEAD(&bounce_map_waitinglist, links);
 			STAILQ_INSERT_TAIL(&bounce_map_callbacklist,
 			    map, links);
-			busdma_swi_pending = 1;
 			bz->total_deferred++;
-			swi_sched(vm_ih, 0);
+			schedule_swi = true;
 		}
 	}
 	mtx_unlock(&bounce_lock);
+	if (schedule_swi)
+		swi_sched(busdma_ih, 0);
 }
 
-void
-busdma_swi(void)
+static void
+busdma_swi(void *dummy __unused)
 {
 	bus_dma_tag_t dmat;
 	struct bus_dmamap *map;
@@ -1462,6 +1467,16 @@ busdma_swi(void)
 	}
 	mtx_unlock(&bounce_lock);
 }
+
+static void
+start_busdma_swi(void *dummy __unused)
+{
+	if (swi_add(NULL, "busdma", busdma_swi, NULL, SWI_BUSDMA, INTR_MPSAFE,
+	    &busdma_ih))
+		panic("died while creating busdma swi ithread");
+}
+SYSINIT(start_busdma_swi, SI_SUB_SOFTINTR, SI_ORDER_ANY, start_busdma_swi,
+    NULL);
 
 struct bus_dma_impl bus_dma_bounce_impl = {
 	.tag_create = bounce_bus_dma_tag_create,

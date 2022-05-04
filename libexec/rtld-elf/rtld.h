@@ -55,6 +55,7 @@ extern int tls_max_index;
 
 extern int npagesizes;
 extern size_t *pagesizes;
+extern size_t page_size;
 
 extern int main_argc;
 extern char **main_argv;
@@ -382,6 +383,8 @@ void dump_Elf_Rela(Obj_Entry *, const Elf_Rela *, u_long);
 /*
  * Function declarations.
  */
+uintptr_t rtld_round_page(uintptr_t);
+uintptr_t rtld_trunc_page(uintptr_t);
 unsigned long elf_hash(const char *);
 const Elf_Sym *find_symdef(unsigned long, const Obj_Entry *,
   const Obj_Entry **, int, SymCache *, struct Struct_RtldLockState *);
@@ -396,7 +399,7 @@ void _rtld_bind_start(void);
 void *rtld_resolve_ifunc(const Obj_Entry *obj, const Elf_Sym *def);
 void symlook_init(SymLook *, const char *);
 int symlook_obj(SymLook *, const Obj_Entry *);
-void *tls_get_addr_common(Elf_Addr** dtvp, int index, size_t offset);
+void *tls_get_addr_common(uintptr_t **dtvp, int index, size_t offset);
 void *allocate_tls(Obj_Entry *, void *, size_t, size_t);
 void free_tls(void *, size_t, size_t);
 void *allocate_module_tls(int index);
@@ -404,7 +407,6 @@ bool allocate_tls_offset(Obj_Entry *obj);
 void free_tls_offset(Obj_Entry *obj);
 const Ver_Entry *fetch_ventry(const Obj_Entry *obj, unsigned long);
 int convert_prot(int elfflags);
-void *_get_tp(void);	/* libc implementation */
 bool check_elf_headers(const Elf_Ehdr *hdr, const char *path);
 
 /*

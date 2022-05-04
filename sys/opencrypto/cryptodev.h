@@ -95,6 +95,7 @@
 #define	SHA2_256_BLOCK_LEN	64
 #define	SHA2_384_BLOCK_LEN	128
 #define	SHA2_512_BLOCK_LEN	128
+#define	POLY1305_BLOCK_LEN	16
 
 /* HMAC values */
 #define	NULL_HMAC_BLOCK_LEN		64
@@ -462,6 +463,7 @@ struct cryptop {
 					 * should always check and use the new
 					 * value on future requests.
 					 */
+#define	crp_startcopy	crp_flags
 	int		crp_flags;
 
 #define	CRYPTO_F_BATCH		0x0008	/* Batch op if possible */
@@ -502,6 +504,7 @@ struct cryptop {
 
 	const void	*crp_cipher_key; /* New cipher key if non-NULL. */
 	const void	*crp_auth_key;	/* New auth key if non-NULL. */
+#define	crp_endcopy	crp_opaque
 
 	void		*crp_opaque;	/* Opaque pointer, passed along */
 
@@ -655,7 +658,7 @@ struct cryptkop {
 
 uint32_t crypto_ses2hid(crypto_session_t crypto_session);
 uint32_t crypto_ses2caps(crypto_session_t crypto_session);
-void *crypto_get_driver_session(crypto_session_t crypto_session);
+void	*crypto_get_driver_session(crypto_session_t crypto_session);
 const struct crypto_session_params *crypto_get_params(
     crypto_session_t crypto_session);
 struct auth_hash *crypto_auth_hash(const struct crypto_session_params *csp);
@@ -663,33 +666,34 @@ struct enc_xform *crypto_cipher(const struct crypto_session_params *csp);
 
 MALLOC_DECLARE(M_CRYPTO_DATA);
 
-extern	int crypto_newsession(crypto_session_t *cses,
-    const struct crypto_session_params *params, int hard);
-extern	void crypto_freesession(crypto_session_t cses);
+int	crypto_newsession(crypto_session_t *cses,
+    const struct crypto_session_params *params, int crid);
+void	crypto_freesession(crypto_session_t cses);
 #define	CRYPTOCAP_F_HARDWARE	CRYPTO_FLAG_HARDWARE
 #define	CRYPTOCAP_F_SOFTWARE	CRYPTO_FLAG_SOFTWARE
 #define	CRYPTOCAP_F_SYNC	0x04000000	/* operates synchronously */
 #define	CRYPTOCAP_F_ACCEL_SOFTWARE 0x08000000
-extern	int32_t crypto_get_driverid(device_t dev, size_t session_size,
-    int flags);
-extern	int crypto_find_driver(const char *);
-extern	device_t crypto_find_device_byhid(int hid);
-extern	int crypto_getcaps(int hid);
-extern	int crypto_kregister(uint32_t, int, uint32_t);
-extern	int crypto_unregister_all(uint32_t driverid);
-extern	int crypto_dispatch(struct cryptop *crp);
-extern	int crypto_kdispatch(struct cryptkop *);
+int32_t	crypto_get_driverid(device_t dev, size_t session_size, int flags);
+int	crypto_find_driver(const char *);
+device_t crypto_find_device_byhid(int hid);
+int	crypto_getcaps(int hid);
+int	crypto_kregister(uint32_t, int, uint32_t);
+int	crypto_unregister_all(uint32_t driverid);
+int	crypto_dispatch(struct cryptop *crp);
+int	crypto_kdispatch(struct cryptkop *);
 #define	CRYPTO_SYMQ	0x1
 #define	CRYPTO_ASYMQ	0x2
-extern	int crypto_unblock(uint32_t, int);
-extern	void crypto_done(struct cryptop *crp);
-extern	void crypto_kdone(struct cryptkop *);
-extern	int crypto_getfeat(int *);
+int	crypto_unblock(uint32_t, int);
+void	crypto_done(struct cryptop *crp);
+void	crypto_kdone(struct cryptkop *);
+int	crypto_getfeat(int *);
 
-extern	void crypto_destroyreq(struct cryptop *crp);
-extern	void crypto_initreq(struct cryptop *crp, crypto_session_t cses);
-extern	void crypto_freereq(struct cryptop *crp);
-extern	struct cryptop *crypto_getreq(crypto_session_t cses, int how);
+struct cryptop *crypto_clonereq(struct cryptop *crp, crypto_session_t cses,
+    int how);
+void	crypto_destroyreq(struct cryptop *crp);
+void	crypto_initreq(struct cryptop *crp, crypto_session_t cses);
+void	crypto_freereq(struct cryptop *crp);
+struct cryptop *crypto_getreq(crypto_session_t cses, int how);
 
 extern	int crypto_usercrypto;		/* userland may do crypto requests */
 extern	int crypto_userasymcrypto;	/* userland may do asym crypto reqs */

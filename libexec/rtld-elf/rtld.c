@@ -268,6 +268,7 @@ Elf_Addr _rtld_bind(Obj_Entry *obj, Elf_Size reloff);
 int npagesizes;
 static int osreldate;
 size_t *pagesizes;
+size_t page_size;
 
 static int stack_prot = PROT_READ | PROT_WRITE | RTLD_DEFAULT_STACK_EXEC;
 static int max_stack_flags;
@@ -475,6 +476,18 @@ set_ld_elf_hints_path(void)
 {
 	if (ld_elf_hints_path == NULL || strlen(ld_elf_hints_path) == 0)
 		ld_elf_hints_path = ld_elf_hints_default;
+}
+
+uintptr_t
+rtld_round_page(uintptr_t x)
+{
+	return (roundup2(x, page_size));
+}
+
+uintptr_t
+rtld_trunc_page(uintptr_t x)
+{
+	return (rounddown2(x, page_size));
 }
 
 /*
@@ -1688,10 +1701,10 @@ digest_phdr(const Elf_Phdr *phdr, int phnum, caddr_t entry, const char *path)
 
 	case PT_LOAD:
 	    if (nsegs == 0) {	/* First load segment */
-		obj->vaddrbase = trunc_page(ph->p_vaddr);
+		obj->vaddrbase = rtld_trunc_page(ph->p_vaddr);
 		obj->mapbase = obj->vaddrbase + obj->relocbase;
 	    } else {		/* Last load segment */
-		obj->mapsize = round_page(ph->p_vaddr + ph->p_memsz) -
+		obj->mapsize = rtld_round_page(ph->p_vaddr + ph->p_memsz) -
 		  obj->vaddrbase;
 	    }
 	    nsegs++;
@@ -1715,9 +1728,9 @@ digest_phdr(const Elf_Phdr *phdr, int phnum, caddr_t entry, const char *path)
 	    break;
 
 	case PT_GNU_RELRO:
-	    obj->relro_page = obj->relocbase + trunc_page(ph->p_vaddr);
-	    obj->relro_size = trunc_page(ph->p_vaddr + ph->p_memsz) -
-	      trunc_page(ph->p_vaddr);
+	    obj->relro_page = obj->relocbase + rtld_trunc_page(ph->p_vaddr);
+	    obj->relro_size = rtld_trunc_page(ph->p_vaddr + ph->p_memsz) -
+	      rtld_trunc_page(ph->p_vaddr);
 	    break;
 
 	case PT_NOTE:
@@ -2366,8 +2379,8 @@ parse_rtld_phdr(Obj_Entry *obj)
 			break;
 		case PT_GNU_RELRO:
 			obj->relro_page = obj->relocbase +
-			    trunc_page(ph->p_vaddr);
-			obj->relro_size = round_page(ph->p_memsz);
+			    rtld_trunc_page(ph->p_vaddr);
+			obj->relro_size = rtld_round_page(ph->p_memsz);
 			break;
 		case PT_NOTE:
 			note_start = (Elf_Addr)obj->relocbase + ph->p_vaddr;
@@ -2499,6 +2512,8 @@ psa_filled:
 	/* Discard any invalid entries at the end of the array. */
 	while (npagesizes > 0 && pagesizes[npagesizes - 1] == 0)
 		npagesizes--;
+
+	page_size = pagesizes[0];
 }
 
 /*
@@ -3252,9 +3267,9 @@ reloc_textrel_prot(Obj_Entry *obj, bool before)
 	    l--, ph++) {
 		if (ph->p_type != PT_LOAD || (ph->p_flags & PF_W) != 0)
 			continue;
-		base = obj->relocbase + trunc_page(ph->p_vaddr);
-		sz = round_page(ph->p_vaddr + ph->p_filesz) -
-		    trunc_page(ph->p_vaddr);
+		base = obj->relocbase + rtld_trunc_page(ph->p_vaddr);
+		sz = rtld_round_page(ph->p_vaddr + ph->p_filesz) -
+		    rtld_trunc_page(ph->p_vaddr);
 		prot = before ? (PROT_READ | PROT_WRITE) :
 		    convert_prot(ph->p_flags);
 		if (mprotect(base, sz, prot) == -1) {
@@ -4188,14 +4203,14 @@ dlinfo(void *handle, int request, void *p)
 static void
 rtld_fill_dl_phdr_info(const Obj_Entry *obj, struct dl_phdr_info *phdr_info)
 {
-	Elf_Addr **dtvp;
+	uintptr_t **dtvp;
 
 	phdr_info->dlpi_addr = (Elf_Addr)obj->relocbase;
 	phdr_info->dlpi_name = obj->path;
 	phdr_info->dlpi_phdr = obj->phdr;
 	phdr_info->dlpi_phnum = obj->phsize / sizeof(obj->phdr[0]);
 	phdr_info->dlpi_tls_modid = obj->tlsindex;
-	dtvp = _get_tp();
+	dtvp = &_tcb_get()->tcb_dtv;
 	phdr_info->dlpi_tls_data = (char *)tls_get_addr_slow(dtvp,
 	    obj->tlsindex, 0, true) + TLS_DTV_OFFSET;
 	phdr_info->dlpi_adds = obj_loads;
@@ -5216,9 +5231,9 @@ tls_get_addr_slow(Elf_Addr **dtvp, int index, size_t offset, bool locked)
 }
 
 void *
-tls_get_addr_common(Elf_Addr **dtvp, int index, size_t offset)
+tls_get_addr_common(uintptr_t **dtvp, int index, size_t offset)
 {
-	Elf_Addr *dtv;
+	uintptr_t *dtv;
 
 	dtv = *dtvp;
 	/* Check dtv generation in case new modules have arrived */
