@@ -881,7 +881,10 @@ check_csp(const struct crypto_session_params *csp)
 				return (false);
 			break;
 		case CRYPTO_AES_NIST_GCM_16:
-			if (csp->csp_auth_mlen > 16)
+			if (csp->csp_auth_mlen > AES_GMAC_HASH_LEN)
+				return (false);
+
+			if (csp->csp_ivlen != AES_GCM_IV_LEN)
 				return (false);
 			break;
 		case CRYPTO_CHACHA20_POLY1305:
@@ -1421,7 +1424,8 @@ crp_sanity(struct cryptop *crp)
 		KASSERT(crp->crp_payload_output_start == 0,
 		    ("payload output start non-zero without output buffer"));
 	} else {
-		KASSERT(crp->crp_payload_output_start < olen,
+		KASSERT(crp->crp_payload_output_start == 0 ||
+		    crp->crp_payload_output_start < olen,
 		    ("invalid payload output start"));
 		KASSERT(crp->crp_payload_output_start +
 		    crp->crp_payload_length <= olen,
@@ -1841,6 +1845,27 @@ crypto_getreq(crypto_session_t cses, int how)
 	if (crp != NULL)
 		_crypto_initreq(crp, cses);
 	return (crp);
+}
+
+/*
+ * Clone a crypto request, but associate it with the specified session
+ * rather than inheriting the session from the original request.  The
+ * fields describing the request buffers are copied, but not the
+ * opaque field or callback function.
+ */
+struct cryptop *
+crypto_clonereq(struct cryptop *crp, crypto_session_t cses, int how)
+{
+	struct cryptop *new;
+
+	MPASS((crp->crp_flags & CRYPTO_F_DONE) == 0);
+	new = crypto_getreq(cses, how);
+	if (new == NULL)
+		return (NULL);
+
+	memcpy(&new->crp_startcopy, &crp->crp_startcopy,
+	    __rangeof(struct cryptop, crp_startcopy, crp_endcopy));
+	return (new);
 }
 
 /*

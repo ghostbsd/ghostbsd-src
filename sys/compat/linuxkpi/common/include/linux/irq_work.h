@@ -35,11 +35,13 @@
 #include <sys/taskqueue.h>
 
 struct irq_work;
+struct llist_node;
 typedef void (*irq_work_func_t)(struct irq_work *);
 
 struct irq_work {
 	struct task irq_task;
 	irq_work_func_t func;
+	struct llist_node llnode;
 };
 
 extern struct taskqueue *linux_irq_work_tq;
@@ -58,10 +60,13 @@ init_irq_work(struct irq_work *irqw, irq_work_func_t func)
 	irqw->func = func;
 }
 
-static inline void
+static inline bool
 irq_work_queue(struct irq_work *irqw)
 {
-	taskqueue_enqueue(linux_irq_work_tq, &irqw->irq_task);
+	if(taskqueue_enqueue(linux_irq_work_tq, &irqw->irq_task) == 0)
+		return (true);
+
+	return (false);
 }
 
 static inline void

@@ -26,18 +26,14 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "iscsid.h"
+#include "libiscsiutil.h"
 
 struct keys *
 keys_new(void)
@@ -55,92 +51,88 @@ void
 keys_delete(struct keys *keys)
 {
 
-	free(keys->keys_data);
+	for (int i = 0; i < KEYS_MAX; i++) {
+		free(keys->keys_names[i]);
+		free(keys->keys_values[i]);
+	}
 	free(keys);
 }
 
 void
-keys_load(struct keys *keys, const struct pdu *pdu)
+keys_load(struct keys *keys, const char *data, size_t len)
 {
 	int i;
-	char *pair;
+	char *keys_data, *name, *pair, *value;
 	size_t pair_len;
 
-	if (pdu->pdu_data_len == 0)
+	if (len == 0)
 		return;
 
-	if (pdu->pdu_data[pdu->pdu_data_len - 1] != '\0')
+	if (data[len - 1] != '\0')
 		log_errx(1, "protocol error: key not NULL-terminated\n");
 
-	assert(keys->keys_data == NULL);
-	keys->keys_data_len = pdu->pdu_data_len;
-	keys->keys_data = malloc(keys->keys_data_len);
-	if (keys->keys_data == NULL)
+	keys_data = malloc(len);
+	if (keys_data == NULL)
 		log_err(1, "malloc");
-	memcpy(keys->keys_data, pdu->pdu_data, keys->keys_data_len);
+	memcpy(keys_data, data, len);
 
 	/*
 	 * XXX: Review this carefully.
 	 */
-	pair = keys->keys_data;
+	pair = keys_data;
 	for (i = 0;; i++) {
 		if (i >= KEYS_MAX)
 			log_errx(1, "too many keys received");
 
 		pair_len = strlen(pair);
 
-		keys->keys_values[i] = pair;
-		keys->keys_names[i] = strsep(&keys->keys_values[i], "=");
-		if (keys->keys_names[i] == NULL || keys->keys_values[i] == NULL)
+		value = pair;
+		name = strsep(&value, "=");
+		if (name == NULL || value == NULL)
 			log_errx(1, "malformed keys");
+		keys->keys_names[i] = checked_strdup(name);
+		keys->keys_values[i] = checked_strdup(value);
 		log_debugx("key received: \"%s=%s\"",
 		    keys->keys_names[i], keys->keys_values[i]);
 
 		pair += pair_len + 1; /* +1 to skip the terminating '\0'. */
-		if (pair == keys->keys_data + keys->keys_data_len)
+		if (pair == keys_data + len)
 			break;
-		assert(pair < keys->keys_data + keys->keys_data_len);
+		assert(pair < keys_data + len);
 	}
+	free(keys_data);
 }
 
 void
-keys_save(struct keys *keys, struct pdu *pdu)
+keys_save(struct keys *keys, char **datap, size_t *lenp)
 {
+	FILE *fp;
 	char *data;
 	size_t len;
 	int i;
 
-	/*
-	 * XXX: Not particularly efficient.
-	 */
-	len = 0;
+	fp = open_memstream(&data, &len);
+	if (fp == NULL)
+		log_err(1, "open_memstream");
 	for (i = 0; i < KEYS_MAX; i++) {
 		if (keys->keys_names[i] == NULL)
 			break;
-		/*
-		 * +1 for '=', +1 for '\0'.
-		 */
-		len += strlen(keys->keys_names[i]) +
-		    strlen(keys->keys_values[i]) + 2;
+
+		fprintf(fp, "%s=%s", keys->keys_names[i], keys->keys_values[i]);
+
+		/* Append a '\0' after each key pair. */
+		fputc('\0', fp);
+	}
+	if (fclose(fp) != 0)
+		log_err(1, "fclose");
+
+	if (len == 0) {
+		free(data);
+		data = NULL;
 	}
 
-	if (len == 0)
-		return;
-
-	data = malloc(len);
-	if (data == NULL)
-		log_err(1, "malloc");
-
-	pdu->pdu_data = data;
-	pdu->pdu_data_len = len;
-
-	for (i = 0; i < KEYS_MAX; i++) {
-		if (keys->keys_names[i] == NULL)
-			break;
-		data += sprintf(data, "%s=%s",
-		    keys->keys_names[i], keys->keys_values[i]);
-		data += 1; /* for '\0'. */
-	}
+	*datap = data;
+	*lenp = len;
 }
 
 const char *

@@ -421,6 +421,137 @@ finalize_pdu(struct icl_cxgbei_conn *icc, struct icl_cxgbei_pdu *icp)
 	return (m);
 }
 
+static void
+icl_cxgbei_tx_main(void *arg)
+{
+	struct epoch_tracker et;
+	struct icl_cxgbei_conn *icc = arg;
+	struct icl_conn *ic = &icc->ic;
+	struct toepcb *toep = icc->toep;
+	struct socket *so = ic->ic_socket;
+	struct inpcb *inp = sotoinpcb(so);
+	struct icl_pdu *ip;
+	struct mbuf *m;
+	struct mbufq mq;
+	STAILQ_HEAD(, icl_pdu) tx_pdus = STAILQ_HEAD_INITIALIZER(tx_pdus);
+
+	mbufq_init(&mq, INT_MAX);
+
+	ICL_CONN_LOCK(ic);
+	while (__predict_true(!ic->ic_disconnecting)) {
+		while (STAILQ_EMPTY(&icc->sent_pdus)) {
+			icc->tx_active = false;
+			mtx_sleep(&icc->tx_active, ic->ic_lock, 0, "-", 0);
+			if (__predict_false(ic->ic_disconnecting))
+				goto out;
+			MPASS(icc->tx_active);
+		}
+
+		STAILQ_SWAP(&icc->sent_pdus, &tx_pdus, icl_pdu);
+		ICL_CONN_UNLOCK(ic);
+
+		while ((ip = STAILQ_FIRST(&tx_pdus)) != NULL) {
+			STAILQ_REMOVE_HEAD(&tx_pdus, ip_next);
+
+			m = finalize_pdu(icc, ip_to_icp(ip));
+			M_ASSERTPKTHDR(m);
+			MPASS((m->m_pkthdr.len & 3) == 0);
+
+			mbufq_enqueue(&mq, m);
+		}
+
+		ICL_CONN_LOCK(ic);
+		if (__predict_false(ic->ic_disconnecting) ||
+		    __predict_false(ic->ic_socket == NULL)) {
+			mbufq_drain(&mq);
+			break;
+		}
+
+		CURVNET_SET(toep->vnet);
+		NET_EPOCH_ENTER(et);
+		INP_WLOCK(inp);
+
+		ICL_CONN_UNLOCK(ic);
+		if (__predict_false(inp->inp_flags & (INP_DROPPED |
+		    INP_TIMEWAIT)) ||
+		    __predict_false((toep->flags & TPF_ATTACHED) == 0)) {
+			mbufq_drain(&mq);
+		} else {
+			mbufq_concat(&toep->ulp_pduq, &mq);
+			t4_push_pdus(icc->sc, toep, 0);
+		}
+		INP_WUNLOCK(inp);
+		NET_EPOCH_EXIT(et);
+		CURVNET_RESTORE();
+
+		ICL_CONN_LOCK(ic);
+	}
+out:
+	ICL_CONN_UNLOCK(ic);
+
+	kthread_exit();
+}
+
+static void
+icl_cxgbei_rx_main(void *arg)
+{
+	struct icl_cxgbei_conn *icc = arg;
+	struct icl_conn *ic = &icc->ic;
+	struct icl_pdu *ip;
+	struct sockbuf *sb;
+	STAILQ_HEAD(, icl_pdu) rx_pdus = STAILQ_HEAD_INITIALIZER(rx_pdus);
+	bool cantrcvmore;
+
+	sb = &ic->ic_socket->so_rcv;
+	SOCKBUF_LOCK(sb);
+	while (__predict_true(!ic->ic_disconnecting)) {
+		while (STAILQ_EMPTY(&icc->rcvd_pdus)) {
+			icc->rx_active = false;
+			mtx_sleep(&icc->rx_active, SOCKBUF_MTX(sb), 0, "-", 0);
+			if (__predict_false(ic->ic_disconnecting))
+				goto out;
+			MPASS(icc->rx_active);
+		}
+
+		if (__predict_false(sbused(sb)) != 0) {
+			/*
+			 * PDUs were received before the tid
+			 * transitioned to ULP mode.  Convert
+			 * them to icl_cxgbei_pdus and insert
+			 * them into the head of rcvd_pdus.
+			 */
+			parse_pdus(icc, sb);
+		}
+		cantrcvmore = (sb->sb_state & SBS_CANTRCVMORE) != 0;
+		MPASS(STAILQ_EMPTY(&rx_pdus));
+		STAILQ_SWAP(&icc->rcvd_pdus, &rx_pdus, icl_pdu);
+		SOCKBUF_UNLOCK(sb);
+
+		/* Hand over PDUs to ICL. */
+		while ((ip = STAILQ_FIRST(&rx_pdus)) != NULL) {
+			STAILQ_REMOVE_HEAD(&rx_pdus, ip_next);
+			if (cantrcvmore)
+				icl_cxgbei_pdu_done(ip, ENOTCONN);
+			else
+				ic->ic_receive(ip);
+		}
+
+		SOCKBUF_LOCK(sb);
+	}
+out:
+	/*
+	 * Since ic_disconnecting is set before the SOCKBUF_MTX is
+	 * locked in icl_cxgbei_conn_close, the loop above can exit
+	 * before icl_cxgbei_conn_close can lock SOCKBUF_MTX and block
+	 * waiting for the thread exit.
+	 */
+	while (!icc->rx_exiting)
+		mtx_sleep(&icc->rx_active, SOCKBUF_MTX(sb), 0, "-", 0);
+	SOCKBUF_UNLOCK(sb);
+
+	kthread_exit();
+}
+
 int
 icl_cxgbei_conn_pdu_append_data(struct icl_conn *ic, struct icl_pdu *ip,
     const void *addr, size_t len, int flags)
@@ -534,13 +665,9 @@ void
 icl_cxgbei_conn_pdu_queue_cb(struct icl_conn *ic, struct icl_pdu *ip,
 			     icl_pdu_cb cb)
 {
-	struct epoch_tracker et;
 	struct icl_cxgbei_conn *icc = ic_to_icc(ic);
 	struct icl_cxgbei_pdu *icp = ip_to_icp(ip);
 	struct socket *so = ic->ic_socket;
-	struct toepcb *toep = icc->toep;
-	struct inpcb *inp;
-	struct mbuf *m;
 
 	MPASS(ic == ip->ip_conn);
 	MPASS(ip->ip_bhs_mbuf != NULL);
@@ -557,28 +684,11 @@ icl_cxgbei_conn_pdu_queue_cb(struct icl_conn *ic, struct icl_pdu *ip,
 		return;
 	}
 
-	m = finalize_pdu(icc, icp);
-	M_ASSERTPKTHDR(m);
-	MPASS((m->m_pkthdr.len & 3) == 0);
-
-	/*
-	 * Do not get inp from toep->inp as the toepcb might have detached
-	 * already.
-	 */
-	inp = sotoinpcb(so);
-	CURVNET_SET(toep->vnet);
-	NET_EPOCH_ENTER(et);
-	INP_WLOCK(inp);
-	if (__predict_false(inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT)) ||
-	    __predict_false((toep->flags & TPF_ATTACHED) == 0))
-		m_freem(m);
-	else {
-		mbufq_enqueue(&toep->ulp_pduq, m);
-		t4_push_pdus(icc->sc, toep, 0);
+	STAILQ_INSERT_TAIL(&icc->sent_pdus, ip, ip_next);
+	if (!icc->tx_active) {
+		icc->tx_active = true;
+		wakeup(&icc->tx_active);
 	}
-	INP_WUNLOCK(inp);
-	NET_EPOCH_EXIT(et);
-	CURVNET_RESTORE();
 }
 
 static struct icl_conn *
@@ -593,6 +703,7 @@ icl_cxgbei_new_conn(const char *name, struct mtx *lock)
 	    M_WAITOK | M_ZERO);
 	icc->icc_signature = CXGBEI_CONN_SIGNATURE;
 	STAILQ_INIT(&icc->rcvd_pdus);
+	STAILQ_INIT(&icc->sent_pdus);
 
 	icc->cmp_table = hashinit(64, M_CXGBEI, &icc->cmp_hash_mask);
 	mtx_init(&icc->cmp_lock, "cxgbei_cmp", NULL, MTX_DEF);
@@ -638,10 +749,8 @@ icl_cxgbei_setsockopt(struct icl_conn *ic, struct socket *so, int sspace,
 	rs = max(recvspace, rspace);
 
 	error = soreserve(so, ss, rs);
-	if (error != 0) {
-		icl_cxgbei_conn_close(ic);
+	if (error != 0)
 		return (error);
-	}
 	SOCKBUF_LOCK(&so->so_snd);
 	so->so_snd.sb_flags |= SB_AUTOSIZE;
 	SOCKBUF_UNLOCK(&so->so_snd);
@@ -659,10 +768,8 @@ icl_cxgbei_setsockopt(struct icl_conn *ic, struct socket *so, int sspace,
 	opt.sopt_val = &one;
 	opt.sopt_valsize = sizeof(one);
 	error = sosetopt(so, &opt);
-	if (error != 0) {
-		icl_cxgbei_conn_close(ic);
+	if (error != 0)
 		return (error);
-	}
 
 	return (0);
 }
@@ -832,8 +939,10 @@ icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 	fa.sc = NULL;
 	fa.so = so;
 	t4_iterate(find_offload_adapter, &fa);
-	if (fa.sc == NULL)
-		return (EINVAL);
+	if (fa.sc == NULL) {
+		error = EINVAL;
+		goto out;
+	}
 	icc->sc = fa.sc;
 
 	max_rx_pdu_len = ISCSI_BHS_SIZE + ic->ic_max_recv_data_segment_length;
@@ -852,7 +961,8 @@ icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 	tp = intotcpcb(inp);
 	if (inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT)) {
 		INP_WUNLOCK(inp);
-		return (EBUSY);
+		error = ENOTCONN;
+		goto out;
 	}
 
 	/*
@@ -866,11 +976,11 @@ icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 
 	if (ulp_mode(toep) != ULP_MODE_NONE) {
 		INP_WUNLOCK(inp);
-		return (EINVAL);
+		error = EINVAL;
+		goto out;
 	}
 
 	icc->toep = toep;
-	icc->cwt = cxgbei_select_worker_thread(icc);
 
 	icc->ulp_submode = 0;
 	if (ic->ic_header_crc32c)
@@ -894,7 +1004,21 @@ icl_cxgbei_conn_handoff(struct icl_conn *ic, int fd)
 	set_ulp_mode_iscsi(icc->sc, toep, icc->ulp_submode);
 	INP_WUNLOCK(inp);
 
-	return (icl_cxgbei_setsockopt(ic, so, max_tx_pdu_len, max_rx_pdu_len));
+	error = kthread_add(icl_cxgbei_tx_main, icc, NULL, &icc->tx_thread, 0,
+	    0, "%stx (cxgbei)", ic->ic_name);
+	if (error != 0)
+		goto out;
+
+	error = kthread_add(icl_cxgbei_rx_main, icc, NULL, &icc->rx_thread, 0,
+	    0, "%srx (cxgbei)", ic->ic_name);
+	if (error != 0)
+		goto out;
+
+	error = icl_cxgbei_setsockopt(ic, so, max_tx_pdu_len, max_rx_pdu_len);
+out:
+	if (error != 0)
+		icl_cxgbei_conn_close(ic);
+	return (error);
 }
 
 void
@@ -925,47 +1049,57 @@ icl_cxgbei_conn_close(struct icl_conn *ic)
 	    ("destroying session with %d outstanding PDUs",
 	     ic->ic_outstanding_pdus));
 #endif
-	ICL_CONN_UNLOCK(ic);
 
 	CTR3(KTR_CXGBE, "%s: tid %d, icc %p", __func__, toep ? toep->tid : -1,
 	    icc);
+
+	/*
+	 * Wait for the transmit thread to stop processing
+	 * this connection.
+	 */
+	if (icc->tx_thread != NULL) {
+		wakeup(&icc->tx_active);
+		mtx_sleep(icc->tx_thread, ic->ic_lock, 0, "conclo", 0);
+	}
+
+	/* Discard PDUs queued for TX. */
+	while (!STAILQ_EMPTY(&icc->sent_pdus)) {
+		ip = STAILQ_FIRST(&icc->sent_pdus);
+		STAILQ_REMOVE_HEAD(&icc->sent_pdus, ip_next);
+		icl_cxgbei_pdu_done(ip, ENOTCONN);
+	}
+	ICL_CONN_UNLOCK(ic);
+
 	inp = sotoinpcb(so);
 	sb = &so->so_rcv;
+
+	/*
+	 * Wait for the receive thread to stop processing this
+	 * connection.
+	 */
+	SOCKBUF_LOCK(sb);
+	if (icc->rx_thread != NULL) {
+		icc->rx_exiting = true;
+		wakeup(&icc->rx_active);
+		mtx_sleep(icc->rx_thread, SOCKBUF_MTX(sb), 0, "conclo", 0);
+	}
+
+	/*
+	 * Discard received PDUs not passed to the iSCSI layer.
+	 */
+	while (!STAILQ_EMPTY(&icc->rcvd_pdus)) {
+		ip = STAILQ_FIRST(&icc->rcvd_pdus);
+		STAILQ_REMOVE_HEAD(&icc->rcvd_pdus, ip_next);
+		icl_cxgbei_pdu_done(ip, ENOTCONN);
+	}
+	SOCKBUF_UNLOCK(sb);
+
 	INP_WLOCK(inp);
 	if (toep != NULL) {	/* NULL if connection was never offloaded. */
 		toep->ulpcb = NULL;
 
-		/* Discard PDUs queued for TX. */
+		/* Discard mbufs queued for TX. */
 		mbufq_drain(&toep->ulp_pduq);
-
-		/*
-		 * Wait for the cwt threads to stop processing this
-		 * connection.
-		 */
-		SOCKBUF_LOCK(sb);
-		if (icc->rx_flags & RXF_ACTIVE) {
-			volatile u_int *p = &icc->rx_flags;
-
-			SOCKBUF_UNLOCK(sb);
-			INP_WUNLOCK(inp);
-
-			while (*p & RXF_ACTIVE)
-				pause("conclo", 1);
-
-			INP_WLOCK(inp);
-			SOCKBUF_LOCK(sb);
-		}
-
-		/*
-		 * Discard received PDUs not passed to the iSCSI
-		 * layer.
-		 */
-		while (!STAILQ_EMPTY(&icc->rcvd_pdus)) {
-			ip = STAILQ_FIRST(&icc->rcvd_pdus);
-			STAILQ_REMOVE_HEAD(&icc->rcvd_pdus, ip_next);
-			icl_cxgbei_pdu_done(ip, ENOTCONN);
-		}
-		SOCKBUF_UNLOCK(sb);
 
 		/*
 		 * Grab a reference to use when waiting for the final
@@ -1087,11 +1221,9 @@ icl_cxgbei_conn_task_setup(struct icl_conn *ic, struct icl_pdu *ip,
 	MPASS(arg != NULL);
 	MPASS(*arg == NULL);
 
-	if (ic->ic_disconnecting || ic->ic_socket == NULL)
-		return (ECONNRESET);
-
 	if ((csio->ccb_h.flags & CAM_DIR_MASK) != CAM_DIR_IN ||
-	    csio->dxfer_len < ci->ddp_threshold) {
+	    csio->dxfer_len < ci->ddp_threshold || ic->ic_disconnecting ||
+	    ic->ic_socket == NULL) {
 no_ddp:
 		/*
 		 * No DDP for this I/O.	 Allocate an ITT (based on the one
@@ -1149,7 +1281,7 @@ no_ddp:
 		mbufq_drain(&mq);
 		t4_free_page_pods(prsv);
 		free(ddp, M_CXGBEI);
-		return (ECONNRESET);
+		goto no_ddp;
 	}
 	mbufq_concat(&toep->ulp_pduq, &mq);
 	INP_WUNLOCK(inp);
