@@ -134,11 +134,15 @@ linux_execve(struct thread *td, struct linux_execve_args *args)
 	char *path;
 	int error;
 
-	LCONVPATHEXIST(args->path, &path);
-
-	error = freebsd32_exec_copyin_args(&eargs, path, UIO_SYSSPACE,
-	    args->argp, args->envp);
-	free(path, M_TEMP);
+	if (!LUSECONVPATH(td)) {
+		error = freebsd32_exec_copyin_args(&eargs, args->path, UIO_USERSPACE,
+		    args->argp, args->envp);
+	} else {
+		LCONVPATHEXIST(args->path, &path);
+		error = freebsd32_exec_copyin_args(&eargs, path, UIO_SYSSPACE,
+		    args->argp, args->envp);
+		LFREEPATH(path);
+	}
 	if (error == 0)
 		error = linux_common_execve(td, &eargs);
 	AUDIT_SYSCALL_EXIT(error == EJUSTRETURN ? 0 : error, td);
@@ -255,12 +259,9 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 
 	switch (args->what & 0xFFFF) {
 	case LINUX_SEMOP: {
-		struct linux_semop_args a;
 
-		a.semid = args->arg1;
-		a.tsops = PTRIN(args->ptr);
-		a.nsops = args->arg2;
-		return (linux_semop(td, &a));
+		return (kern_semop(td, args->arg1, PTRIN(args->ptr),
+		    args->arg2, NULL));
 	}
 	case LINUX_SEMGET: {
 		struct linux_semget_args a;
@@ -281,6 +282,15 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 		if (error)
 			return (error);
 		return (linux_semctl(td, &a));
+	}
+	case LINUX_SEMTIMEDOP: {
+		struct linux_semtimedop_args a;
+
+		a.semid = args->arg1;
+		a.tsops = PTRIN(args->ptr);
+		a.nsops = args->arg2;
+		a.timeout = PTRIN(args->arg5);
+		return (linux_semtimedop(td, &a));
 	}
 	case LINUX_MSGSND: {
 		struct linux_msgsnd_args a;

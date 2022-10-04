@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -76,11 +76,7 @@ for type in "mirror" "raidz" "raidz2"; do
 		log_must zpool offline $TESTPOOL $VDIR/a
 		log_must wait_for_degraded $TESTPOOL
 
-		zpool status -v $TESTPOOL | grep logs | \
-			grep "DEGRADED" 2>&1 >/dev/null
-		if (( $? == 0 )); then
-			log_fail "log device should display correct status"
-		fi
+		log_mustnot eval "zpool status -v $TESTPOOL | grep logs | grep -q \"DEGRADED\""
 
 		log_must zpool online $TESTPOOL $VDIR/a
 		log_must zpool destroy -f $TESTPOOL

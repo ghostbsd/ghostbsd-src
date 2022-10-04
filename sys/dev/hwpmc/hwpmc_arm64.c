@@ -38,6 +38,8 @@ __FBSDID("$FreeBSD$");
 #include <machine/pmc_mdep.h>
 #include <machine/cpu.h>
 
+#include "opt_acpi.h"
+
 static int arm64_npmcs;
 
 struct arm64_event_code_map {
@@ -527,11 +529,11 @@ arm64_pcpu_fini(struct pmc_mdep *md, int cpu)
 }
 
 struct pmc_mdep *
-pmc_arm64_initialize()
+pmc_arm64_initialize(void)
 {
 	struct pmc_mdep *pmc_mdep;
 	struct pmc_classdep *pcd;
-	int idcode, impcode;
+	int classes, idcode, impcode;
 	int reg;
 	uint64_t midr;
 
@@ -561,8 +563,18 @@ pmc_arm64_initialize()
 	arm64_pcpu = malloc(sizeof(struct arm64_cpu *) * pmc_cpu_max(),
 		M_PMC, M_WAITOK | M_ZERO);
 
-	/* Just one class */
-	pmc_mdep = pmc_mdep_alloc(1);
+	/* One AArch64 CPU class */
+	classes = 1;
+
+#ifdef DEV_ACPI
+	/* Query presence of optional classes and set max class. */
+	if (pmc_cmn600_nclasses() > 0)
+		classes = MAX(classes, PMC_MDEP_CLASS_INDEX_CMN600);
+	if (pmc_dmc620_nclasses() > 0)
+		classes = MAX(classes, PMC_MDEP_CLASS_INDEX_DMC620_C);
+#endif
+
+	pmc_mdep = pmc_mdep_alloc(classes);
 
 	switch(impcode) {
 	case PMCR_IMP_ARM:
@@ -610,6 +622,15 @@ pmc_arm64_initialize()
 	pmc_mdep->pmd_switch_out = arm64_switch_out;
 
 	pmc_mdep->pmd_npmc   += arm64_npmcs;
+
+#ifdef DEV_ACPI
+	if (pmc_cmn600_nclasses() > 0)
+		pmc_cmn600_initialize(pmc_mdep);
+	if (pmc_dmc620_nclasses() > 0) {
+		pmc_dmc620_initialize_cd2(pmc_mdep);
+		pmc_dmc620_initialize_c(pmc_mdep);
+	}
+#endif
 
 	return (pmc_mdep);
 }

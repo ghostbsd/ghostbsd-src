@@ -153,9 +153,8 @@ agp_alloc_gatt(device_t dev)
 		return 0;
 
 	gatt->ag_entries = entries;
-	gatt->ag_virtual = (void *)kmem_alloc_contig(entries *
-	    sizeof(u_int32_t), M_NOWAIT | M_ZERO, 0, ~0, PAGE_SIZE, 0,
-	    VM_MEMATTR_WRITE_COMBINING);
+	gatt->ag_virtual = kmem_alloc_contig(entries * sizeof(uint32_t),
+	    M_NOWAIT | M_ZERO, 0, ~0, PAGE_SIZE, 0, VM_MEMATTR_WRITE_COMBINING);
 	if (!gatt->ag_virtual) {
 		if (bootverbose)
 			device_printf(dev, "contiguous allocation failed\n");
@@ -170,8 +169,7 @@ agp_alloc_gatt(device_t dev)
 void
 agp_free_gatt(struct agp_gatt *gatt)
 {
-	kmem_free((vm_offset_t)gatt->ag_virtual, gatt->ag_entries *
-	    sizeof(u_int32_t));
+	kmem_free(gatt->ag_virtual, gatt->ag_entries * sizeof(uint32_t));
 	free(gatt, M_AGP);
 }
 
@@ -514,7 +512,7 @@ agp_generic_alloc_memory(device_t dev, int type, vm_size_t size)
 	mem->am_id = sc->as_nextid++;
 	mem->am_size = size;
 	mem->am_type = 0;
-	mem->am_obj = vm_object_allocate(OBJT_DEFAULT, atop(round_page(size)));
+	mem->am_obj = vm_object_allocate(OBJT_SWAP, atop(round_page(size)));
 	mem->am_physical = 0;
 	mem->am_offset = 0;
 	mem->am_is_bound = 0;
@@ -907,7 +905,7 @@ agp_mmap(struct cdev *kdev, vm_ooffset_t offset, vm_paddr_t *paddr,
 /* Implementation of the kernel api */
 
 device_t
-agp_find_device()
+agp_find_device(void)
 {
 	device_t *children, child;
 	int i, count;

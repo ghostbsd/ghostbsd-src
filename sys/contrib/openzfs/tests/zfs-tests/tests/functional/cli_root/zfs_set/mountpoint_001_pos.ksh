@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -69,11 +69,7 @@ log_assert "Setting a valid mountpoint to file system, it must be successful."
 log_onexit cleanup
 
 old_fs_mpt=$(get_prop mountpoint $TESTPOOL/$TESTFS)
-[[ $? != 0 ]] && \
-	log_fail "Get the $TESTPOOL/$TESTFS mountpoint error."
 old_ctr_mpt=$(get_prop mountpoint $TESTPOOL/$TESTCTR)
-[[ $? != 0 ]] && \
-	log_fail "Get the $TESTPOOL/$TESTCTR mountpoint error."
 
 if [[ ! -d $TESTDIR2 ]]; then
 	log_must mkdir $TESTDIR2

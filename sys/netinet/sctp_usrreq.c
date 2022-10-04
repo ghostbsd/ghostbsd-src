@@ -260,107 +260,94 @@ sctp_notify(struct sctp_inpcb *inp,
 }
 
 void
-sctp_ctlinput(int cmd, struct sockaddr *sa, void *vip)
+sctp_ctlinput(struct icmp *icmp)
 {
-	struct ip *outer_ip;
-	struct ip *inner_ip;
+	struct ip *inner_ip, *outer_ip;
 	struct sctphdr *sh;
-	struct icmp *icmp;
 	struct sctp_inpcb *inp;
 	struct sctp_tcb *stcb;
 	struct sctp_nets *net;
 	struct sctp_init_chunk *ch;
 	struct sockaddr_in src, dst;
 
-	if (sa->sa_family != AF_INET ||
-	    ((struct sockaddr_in *)sa)->sin_addr.s_addr == INADDR_ANY) {
+	if (icmp_errmap(icmp) == 0)
 		return;
-	}
-	if (PRC_IS_REDIRECT(cmd)) {
-		vip = NULL;
-	} else if ((unsigned)cmd >= PRC_NCMDS || inetctlerrmap[cmd] == 0) {
-		return;
-	}
-	if (vip != NULL) {
-		inner_ip = (struct ip *)vip;
-		icmp = (struct icmp *)((caddr_t)inner_ip -
-		    (sizeof(struct icmp) - sizeof(struct ip)));
-		outer_ip = (struct ip *)((caddr_t)icmp - sizeof(struct ip));
-		sh = (struct sctphdr *)((caddr_t)inner_ip + (inner_ip->ip_hl << 2));
-		memset(&src, 0, sizeof(struct sockaddr_in));
-		src.sin_family = AF_INET;
-		src.sin_len = sizeof(struct sockaddr_in);
-		src.sin_port = sh->src_port;
-		src.sin_addr = inner_ip->ip_src;
-		memset(&dst, 0, sizeof(struct sockaddr_in));
-		dst.sin_family = AF_INET;
-		dst.sin_len = sizeof(struct sockaddr_in);
-		dst.sin_port = sh->dest_port;
-		dst.sin_addr = inner_ip->ip_dst;
-		/*
-		 * 'dst' holds the dest of the packet that failed to be
-		 * sent. 'src' holds our local endpoint address. Thus we
-		 * reverse the dst and the src in the lookup.
-		 */
-		inp = NULL;
-		net = NULL;
-		stcb = sctp_findassociation_addr_sa((struct sockaddr *)&dst,
-		    (struct sockaddr *)&src,
-		    &inp, &net, 1,
-		    SCTP_DEFAULT_VRFID);
-		if ((stcb != NULL) &&
-		    (net != NULL) &&
-		    (inp != NULL)) {
-			/* Check the verification tag */
-			if (ntohl(sh->v_tag) != 0) {
+
+	outer_ip = (struct ip *)((caddr_t)icmp - sizeof(struct ip));
+	inner_ip = &icmp->icmp_ip;
+	sh = (struct sctphdr *)((caddr_t)inner_ip + (inner_ip->ip_hl << 2));
+	memset(&src, 0, sizeof(struct sockaddr_in));
+	src.sin_family = AF_INET;
+	src.sin_len = sizeof(struct sockaddr_in);
+	src.sin_port = sh->src_port;
+	src.sin_addr = inner_ip->ip_src;
+	memset(&dst, 0, sizeof(struct sockaddr_in));
+	dst.sin_family = AF_INET;
+	dst.sin_len = sizeof(struct sockaddr_in);
+	dst.sin_port = sh->dest_port;
+	dst.sin_addr = inner_ip->ip_dst;
+	/*
+	 * 'dst' holds the dest of the packet that failed to be
+	 * sent. 'src' holds our local endpoint address. Thus we
+	 * reverse the dst and the src in the lookup.
+	 */
+	inp = NULL;
+	net = NULL;
+	stcb = sctp_findassociation_addr_sa((struct sockaddr *)&dst,
+	    (struct sockaddr *)&src,
+	    &inp, &net, 1,
+	    SCTP_DEFAULT_VRFID);
+	if ((stcb != NULL) &&
+	    (net != NULL) &&
+	    (inp != NULL)) {
+		/* Check the verification tag */
+		if (ntohl(sh->v_tag) != 0) {
+			/*
+			 * This must be the verification tag used
+			 * for sending out packets. We don't
+			 * consider packets reflecting the
+			 * verification tag.
+			 */
+			if (ntohl(sh->v_tag) != stcb->asoc.peer_vtag) {
+				SCTP_TCB_UNLOCK(stcb);
+				return;
+			}
+		} else {
+			if (ntohs(outer_ip->ip_len) >=
+			    sizeof(struct ip) +
+			    8 + (inner_ip->ip_hl << 2) + 20) {
 				/*
-				 * This must be the verification tag used
-				 * for sending out packets. We don't
-				 * consider packets reflecting the
-				 * verification tag.
+				 * In this case we can check if we
+				 * got an INIT chunk and if the
+				 * initiate tag matches.
 				 */
-				if (ntohl(sh->v_tag) != stcb->asoc.peer_vtag) {
+				ch = (struct sctp_init_chunk *)(sh + 1);
+				if ((ch->ch.chunk_type != SCTP_INITIATION) ||
+				    (ntohl(ch->init.initiate_tag) != stcb->asoc.my_vtag)) {
 					SCTP_TCB_UNLOCK(stcb);
 					return;
 				}
 			} else {
-				if (ntohs(outer_ip->ip_len) >=
-				    sizeof(struct ip) +
-				    8 + (inner_ip->ip_hl << 2) + 20) {
-					/*
-					 * In this case we can check if we
-					 * got an INIT chunk and if the
-					 * initiate tag matches.
-					 */
-					ch = (struct sctp_init_chunk *)(sh + 1);
-					if ((ch->ch.chunk_type != SCTP_INITIATION) ||
-					    (ntohl(ch->init.initiate_tag) != stcb->asoc.my_vtag)) {
-						SCTP_TCB_UNLOCK(stcb);
-						return;
-					}
-				} else {
-					SCTP_TCB_UNLOCK(stcb);
-					return;
-				}
-			}
-			sctp_notify(inp, stcb, net,
-			    icmp->icmp_type,
-			    icmp->icmp_code,
-			    ntohs(inner_ip->ip_len),
-			    (uint32_t)ntohs(icmp->icmp_nextmtu));
-		} else {
-			if ((stcb == NULL) && (inp != NULL)) {
-				/* reduce ref-count */
-				SCTP_INP_WLOCK(inp);
-				SCTP_INP_DECR_REF(inp);
-				SCTP_INP_WUNLOCK(inp);
-			}
-			if (stcb) {
 				SCTP_TCB_UNLOCK(stcb);
+				return;
 			}
 		}
+		sctp_notify(inp, stcb, net,
+		    icmp->icmp_type,
+		    icmp->icmp_code,
+		    ntohs(inner_ip->ip_len),
+		    (uint32_t)ntohs(icmp->icmp_nextmtu));
+	} else {
+		if ((stcb == NULL) && (inp != NULL)) {
+			/* reduce ref-count */
+			SCTP_INP_WLOCK(inp);
+			SCTP_INP_DECR_REF(inp);
+			SCTP_INP_WUNLOCK(inp);
+		}
+		if (stcb) {
+			SCTP_TCB_UNLOCK(stcb);
+		}
 	}
-	return;
 }
 #endif
 
@@ -454,13 +441,10 @@ sctp_abort(struct socket *so)
 		sctp_inpcb_free(inp, SCTP_FREE_SHOULD_USE_ABORT,
 		    SCTP_CALLED_AFTER_CMPSET_OFCLOSE);
 		SOCK_LOCK(so);
+		KASSERT(!SOLISTENING(so),
+		    ("sctp_abort: called on listening socket %p", so));
 		SCTP_SB_CLEAR(so->so_snd);
-		/*
-		 * same for the rcv ones, they are only here for the
-		 * accounting/select.
-		 */
 		SCTP_SB_CLEAR(so->so_rcv);
-
 		/* Now null out the reference, we are completely detached. */
 		so->so_pcb = NULL;
 		SOCK_UNLOCK(so);
@@ -545,7 +529,7 @@ sctp_close(struct socket *so)
 	if ((inp->sctp_flags & SCTP_PCB_FLAGS_SOCKET_GONE) == 0) {
 		inp->sctp_flags |= SCTP_PCB_FLAGS_SOCKET_GONE | SCTP_PCB_FLAGS_CLOSE_IP;
 		if (((so->so_options & SO_LINGER) && (so->so_linger == 0)) ||
-		    (so->so_rcv.sb_cc > 0)) {
+		    (SCTP_SBAVAIL(&so->so_rcv) > 0)) {
 #ifdef SCTP_LOG_CLOSING
 			sctp_log_closing(inp, NULL, 13);
 #endif
@@ -565,13 +549,10 @@ sctp_close(struct socket *so)
 		 * the SCTP association.
 		 */
 		SOCK_LOCK(so);
-		SCTP_SB_CLEAR(so->so_snd);
-		/*
-		 * same for the rcv ones, they are only here for the
-		 * accounting/select.
-		 */
-		SCTP_SB_CLEAR(so->so_rcv);
-
+		if (!SOLISTENING(so)) {
+			SCTP_SB_CLEAR(so->so_snd);
+			SCTP_SB_CLEAR(so->so_rcv);
+		}
 		/* Now null out the reference, we are completely detached. */
 		so->so_pcb = NULL;
 		SOCK_UNLOCK(so);
@@ -707,9 +688,8 @@ sctp_disconnect(struct socket *so)
 				return (0);
 			}
 			NET_EPOCH_ENTER(et);
-			if (((so->so_options & SO_LINGER) &&
-			    (so->so_linger == 0)) ||
-			    (so->so_rcv.sb_cc > 0)) {
+			if (((so->so_options & SO_LINGER) && (so->so_linger == 0)) ||
+			    (SCTP_SBAVAIL(&so->so_rcv) > 0)) {
 				if (SCTP_GET_STATE(stcb) != SCTP_STATE_COOKIE_WAIT) {
 					/* Left with Data unread */
 					struct mbuf *op_err;
@@ -846,18 +826,22 @@ sctp_flush(struct socket *so, int how)
 		inp->sctp_flags |= SCTP_PCB_FLAGS_SOCKET_CANT_READ;
 		SCTP_INP_READ_UNLOCK(inp);
 		SCTP_INP_WUNLOCK(inp);
-		so->so_rcv.sb_cc = 0;
-		so->so_rcv.sb_mbcnt = 0;
-		so->so_rcv.sb_mb = NULL;
+		SOCK_LOCK(so);
+		KASSERT(!SOLISTENING(so),
+		    ("sctp_flush: called on listening socket %p", so));
+		SCTP_SB_CLEAR(so->so_rcv);
+		SOCK_UNLOCK(so);
 	}
 	if ((how == PRU_FLUSH_WR) || (how == PRU_FLUSH_RDWR)) {
 		/*
 		 * First make sure the sb will be happy, we don't use these
 		 * except maybe the count
 		 */
-		so->so_snd.sb_cc = 0;
-		so->so_snd.sb_mbcnt = 0;
-		so->so_snd.sb_mb = NULL;
+		SOCK_LOCK(so);
+		KASSERT(!SOLISTENING(so),
+		    ("sctp_flush: called on listening socket %p", so));
+		SCTP_SB_CLEAR(so->so_snd);
+		SOCK_UNLOCK(so);
 	}
 	return (0);
 }
@@ -1422,8 +1406,7 @@ sctp_do_connect_x(struct socket *so, struct sctp_inpcb *inp, void *optval,
 		}
 	}
 #endif				/* INET6 */
-	if ((inp->sctp_flags & SCTP_PCB_FLAGS_UNBOUND) ==
-	    SCTP_PCB_FLAGS_UNBOUND) {
+	if (inp->sctp_flags & SCTP_PCB_FLAGS_UNBOUND) {
 		/* Bind a ephemeral port */
 		error = sctp_inpcb_bind(so, NULL, NULL, p);
 		if (error) {
@@ -5327,8 +5310,8 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 				if (net != NULL) {
 					/************************NET SPECIFIC SET ******************/
 					if (paddrp->spp_flags & SPP_HB_DISABLE) {
-						if (!(net->dest_state & SCTP_ADDR_UNCONFIRMED) &&
-						    !(net->dest_state & SCTP_ADDR_NOHB)) {
+						if (((net->dest_state & SCTP_ADDR_UNCONFIRMED) == 0) &&
+						    ((net->dest_state & SCTP_ADDR_NOHB) == 0)) {
 							sctp_timer_stop(SCTP_TIMER_TYPE_HEARTBEAT, inp, stcb, net,
 							    SCTP_FROM_SCTP_USRREQ + SCTP_LOC_9);
 						}
@@ -5484,9 +5467,9 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 					}
 					if (paddrp->spp_flags & SPP_HB_DISABLE) {
 						TAILQ_FOREACH(net, &stcb->asoc.nets, sctp_next) {
-							if (!(net->dest_state & SCTP_ADDR_NOHB)) {
+							if ((net->dest_state & SCTP_ADDR_NOHB) == 0) {
 								net->dest_state |= SCTP_ADDR_NOHB;
-								if (!(net->dest_state & SCTP_ADDR_UNCONFIRMED)) {
+								if ((net->dest_state & SCTP_ADDR_UNCONFIRMED) == 0) {
 									sctp_timer_stop(SCTP_TIMER_TYPE_HEARTBEAT,
 									    inp, stcb, net,
 									    SCTP_FROM_SCTP_USRREQ + SCTP_LOC_15);
@@ -5800,11 +5783,11 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
 
 			if ((stcb != NULL) && (net != NULL)) {
 				if (net != stcb->asoc.primary_destination) {
-					if (!(net->dest_state & SCTP_ADDR_UNCONFIRMED)) {
+					if ((net->dest_state & SCTP_ADDR_UNCONFIRMED) == 0) {
 						/* Ok we need to set it */
 						if (sctp_set_primary_addr(stcb, (struct sockaddr *)NULL, net) == 0) {
 							if ((stcb->asoc.alternate) &&
-							    (!(net->dest_state & SCTP_ADDR_PF)) &&
+							    ((net->dest_state & SCTP_ADDR_PF) == 0) &&
 							    (net->dest_state & SCTP_ADDR_REACHABLE)) {
 								sctp_free_remote_addr(stcb->asoc.alternate);
 								stcb->asoc.alternate = NULL;
@@ -7015,8 +6998,7 @@ sctp_connect(struct socket *so, struct sockaddr *addr, struct thread *p)
 		goto out_now;
 	}
 #endif
-	if ((inp->sctp_flags & SCTP_PCB_FLAGS_UNBOUND) ==
-	    SCTP_PCB_FLAGS_UNBOUND) {
+	if (inp->sctp_flags & SCTP_PCB_FLAGS_UNBOUND) {
 		/* Bind a ephemeral port */
 		error = sctp_inpcb_bind(so, NULL, NULL, p);
 		if (error) {
@@ -7225,6 +7207,15 @@ sctp_listen(struct socket *so, int backlog, struct thread *p)
 		SOCK_UNLOCK(so);
 		solisten_proto_abort(so);
 		error = EADDRINUSE;
+		SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, error);
+		goto out;
+	}
+	if ((inp->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) &&
+	    ((inp->sctp_flags & SCTP_PCB_FLAGS_WAS_CONNECTED) ||
+	    (inp->sctp_flags & SCTP_PCB_FLAGS_WAS_ABORTED))) {
+		SOCK_UNLOCK(so);
+		solisten_proto_abort(so);
+		error = EINVAL;
 		SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, error);
 		goto out;
 	}
@@ -7522,24 +7513,37 @@ sctp_peeraddr(struct socket *so, struct sockaddr **addr)
 	return (0);
 }
 
-struct pr_usrreqs sctp_usrreqs = {
-	.pru_abort = sctp_abort,
-	.pru_accept = sctp_accept,
-	.pru_attach = sctp_attach,
-	.pru_bind = sctp_bind,
-	.pru_connect = sctp_connect,
-	.pru_control = in_control,
-	.pru_close = sctp_close,
-	.pru_detach = sctp_close,
-	.pru_sopoll = sopoll_generic,
-	.pru_flush = sctp_flush,
-	.pru_disconnect = sctp_disconnect,
-	.pru_listen = sctp_listen,
-	.pru_peeraddr = sctp_peeraddr,
-	.pru_send = sctp_sendm,
-	.pru_shutdown = sctp_shutdown,
-	.pru_sockaddr = sctp_ingetaddr,
-	.pru_sosend = sctp_sosend,
-	.pru_soreceive = sctp_soreceive
+#define	SCTP_PROTOSW						\
+	.pr_protocol =	IPPROTO_SCTP,				\
+	.pr_ctloutput =	sctp_ctloutput,				\
+	.pr_abort =	sctp_abort,				\
+	.pr_accept =	sctp_accept,				\
+	.pr_attach =	sctp_attach,				\
+	.pr_bind =	sctp_bind,				\
+	.pr_connect =	sctp_connect,				\
+	.pr_control =	in_control,				\
+	.pr_close =	sctp_close,				\
+	.pr_detach =	sctp_close,				\
+	.pr_sopoll =	sopoll_generic,				\
+	.pr_flush =	sctp_flush,				\
+	.pr_disconnect = sctp_disconnect,			\
+	.pr_listen =	sctp_listen,				\
+	.pr_peeraddr =	sctp_peeraddr,				\
+	.pr_send =	sctp_sendm,				\
+	.pr_shutdown =	sctp_shutdown,				\
+	.pr_sockaddr =	sctp_ingetaddr,				\
+	.pr_sosend =	sctp_sosend,				\
+	.pr_soreceive =	sctp_soreceive				\
+
+struct protosw sctp_seqpacket_protosw = {
+	.pr_type =	SOCK_SEQPACKET,
+	.pr_flags =	PR_WANTRCVD,
+	SCTP_PROTOSW
+};
+
+struct protosw sctp_stream_protosw = {
+	.pr_type =      SOCK_STREAM,
+	.pr_flags =	PR_CONNREQUIRED | PR_WANTRCVD,
+	SCTP_PROTOSW
 };
 #endif

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -34,11 +34,9 @@
 
 verify_runnable "global"
 
-ismounted $NONZFS_TESTDIR $NEWFS_DEFAULT_FS
-(( $? == 0 )) && log_must umount -f $NONZFS_TESTDIR
+ismounted $NONZFS_TESTDIR $NEWFS_DEFAULT_FS && log_must umount -f $NONZFS_TESTDIR
 
-ismounted $TESTPOOL/$TESTFS
-[[ $? == 0 ]] && log_must zfs umount -f $TESTDIR
+ismounted $TESTPOOL/$TESTFS && log_must zfs umount -f $TESTDIR
 destroy_pool $TESTPOOL
 
 DISK=${DISKS%% *}

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -72,20 +72,17 @@ while (( i < ${#shareopts[*]} ))
 do
 	log_must zfs set sharenfs="${shareopts[i]}" $TESTPOOL/$TESTFS
 
-	option=`get_prop sharenfs $TESTPOOL/$TESTFS`
+	option=$(get_prop sharenfs $TESTPOOL/$TESTFS)
 	if [[ $option != ${shareopts[i]} ]]; then
 		log_fail "get sharenfs failed. ($option != ${shareopts[i]})"
 	fi
 
 	# Verify the single option after the leading 'ro' or 'rw'.
 	if is_linux; then
-		option=`echo "$option" | cut -f2 -d','`
+		IFS=',' read -r _ option _ <<<"$option"
 	fi
 
-	showshares_nfs | grep $option > /dev/null 2>&1
-	if (( $? != 0 )); then
-		log_fail "The '$option' option was not found in share output."
-	fi
+	log_must eval "showshares_nfs | grep -q \"$option\""
 
 	((i = i + 1))
 done

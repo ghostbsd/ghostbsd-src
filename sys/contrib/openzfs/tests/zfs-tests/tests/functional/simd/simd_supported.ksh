@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -32,20 +32,20 @@
 #
 # STRATEGY:
 #	1. Test if we are running on a Linux x86 system with SSE support
-#       2. If so, check if the zfs_fletcher_4_impl module parameter contains
+#	2. If so, check if the zfs_fletcher_4_impl module parameter contains
 #	   a sse implementation
 #	3. If not fail the test, otherwise pass it
 
 log_note "Testing if we support SIMD instructions (Linux x86 only)"
 
-if !is_linux; then
+if ! is_linux; then
     log_unsupported "Not a Linux System"
 fi
 
 case "$(uname -m)" in
-i386|i686|x86_64)
-	typeset -R modparam="/sys/module/zcommon/parameters/zfs_fletcher_4_impl"
-	if cat /proc/cpuinfo | awk '/^flags/ {print; exit;}' | grep -q sse; then
+i?86|x86_64)
+	typeset -R modparam="/sys/module/zfs/parameters/zfs_fletcher_4_impl"
+	if awk '/^flags/ {exit !/sse/}' /proc/cpuinfo; then
 		log_must grep -q sse "$modparam"
 		log_pass "SIMD instructions supported"
 	else

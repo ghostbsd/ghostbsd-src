@@ -114,7 +114,7 @@ tpmcrb_acpi_probe(device_t dev)
 	status = AcpiGetTable(ACPI_SIG_TPM2, 1, (ACPI_TABLE_HEADER **) &tbl);
 	if(ACPI_FAILURE(status) ||
 	   tbl->StartMethod != TPM2_START_METHOD_CRB)
-		err = ENXIO;
+		return (ENXIO);
 
 	device_set_desc(dev, "Trusted Platform Module 2.0, CRB mode");
 	return (err);
@@ -415,9 +415,9 @@ static device_method_t	tpmcrb_methods[] = {
 	DEVMETHOD(device_suspend,	tpm20_suspend),
 	{0, 0}
 };
+
 static driver_t	tpmcrb_driver = {
 	"tpmcrb", tpmcrb_methods, sizeof(struct tpmcrb_sc),
 };
 
-devclass_t tpmcrb_devclass;
-DRIVER_MODULE(tpmcrb, acpi, tpmcrb_driver, tpmcrb_devclass, 0, 0);
+DRIVER_MODULE(tpmcrb, acpi, tpmcrb_driver, 0, 0);

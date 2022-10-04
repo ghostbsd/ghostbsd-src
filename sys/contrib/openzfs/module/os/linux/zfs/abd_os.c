@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -620,7 +620,6 @@ abd_alloc_zero_scatter(void)
 	ABD_SCATTER(abd_zero_scatter).abd_offset = 0;
 	ABD_SCATTER(abd_zero_scatter).abd_nents = nr_pages;
 	abd_zero_scatter->abd_size = SPA_MAXBLOCKSIZE;
-	zfs_refcount_create(&abd_zero_scatter->abd_children);
 	ABD_SCATTER(abd_zero_scatter).abd_sgl = vmem_alloc(nr_pages *
 	    sizeof (struct scatterlist), KM_SLEEP);
 

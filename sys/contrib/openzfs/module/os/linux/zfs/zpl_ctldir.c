@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -32,6 +32,9 @@
 #include <sys/zfs_vnops.h>
 #include <sys/zfs_ctldir.h>
 #include <sys/zpl.h>
+#include <sys/dmu.h>
+#include <sys/dsl_dataset.h>
+#include <sys/zap.h>
 
 /*
  * Common open routine.  Disallow any write access.
@@ -54,7 +57,8 @@ zpl_root_iterate(struct file *filp, zpl_dir_context_t *ctx)
 	zfsvfs_t *zfsvfs = ITOZSB(file_inode(filp));
 	int error = 0;
 
-	ZPL_ENTER(zfsvfs);
+	if ((error = zpl_enter(zfsvfs, FTAG)) != 0)
+		return (error);
 
 	if (!zpl_dir_emit_dots(filp, ctx))
 		goto out;
@@ -75,7 +79,7 @@ zpl_root_iterate(struct file *filp, zpl_dir_context_t *ctx)
 		ctx->pos++;
 	}
 out:
-	ZPL_EXIT(zfsvfs);
+	zpl_exit(zfsvfs, FTAG);
 
 	return (error);
 }
@@ -204,7 +208,7 @@ zpl_snapdir_revalidate(struct dentry *dentry, unsigned int flags)
 	return (!!dentry->d_inode);
 }
 
-static const dentry_operations_t zpl_dops_snapdirs = {
+static dentry_operations_t zpl_dops_snapdirs = {
 /*
  * Auto mounting of snapshots is only supported for 2.6.37 and
  * newer kernels.  Prior to this kernel the ops->follow_link()
@@ -255,7 +259,8 @@ zpl_snapdir_iterate(struct file *filp, zpl_dir_context_t *ctx)
 	uint64_t id, pos;
 	int error = 0;
 
-	ZPL_ENTER(zfsvfs);
+	if ((error = zpl_enter(zfsvfs, FTAG)) != 0)
+		return (error);
 	cookie = spl_fstrans_mark();
 
 	if (!zpl_dir_emit_dots(filp, ctx))
@@ -279,7 +284,7 @@ zpl_snapdir_iterate(struct file *filp, zpl_dir_context_t *ctx)
 	}
 out:
 	spl_fstrans_unmark(cookie);
-	ZPL_EXIT(zfsvfs);
+	zpl_exit(zfsvfs, FTAG);
 
 	if (error == -ENOENT)
 		return (0);
@@ -398,8 +403,10 @@ zpl_snapdir_getattr_impl(const struct path *path, struct kstat *stat,
 	(void) request_mask, (void) query_flags;
 	struct inode *ip = path->dentry->d_inode;
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
+	int error;
 
-	ZPL_ENTER(zfsvfs);
+	if ((error = zpl_enter(zfsvfs, FTAG)) != 0)
+		return (error);
 #ifdef HAVE_USERNS_IOPS_GETATTR
 #ifdef HAVE_GENERIC_FILLATTR_USERNS
 	generic_fillattr(user_ns, ip, stat);
@@ -411,9 +418,23 @@ zpl_snapdir_getattr_impl(const struct path *path, struct kstat *stat,
 #endif
 
 	stat->nlink = stat->size = 2;
+
+	dsl_dataset_t *ds = dmu_objset_ds(zfsvfs->z_os);
+	if (dsl_dataset_phys(ds)->ds_snapnames_zapobj != 0) {
+		uint64_t snap_count;
+		int err = zap_count(
+		    dmu_objset_pool(ds->ds_objset)->dp_meta_objset,
+		    dsl_dataset_phys(ds)->ds_snapnames_zapobj, &snap_count);
+		if (err != 0) {
+			zpl_exit(zfsvfs, FTAG);
+			return (-err);
+		}
+		stat->nlink += snap_count;
+	}
+
 	stat->ctime = stat->mtime = dmu_objset_snap_cmtime(zfsvfs->z_os);
 	stat->atime = current_time(ip);
-	ZPL_EXIT(zfsvfs);
+	zpl_exit(zfsvfs, FTAG);
 
 	return (0);
 }
@@ -491,7 +512,8 @@ zpl_shares_iterate(struct file *filp, zpl_dir_context_t *ctx)
 	znode_t *dzp;
 	int error = 0;
 
-	ZPL_ENTER(zfsvfs);
+	if ((error = zpl_enter(zfsvfs, FTAG)) != 0)
+		return (error);
 	cookie = spl_fstrans_mark();
 
 	if (zfsvfs->z_shares_dir == 0) {
@@ -510,7 +532,7 @@ zpl_shares_iterate(struct file *filp, zpl_dir_context_t *ctx)
 	iput(ZTOI(dzp));
 out:
 	spl_fstrans_unmark(cookie);
-	ZPL_EXIT(zfsvfs);
+	zpl_exit(zfsvfs, FTAG);
 	ASSERT3S(error, <=, 0);
 
 	return (error);
@@ -547,7 +569,8 @@ zpl_shares_getattr_impl(const struct path *path, struct kstat *stat,
 	znode_t *dzp;
 	int error;
 
-	ZPL_ENTER(zfsvfs);
+	if ((error = zpl_enter(zfsvfs, FTAG)) != 0)
+		return (error);
 
 	if (zfsvfs->z_shares_dir == 0) {
 #ifdef HAVE_USERNS_IOPS_GETATTR
@@ -561,7 +584,7 @@ zpl_shares_getattr_impl(const struct path *path, struct kstat *stat,
 #endif
 		stat->nlink = stat->size = 2;
 		stat->atime = current_time(ip);
-		ZPL_EXIT(zfsvfs);
+		zpl_exit(zfsvfs, FTAG);
 		return (0);
 	}
 
@@ -579,7 +602,7 @@ zpl_shares_getattr_impl(const struct path *path, struct kstat *stat,
 		iput(ZTOI(dzp));
 	}
 
-	ZPL_EXIT(zfsvfs);
+	zpl_exit(zfsvfs, FTAG);
 	ASSERT3S(error, <=, 0);
 
 	return (error);

@@ -108,6 +108,10 @@ LINUXKPI_GENSRCS+= \
 	opt_usb.h \
 	opt_stack.h
 
+LINUXKPI_INCLUDES+= \
+	-I${SYSDIR}/compat/linuxkpi/common/include \
+	-I${SYSDIR}/compat/linuxkpi/dummy/include
+
 CFLAGS+=	${WERROR}
 CFLAGS+=	-D_KERNEL
 CFLAGS+=	-DKLD_MODULE
@@ -145,7 +149,11 @@ CFLAGS.gcc+= --param large-function-growth=1000
 # share/mk/src.sys.mk, but the following is important for out-of-tree modules
 # (e.g. ports).
 CFLAGS+=	-fno-common
-LDFLAGS+=	-d -warn-common
+.if ${LINKER_TYPE} != "lld" || ${LINKER_VERSION} < 140000
+# lld >= 14 warns that -d is deprecated, and will be removed.
+LDFLAGS+=	-d
+.endif
+LDFLAGS+=	-warn-common
 
 .if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mbuild-id}
 LDFLAGS+=	--build-id=sha1
@@ -195,7 +203,7 @@ ${_firmw:C/\:.*$/.fwo/:T}:	${_firmw:C/\:.*$//} ${SYSDIR}/kern/firmw.S
 	${CC:N${CCACHE_BIN}} -c -x assembler-with-cpp -DLOCORE 	\
 	    ${CFLAGS} ${WERROR} 				\
 	    -DFIRMW_FILE="${.ALLSRC:M*${_firmw:C/\:.*$//}}" 	\
-	    -DFIRMW_SYMBOL="${_firmw:C/\:.*$//:C/[-.\/]/_/g}"	\
+	    -DFIRMW_SYMBOL="${_firmw:C/\:.*$//:C/[-.\/@]/_/g}"	\
 	    ${SYSDIR}/kern/firmw.S -o ${.TARGET}
 
 OBJS+=	${_firmw:C/\:.*$/.fwo/:T}
@@ -213,7 +221,7 @@ OBJS+=	${SRCS:N*.h:R:S/$/.o/g}
 PROG=	${KMOD}.ko
 .endif
 
-.if !defined(DEBUG_FLAGS) || ${MK_KERNEL_SYMBOLS} == "no"
+.if !defined(DEBUG_FLAGS) || ${MK_SPLIT_KERNEL_DEBUG} == "no"
 FULLPROG=	${PROG}
 .else
 FULLPROG=	${PROG}.full
@@ -247,7 +255,7 @@ ${KMOD}.kld: ${OBJS} ${BLOB_OBJS}
 .else
 ${FULLPROG}: ${OBJS} ${BLOB_OBJS}
 .endif
-	${LD} -m ${LD_EMULATION} ${_LDFLAGS} ${LDSCRIPT_FLAGS} -r -d \
+	${LD} -m ${LD_EMULATION} ${_LDFLAGS} ${LDSCRIPT_FLAGS} -r \
 	    -o ${.TARGET} ${OBJS} ${BLOB_OBJS}
 .if ${MK_CTF} != "no"
 	${CTFMERGE} ${CTFFLAGS} -o ${.TARGET} ${OBJS} ${BLOB_OBJS}
@@ -278,6 +286,9 @@ _MAP_DEBUG_PREFIX= yes
 _ILINKS=machine
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _ILINKS+=x86
+.endif
+.if ${MACHINE_CPUARCH} == "amd64"
+_ILINKS+=i386
 .endif
 CLEANFILES+=${_ILINKS}
 
@@ -317,7 +328,7 @@ ${_ILINKS}:
 
 CLEANFILES+= ${PROG} ${KMOD}.kld ${OBJS}
 
-.if defined(DEBUG_FLAGS) && ${MK_KERNEL_SYMBOLS} != "no"
+.if defined(DEBUG_FLAGS) && ${MK_SPLIT_KERNEL_DEBUG} != "no"
 CLEANFILES+= ${FULLPROG} ${PROG}.debug
 .endif
 

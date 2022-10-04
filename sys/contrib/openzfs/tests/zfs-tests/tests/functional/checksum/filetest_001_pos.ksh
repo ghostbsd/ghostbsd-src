@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -85,7 +85,7 @@ log_must zpool import $TESTPOOL
 log_must zpool scrub $TESTPOOL
 log_must wait_scrubbed $TESTPOOL
 
-cksum=$(zpool status -P -v $TESTPOOL | grep "$firstvdev" | awk '{print $5}')
+cksum=$(zpool status -P -v $TESTPOOL | awk -v v="$firstvdev" '$0 ~ v {print $5}')
 log_assert "Normal file write test saw $cksum checksum errors"
 log_must [ $cksum -eq 0 ]
 
@@ -105,8 +105,7 @@ while [[ $j -lt ${#CHECKSUM_TYPES[*]} ]]; do
 	log_must zpool scrub $TESTPOOL
 	log_must wait_scrubbed $TESTPOOL
 
-	cksum=$(zpool status -P -v $TESTPOOL | grep "$firstvdev" | \
-	    awk '{print $5}')
+	cksum=$(zpool status -P -v $TESTPOOL | awk -v v="$firstvdev" '$0 ~ v {print $5}')
 
 	log_assert "Checksum '$type' caught $cksum checksum errors"
 	log_must [ $cksum -ne 0 ]

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -159,12 +159,5 @@ enum scope_prefix_types {
 	MODULE_PARM_DESC(name_prefix ## name, desc)
 
 #define	ZFS_MODULE_PARAM_ARGS	const char *buf, zfs_kernel_param_t *kp
-
-#define	ZFS_MODULE_DESCRIPTION(s) MODULE_DESCRIPTION(s)
-#define	ZFS_MODULE_AUTHOR(s) MODULE_AUTHOR(s)
-#define	ZFS_MODULE_LICENSE(s) MODULE_LICENSE(s)
-#define	ZFS_MODULE_VERSION(s) MODULE_VERSION(s)
-
-#define	module_init_early(fn) module_init(fn)
 
 #endif	/* _MOD_COMPAT_H */

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -44,7 +44,7 @@ void
 print_timestamp(uint_t timestamp_fmt)
 {
 	time_t t = time(NULL);
-	static char *fmt = NULL;
+	static const char *fmt = NULL;
 
 	/* We only need to retrieve this once per invocation */
 	if (fmt == NULL)
@@ -54,9 +54,10 @@ print_timestamp(uint_t timestamp_fmt)
 		(void) printf("%lld\n", (longlong_t)t);
 	} else if (timestamp_fmt == DDATE) {
 		char dstr[64];
+		struct tm tm;
 		int len;
 
-		len = strftime(dstr, sizeof (dstr), fmt, localtime(&t));
+		len = strftime(dstr, sizeof (dstr), fmt, localtime_r(&t, &tm));
 		if (len > 0)
 			(void) printf("%s\n", dstr);
 	}

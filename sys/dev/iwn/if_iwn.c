@@ -374,9 +374,8 @@ static driver_t iwn_driver = {
 	iwn_methods,
 	sizeof(struct iwn_softc)
 };
-static devclass_t iwn_devclass;
 
-DRIVER_MODULE(iwn, pci, iwn_driver, iwn_devclass, NULL, NULL);
+DRIVER_MODULE(iwn, pci, iwn_driver, NULL, NULL);
 MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, iwn, iwn_ident_table,
     nitems(iwn_ident_table) - 1);
 MODULE_VERSION(iwn, 1);
@@ -9124,7 +9123,7 @@ iwn_set_channel(struct ieee80211com *ic)
 		error = iwn_config(sc);
 		if (error != 0)
 		device_printf(sc->sc_dev,
-		    "%s: error %d settting channel\n", __func__, error);
+		    "%s: error %d setting channel\n", __func__, error);
 	}
 	IWN_UNLOCK(sc);
 }

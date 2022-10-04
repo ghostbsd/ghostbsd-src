@@ -6,7 +6,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -120,7 +120,7 @@ function verify_reverse_sort { # command list name
 function is_fs_type_zfs {
 
     typeset dirname=$1
-    typeset fs="$(df $dirname | tail -1 | awk '{print $NF}')"
+    typeset fs="$(df $dirname | awk 'END {print $NF}')"
 
     if is_freebsd; then
         fs_type=$(mount | awk -v fs=$fs '{if ($3 == fs) print $4}' \

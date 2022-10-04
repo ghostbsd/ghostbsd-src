@@ -151,6 +151,11 @@ goldfish_rtc_settime(device_t dev, struct timespec *ts)
 
 	sc = device_get_softc(dev);
 
+	/*
+	 * We request a timespec with no resolution-adjustment.  That also
+	 * disables utc adjustment, so apply that ourselves.
+	 */
+	ts->tv_sec -= utc_offset();
 	nsec = (uint64_t)ts->tv_sec * 1000000000 + ts->tv_nsec;
 
 	mtx_lock(&sc->mtx);
@@ -176,7 +181,5 @@ static device_method_t goldfish_rtc_methods[] = {
 
 DEFINE_CLASS_0(goldfish_rtc, goldfish_rtc_driver, goldfish_rtc_methods,
     sizeof(struct goldfish_rtc_softc));
-static devclass_t goldfish_rtc_devclass;
 
-DRIVER_MODULE(goldfish_rtc, simplebus, goldfish_rtc_driver,
-    goldfish_rtc_devclass, NULL, NULL);
+DRIVER_MODULE(goldfish_rtc, simplebus, goldfish_rtc_driver, NULL, NULL);

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -27,14 +27,22 @@
 #ifdef CONFIG_COMPAT
 #include <linux/compat.h>
 #endif
+#include <linux/fs.h>
 #include <sys/file.h>
 #include <sys/dmu_objset.h>
 #include <sys/zfs_znode.h>
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_vnops.h>
 #include <sys/zfs_project.h>
-#ifdef HAVE_VFS_SET_PAGE_DIRTY_NOBUFFERS
+#if defined(HAVE_VFS_SET_PAGE_DIRTY_NOBUFFERS) || \
+    defined(HAVE_VFS_FILEMAP_DIRTY_FOLIO)
 #include <linux/pagemap.h>
+#endif
+#ifdef HAVE_FILE_FADVISE
+#include <linux/fadvise.h>
+#endif
+#ifdef HAVE_VFS_FILEMAP_DIRTY_FOLIO
+#include <linux/writeback.h>
 #endif
 
 /*
@@ -161,17 +169,59 @@ static int
 zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 {
 	struct inode *inode = filp->f_mapping->host;
+	znode_t *zp = ITOZ(inode);
+	zfsvfs_t *zfsvfs = ITOZSB(inode);
 	cred_t *cr = CRED();
 	int error;
 	fstrans_cookie_t cookie;
 
+	/*
+	 * The variables z_sync_writes_cnt and z_async_writes_cnt work in
+	 * tandem so that sync writes can detect if there are any non-sync
+	 * writes going on and vice-versa. The "vice-versa" part to this logic
+	 * is located in zfs_putpage() where non-sync writes check if there are
+	 * any ongoing sync writes. If any sync and non-sync writes overlap,
+	 * we do a commit to complete the non-sync writes since the latter can
+	 * potentially take several seconds to complete and thus block sync
+	 * writes in the upcoming call to filemap_write_and_wait_range().
+	 */
+	atomic_inc_32(&zp->z_sync_writes_cnt);
+	/*
+	 * If the following check does not detect an overlapping non-sync write
+	 * (say because it's just about to start), then it is guaranteed that
+	 * the non-sync write will detect this sync write. This is because we
+	 * always increment z_sync_writes_cnt / z_async_writes_cnt before doing
+	 * the check on z_async_writes_cnt / z_sync_writes_cnt here and in
+	 * zfs_putpage() respectively.
+	 */
+	if (atomic_load_32(&zp->z_async_writes_cnt) > 0) {
+		if ((error = zpl_enter(zfsvfs, FTAG)) != 0) {
+			atomic_dec_32(&zp->z_sync_writes_cnt);
+			return (error);
+		}
+		zil_commit(zfsvfs->z_log, zp->z_id);
+		zpl_exit(zfsvfs, FTAG);
+	}
+
 	error = filemap_write_and_wait_range(inode->i_mapping, start, end);
+
+	/*
+	 * The sync write is not complete yet but we decrement
+	 * z_sync_writes_cnt since zfs_fsync() increments and decrements
+	 * it internally. If a non-sync write starts just after the decrement
+	 * operation but before we call zfs_fsync(), it may not detect this
+	 * overlapping sync write but it does not matter since we have already
+	 * gone past filemap_write_and_wait_range() and we won't block due to
+	 * the non-sync write.
+	 */
+	atomic_dec_32(&zp->z_sync_writes_cnt);
+
 	if (error)
 		return (error);
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	error = -zfs_fsync(ITOZ(inode), datasync, cr);
+	error = -zfs_fsync(zp, datasync, cr);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 	ASSERT3S(error, <=, 0);
@@ -413,6 +463,8 @@ zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
 	if (ret)
 		return (ret);
 
+	kiocb->ki_pos = pos;
+
 	zfs_uio_t uio;
 	zfs_uio_iovec_init(&uio, iov, nr_segs, kiocb->ki_pos, UIO_USERSPACE,
 	    count, 0);
@@ -629,11 +681,19 @@ zpl_readpage_common(struct page *pp)
 	return (error);
 }
 
+#ifdef HAVE_VFS_READ_FOLIO
+static int
+zpl_read_folio(struct file *filp, struct folio *folio)
+{
+	return (zpl_readpage_common(&folio->page));
+}
+#else
 static int
 zpl_readpage(struct file *filp, struct page *pp)
 {
 	return (zpl_readpage_common(pp));
 }
+#endif
 
 static int
 zpl_readpage_filler(void *data, struct page *pp)
@@ -647,24 +707,41 @@ zpl_readpage_filler(void *data, struct page *pp)
  * paging.  For simplicity, the code relies on read_cache_pages() to
  * correctly lock each page for IO and call zpl_readpage().
  */
+#ifdef HAVE_VFS_READPAGES
 static int
 zpl_readpages(struct file *filp, struct address_space *mapping,
     struct list_head *pages, unsigned nr_pages)
 {
 	return (read_cache_pages(mapping, pages, zpl_readpage_filler, NULL));
 }
+#else
+static void
+zpl_readahead(struct readahead_control *ractl)
+{
+	struct page *page;
+
+	while ((page = readahead_page(ractl)) != NULL) {
+		int ret;
+
+		ret = zpl_readpage_filler(NULL, page);
+		put_page(page);
+		if (ret)
+			break;
+	}
+}
+#endif
 
 static int
 zpl_putpage(struct page *pp, struct writeback_control *wbc, void *data)
 {
-	struct address_space *mapping = data;
+	boolean_t *for_sync = data;
 	fstrans_cookie_t cookie;
 
 	ASSERT(PageLocked(pp));
 	ASSERT(!PageWriteback(pp));
 
 	cookie = spl_fstrans_mark();
-	(void) zfs_putpage(mapping->host, pp, wbc);
+	(void) zfs_putpage(pp->mapping->host, pp, wbc, *for_sync);
 	spl_fstrans_unmark(cookie);
 
 	return (0);
@@ -678,10 +755,11 @@ zpl_writepages(struct address_space *mapping, struct writeback_control *wbc)
 	enum writeback_sync_modes sync_mode;
 	int result;
 
-	ZPL_ENTER(zfsvfs);
+	if ((result = zpl_enter(zfsvfs, FTAG)) != 0)
+		return (result);
 	if (zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS)
 		wbc->sync_mode = WB_SYNC_ALL;
-	ZPL_EXIT(zfsvfs);
+	zpl_exit(zfsvfs, FTAG);
 	sync_mode = wbc->sync_mode;
 
 	/*
@@ -691,14 +769,15 @@ zpl_writepages(struct address_space *mapping, struct writeback_control *wbc)
 	 * we run it once in non-SYNC mode so that the ZIL gets all the data,
 	 * and then we commit it all in one go.
 	 */
+	boolean_t for_sync = (sync_mode == WB_SYNC_ALL);
 	wbc->sync_mode = WB_SYNC_NONE;
-	result = write_cache_pages(mapping, wbc, zpl_putpage, mapping);
+	result = write_cache_pages(mapping, wbc, zpl_putpage, &for_sync);
 	if (sync_mode != wbc->sync_mode) {
-		ZPL_ENTER(zfsvfs);
-		ZPL_VERIFY_ZP(zp);
+		if ((result = zpl_enter_verify_zp(zfsvfs, zp, FTAG)) != 0)
+			return (result);
 		if (zfsvfs->z_log != NULL)
 			zil_commit(zfsvfs->z_log, zp->z_id);
-		ZPL_EXIT(zfsvfs);
+		zpl_exit(zfsvfs, FTAG);
 
 		/*
 		 * We need to call write_cache_pages() again (we can't just
@@ -708,7 +787,8 @@ zpl_writepages(struct address_space *mapping, struct writeback_control *wbc)
 		 * details). That being said, this is a no-op in most cases.
 		 */
 		wbc->sync_mode = sync_mode;
-		result = write_cache_pages(mapping, wbc, zpl_putpage, mapping);
+		result = write_cache_pages(mapping, wbc, zpl_putpage,
+		    &for_sync);
 	}
 	return (result);
 }
@@ -725,7 +805,9 @@ zpl_writepage(struct page *pp, struct writeback_control *wbc)
 	if (ITOZSB(pp->mapping->host)->z_os->os_sync == ZFS_SYNC_ALWAYS)
 		wbc->sync_mode = WB_SYNC_ALL;
 
-	return (zpl_putpage(pp, wbc, pp->mapping));
+	boolean_t for_sync = (wbc->sync_mode == WB_SYNC_ALL);
+
+	return (zpl_putpage(pp, wbc, &for_sync));
 }
 
 /*
@@ -764,11 +846,13 @@ zpl_fallocate_common(struct inode *ip, int mode, loff_t offset, loff_t len)
 	if (mode & (test_mode)) {
 		flock64_t bf;
 
-		if (offset > olen)
-			goto out_unmark;
+		if (mode & FALLOC_FL_KEEP_SIZE) {
+			if (offset > olen)
+				goto out_unmark;
 
-		if (offset + len > olen)
-			len = olen - offset;
+			if (offset + len > olen)
+				len = olen - offset;
+		}
 		bf.l_type = F_WRLCK;
 		bf.l_whence = SEEK_SET;
 		bf.l_start = offset;
@@ -829,6 +913,61 @@ zpl_ioctl_getversion(struct file *filp, void __user *arg)
 
 	return (copy_to_user(arg, &generation, sizeof (generation)));
 }
+
+#ifdef HAVE_FILE_FADVISE
+static int
+zpl_fadvise(struct file *filp, loff_t offset, loff_t len, int advice)
+{
+	struct inode *ip = file_inode(filp);
+	znode_t *zp = ITOZ(ip);
+	zfsvfs_t *zfsvfs = ITOZSB(ip);
+	objset_t *os = zfsvfs->z_os;
+	int error = 0;
+
+	if (S_ISFIFO(ip->i_mode))
+		return (-ESPIPE);
+
+	if (offset < 0 || len < 0)
+		return (-EINVAL);
+
+	if ((error = zpl_enter_verify_zp(zfsvfs, zp, FTAG)) != 0)
+		return (error);
+
+	switch (advice) {
+	case POSIX_FADV_SEQUENTIAL:
+	case POSIX_FADV_WILLNEED:
+#ifdef HAVE_GENERIC_FADVISE
+		if (zn_has_cached_data(zp))
+			error = generic_fadvise(filp, offset, len, advice);
+#endif
+		/*
+		 * Pass on the caller's size directly, but note that
+		 * dmu_prefetch_max will effectively cap it.  If there
+		 * really is a larger sequential access pattern, perhaps
+		 * dmu_zfetch will detect it.
+		 */
+		if (len == 0)
+			len = i_size_read(ip) - offset;
+
+		dmu_prefetch(os, zp->z_id, 0, offset, len,
+		    ZIO_PRIORITY_ASYNC_READ);
+		break;
+	case POSIX_FADV_NORMAL:
+	case POSIX_FADV_RANDOM:
+	case POSIX_FADV_DONTNEED:
+	case POSIX_FADV_NOREUSE:
+		/* ignored for now */
+		break;
+	default:
+		error = -EINVAL;
+		break;
+	}
+
+	zfs_exit(zfsvfs, FTAG);
+
+	return (error);
+}
+#endif /* HAVE_FILE_FADVISE */
 
 #define	ZFS_FL_USER_VISIBLE	(FS_FL_USER_VISIBLE | ZFS_PROJINHERIT_FL)
 #define	ZFS_FL_USER_MODIFIABLE	(FS_FL_USER_MODIFIABLE | ZFS_PROJINHERIT_FL)
@@ -1135,13 +1274,24 @@ zpl_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 
 const struct address_space_operations zpl_address_space_operations = {
+#ifdef HAVE_VFS_READPAGES
 	.readpages	= zpl_readpages,
+#else
+	.readahead	= zpl_readahead,
+#endif
+#ifdef HAVE_VFS_READ_FOLIO
+	.read_folio	= zpl_read_folio,
+#else
 	.readpage	= zpl_readpage,
+#endif
 	.writepage	= zpl_writepage,
 	.writepages	= zpl_writepages,
 	.direct_IO	= zpl_direct_IO,
 #ifdef HAVE_VFS_SET_PAGE_DIRTY_NOBUFFERS
 	.set_page_dirty = __set_page_dirty_nobuffers,
+#endif
+#ifdef HAVE_VFS_FILEMAP_DIRTY_FOLIO
+	.dirty_folio	= filemap_dirty_folio,
 #endif
 };
 
@@ -1172,6 +1322,9 @@ const struct file_operations zpl_file_operations = {
 	.aio_fsync	= zpl_aio_fsync,
 #endif
 	.fallocate	= zpl_fallocate,
+#ifdef HAVE_FILE_FADVISE
+	.fadvise	= zpl_fadvise,
+#endif
 	.unlocked_ioctl	= zpl_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= zpl_compat_ioctl,

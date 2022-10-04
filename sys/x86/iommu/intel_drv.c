@@ -83,7 +83,6 @@ __FBSDID("$FreeBSD$");
 #define	DMAR_QI_IRQ_RID		1
 #define	DMAR_REG_RID		2
 
-static devclass_t dmar_devclass;
 static device_t *dmar_devs;
 static int dmar_devcnt;
 
@@ -600,7 +599,7 @@ static driver_t	dmar_driver = {
 	sizeof(struct dmar_unit),
 };
 
-DRIVER_MODULE(dmar, acpi, dmar_driver, dmar_devclass, 0, 0);
+DRIVER_MODULE(dmar, acpi, dmar_driver, 0, 0);
 MODULE_DEPEND(dmar, acpi, 1, 1, 1);
 
 static void
@@ -933,7 +932,7 @@ dmar_rmrr_iter(ACPI_DMAR_HEADER *dmarh, void *arg)
 			/* The RMRR entry end address is inclusive. */
 			entry->end = resmem->EndAddress;
 			TAILQ_INSERT_TAIL(ria->rmrr_entries, entry,
-			    unroll_link);
+			    dmamap_link);
 		}
 	}
 
@@ -1173,7 +1172,7 @@ dmar_print_domain(struct dmar_domain *domain, bool show_mappings)
 	}
 }
 
-DB_FUNC(dmar_domain, db_dmar_print_domain, db_show_table, CS_OWN, NULL)
+DB_SHOW_COMMAND_FLAGS(dmar_domain, db_dmar_print_domain, CS_OWN)
 {
 	struct dmar_unit *unit;
 	struct dmar_domain *domain;

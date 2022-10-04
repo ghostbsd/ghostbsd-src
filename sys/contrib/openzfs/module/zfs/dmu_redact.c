@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -142,7 +142,7 @@ record_merge_enqueue(bqueue_t *q, struct redact_record **build,
 {
 	if (new->eos_marker) {
 		if (*build != NULL)
-			bqueue_enqueue(q, *build, sizeof (*build));
+			bqueue_enqueue(q, *build, sizeof (**build));
 		bqueue_enqueue_flush(q, new, sizeof (*new));
 		return;
 	}
@@ -824,7 +824,7 @@ perform_thread_merge(bqueue_t *q, uint32_t num_threads,
 	avl_destroy(&end_tree);
 	kmem_free(redact_nodes, num_threads * sizeof (*redact_nodes));
 	if (current_record != NULL)
-		bqueue_enqueue(q, current_record, sizeof (current_record));
+		bqueue_enqueue(q, current_record, sizeof (*current_record));
 	return (err);
 }
 
@@ -855,7 +855,7 @@ redact_merge_thread(void *arg)
  * object number.
  */
 static int
-hold_next_object(objset_t *os, struct redact_record *rec, void *tag,
+hold_next_object(objset_t *os, struct redact_record *rec, const void *tag,
     uint64_t *object, dnode_t **dn)
 {
 	int err = 0;

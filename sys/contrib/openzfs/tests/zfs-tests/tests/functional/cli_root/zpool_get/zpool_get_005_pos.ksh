@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -50,14 +50,9 @@ typeset -i i=0
 while [[ $i -lt "${#properties[@]}" ]]; do
 	log_note "Checking for parsable ${properties[$i]} property"
 	log_must eval "zpool get -p ${properties[$i]} $TESTPOOL >/tmp/value.$$"
-	grep "${properties[$i]}" /tmp/value.$$ >/dev/null 2>&1
-	if [[ $? -ne 0 ]]; then
-		log_fail "${properties[$i]} not seen in output"
-	fi
+	log_must grep -q "${properties[$i]}" /tmp/value.$$
 
-	typeset v=$(grep "${properties[$i]}" /tmp/value.$$ | awk '{print $3}')
-
-	log_note "${properties[$i]} has a value of $v"
+	typeset v=$(awk -v p="${properties[$i]}" '$0 ~ p {print $3}' /tmp/value.$$)
 
 	# Determine if this value is a valid number, result in return code
 	log_must test -n "$v"

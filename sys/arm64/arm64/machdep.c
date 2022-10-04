@@ -300,7 +300,8 @@ cpu_pcpu_init(struct pcpu *pcpu, int cpuid, size_t size)
 {
 
 	pcpu->pc_acpi_id = 0xffffffff;
-	pcpu->pc_mpidr = 0xffffffff;
+	pcpu->pc_mpidr_low = 0xffffffff;
+	pcpu->pc_mpidr_high = 0xffffffff;
 }
 
 void
@@ -420,14 +421,6 @@ arm64_get_writable_addr(vm_offset_t addr, vm_offset_t *out)
 	return (false);
 }
 
-typedef struct {
-	uint32_t type;
-	uint64_t phys_start;
-	uint64_t virt_start;
-	uint64_t num_pages;
-	uint64_t attr;
-} EFI_MEMORY_DESCRIPTOR;
-
 typedef void (*efi_map_entry_cb)(struct efi_md *);
 
 static void
@@ -486,6 +479,11 @@ add_efi_map_entry(struct efi_md *p)
 {
 
 	switch (p->md_type) {
+	case EFI_MD_TYPE_RECLAIM:
+		/*
+		 * The recomended location for ACPI tables. Map into the
+		 * DMAP so we can access them from userspace via /dev/mem.
+		 */
 	case EFI_MD_TYPE_RT_CODE:
 		/*
 		 * Some UEFI implementations put the system table in the
@@ -648,6 +646,8 @@ bus_probe(void)
 				break;
 			}
 			order = strchr(order, ',');
+			if (order != NULL)
+				order++;	/* Skip comma */
 		}
 		freeenv(env);
 
@@ -768,7 +768,9 @@ initarm(struct arm64_bootparams *abp)
 	update_special_regs(0);
 
 	link_elf_ireloc(kmdp);
+#ifdef FDT
 	try_load_dtb(kmdp);
+#endif
 
 	efi_systbl_phys = MD_FETCH(kmdp, MODINFOMD_FW_HANDLE, vm_paddr_t);
 
@@ -820,9 +822,8 @@ initarm(struct arm64_bootparams *abp)
 	pan_setup();
 
 	/* Bootstrap enough of pmap  to enter the kernel proper */
-	pmap_bootstrap(abp->kern_l0pt, abp->kern_l1pt,
-	    KERNBASE - abp->kern_delta, lastaddr - KERNBASE);
-	/* Exclude entries neexed in teh DMAP region, but not phys_avail */
+	pmap_bootstrap(KERNBASE - abp->kern_delta, lastaddr - KERNBASE);
+	/* Exclude entries needed in the DMAP region, but not phys_avail */
 	if (efihdr != NULL)
 		exclude_efi_map_entries(efihdr);
 	physmem_init_kernel_globals();

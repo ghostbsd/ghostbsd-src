@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -100,6 +100,11 @@ typedef struct dbuf_stats {
 	 */
 	kstat_named_t hash_insert_race;
 	/*
+	 * Number of entries in the hash table dbuf and mutex arrays.
+	 */
+	kstat_named_t hash_table_count;
+	kstat_named_t hash_mutex_count;
+	/*
 	 * Statistics about the size of the metadata dbuf cache.
 	 */
 	kstat_named_t metadata_cache_count;
@@ -131,6 +136,8 @@ dbuf_stats_t dbuf_stats = {
 	{ "hash_chains",			KSTAT_DATA_UINT64 },
 	{ "hash_chain_max",			KSTAT_DATA_UINT64 },
 	{ "hash_insert_race",			KSTAT_DATA_UINT64 },
+	{ "hash_table_count",			KSTAT_DATA_UINT64 },
+	{ "hash_mutex_count",			KSTAT_DATA_UINT64 },
 	{ "metadata_cache_count",		KSTAT_DATA_UINT64 },
 	{ "metadata_cache_size_bytes",		KSTAT_DATA_UINT64 },
 	{ "metadata_cache_size_bytes_max",	KSTAT_DATA_UINT64 },
@@ -224,8 +231,11 @@ static unsigned long dbuf_cache_max_bytes = ULONG_MAX;
 static unsigned long dbuf_metadata_cache_max_bytes = ULONG_MAX;
 
 /* Set the default sizes of the caches to log2 fraction of arc size */
-static int dbuf_cache_shift = 5;
-static int dbuf_metadata_cache_shift = 6;
+static uint_t dbuf_cache_shift = 5;
+static uint_t dbuf_metadata_cache_shift = 6;
+
+/* Set the dbuf hash mutex count as log2 shift (dynamic by default) */
+static uint_t dbuf_mutex_cache_shift = 0;
 
 static unsigned long dbuf_cache_target_bytes(void);
 static unsigned long dbuf_metadata_cache_target_bytes(void);
@@ -838,6 +848,7 @@ static int
 dbuf_kstat_update(kstat_t *ksp, int rw)
 {
 	dbuf_stats_t *ds = ksp->ks_data;
+	dbuf_hash_table_t *h = &dbuf_hash_table;
 
 	if (rw == KSTAT_WRITE)
 		return (SET_ERROR(EACCES));
@@ -867,6 +878,8 @@ dbuf_kstat_update(kstat_t *ksp, int rw)
 	    wmsum_value(&dbuf_sums.hash_chains);
 	ds->hash_insert_race.value.ui64 =
 	    wmsum_value(&dbuf_sums.hash_insert_race);
+	ds->hash_table_count.value.ui64 = h->hash_table_mask + 1;
+	ds->hash_mutex_count.value.ui64 = h->hash_mutex_mask + 1;
 	ds->metadata_cache_count.value.ui64 =
 	    wmsum_value(&dbuf_sums.metadata_cache_count);
 	ds->metadata_cache_size_bytes.value.ui64 = zfs_refcount_count(
@@ -879,9 +892,8 @@ dbuf_kstat_update(kstat_t *ksp, int rw)
 void
 dbuf_init(void)
 {
-	uint64_t hsize = 1ULL << 16;
+	uint64_t hmsize, hsize = 1ULL << 16;
 	dbuf_hash_table_t *h = &dbuf_hash_table;
-	int i;
 
 	/*
 	 * The hash table is big enough to fill one eighth of physical memory
@@ -892,29 +904,42 @@ dbuf_init(void)
 	while (hsize * zfs_arc_average_blocksize < arc_all_memory() / 8)
 		hsize <<= 1;
 
-retry:
-	h->hash_table_mask = hsize - 1;
-#if defined(_KERNEL)
+	h->hash_table = NULL;
+	while (h->hash_table == NULL) {
+		h->hash_table_mask = hsize - 1;
+
+		h->hash_table = vmem_zalloc(hsize * sizeof (void *), KM_SLEEP);
+		if (h->hash_table == NULL)
+			hsize >>= 1;
+
+		ASSERT3U(hsize, >=, 1ULL << 10);
+	}
+
 	/*
-	 * Large allocations which do not require contiguous pages
-	 * should be using vmem_alloc() in the linux kernel
+	 * The hash table buckets are protected by an array of mutexes where
+	 * each mutex is reponsible for protecting 128 buckets.  A minimum
+	 * array size of 8192 is targeted to avoid contention.
 	 */
-	h->hash_table = vmem_zalloc(hsize * sizeof (void *), KM_SLEEP);
-#else
-	h->hash_table = kmem_zalloc(hsize * sizeof (void *), KM_NOSLEEP);
-#endif
-	if (h->hash_table == NULL) {
-		/* XXX - we should really return an error instead of assert */
-		ASSERT(hsize > (1ULL << 10));
-		hsize >>= 1;
-		goto retry;
+	if (dbuf_mutex_cache_shift == 0)
+		hmsize = MAX(hsize >> 7, 1ULL << 13);
+	else
+		hmsize = 1ULL << MIN(dbuf_mutex_cache_shift, 24);
+
+	h->hash_mutexes = NULL;
+	while (h->hash_mutexes == NULL) {
+		h->hash_mutex_mask = hmsize - 1;
+
+		h->hash_mutexes = vmem_zalloc(hmsize * sizeof (kmutex_t),
+		    KM_SLEEP);
+		if (h->hash_mutexes == NULL)
+			hmsize >>= 1;
 	}
 
 	dbuf_kmem_cache = kmem_cache_create("dmu_buf_impl_t",
 	    sizeof (dmu_buf_impl_t),
 	    0, dbuf_cons, dbuf_dest, NULL, NULL, NULL, 0);
 
-	for (i = 0; i < DBUF_MUTEXES; i++)
+	for (int i = 0; i < hmsize; i++)
 		mutex_init(&h->hash_mutexes[i], NULL, MUTEX_DEFAULT, NULL);
 
 	dbuf_stats_init(h);
@@ -941,7 +966,7 @@ retry:
 
 	wmsum_init(&dbuf_sums.cache_count, 0);
 	wmsum_init(&dbuf_sums.cache_total_evicts, 0);
-	for (i = 0; i < DN_MAX_LEVELS; i++) {
+	for (int i = 0; i < DN_MAX_LEVELS; i++) {
 		wmsum_init(&dbuf_sums.cache_levels[i], 0);
 		wmsum_init(&dbuf_sums.cache_levels_bytes[i], 0);
 	}
@@ -957,7 +982,7 @@ retry:
 	    KSTAT_TYPE_NAMED, sizeof (dbuf_stats) / sizeof (kstat_named_t),
 	    KSTAT_FLAG_VIRTUAL);
 	if (dbuf_ksp != NULL) {
-		for (i = 0; i < DN_MAX_LEVELS; i++) {
+		for (int i = 0; i < DN_MAX_LEVELS; i++) {
 			snprintf(dbuf_stats.cache_levels[i].name,
 			    KSTAT_STRLEN, "cache_level_%d", i);
 			dbuf_stats.cache_levels[i].data_type =
@@ -977,21 +1002,16 @@ void
 dbuf_fini(void)
 {
 	dbuf_hash_table_t *h = &dbuf_hash_table;
-	int i;
 
 	dbuf_stats_destroy();
 
-	for (i = 0; i < DBUF_MUTEXES; i++)
+	for (int i = 0; i < (h->hash_mutex_mask + 1); i++)
 		mutex_destroy(&h->hash_mutexes[i]);
-#if defined(_KERNEL)
-	/*
-	 * Large allocations which do not require contiguous pages
-	 * should be using vmem_free() in the linux kernel
-	 */
+
 	vmem_free(h->hash_table, (h->hash_table_mask + 1) * sizeof (void *));
-#else
-	kmem_free(h->hash_table, (h->hash_table_mask + 1) * sizeof (void *));
-#endif
+	vmem_free(h->hash_mutexes, (h->hash_mutex_mask + 1) *
+	    sizeof (kmutex_t));
+
 	kmem_cache_destroy(dbuf_kmem_cache);
 	taskq_destroy(dbu_evict_taskq);
 
@@ -1018,7 +1038,7 @@ dbuf_fini(void)
 
 	wmsum_fini(&dbuf_sums.cache_count);
 	wmsum_fini(&dbuf_sums.cache_total_evicts);
-	for (i = 0; i < DN_MAX_LEVELS; i++) {
+	for (int i = 0; i < DN_MAX_LEVELS; i++) {
 		wmsum_fini(&dbuf_sums.cache_levels[i]);
 		wmsum_fini(&dbuf_sums.cache_levels_bytes[i]);
 	}
@@ -1297,7 +1317,7 @@ dbuf_whichblock(const dnode_t *dn, const int64_t level, const uint64_t offset)
  * used when modifying or reading db_blkptr.
  */
 db_lock_type_t
-dmu_buf_lock_parent(dmu_buf_impl_t *db, krw_t rw, void *tag)
+dmu_buf_lock_parent(dmu_buf_impl_t *db, krw_t rw, const void *tag)
 {
 	enum db_lock_type ret = DLT_NONE;
 	if (db->db_parent != NULL) {
@@ -1322,7 +1342,7 @@ dmu_buf_lock_parent(dmu_buf_impl_t *db, krw_t rw, void *tag)
  * panic if we didn't pass the lock type in.
  */
 void
-dmu_buf_unlock_parent(dmu_buf_impl_t *db, db_lock_type_t type, void *tag)
+dmu_buf_unlock_parent(dmu_buf_impl_t *db, db_lock_type_t type, const void *tag)
 {
 	if (type == DLT_PARENT)
 		rw_exit(&db->db_parent->db_rwlock);
@@ -1522,7 +1542,7 @@ dbuf_read_verify_dnode_crypt(dmu_buf_impl_t *db, uint32_t flags)
  */
 static int
 dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
-    db_lock_type_t dblt, void *tag)
+    db_lock_type_t dblt, const void *tag)
 {
 	dnode_t *dn;
 	zbookmark_phys_t zb;
@@ -2941,9 +2961,6 @@ dbuf_destroy(dmu_buf_impl_t *db)
 	ASSERT3U(db->db_caching_status, ==, DB_NO_CACHE);
 	ASSERT(!multilist_link_active(&db->db_cache_link));
 
-	kmem_cache_free(dbuf_kmem_cache, db);
-	arc_space_return(sizeof (dmu_buf_impl_t), ARC_SPACE_DBUF);
-
 	/*
 	 * If this dbuf is referenced from an indirect dbuf,
 	 * decrement the ref count on the indirect dbuf.
@@ -2952,6 +2969,9 @@ dbuf_destroy(dmu_buf_impl_t *db)
 		mutex_enter(&parent->db_mtx);
 		dbuf_rele_and_unlock(parent, db, B_TRUE);
 	}
+
+	kmem_cache_free(dbuf_kmem_cache, db);
+	arc_space_return(sizeof (dmu_buf_impl_t), ARC_SPACE_DBUF);
 }
 
 /*
@@ -3185,8 +3205,10 @@ typedef struct dbuf_prefetch_arg {
 static void
 dbuf_prefetch_fini(dbuf_prefetch_arg_t *dpa, boolean_t io_done)
 {
-	if (dpa->dpa_cb != NULL)
-		dpa->dpa_cb(dpa->dpa_arg, io_done);
+	if (dpa->dpa_cb != NULL) {
+		dpa->dpa_cb(dpa->dpa_arg, dpa->dpa_zb.zb_level,
+		    dpa->dpa_zb.zb_blkid, io_done);
+	}
 	kmem_free(dpa, sizeof (*dpa));
 }
 
@@ -3197,9 +3219,10 @@ dbuf_issue_final_prefetch_done(zio_t *zio, const zbookmark_phys_t *zb,
 	(void) zio, (void) zb, (void) iobp;
 	dbuf_prefetch_arg_t *dpa = private;
 
-	dbuf_prefetch_fini(dpa, B_TRUE);
 	if (abuf != NULL)
 		arc_buf_destroy(abuf, private);
+
+	dbuf_prefetch_fini(dpa, B_TRUE);
 }
 
 /*
@@ -3251,7 +3274,8 @@ dbuf_prefetch_indirect_done(zio_t *zio, const zbookmark_phys_t *zb,
 
 	if (abuf == NULL) {
 		ASSERT(zio == NULL || zio->io_error != 0);
-		return (dbuf_prefetch_fini(dpa, B_TRUE));
+		dbuf_prefetch_fini(dpa, B_TRUE);
+		return;
 	}
 	ASSERT(zio == NULL || zio->io_error == 0);
 
@@ -3284,7 +3308,8 @@ dbuf_prefetch_indirect_done(zio_t *zio, const zbookmark_phys_t *zb,
 		    dpa->dpa_curlevel, curblkid, FTAG);
 		if (db == NULL) {
 			arc_buf_destroy(abuf, private);
-			return (dbuf_prefetch_fini(dpa, B_TRUE));
+			dbuf_prefetch_fini(dpa, B_TRUE);
+			return;
 		}
 		(void) dbuf_read(db, NULL,
 		    DB_RF_MUST_SUCCEED | DB_RF_NOPREFETCH | DB_RF_HAVESTRUCT);
@@ -3302,7 +3327,9 @@ dbuf_prefetch_indirect_done(zio_t *zio, const zbookmark_phys_t *zb,
 	    dpa->dpa_dnode->dn_objset->os_dsl_dataset,
 	    SPA_FEATURE_REDACTED_DATASETS));
 	if (BP_IS_HOLE(bp) || BP_IS_REDACTED(bp)) {
+		arc_buf_destroy(abuf, private);
 		dbuf_prefetch_fini(dpa, B_TRUE);
+		return;
 	} else if (dpa->dpa_curlevel == dpa->dpa_zb.zb_level) {
 		ASSERT3U(nextblkid, ==, dpa->dpa_zb.zb_blkid);
 		dbuf_issue_final_prefetch(dpa, bp);
@@ -3320,7 +3347,8 @@ dbuf_prefetch_indirect_done(zio_t *zio, const zbookmark_phys_t *zb,
 		    dpa->dpa_zb.zb_object, dpa->dpa_curlevel, nextblkid);
 
 		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
-		    bp, dbuf_prefetch_indirect_done, dpa, dpa->dpa_prio,
+		    bp, dbuf_prefetch_indirect_done, dpa,
+		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
 		    &iter_aflags, &zb);
 	}
@@ -3455,7 +3483,8 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 		SET_BOOKMARK(&zb, ds != NULL ? ds->ds_object : DMU_META_OBJSET,
 		    dn->dn_object, curlevel, curblkid);
 		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
-		    &bp, dbuf_prefetch_indirect_done, dpa, prio,
+		    &bp, dbuf_prefetch_indirect_done, dpa,
+		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
 		    &iter_aflags, &zb);
 	}
@@ -3467,7 +3496,7 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 	return (1);
 no_issue:
 	if (cb != NULL)
-		cb(arg, B_FALSE);
+		cb(arg, level, blkid, B_FALSE);
 	return (0);
 }
 
@@ -3527,7 +3556,7 @@ dbuf_hold_copy(dnode_t *dn, dmu_buf_impl_t *db)
 int
 dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
-    void *tag, dmu_buf_impl_t **dbp)
+    const void *tag, dmu_buf_impl_t **dbp)
 {
 	dmu_buf_impl_t *db, *parent = NULL;
 
@@ -3632,13 +3661,13 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 }
 
 dmu_buf_impl_t *
-dbuf_hold(dnode_t *dn, uint64_t blkid, void *tag)
+dbuf_hold(dnode_t *dn, uint64_t blkid, const void *tag)
 {
 	return (dbuf_hold_level(dn, 0, blkid, tag));
 }
 
 dmu_buf_impl_t *
-dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, void *tag)
+dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, const void *tag)
 {
 	dmu_buf_impl_t *db;
 	int err = dbuf_hold_impl(dn, level, blkid, FALSE, FALSE, tag, &db);
@@ -3679,7 +3708,7 @@ dbuf_rm_spill(dnode_t *dn, dmu_tx_t *tx)
 
 #pragma weak dmu_buf_add_ref = dbuf_add_ref
 void
-dbuf_add_ref(dmu_buf_impl_t *db, void *tag)
+dbuf_add_ref(dmu_buf_impl_t *db, const void *tag)
 {
 	int64_t holds = zfs_refcount_add(&db->db_holds, tag);
 	VERIFY3S(holds, >, 1);
@@ -3688,7 +3717,7 @@ dbuf_add_ref(dmu_buf_impl_t *db, void *tag)
 #pragma weak dmu_buf_try_add_ref = dbuf_try_add_ref
 boolean_t
 dbuf_try_add_ref(dmu_buf_t *db_fake, objset_t *os, uint64_t obj, uint64_t blkid,
-    void *tag)
+    const void *tag)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
 	dmu_buf_impl_t *found_db;
@@ -3717,14 +3746,14 @@ dbuf_try_add_ref(dmu_buf_t *db_fake, objset_t *os, uint64_t obj, uint64_t blkid,
  * dnode's parent dbuf evicting its dnode handles.
  */
 void
-dbuf_rele(dmu_buf_impl_t *db, void *tag)
+dbuf_rele(dmu_buf_impl_t *db, const void *tag)
 {
 	mutex_enter(&db->db_mtx);
 	dbuf_rele_and_unlock(db, tag, B_FALSE);
 }
 
 void
-dmu_buf_rele(dmu_buf_t *db, void *tag)
+dmu_buf_rele(dmu_buf_t *db, const void *tag)
 {
 	dbuf_rele((dmu_buf_impl_t *)db, tag);
 }
@@ -3743,7 +3772,7 @@ dmu_buf_rele(dmu_buf_t *db, void *tag)
  *
  */
 void
-dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag, boolean_t evicting)
+dbuf_rele_and_unlock(dmu_buf_impl_t *db, const void *tag, boolean_t evicting)
 {
 	int64_t holds;
 	uint64_t size;
@@ -3947,7 +3976,7 @@ dmu_buf_get_user(dmu_buf_t *db_fake)
 }
 
 void
-dmu_buf_user_evict_wait()
+dmu_buf_user_evict_wait(void)
 {
 	taskq_wait(dbu_evict_taskq);
 }
@@ -5103,8 +5132,11 @@ ZFS_MODULE_PARAM(zfs_dbuf_cache, dbuf_cache_, lowater_pct, UINT, ZMOD_RW,
 ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, metadata_cache_max_bytes, ULONG, ZMOD_RW,
 	"Maximum size in bytes of dbuf metadata cache.");
 
-ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, cache_shift, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, cache_shift, UINT, ZMOD_RW,
 	"Set size of dbuf cache to log2 fraction of arc size.");
 
-ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, metadata_cache_shift, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, metadata_cache_shift, UINT, ZMOD_RW,
 	"Set size of dbuf metadata cache to log2 fraction of arc size.");
+
+ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, mutex_cache_shift, UINT, ZMOD_RD,
+	"Set size of dbuf cache mutex array as log2 shift.");

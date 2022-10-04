@@ -7,7 +7,7 @@
  * with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -37,14 +37,14 @@
 #include <sys/feature_tests.h>
 #include_next <sys/types.h>
 #include <sys/types32.h>
-#include <sys/va_list.h>
+#include <stdarg.h>
 #include <sys/stdtypes.h>
 
 #ifndef HAVE_INTTYPES
 #include <inttypes.h>
 #endif /* HAVE_INTTYPES */
 
-typedef int		zoneid_t;
+typedef uint_t		zoneid_t;
 typedef int		projid_t;
 
 /*

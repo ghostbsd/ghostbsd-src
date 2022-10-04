@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -46,7 +46,7 @@ verify_runnable "global"
 
 log_assert "'zpool history' can cope with simultaneous commands."
 
-typeset -i orig_count=$(zpool history $spool | wc -l | awk '{print $1}')
+typeset -i orig_count=$(zpool history $spool | wc -l)
 
 typeset -i i=0
 while ((i < 10)); do
@@ -90,7 +90,7 @@ while ((i < 10)); do
 	((i += 1))
 done
 
-typeset -i entry_count=$(zpool history $spool | wc -l | awk '{print $1}')
+typeset -i entry_count=$(zpool history $spool | wc -l)
 
 if ((entry_count - orig_count != 200)); then
 	log_fail "The entries count error: entry_count=$entry_count " \

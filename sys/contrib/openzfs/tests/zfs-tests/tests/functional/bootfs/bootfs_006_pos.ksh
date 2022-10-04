@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -44,12 +44,6 @@
 verify_runnable "global"
 
 
-zpool set 2>&1 | grep bootfs > /dev/null
-if [ $? -ne 0 ]
-then
-	log_unsupported "bootfs pool property not supported on this release."
-fi
-
 VDEV1=$TESTDIR/bootfs_006_pos_a.$$.dat
 VDEV2=$TESTDIR/bootfs_006_pos_b.$$.dat
 VDEV3=$TESTDIR/bootfs_006_pos_c.$$.dat
@@ -60,7 +54,7 @@ function verify_bootfs { # $POOL
 	log_must zfs create $POOL/$TESTFS
 
 	log_must zpool set bootfs=$POOL/$TESTFS $POOL
-	VAL=$(zpool get bootfs $POOL | tail -1 | awk '{print $3}' )
+	VAL=$(zpool get bootfs $POOL | awk 'END {print $3}' )
 	if [ $VAL != "$POOL/$TESTFS" ]
 	then
 		log_must zpool status -v $POOL
@@ -74,7 +68,7 @@ function verify_no_bootfs { # $POOL
 	POOL=$1
 	log_must zfs create $POOL/$TESTFS
 	log_mustnot zpool set bootfs=$POOL/$TESTFS $POOL
-	VAL=$(zpool get bootfs $POOL | tail -1 | awk '{print $3}' )
+	VAL=$(zpool get bootfs $POOL | awk 'END {print $3}' )
 	if [ $VAL == "$POOL/$TESTFS" ]
 	then
 		log_must zpool status -v $POOL

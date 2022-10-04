@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -93,6 +93,7 @@ typedef enum dmu_objset_type {
 typedef enum {
 	ZPROP_CONT = -2,
 	ZPROP_INVAL = -1,
+	ZPROP_USERPROP = ZPROP_INVAL,
 	ZFS_PROP_TYPE = 0,
 	ZFS_PROP_CREATION,
 	ZFS_PROP_USED,
@@ -188,6 +189,7 @@ typedef enum {
 	ZFS_PROP_IVSET_GUID,		/* not exposed to the user */
 	ZFS_PROP_REDACTED,
 	ZFS_PROP_REDACT_SNAPS,
+	ZFS_PROP_SNAPSHOTS_CHANGED,
 	ZFS_NUM_PROPS
 } zfs_prop_t;
 
@@ -310,7 +312,7 @@ typedef int (*zprop_func)(int, void *);
  */
 typedef enum {
 	VDEV_PROP_INVAL = -1,
-#define	VDEV_PROP_USER	VDEV_PROP_INVAL
+	VDEV_PROP_USERPROP = VDEV_PROP_INVAL,
 	VDEV_PROP_NAME,
 	VDEV_PROP_CAPACITY,
 	VDEV_PROP_STATE,
@@ -1292,6 +1294,7 @@ typedef struct ddt_histogram {
 #define	ZVOL_DRIVER	"zvol"
 #define	ZFS_DRIVER	"zfs"
 #define	ZFS_DEV		"/dev/zfs"
+#define	ZFS_DEVDIR	"/dev"
 
 #define	ZFS_SUPER_MAGIC	0x2fc12fc1
 
@@ -1449,7 +1452,9 @@ typedef enum zfs_ioc {
 	ZFS_IOC_EVENTS_SEEK,			/* 0x83 (Linux) */
 	ZFS_IOC_NEXTBOOT,			/* 0x84 (FreeBSD) */
 	ZFS_IOC_JAIL,				/* 0x85 (FreeBSD) */
+	ZFS_IOC_USERNS_ATTACH = ZFS_IOC_JAIL,	/* 0x85 (Linux) */
 	ZFS_IOC_UNJAIL,				/* 0x86 (FreeBSD) */
+	ZFS_IOC_USERNS_DETACH = ZFS_IOC_UNJAIL,	/* 0x86 (Linux) */
 	ZFS_IOC_SET_BOOTENV,			/* 0x87 */
 	ZFS_IOC_GET_BOOTENV,			/* 0x88 */
 	ZFS_IOC_LAST
@@ -1530,6 +1535,8 @@ typedef enum {
 	ZFS_ERR_REBUILD_IN_PROGRESS,
 	ZFS_ERR_BADPROP,
 	ZFS_ERR_VDEV_NOTSUP,
+	ZFS_ERR_NOT_USER_NAMESPACE,
+	ZFS_ERR_RESUME_EXISTS,
 } zfs_errno_t;
 
 /*
@@ -1752,9 +1759,9 @@ typedef enum {
  * against the cost of COWing a giant block to modify one byte, and the
  * large latency of reading or writing a large block.
  *
- * Note that although blocks up to 16MB are supported, the recordsize
- * property can not be set larger than zfs_max_recordsize (default 1MB).
- * See the comment near zfs_max_recordsize in dsl_dataset.c for details.
+ * The recordsize property can not be set larger than zfs_max_recordsize
+ * (default 16MB on 64-bit and 1MB on 32-bit). See the comment near
+ * zfs_max_recordsize in dsl_dataset.c for details.
  *
  * Note that although the LSIZE field of the blkptr_t can store sizes up
  * to 32MB, the dnode's dn_datablkszsec can only store sizes up to

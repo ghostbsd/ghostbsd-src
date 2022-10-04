@@ -159,7 +159,7 @@ svc_vc_create(SVCPOOL *pool, struct socket *so, size_t sendsize,
 	if (so->so_state & (SS_ISCONNECTED|SS_ISDISCONNECTED)) {
 		SOCK_UNLOCK(so);
 		CURVNET_SET(so->so_vnet);
-		error = so->so_proto->pr_usrreqs->pru_peeraddr(so, &sa);
+		error = so->so_proto->pr_peeraddr(so, &sa);
 		CURVNET_RESTORE();
 		if (error)
 			return (NULL);
@@ -178,7 +178,7 @@ svc_vc_create(SVCPOOL *pool, struct socket *so, size_t sendsize,
 	xprt->xp_ops = &svc_vc_rendezvous_ops;
 
 	CURVNET_SET(so->so_vnet);
-	error = so->so_proto->pr_usrreqs->pru_sockaddr(so, &sa);
+	error = so->so_proto->pr_sockaddr(so, &sa);
 	CURVNET_RESTORE();
 	if (error) {
 		goto cleanup_svc_vc_create;
@@ -262,7 +262,7 @@ svc_vc_create_conn(SVCPOOL *pool, struct socket *so, struct sockaddr *raddr)
 	memcpy(&xprt->xp_rtaddr, raddr, raddr->sa_len);
 
 	CURVNET_SET(so->so_vnet);
-	error = so->so_proto->pr_usrreqs->pru_sockaddr(so, &sa);
+	error = so->so_proto->pr_sockaddr(so, &sa);
 	CURVNET_RESTORE();
 	if (error)
 		goto cleanup_svc_vc_create;
@@ -463,7 +463,7 @@ svc_vc_destroy_common(SVCXPRT *xprt)
 				 */
 				rpctls_srv_disconnect(xprt->xp_sslsec,
 				    xprt->xp_sslusec, xprt->xp_sslrefno,
-				    &reterr);
+				    xprt->xp_sslproc, &reterr);
 			}
 			/* Must sorele() to get rid of reference. */
 			CURVNET_SET(xprt->xp_socket->so_vnet);
@@ -804,8 +804,8 @@ tryagain:
 		}
 
 		/*
-		 * A return of ENXIO indicates that there is a
-		 * non-application data record at the head of the
+		 * A return of ENXIO indicates that there is an
+		 * alert record at the head of the
 		 * socket's receive queue, for TLS connections.
 		 * This record needs to be handled in userland
 		 * via an SSL_read() call, so do an upcall to the daemon.
@@ -817,7 +817,7 @@ tryagain:
 			sx_xunlock(&xprt->xp_lock);
 			ret = rpctls_srv_handlerecord(xprt->xp_sslsec,
 			    xprt->xp_sslusec, xprt->xp_sslrefno,
-			    &reterr);
+			    xprt->xp_sslproc, &reterr);
 			sx_xlock(&xprt->xp_lock);
 			xprt->xp_dontrcv = FALSE;
 			if (ret != RPC_SUCCESS || reterr != RPCTLSERR_OK) {
@@ -863,10 +863,10 @@ tryagain:
 			    cmsg->cmsg_len == CMSG_LEN(sizeof(tgr))) {
 				memcpy(&tgr, CMSG_DATA(cmsg), sizeof(tgr));
 				/*
-				 * This should have been handled by
-				 * the rpctls_svc_handlerecord()
-				 * upcall.  If not, all we can do is
-				 * toss it away.
+				 * TLS_RLTYPE_ALERT records should be handled
+				 * since soreceive() would have returned
+				 * ENXIO.  Just throw any other
+				 * non-TLS_RLTYPE_APP records away.
 				 */
 				if (tgr.tls_type != TLS_RLTYPE_APP) {
 					m_freem(m);
@@ -1075,7 +1075,7 @@ svc_vc_backchannel_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 }
 
 static bool_t
-svc_vc_null()
+svc_vc_null(void)
 {
 
 	return (FALSE);

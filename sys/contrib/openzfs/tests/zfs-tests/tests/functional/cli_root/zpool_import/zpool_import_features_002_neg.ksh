@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -69,18 +69,18 @@ done
 log_mustnot zpool import -d $DEVICE_DIR $TESTPOOL1
 
 # error message should not mention "readonly"
-log_mustnot eval "zpool import -d $DEVICE_DIR $TESTPOOL1 | grep readonly"
+log_mustnot eval "zpool import -d $DEVICE_DIR $TESTPOOL1 | grep -q readonly"
 log_mustnot poolexists $TESTPOOL1
 
 for feature in $active_features; do
 	log_must eval "zpool import -d $DEVICE_DIR $TESTPOOL1 \
-	    | grep $feature"
+	    | grep -q $feature"
 	log_mustnot poolexists $TESTPOOL1
 done
 
 for feature in $enabled_features; do
 	log_mustnot eval "zpool import -d $DEVICE_DIR $TESTPOOL1 \
-	    | grep $feature"
+	    | grep -q $feature"
 	log_mustnot poolexists $TESTPOOL1
 done
 

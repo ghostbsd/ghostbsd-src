@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -149,7 +149,7 @@ while (( i < ${#mntp_fs[*]} )); do
 	else
 		log_must zfs set sharenfs=on ${mntp_fs[((i+1))]}
 		is_shared ${mntp_fs[i]} || \
-			log_fail "'zfs set sharenfs=on' fails to share filesystem."
+			log_fail "'zfs set sharenfs=on' fails to share filesystem: ${mntp_fs[i]} not shared."
 	fi
 
         ((i = i + 2))
@@ -166,7 +166,7 @@ log_must zfs unshare -a
 i=0
 while (( i < ${#mntp_fs[*]} )); do
         not_shared ${mntp_fs[i]} || \
-                log_fail "'zfs unshare -a' fails to unshare all shared zfs filesystems."
+                log_fail "'zfs unshare -a' fails to unshare all shared zfs filesystems: ${mntp_fs[i]} still shared."
 
         ((i = i + 2))
 done

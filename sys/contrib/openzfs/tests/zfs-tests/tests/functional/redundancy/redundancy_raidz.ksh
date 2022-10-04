@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -77,7 +77,7 @@ function test_selfheal # <pool> <parity> <dir>
 	log_must zpool import -o cachefile=none -d $dir $pool
 
 	typeset mntpnt=$(get_prop mountpoint $pool/fs)
-	log_must find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1
+	log_must eval "find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1"
 	log_must check_pool_status $pool "errors" "No known data errors"
 
 	#
@@ -100,7 +100,7 @@ function test_selfheal # <pool> <parity> <dir>
 	log_must zpool import -o cachefile=none -d $dir $pool
 
 	typeset mntpnt=$(get_prop mountpoint $pool/fs)
-	log_must find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1
+	log_must eval "find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1"
 	log_must check_pool_status $pool "errors" "No known data errors"
 
 	log_must zpool scrub -w $pool

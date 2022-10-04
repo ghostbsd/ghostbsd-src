@@ -75,7 +75,7 @@ blk_flush(struct dumperinfo *di)
 	if (fragsz == 0)
 		return (0);
 
-	error = dump_append(di, dump_va, 0, fragsz);
+	error = dump_append(di, dump_va, fragsz);
 	fragsz = 0;
 	return (error);
 }
@@ -121,7 +121,7 @@ blk_write(struct dumperinfo *di, char *ptr, vm_paddr_t pa, size_t sz)
 		wdog_kern_pat(WD_LASTVAL);
 
 		if (ptr) {
-			error = dump_append(di, ptr, 0, len);
+			error = dump_append(di, ptr, len);
 			if (error)
 				return (error);
 			ptr += len;
@@ -239,7 +239,13 @@ cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 	mdhdr.dmapbase = DMAP_MIN_ADDRESS;
 	mdhdr.dmapend = DMAP_MAX_ADDRESS;
 	mdhdr.dumpavailsize = round_page(sizeof(dump_avail));
+#if PAGE_SIZE == PAGE_SIZE_4K
 	mdhdr.flags = MINIDUMP_FLAG_PS_4K;
+#elif PAGE_SIZE == PAGE_SIZE_16K
+	mdhdr.flags = MINIDUMP_FLAG_PS_16K;
+#else
+#error Unsupported page size
+#endif
 
 	dump_init_header(di, &kdh, KERNELDUMPMAGIC, KERNELDUMP_AARCH64_VERSION,
 	    dumpsize);

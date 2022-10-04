@@ -460,16 +460,16 @@ ng_btsocket_hci_raw_savctl(ng_btsocket_hci_raw_pcb_p pcb, struct mbuf **ctl,
 
 	if (pcb->flags & NG_BTSOCKET_HCI_RAW_DIRECTION) {
 		dir = (m->m_flags & M_PROTO1)? 1 : 0;
-		*ctl = sbcreatecontrol((caddr_t) &dir, sizeof(dir),
-					SCM_HCI_RAW_DIRECTION, SOL_HCI_RAW);
+		*ctl = sbcreatecontrol(&dir, sizeof(dir),
+		    SCM_HCI_RAW_DIRECTION, SOL_HCI_RAW, M_NOWAIT);
 		if (*ctl != NULL)
 			ctl = &((*ctl)->m_next);
 	}
 
 	if (pcb->so->so_options & SO_TIMESTAMP) {
 		microtime(&tv);
-		*ctl = sbcreatecontrol((caddr_t) &tv, sizeof(tv),
-					SCM_TIMESTAMP, SOL_SOCKET);
+		*ctl = sbcreatecontrol(&tv, sizeof(tv), SCM_TIMESTAMP,
+		    SOL_SOCKET, M_NOWAIT);
 		if (*ctl != NULL)
 			ctl = &((*ctl)->m_next);
 	}
@@ -1031,7 +1031,7 @@ ng_btsocket_hci_raw_connect(struct socket *so, struct sockaddr *nam,
  */
 
 int
-ng_btsocket_hci_raw_control(struct socket *so, u_long cmd, caddr_t data,
+ng_btsocket_hci_raw_control(struct socket *so, u_long cmd, void *data,
 		struct ifnet *ifp, struct thread *td)
 {
 	ng_btsocket_hci_raw_pcb_p	 pcb = so2hci_raw_pcb(so);

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -109,7 +109,7 @@ log_must chattr -p 100 $TESTDIR/fs3/dir
 log_must sleep 5 # upgrade done in the background so let's wait for a while
 zfs projectspace -o used $TESTPOOL/fs3 | grep -q "USED" ||
 	log_fail "project quota should be enabled for $TESTPOOL/fs3"
-cnt=$(zfs get -H projectobjused@100 $TESTPOOL/fs3 | awk '{print $3}')
+cnt=$(get_prop projectobjused@100 $TESTPOOL/fs3)
 # if 'xattr=on', then 'cnt = 2'
 [[ $cnt -ne 1 ]] && [[ $cnt -ne 2 ]] &&
 	log_fail "projectquota accounting failed $cnt"

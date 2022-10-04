@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -42,15 +42,8 @@ verify_runnable "both"
 
 function cleanup
 {
-	if poolexists $MPOOL; then
-		destroy_pool $MPOOL
-	fi
-
-	for file in $VDEV1 $VDEV2; do
-		[[ -f $file ]] && rm -f $file
-	done
-
-	log_must rm -f $TMP_EVENTS_ZED
+	poolexists $MPOOL && log_must destroy_pool $MPOOL
+	log_must rm -f $VDEV1 $VDEV2 $TMP_EVENTS_ZED
 	log_must zed_stop
 }
 
@@ -69,10 +62,9 @@ log_must zed_start
 log_must file_wait_event $ZED_DEBUG_LOG 'sysevent\.fs\.zfs\.config_sync' 150
 log_must cp $ZED_DEBUG_LOG $TMP_EVENTS_ZED
 
-awk -v event="sysevent.fs.zfs.pool_create" \
-    'BEGIN{FS="\n"; RS=""} $0 ~ event { print $0 }' \
-    $TMP_EVENTS_ZED >$TMP_EVENT_ZED
-log_must grep -q "^ZEVENT_POOL=$MPOOL" $TMP_EVENT_ZED
+log_mustnot awk -v event="sysevent.fs.zfs.pool_create" -v crit="\\nZEVENT_POOL=$MPOOL" \
+    'BEGIN{FS="\n"; RS=""} $0 ~ event && $0 ~ crit { exit 1 }' \
+    $TMP_EVENTS_ZED
 
 # 3. Stop the ZED
 zed_stop

@@ -54,7 +54,7 @@ __FBSDID("$FreeBSD$");
 #endif
 #include <libutil.h>
 
-#include "crc32.h"
+#include <zlib.h>
 #include "_libproc.h"
 
 #define	PATH_DEBUG_DIR	"/usr/lib/debug"
@@ -70,17 +70,14 @@ extern char *__cxa_demangle(const char *, char *, size_t *, int *);
 static int
 crc32_file(int fd, uint32_t *crc)
 {
-	uint8_t buf[PAGE_SIZE], *p;
-	size_t n;
+	char buf[MAXPHYS];
+	ssize_t nr;
 
-	*crc = ~0;
-	while ((n = read(fd, buf, sizeof(buf))) > 0) {
-		p = &buf[0];
-		while (n-- > 0)
-			*crc = crc32_tab[(*crc ^ *p++) & 0xff] ^ (*crc >> 8);
+	*crc = crc32(0L, Z_NULL, 0);
+	while ((nr = read(fd, buf, sizeof(buf))) > 0) {
+		*crc = crc32(*crc, (char *)buf, nr);
 	}
-	*crc = ~*crc;
-	return (n);
+	return (!!nr);
 }
 
 static void
@@ -108,7 +105,7 @@ struct symsort_thunk {
 };
 
 static int
-symvalcmp(void *_thunk, const void *a1, const void *a2)
+symvalcmp(const void *a1, const void *a2, void *_thunk)
 {
 	GElf_Sym sym1, sym2;
 	struct symsort_thunk *thunk;
@@ -195,7 +192,7 @@ load_symtab(Elf *e, struct symtab *symtab, u_long sh_type)
 
 	thunk.e = e;
 	thunk.symtab = symtab;
-	qsort_r(symtab->index, nsyms, sizeof(u_int), &thunk, symvalcmp);
+	qsort_r(symtab->index, nsyms, sizeof(u_int), symvalcmp, &thunk);
 
 	return (0);
 }

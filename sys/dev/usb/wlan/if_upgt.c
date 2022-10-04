@@ -1270,7 +1270,7 @@ upgt_eeprom_read(struct upgt_softc *sc)
 	int block, error, offset;
 
 	UPGT_LOCK(sc);
-	usb_pause_mtx(&sc->sc_mtx, 100);
+	usb_pause_mtx(&sc->sc_mtx, USB_MS_TO_TICKS(100));
 
 	offset = 0;
 	block = UPGT_EEPROM_BLOCK_SIZE;
@@ -1883,7 +1883,7 @@ upgt_device_reset(struct upgt_softc *sc)
 	memcpy(data->buf, init_cmd, sizeof(init_cmd));
 	data->buflen = sizeof(init_cmd);
 	upgt_bulk_tx(sc, data);
-	usb_pause_mtx(&sc->sc_mtx, 100);
+	usb_pause_mtx(&sc->sc_mtx, USB_MS_TO_TICKS(100));
 
 	UPGT_UNLOCK(sc);
 	DPRINTF(sc, UPGT_DEBUG_FW, "%s: device initialized\n", __func__);
@@ -2340,9 +2340,7 @@ static driver_t upgt_driver = {
 	.size = sizeof(struct upgt_softc)
 };
 
-static devclass_t upgt_devclass;
-
-DRIVER_MODULE(if_upgt, uhub, upgt_driver, upgt_devclass, NULL, 0);
+DRIVER_MODULE(if_upgt, uhub, upgt_driver, NULL, NULL);
 MODULE_VERSION(if_upgt, 1);
 MODULE_DEPEND(if_upgt, usb, 1, 1, 1);
 MODULE_DEPEND(if_upgt, wlan, 1, 1, 1);

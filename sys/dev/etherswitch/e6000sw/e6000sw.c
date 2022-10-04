@@ -112,6 +112,8 @@ static int e6000sw_read_xmdio(device_t, int, int, int);
 static int e6000sw_write_xmdio(device_t, int, int, int, int);
 static int e6000sw_readphy(device_t, int, int);
 static int e6000sw_writephy(device_t, int, int, int);
+static int e6000sw_readphy_locked(device_t, int, int);
+static int e6000sw_writephy_locked(device_t, int, int, int);
 static etherswitch_info_t* e6000sw_getinfo(device_t);
 static int e6000sw_getconf(device_t, etherswitch_conf_t *);
 static int e6000sw_setconf(device_t, etherswitch_conf_t *);
@@ -159,8 +161,8 @@ static device_method_t e6000sw_methods[] = {
 	DEVMETHOD(bus_add_child,		device_add_child_ordered),
 
 	/* mii interface */
-	DEVMETHOD(miibus_readreg,		e6000sw_readphy),
-	DEVMETHOD(miibus_writereg,		e6000sw_writephy),
+	DEVMETHOD(miibus_readreg,		e6000sw_readphy_locked),
+	DEVMETHOD(miibus_writereg,		e6000sw_writephy_locked),
 
 	/* etherswitch interface */
 	DEVMETHOD(etherswitch_getinfo,		e6000sw_getinfo),
@@ -180,15 +182,12 @@ static device_method_t e6000sw_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t e6000sw_devclass;
-
 DEFINE_CLASS_0(e6000sw, e6000sw_driver, e6000sw_methods,
     sizeof(e6000sw_softc_t));
 
-DRIVER_MODULE(e6000sw, mdio, e6000sw_driver, e6000sw_devclass, 0, 0);
-DRIVER_MODULE(etherswitch, e6000sw, etherswitch_driver, etherswitch_devclass, 0,
-    0);
-DRIVER_MODULE(miibus, e6000sw, miibus_driver, miibus_devclass, 0, 0);
+DRIVER_MODULE(e6000sw, mdio, e6000sw_driver, 0, 0);
+DRIVER_MODULE(etherswitch, e6000sw, etherswitch_driver, 0, 0);
+DRIVER_MODULE(miibus, e6000sw, miibus_driver, 0, 0);
 MODULE_DEPEND(e6000sw, mdio, 1, 1, 1);
 
 
@@ -530,20 +529,11 @@ e6000sw_attach(device_t dev)
 		if (!e6000sw_is_phyport(sc, port))
 			continue;
 
-		/*
-		 * It's necessary to unlock mutex, because e6000sw_attach_miibus
-		 * calls functions, which try to lock mutex.That leads
-		 * to recursive lock on non recursive mutex.
-		 */
-		E6000SW_UNLOCK(sc);
-
 		err = e6000sw_attach_miibus(sc, port);
 		if (err != 0) {
 			device_printf(sc->dev, "failed to attach miibus\n");
 			goto out_fail;
 		}
-
-		E6000SW_LOCK(sc);
 	}
 
 	etherswitch_info.es_nports = sc->num_ports;
@@ -657,29 +647,41 @@ e6000sw_write_xmdio(device_t dev, int phy, int devaddr, int devreg, int val)
 	return (0);
 }
 
+static int e6000sw_readphy(device_t dev, int phy, int reg)
+{
+	e6000sw_softc_t *sc;
+	int ret;
+
+	sc = device_get_softc(dev);
+	E6000SW_LOCK_ASSERT(sc, SA_UNLOCKED);
+
+	E6000SW_LOCK(sc);
+	ret = e6000sw_readphy_locked(dev, phy, reg);
+	E6000SW_UNLOCK(sc);
+
+	return (ret);
+}
+
 /*
  * PHY registers are paged. Put page index in reg 22 (accessible from every
  * page), then access specific register.
  */
 static int
-e6000sw_readphy(device_t dev, int phy, int reg)
+e6000sw_readphy_locked(device_t dev, int phy, int reg)
 {
 	e6000sw_softc_t *sc;
 	uint32_t val;
 
 	sc = device_get_softc(dev);
-	E6000SW_LOCK_ASSERT(sc, SA_UNLOCKED);
+	E6000SW_LOCK_ASSERT(sc, SA_XLOCKED);
 
 	if (!e6000sw_is_phyport(sc, phy) || reg >= E6000SW_NUM_PHY_REGS) {
 		device_printf(dev, "Wrong register address.\n");
 		return (EINVAL);
 	}
 
-	E6000SW_LOCK(sc);
-
 	if (E6000SW_WAITREADY2(sc, SMI_PHY_CMD_REG, SMI_CMD_BUSY)) {
 		device_printf(dev, "Timeout while waiting for switch\n");
-		E6000SW_UNLOCK(sc);
 		return (ETIMEDOUT);
 	}
 
@@ -688,35 +690,44 @@ e6000sw_readphy(device_t dev, int phy, int reg)
 	    ((phy << SMI_CMD_DEV_ADDR) & SMI_CMD_DEV_ADDR_MASK));
 	if (E6000SW_WAITREADY2(sc, SMI_PHY_CMD_REG, SMI_CMD_BUSY)) {
 		device_printf(dev, "Timeout while waiting for switch\n");
-		E6000SW_UNLOCK(sc);
 		return (ETIMEDOUT);
 	}
 
 	val = e6000sw_readreg(sc, REG_GLOBAL2, SMI_PHY_DATA_REG);
 
-	E6000SW_UNLOCK(sc);
-
 	return (val & PHY_DATA_MASK);
 }
 
+static int e6000sw_writephy(device_t dev, int phy, int reg, int data)
+{
+	e6000sw_softc_t *sc;
+	int ret;
+
+	sc = device_get_softc(dev);
+	E6000SW_LOCK_ASSERT(sc, SA_UNLOCKED);
+
+	E6000SW_LOCK(sc);
+	ret = e6000sw_writephy_locked(dev, phy, reg, data);
+	E6000SW_UNLOCK(sc);
+
+	return (ret);
+}
+
 static int
-e6000sw_writephy(device_t dev, int phy, int reg, int data)
+e6000sw_writephy_locked(device_t dev, int phy, int reg, int data)
 {
 	e6000sw_softc_t *sc;
 
 	sc = device_get_softc(dev);
-	E6000SW_LOCK_ASSERT(sc, SA_UNLOCKED);
+	E6000SW_LOCK_ASSERT(sc, SA_XLOCKED);
 
 	if (!e6000sw_is_phyport(sc, phy) || reg >= E6000SW_NUM_PHY_REGS) {
 		device_printf(dev, "Wrong register address.\n");
 		return (EINVAL);
 	}
 
-	E6000SW_LOCK(sc);
-
 	if (E6000SW_WAITREADY2(sc, SMI_PHY_CMD_REG, SMI_CMD_BUSY)) {
 		device_printf(dev, "Timeout while waiting for switch\n");
-		E6000SW_UNLOCK(sc);
 		return (ETIMEDOUT);
 	}
 
@@ -725,8 +736,6 @@ e6000sw_writephy(device_t dev, int phy, int reg, int data)
 	e6000sw_writereg(sc, REG_GLOBAL2, SMI_PHY_CMD_REG,
 	    SMI_CMD_OP_C22_WRITE | (reg & SMI_CMD_REG_ADDR_MASK) |
 	    ((phy << SMI_CMD_DEV_ADDR) & SMI_CMD_DEV_ADDR_MASK));
-
-	E6000SW_UNLOCK(sc);
 
 	return (0);
 }
@@ -948,7 +957,7 @@ e6000sw_init_vlan(struct e6000sw_softc *sc)
 		ret &= ~(PORT_CONTROL_EGRESS | PORT_CONTROL_FRAME);
 		e6000sw_writereg(sc, REG_PORT(sc, port), PORT_CONTROL, ret);
 
-		/* Set the the 802.1q mode. */
+		/* Set the 802.1q mode. */
 		ret = e6000sw_readreg(sc, REG_PORT(sc, port), PORT_CONTROL2);
 		ret &= ~PORT_CONTROL2_DOT1Q;
 		if (sc->vlan_mode == ETHERSWITCH_VLAN_DOT1Q)
@@ -1064,7 +1073,7 @@ e6000sw_writereg_wrapper(device_t dev, int addr_reg, int val)
 		device_printf(dev, "Wrong register address.\n");
 		return (EINVAL);
 	}
-	e6000sw_writereg(device_get_softc(dev), addr_reg / 5,
+	e6000sw_writereg(device_get_softc(dev), addr_reg / 32,
 	    addr_reg % 32, val);
 
 	return (0);

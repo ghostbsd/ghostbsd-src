@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -34,8 +34,7 @@
 # (it can cause useradd to take a long time, hitting our TIMEOUT)
 if is_illumos; then
 	USES_NIS=false
-	svcs svc:/network/nis/client:default | grep online > /dev/null
-	if [ $? -eq 0 ]
+	if svcs svc:/network/nis/client:default | grep -q online
 	then
 		svcadm disable -t svc:/network/nis/client:default
 		USES_NIS=true

@@ -241,12 +241,12 @@ static const struct flash_spec flash_table[] =
 	{0x19000002, 0x5b808201, 0x000500db, 0x03840253, 0xaf020406,
 	 NONBUFFERED_FLAGS, ST_MICRO_FLASH_PAGE_BITS, ST_MICRO_FLASH_PAGE_SIZE,
 	 ST_MICRO_FLASH_BYTE_ADDR_MASK, ST_MICRO_FLASH_BASE_TOTAL_SIZE*2,
-	 "Entry 0101: ST M45PE10 (128kB non-bufferred)"},
+	 "Entry 0101: ST M45PE10 (128kB non-buffered)"},
 	/* Entry 0110: ST M45PE20 (non-buffered flash)*/
 	{0x15000001, 0x57808201, 0x000500db, 0x03840253, 0xaf020406,
 	 NONBUFFERED_FLAGS, ST_MICRO_FLASH_PAGE_BITS, ST_MICRO_FLASH_PAGE_SIZE,
 	 ST_MICRO_FLASH_BYTE_ADDR_MASK, ST_MICRO_FLASH_BASE_TOTAL_SIZE*4,
-	 "Entry 0110: ST M45PE20 (256kB non-bufferred)"},
+	 "Entry 0110: ST M45PE20 (256kB non-buffered)"},
 	/* Saifun SA25F005 (non-buffered flash) */
 	/* strap, cfg1, & write1 need updates */
 	{0x1d000003, 0x5f808201, 0x00050081, 0x03840253, 0xaf020406,
@@ -515,14 +515,12 @@ static driver_t bce_driver = {
 	sizeof(struct bce_softc)
 };
 
-static devclass_t bce_devclass;
-
 MODULE_DEPEND(bce, pci, 1, 1, 1);
 MODULE_DEPEND(bce, ether, 1, 1, 1);
 MODULE_DEPEND(bce, miibus, 1, 1, 1);
 
-DRIVER_MODULE(bce, pci, bce_driver, bce_devclass, NULL, NULL);
-DRIVER_MODULE(miibus, bce, miibus_driver, miibus_devclass, NULL, NULL);
+DRIVER_MODULE(bce, pci, bce_driver, NULL, NULL);
+DRIVER_MODULE(miibus, bce, miibus_driver, NULL, NULL);
 MODULE_PNP_INFO("U16:vendor;U16:device;U16:#;U16:#;D:#", pci, bce,
     bce_devs, nitems(bce_devs) - 1);
 

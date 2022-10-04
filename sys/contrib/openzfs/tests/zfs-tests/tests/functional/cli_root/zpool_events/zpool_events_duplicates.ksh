@@ -6,7 +6,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -46,8 +46,6 @@ FILESIZE="10M"
 OLD_LEN_MAX=$(get_tunable ZEVENT_LEN_MAX)
 RETAIN_MAX=$(get_tunable ZEVENT_RETAIN_MAX)
 
-EREPORTS="$STF_SUITE/tests/functional/cli_root/zpool_events/ereports"
-
 duplicates=false
 
 function cleanup
@@ -58,7 +56,7 @@ function cleanup
 	if poolexists $POOL ; then
 		destroy_pool $POOL
 	fi
-	log_must rm -f $VDEV1 $VDEV2
+	log_must rm -fd $VDEV1 $VDEV2 $MOUNTDIR
 }
 
 log_assert "Duplicate I/O ereport errors are not posted"
@@ -103,7 +101,7 @@ function do_dup_test
 		# Read the file a few times to generate some
 		# duplicate errors of the same blocks
 		for _ in {1..15}; do
-			dd if=$FILEPATH of=/dev/null bs=128K > /dev/null 2>&1
+			dd if=$FILEPATH of=/dev/null bs=128K 2>/dev/null
 		done
 		log_must zinject -c all
 	fi
@@ -117,7 +115,7 @@ function do_dup_test
 
 	log_must zinject -c all
 
-	ereports="$($EREPORTS | sort)"
+	ereports="$(ereports | sort)"
 	actual=$(echo "$ereports" | wc -l)
 	unique=$(echo "$ereports" | uniq | wc -l)
 	log_note "$actual total $ERR $RW ereports where $unique were unique"
@@ -140,4 +138,3 @@ if $duplicates; then
 else
 	log_pass "Duplicate I/O ereport errors are not posted"
 fi
-

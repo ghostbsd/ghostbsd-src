@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -94,7 +94,7 @@ typedef struct vdev_copy_arg {
  * doing a device removal.  This determines how much i/o we can have
  * in flight concurrently.
  */
-static const int zfs_remove_max_copy_bytes = 64 * 1024 * 1024;
+static const uint_t zfs_remove_max_copy_bytes = 64 * 1024 * 1024;
 
 /*
  * The largest contiguous segment that we will attempt to allocate when
@@ -104,7 +104,7 @@ static const int zfs_remove_max_copy_bytes = 64 * 1024 * 1024;
  *
  * See also the accessor function spa_remove_max_segment().
  */
-int zfs_remove_max_segment = SPA_MAXBLOCKSIZE;
+uint_t zfs_remove_max_segment = SPA_MAXBLOCKSIZE;
 
 /*
  * Ignore hard IO errors during device removal.  When set if a device
@@ -130,7 +130,7 @@ static int zfs_removal_ignore_errors = 0;
  *  - we'll do larger allocations, which may fail and fall back on smaller
  *    allocations
  */
-int vdev_removal_max_span = 32 * 1024;
+uint_t vdev_removal_max_span = 32 * 1024;
 
 /*
  * This is used by the test suite so that it can ensure that certain
@@ -338,8 +338,8 @@ spa_vdev_alloc(spa_t *spa, uint64_t guid)
 }
 
 static void
-spa_vdev_remove_aux(nvlist_t *config, char *name, nvlist_t **dev, int count,
-    nvlist_t *dev_to_remove)
+spa_vdev_remove_aux(nvlist_t *config, const char *name, nvlist_t **dev,
+    int count, nvlist_t *dev_to_remove)
 {
 	nvlist_t **newdev = NULL;
 
@@ -1364,6 +1364,8 @@ vdev_remove_complete(spa_t *spa)
 	ASSERT3P(vd->vdev_initialize_thread, ==, NULL);
 	ASSERT3P(vd->vdev_trim_thread, ==, NULL);
 	ASSERT3P(vd->vdev_autotrim_thread, ==, NULL);
+	vdev_rebuild_stop_wait(vd);
+	ASSERT3P(vd->vdev_rebuild_thread, ==, NULL);
 	uint64_t vdev_space = spa_deflate(spa) ?
 	    vd->vdev_stat.vs_dspace : vd->vdev_stat.vs_space;
 
@@ -1386,7 +1388,6 @@ vdev_remove_complete(spa_t *spa)
 		vdev_metaslab_fini(vd);
 		metaslab_group_destroy(vd->vdev_mg);
 		vd->vdev_mg = NULL;
-		spa_log_sm_set_blocklimit(spa);
 	}
 	if (vd->vdev_log_mg != NULL) {
 		ASSERT0(vd->vdev_ms_count);
@@ -2131,7 +2132,6 @@ spa_vdev_remove_log(vdev_t *vd, uint64_t *txg)
 	 * metaslab_class_histogram_verify()
 	 */
 	vdev_metaslab_fini(vd);
-	spa_log_sm_set_blocklimit(spa);
 
 	spa_vdev_config_exit(spa, NULL, *txg, 0, FTAG);
 	*txg = spa_vdev_config_enter(spa);
@@ -2251,7 +2251,6 @@ spa_vdev_remove_top_check(vdev_t *vd)
 	 * and not be raidz or draid.
 	 */
 	vdev_t *rvd = spa->spa_root_vdev;
-	int num_indirect = 0;
 	for (uint64_t id = 0; id < rvd->vdev_children; id++) {
 		vdev_t *cvd = rvd->vdev_child[id];
 
@@ -2267,8 +2266,6 @@ spa_vdev_remove_top_check(vdev_t *vd)
 		if (cvd->vdev_ashift != 0 &&
 		    cvd->vdev_alloc_bias == VDEV_BIAS_NONE)
 			ASSERT3U(cvd->vdev_ashift, ==, spa->spa_max_ashift);
-		if (cvd->vdev_ops == &vdev_indirect_ops)
-			num_indirect++;
 		if (!vdev_is_concrete(cvd))
 			continue;
 		if (vdev_get_nparity(cvd) != 0)
@@ -2387,7 +2384,8 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 	int error = 0, error_log;
 	boolean_t locked = MUTEX_HELD(&spa_namespace_lock);
 	sysevent_t *ev = NULL;
-	char *vd_type = NULL, *vd_path = NULL;
+	const char *vd_type = NULL;
+	char *vd_path = NULL;
 
 	ASSERT(spa_writeable(spa));
 
@@ -2547,14 +2545,14 @@ spa_removal_get_stats(spa_t *spa, pool_removal_stat_t *prs)
 ZFS_MODULE_PARAM(zfs_vdev, zfs_, removal_ignore_errors, INT, ZMOD_RW,
 	"Ignore hard IO errors when removing device");
 
-ZFS_MODULE_PARAM(zfs_vdev, zfs_, remove_max_segment, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_vdev, zfs_, remove_max_segment, UINT, ZMOD_RW,
 	"Largest contiguous segment to allocate when removing device");
 
-ZFS_MODULE_PARAM(zfs_vdev, vdev_, removal_max_span, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_vdev, vdev_, removal_max_span, UINT, ZMOD_RW,
 	"Largest span of free chunks a remap segment can span");
 
 /* BEGIN CSTYLED */
-ZFS_MODULE_PARAM(zfs_vdev, zfs_, removal_suspend_progress, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_vdev, zfs_, removal_suspend_progress, UINT, ZMOD_RW,
 	"Pause device removal after this many bytes are copied "
 	"(debug use only - causes removal to hang)");
 /* END CSTYLED */

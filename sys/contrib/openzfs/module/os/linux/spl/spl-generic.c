@@ -47,6 +47,7 @@
 #include <linux/mod_compat.h>
 #include <sys/cred.h>
 #include <sys/vnode.h>
+#include <sys/misc.h>
 
 unsigned long spl_hostid = 0;
 EXPORT_SYMBOL(spl_hostid);
@@ -425,21 +426,32 @@ EXPORT_SYMBOL(__aeabi_ldivmod);
  * functions against their Solaris counterparts.  It is possible that I
  * may have misinterpreted the man page or the man page is incorrect.
  */
-int ddi_strtoul(const char *, char **, int, unsigned long *);
 int ddi_strtol(const char *, char **, int, long *);
 int ddi_strtoull(const char *, char **, int, unsigned long long *);
 int ddi_strtoll(const char *, char **, int, long long *);
 
-#define	define_ddi_strtoux(type, valtype)				\
-int ddi_strtou##type(const char *str, char **endptr,			\
+#define	define_ddi_strtox(type, valtype)				\
+int ddi_strto##type(const char *str, char **endptr,			\
     int base, valtype *result)						\
 {									\
 	valtype last_value, value = 0;					\
 	char *ptr = (char *)str;					\
-	int flag = 1, digit;						\
+	int digit, minus = 0;						\
+									\
+	while (strchr(" \t\n\r\f", *ptr))				\
+		++ptr;							\
 									\
 	if (strlen(ptr) == 0)						\
 		return (EINVAL);					\
+									\
+	switch (*ptr) {							\
+	case '-':							\
+		minus = 1;						\
+		zfs_fallthrough;					\
+	case '+':							\
+		++ptr;							\
+		break;							\
+	}								\
 									\
 	/* Auto-detect base based on prefix */				\
 	if (!base) {							\
@@ -474,46 +486,21 @@ int ddi_strtou##type(const char *str, char **endptr,			\
 		if (last_value > value) /* Overflow */			\
 			return (ERANGE);				\
 									\
-		flag = 1;						\
 		ptr++;							\
 	}								\
 									\
-	if (flag)							\
-		*result = value;					\
+	*result = minus ? -value : value;				\
 									\
 	if (endptr)							\
-		*endptr = (char *)(flag ? ptr : str);			\
+		*endptr = ptr;						\
 									\
 	return (0);							\
 }									\
 
-#define	define_ddi_strtox(type, valtype)				\
-int ddi_strto##type(const char *str, char **endptr,			\
-    int base, valtype *result)						\
-{									\
-	int rc;								\
-									\
-	if (*str == '-') {						\
-		rc = ddi_strtou##type(str + 1, endptr, base, result);	\
-		if (!rc) {						\
-			if (*endptr == str + 1)				\
-				*endptr = (char *)str;			\
-			else						\
-				*result = -*result;			\
-		}							\
-	} else {							\
-		rc = ddi_strtou##type(str, endptr, base, result);	\
-	}								\
-									\
-	return (rc);							\
-}
-
-define_ddi_strtoux(l, unsigned long)
 define_ddi_strtox(l, long)
-define_ddi_strtoux(ll, unsigned long long)
+define_ddi_strtox(ull, unsigned long long)
 define_ddi_strtox(ll, long long)
 
-EXPORT_SYMBOL(ddi_strtoul);
 EXPORT_SYMBOL(ddi_strtol);
 EXPORT_SYMBOL(ddi_strtoll);
 EXPORT_SYMBOL(ddi_strtoull);
@@ -530,6 +517,38 @@ ddi_copyin(const void *from, void *to, size_t len, int flags)
 	return (copyin(from, to, len));
 }
 EXPORT_SYMBOL(ddi_copyin);
+
+/*
+ * Post a uevent to userspace whenever a new vdev adds to the pool. It is
+ * necessary to sync blkid information with udev, which zed daemon uses
+ * during device hotplug to identify the vdev.
+ */
+void
+spl_signal_kobj_evt(struct block_device *bdev)
+{
+#if defined(HAVE_BDEV_KOBJ) || defined(HAVE_PART_TO_DEV)
+#ifdef HAVE_BDEV_KOBJ
+	struct kobject *disk_kobj = bdev_kobj(bdev);
+#else
+	struct kobject *disk_kobj = &part_to_dev(bdev->bd_part)->kobj;
+#endif
+	if (disk_kobj) {
+		int ret = kobject_uevent(disk_kobj, KOBJ_CHANGE);
+		if (ret) {
+			pr_warn("ZFS: Sending event '%d' to kobject: '%s'"
+			    " (%p): failed(ret:%d)\n", KOBJ_CHANGE,
+			    kobject_name(disk_kobj), disk_kobj, ret);
+		}
+	}
+#else
+/*
+ * This is encountered if neither bdev_kobj() nor part_to_dev() is available
+ * in the kernel - likely due to an API change that needs to be chased down.
+ */
+#error "Unsupported kernel: unable to get struct kobj from bdev"
+#endif
+}
+EXPORT_SYMBOL(spl_signal_kobj_evt);
 
 int
 ddi_copyout(const void *from, void *to, size_t len, int flags)
@@ -719,7 +738,7 @@ spl_kvmem_init(void)
  * initialize each of the per-cpu seeds so that the sequences generated on each
  * CPU are guaranteed to never overlap in practice.
  */
-static void __init
+static int __init
 spl_random_init(void)
 {
 	uint64_t s[2];
@@ -727,6 +746,9 @@ spl_random_init(void)
 
 	spl_pseudo_entropy = __alloc_percpu(2 * sizeof (uint64_t),
 	    sizeof (uint64_t));
+
+	if (!spl_pseudo_entropy)
+		return (-ENOMEM);
 
 	get_random_bytes(s, sizeof (s));
 
@@ -751,6 +773,8 @@ spl_random_init(void)
 		wordp[0] = s[0];
 		wordp[1] = s[1];
 	}
+
+	return (0);
 }
 
 static void
@@ -771,7 +795,8 @@ spl_init(void)
 {
 	int rc = 0;
 
-	spl_random_init();
+	if ((rc = spl_random_init()))
+		goto out0;
 
 	if ((rc = spl_kvmem_init()))
 		goto out1;
@@ -794,8 +819,13 @@ spl_init(void)
 	if ((rc = spl_zlib_init()))
 		goto out7;
 
+	if ((rc = spl_zone_init()))
+		goto out8;
+
 	return (rc);
 
+out8:
+	spl_zlib_fini();
 out7:
 	spl_kstat_fini();
 out6:
@@ -809,12 +839,15 @@ out3:
 out2:
 	spl_kvmem_fini();
 out1:
+	spl_random_fini();
+out0:
 	return (rc);
 }
 
 static void __exit
 spl_fini(void)
 {
+	spl_zone_fini();
 	spl_zlib_fini();
 	spl_kstat_fini();
 	spl_proc_fini();
@@ -828,7 +861,7 @@ spl_fini(void)
 module_init(spl_init);
 module_exit(spl_fini);
 
-ZFS_MODULE_DESCRIPTION("Solaris Porting Layer");
-ZFS_MODULE_AUTHOR(ZFS_META_AUTHOR);
-ZFS_MODULE_LICENSE("GPL");
-ZFS_MODULE_VERSION(ZFS_META_VERSION "-" ZFS_META_RELEASE);
+MODULE_DESCRIPTION("Solaris Porting Layer");
+MODULE_AUTHOR(ZFS_META_AUTHOR);
+MODULE_LICENSE("GPL");
+MODULE_VERSION(ZFS_META_VERSION "-" ZFS_META_RELEASE);

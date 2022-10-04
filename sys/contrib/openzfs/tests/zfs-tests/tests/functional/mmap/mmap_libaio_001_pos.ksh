@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -42,9 +42,7 @@ verify_runnable "global"
 log_assert "verify mmap'd pages work with libaio"
 
 # mmap_libaio is built when the libaio-devel package is installed.
-if ! which mmap_libaio; then
-	log_unsupported "This test requires mmap_libaio."
-fi
+command -v mmap_libaio > /dev/null || log_unsupported "This test requires mmap_libaio."
 
 log_must chmod 777 $TESTDIR
 

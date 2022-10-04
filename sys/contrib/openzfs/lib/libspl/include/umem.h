@@ -7,7 +7,7 @@
  * with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -83,6 +83,7 @@ const char *_umem_debug_init(void);
 const char *_umem_options_init(void);
 const char *_umem_logging_init(void);
 
+__attribute__((alloc_size(1)))
 static inline void *
 umem_alloc(size_t size, int flags)
 {
@@ -95,6 +96,7 @@ umem_alloc(size_t size, int flags)
 	return (ptr);
 }
 
+__attribute__((alloc_size(1)))
 static inline void *
 umem_alloc_aligned(size_t size, size_t align, int flags)
 {
@@ -116,6 +118,7 @@ umem_alloc_aligned(size_t size, size_t align, int flags)
 	return (ptr);
 }
 
+__attribute__((alloc_size(1)))
 static inline void *
 umem_zalloc(size_t size, int flags)
 {
@@ -140,7 +143,7 @@ umem_nofail_callback(umem_nofail_callback_t *cb __maybe_unused)
 
 static inline umem_cache_t *
 umem_cache_create(
-    char *name, size_t bufsize, size_t align,
+    const char *name, size_t bufsize, size_t align,
     umem_constructor_t *constructor,
     umem_destructor_t *destructor,
     umem_reclaim_t *reclaim,

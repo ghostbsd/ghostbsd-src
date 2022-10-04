@@ -72,7 +72,7 @@ madt_handler(ACPI_SUBTABLE_HEADER *entry, void *arg)
 
 	for (i = 0; i < MAXCPU; i++) {
 		pcpu = pcpu_find(i);
-		if (pcpu != NULL && pcpu->pc_mpidr == intr->ArmMpidr) {
+		if (pcpu != NULL && PCPU_GET_MPIDR(pcpu) == intr->ArmMpidr) {
 			cpuid = i;
 			break;
 		}
@@ -190,6 +190,4 @@ static device_method_t pmu_acpi_methods[] = {
 DEFINE_CLASS_0(pmu, pmu_acpi_driver, pmu_acpi_methods,
     sizeof(struct pmu_softc));
 
-static devclass_t pmu_acpi_devclass;
-
-DRIVER_MODULE(pmu, acpi, pmu_acpi_driver, pmu_acpi_devclass, 0, 0);
+DRIVER_MODULE(pmu, acpi, pmu_acpi_driver, 0, 0);

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -26,8 +26,4 @@ rmconfig
 destroy_pool $TESTPOOL
 del_user ${username}
 del_group pamtestgroup
-
-rm -rf "$runstatedir"
-for dir in $TESTDIRS; do
-	rm -rf $dir
-done
+log_must rm -rf "$runstatedir" $TESTDIRS

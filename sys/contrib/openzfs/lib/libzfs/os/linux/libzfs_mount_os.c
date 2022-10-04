@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -84,6 +84,13 @@ static const option_map_t option_map[] = {
 	{ MNTOPT_ACL,		MS_POSIXACL,	ZS_COMMENT	},
 	{ MNTOPT_NOACL,		MS_COMMENT,	ZS_COMMENT	},
 	{ MNTOPT_POSIXACL,	MS_POSIXACL,	ZS_COMMENT	},
+	/*
+	 * Case sensitive options are just listed here to silently
+	 * ignore the error if passed with zfs mount command.
+	 */
+	{ MNTOPT_CASESENSITIVE,		MS_COMMENT,	ZS_COMMENT	},
+	{ MNTOPT_CASEINSENSITIVE,	MS_COMMENT,	ZS_COMMENT	},
+	{ MNTOPT_CASEMIXED,		MS_COMMENT,	ZS_COMMENT	},
 #ifdef MS_NOATIME
 	{ MNTOPT_NOATIME,	MS_NOATIME,	ZS_COMMENT	},
 	{ MNTOPT_ATIME,		MS_COMMENT,	ZS_COMMENT	},
@@ -180,7 +187,7 @@ out:
  * otherwise they are considered fatal are copied in to badopt.
  */
 int
-zfs_parse_mount_options(char *mntopts, unsigned long *mntflags,
+zfs_parse_mount_options(const char *mntopts, unsigned long *mntflags,
     unsigned long *zfsflags, int sloppy, char *badopt, char *mtabopt)
 {
 	int error = 0, quote = 0, flag = 0, count = 0;
@@ -320,7 +327,7 @@ zfs_adjust_mount_options(zfs_handle_t *zhp, const char *mntpoint,
  * make due with return value from the mount process.
  */
 int
-do_mount(zfs_handle_t *zhp, const char *mntpt, char *opts, int flags)
+do_mount(zfs_handle_t *zhp, const char *mntpt, const char *opts, int flags)
 {
 	const char *src = zfs_get_name(zhp);
 	int error = 0;
@@ -341,10 +348,10 @@ do_mount(zfs_handle_t *zhp, const char *mntpt, char *opts, int flags)
 		}
 	} else {
 		char *argv[9] = {
-		    "/bin/mount",
-		    "--no-canonicalize",
-		    "-t", MNTTYPE_ZFS,
-		    "-o", opts,
+		    (char *)"/bin/mount",
+		    (char *)"--no-canonicalize",
+		    (char *)"-t", (char *)MNTTYPE_ZFS,
+		    (char *)"-o", (char *)opts,
 		    (char *)src,
 		    (char *)mntpt,
 		    (char *)NULL };
@@ -384,23 +391,17 @@ do_unmount(zfs_handle_t *zhp, const char *mntpt, int flags)
 		return (rv < 0 ? errno : 0);
 	}
 
-	char force_opt[] = "-f";
-	char lazy_opt[] = "-l";
 	char *argv[7] = {
-	    "/bin/umount",
-	    "-t", MNTTYPE_ZFS,
+	    (char *)"/bin/umount",
+	    (char *)"-t", (char *)MNTTYPE_ZFS,
 	    NULL, NULL, NULL, NULL };
 	int rc, count = 3;
 
-	if (flags & MS_FORCE) {
-		argv[count] = force_opt;
-		count++;
-	}
+	if (flags & MS_FORCE)
+		argv[count++] = (char *)"-f";
 
-	if (flags & MS_DETACH) {
-		argv[count] = lazy_opt;
-		count++;
-	}
+	if (flags & MS_DETACH)
+		argv[count++] = (char *)"-l";
 
 	argv[count] = (char *)mntpt;
 	rc = libzfs_run_process(argv[0], argv, STDOUT_VERBOSE|STDERR_VERBOSE);

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -955,8 +955,7 @@ skip_open:
 	*logical_ashift = highbit(MAX(pp->sectorsize, SPA_MINBLOCKSIZE)) - 1;
 	*physical_ashift = 0;
 	if (pp->stripesize && pp->stripesize > (1 << *logical_ashift) &&
-	    ISP2(pp->stripesize) && pp->stripesize <= (1 << ASHIFT_MAX) &&
-	    pp->stripeoffset == 0)
+	    ISP2(pp->stripesize) && pp->stripeoffset == 0)
 		*physical_ashift = highbit(pp->stripesize) - 1;
 
 	/*
@@ -1131,8 +1130,12 @@ vdev_geom_fill_unmap_cb(void *buf, size_t len, void *priv)
 	vm_offset_t addr = (vm_offset_t)buf;
 	vm_offset_t end = addr + len;
 
-	if (bp->bio_ma_n == 0)
+	if (bp->bio_ma_n == 0) {
 		bp->bio_ma_offset = addr & PAGE_MASK;
+		addr &= ~PAGE_MASK;
+	} else {
+		ASSERT0(P2PHASE(addr, PAGE_SIZE));
+	}
 	do {
 		bp->bio_ma[bp->bio_ma_n++] =
 		    PHYS_TO_VM_PAGE(pmap_kextract(addr));

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -80,8 +80,8 @@ log_must zfs snapshot $init_snap
 log_must eval "zfs send $init_snap > $full_bkup"
 
 log_note "'zfs receive' fails with invalid send streams."
-log_mustnot eval "cat </dev/zero | zfs receive $rst_init_snap"
-log_mustnot eval "cat </dev/zero | zfs receive -d $rst_root"
+log_mustnot eval "cat /dev/zero | zfs receive $rst_init_snap"
+log_mustnot eval "cat /dev/zero | zfs receive -d $rst_root"
 
 log_must eval "zfs receive $rst_init_snap < $full_bkup"
 

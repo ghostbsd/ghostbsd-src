@@ -92,6 +92,7 @@ __DEFAULT_YES_OPTIONS = \
     DIALOG \
     DICT \
     DMAGENT \
+    DTRACE \
     DYNAMICROOT \
     EE \
     EFI \
@@ -141,6 +142,7 @@ __DEFAULT_YES_OPTIONS = \
     LOCATE \
     LPR \
     LS_COLORS \
+    MACHDEP_OPTIMIZATIONS \
     MAIL \
     MAILWRAPPER \
     MAKE \
@@ -301,8 +303,8 @@ BROKEN_OPTIONS+=EFI
 .if ${__T:Mpowerpc*} == ""
 BROKEN_OPTIONS+=LOADER_OFW
 .endif
-# KBOOT is only for powerpc64 (powerpc64le broken)
-.if ${__T} != "powerpc64"
+# KBOOT is only for powerpc64 (powerpc64le broken) and kinda for amd64
+.if ${__T} != "powerpc64" && ${__T} != "amd64"
 BROKEN_OPTIONS+=LOADER_KBOOT
 .endif
 # UBOOT is only for arm, and big-endian powerpc
@@ -364,9 +366,10 @@ MK_SOURCELESS_UCODE:= no
 .endif
 
 .if ${MK_CDDL} == "no"
-MK_ZFS:=	no
-MK_LOADER_ZFS:=	no
 MK_CTF:=	no
+MK_DTRACE:=	no
+MK_LOADER_ZFS:=	no
+MK_ZFS:=	no
 .endif
 
 .if ${MK_CRYPT} == "no"
@@ -387,6 +390,10 @@ MK_TESTS:=	no
 
 .if ${MK_DIALOG} == "no"
 MK_BSDINSTALL:=	no
+.endif
+
+.if ${MK_DTRACE} == "no"
+MK_CTF:=	no
 .endif
 
 .if ${MK_MAIL} == "no"

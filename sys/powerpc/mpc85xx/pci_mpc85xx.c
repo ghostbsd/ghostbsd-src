@@ -256,12 +256,9 @@ static device_method_t fsl_pcib_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t fsl_pcib_devclass;
-
 DEFINE_CLASS_1(pcib, fsl_pcib_driver, fsl_pcib_methods,
     sizeof(struct fsl_pcib_softc), ofw_pcib_driver);
-EARLY_DRIVER_MODULE(pcib, ofwbus, fsl_pcib_driver, fsl_pcib_devclass, 0, 0,
-    BUS_PASS_BUS);
+EARLY_DRIVER_MODULE(pcib, ofwbus, fsl_pcib_driver, 0, 0, BUS_PASS_BUS);
 
 static void
 fsl_pcib_err_intr(void *v)
@@ -316,7 +313,7 @@ fsl_pcib_attach(device_t dev)
 	struct fsl_pcib_softc *sc;
 	phandle_t node;
 	uint32_t cfgreg, brctl, ipreg;
-	int error, rid;
+	int do_reset, error, rid;
 	uint8_t ltssm, capptr;
 
 	sc = device_get_softc(dev);
@@ -377,17 +374,21 @@ fsl_pcib_attach(device_t dev)
 	    PCIM_CMD_PORTEN;
 	fsl_pcib_cfgwrite(sc, 0, 0, 0, PCIR_COMMAND, cfgreg, 2);
 
-	/* Reset the bus.  Needed for Radeon video cards. */
-	brctl = fsl_pcib_read_config(sc->sc_dev, 0, 0, 0,
-	    PCIR_BRIDGECTL_1, 1);
-	brctl |= PCIB_BCR_SECBUS_RESET;
-	fsl_pcib_write_config(sc->sc_dev, 0, 0, 0,
-	    PCIR_BRIDGECTL_1, brctl, 1);
-	DELAY(100000);
-	brctl &= ~PCIB_BCR_SECBUS_RESET;
-	fsl_pcib_write_config(sc->sc_dev, 0, 0, 0,
-	    PCIR_BRIDGECTL_1, brctl, 1);
-	DELAY(100000);
+	do_reset = 0;
+	resource_int_value("pcib", device_get_unit(dev), "reset", &do_reset);
+	if (do_reset) {
+		/* Reset the bus.  Needed for Radeon video cards. */
+		brctl = fsl_pcib_read_config(sc->sc_dev, 0, 0, 0,
+		    PCIR_BRIDGECTL_1, 1);
+		brctl |= PCIB_BCR_SECBUS_RESET;
+		fsl_pcib_write_config(sc->sc_dev, 0, 0, 0,
+		    PCIR_BRIDGECTL_1, brctl, 1);
+		DELAY(100000);
+		brctl &= ~PCIB_BCR_SECBUS_RESET;
+		fsl_pcib_write_config(sc->sc_dev, 0, 0, 0,
+		    PCIR_BRIDGECTL_1, brctl, 1);
+		DELAY(100000);
+	}
 
 	if (sc->sc_pcie) {
 		ltssm = fsl_pcib_cfgread(sc, 0, 0, 0, PCIR_LTSSM, 1);
@@ -942,13 +943,11 @@ static device_method_t fsl_msi_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t fsl_msi_devclass;
-
 static driver_t fsl_msi_driver = {
 	"fsl_msi",
 	fsl_msi_methods,
 	sizeof(struct fsl_msi_softc)
 };
 
-EARLY_DRIVER_MODULE(fsl_msi, simplebus, fsl_msi_driver, fsl_msi_devclass, 0, 0,
+EARLY_DRIVER_MODULE(fsl_msi, simplebus, fsl_msi_driver, 0, 0,
     BUS_PASS_INTERRUPT + 1);

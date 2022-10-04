@@ -1582,7 +1582,7 @@ muge_attach_post(struct usb_ether *ue)
  *	@ue: the USB ethernet device
  *
  *	Most of this is boilerplate code and copied from the base USB ethernet
- *	driver.  It has been overriden so that we can indicate to the system
+ *	driver.  It has been overridden so that we can indicate to the system
  *	that the chip supports H/W checksumming.
  *
  *	RETURNS:
@@ -2264,10 +2264,8 @@ static driver_t muge_driver = {
 	.size = sizeof(struct muge_softc),
 };
 
-static devclass_t muge_devclass;
-
-DRIVER_MODULE(muge, uhub, muge_driver, muge_devclass, NULL, NULL);
-DRIVER_MODULE(miibus, muge, miibus_driver, miibus_devclass, NULL, NULL);
+DRIVER_MODULE(muge, uhub, muge_driver, NULL, NULL);
+DRIVER_MODULE(miibus, muge, miibus_driver, NULL, NULL);
 MODULE_DEPEND(muge, uether, 1, 1, 1);
 MODULE_DEPEND(muge, usb, 1, 1, 1);
 MODULE_DEPEND(muge, ether, 1, 1, 1);

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -296,11 +296,7 @@ static inline struct dentry *file_dentry(const struct file *f)
 
 static inline uid_t zfs_uid_read_impl(struct inode *ip)
 {
-#ifdef HAVE_SUPER_USER_NS
-	return (from_kuid(ip->i_sb->s_user_ns, ip->i_uid));
-#else
 	return (from_kuid(kcred->user_ns, ip->i_uid));
-#endif
 }
 
 static inline uid_t zfs_uid_read(struct inode *ip)
@@ -310,11 +306,7 @@ static inline uid_t zfs_uid_read(struct inode *ip)
 
 static inline gid_t zfs_gid_read_impl(struct inode *ip)
 {
-#ifdef HAVE_SUPER_USER_NS
-	return (from_kgid(ip->i_sb->s_user_ns, ip->i_gid));
-#else
 	return (from_kgid(kcred->user_ns, ip->i_gid));
-#endif
 }
 
 static inline gid_t zfs_gid_read(struct inode *ip)
@@ -324,20 +316,12 @@ static inline gid_t zfs_gid_read(struct inode *ip)
 
 static inline void zfs_uid_write(struct inode *ip, uid_t uid)
 {
-#ifdef HAVE_SUPER_USER_NS
-	ip->i_uid = make_kuid(ip->i_sb->s_user_ns, uid);
-#else
 	ip->i_uid = make_kuid(kcred->user_ns, uid);
-#endif
 }
 
 static inline void zfs_gid_write(struct inode *ip, gid_t gid)
 {
-#ifdef HAVE_SUPER_USER_NS
-	ip->i_gid = make_kgid(ip->i_sb->s_user_ns, gid);
-#else
 	ip->i_gid = make_kgid(kcred->user_ns, gid);
-#endif
 }
 
 /*

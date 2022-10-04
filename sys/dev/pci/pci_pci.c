@@ -133,11 +133,8 @@ static device_method_t pcib_methods[] = {
     DEVMETHOD_END
 };
 
-static devclass_t pcib_devclass;
-
 DEFINE_CLASS_0(pcib, pcib_driver, pcib_methods, sizeof(struct pcib_softc));
-EARLY_DRIVER_MODULE(pcib, pci, pcib_driver, pcib_devclass, NULL, NULL,
-    BUS_PASS_BUS);
+EARLY_DRIVER_MODULE(pcib, pci, pcib_driver, NULL, NULL, BUS_PASS_BUS);
 
 #if defined(NEW_PCIB) || defined(PCI_HP)
 SYSCTL_DECL(_hw_pci);
@@ -1096,6 +1093,11 @@ pcib_hotplug_present(struct pcib_softc *sc)
 	return (-1);
 }
 
+static int pci_enable_pcie_ei = 0;
+SYSCTL_INT(_hw_pci, OID_AUTO, enable_pcie_ei, CTLFLAG_RWTUN,
+    &pci_enable_pcie_ei, 0,
+    "Enable support for PCI-express Electromechanical Interlock.");
+
 static void
 pcib_pcie_hotplug_update(struct pcib_softc *sc, uint16_t val, uint16_t mask,
     bool schedule_task)
@@ -1135,7 +1137,8 @@ pcib_pcie_hotplug_update(struct pcib_softc *sc, uint16_t val, uint16_t mask,
 	 * process of detaching), disable the Electromechanical
 	 * Interlock.
 	 */
-	if (sc->pcie_slot_cap & PCIEM_SLOT_CAP_EIP) {
+	if ((sc->pcie_slot_cap & PCIEM_SLOT_CAP_EIP) &&
+	    pci_enable_pcie_ei) {
 		mask |= PCIEM_SLOT_CTL_EIC;
 		ei_engaged = (sc->pcie_slot_sta & PCIEM_SLOT_STA_EIS) != 0;
 		if (card_inserted != ei_engaged)

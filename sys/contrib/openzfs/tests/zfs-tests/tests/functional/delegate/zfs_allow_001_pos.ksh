@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -57,7 +57,7 @@ function cleanup
 	restore_root_datasets
 }
 
-log_assert "everyone' is interpreted as a keyword even if a user " \
+log_assert "'everyone' is interpreted as a keyword even if a user " \
 	"or group named 'everyone' exists."
 log_onexit cleanup
 
@@ -79,9 +79,7 @@ if [[ $user_added == "TRUE" ]]; then
 fi
 
 log_note "Created a group called 'everyone'."
-if ! cat /etc/group | awk -F: '{print $1}' | \
-	grep -w 'everyone' > /dev/null 2>&1
-then
+if ! grep -q '^everyone:' /etc/group; then
 	group_added="TRUE"
 	log_must add_group everyone
 fi

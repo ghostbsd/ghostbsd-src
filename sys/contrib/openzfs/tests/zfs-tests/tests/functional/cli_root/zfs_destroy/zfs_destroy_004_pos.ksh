@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -98,8 +98,7 @@ log_must zfs set mountpoint=$mntp1 $fs1
 log_must zfs set mountpoint=$mntp2 $clone
 
 for arg in "$fs1 $mntp1" "$clone $mntp2"; do
-	fs=`echo $arg | awk '{print $1}'`
-	mntp=`echo $arg | awk '{print $2}'`
+	read -r fs mntp <<<"$arg"
 
 	log_note "Verify that 'zfs destroy' fails to" \
 			"destroy filesystem when it is busy."

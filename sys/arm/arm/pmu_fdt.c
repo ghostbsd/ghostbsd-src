@@ -105,7 +105,7 @@ pmu_parse_affinity(device_t dev, struct pmu_softc *sc, struct pmu_intr *irq,
 
 	for (i = 0; i < MAXCPU; i++) {
 		pcpu = pcpu_find(i);
-		if (pcpu != NULL && pcpu->pc_mpidr == mpidr) {
+		if (pcpu != NULL && PCPU_GET_MPIDR(pcpu) == mpidr) {
 			irq->cpuid = i;
 			return (0);
 		}
@@ -234,6 +234,4 @@ static driver_t pmu_fdt_driver = {
 	sizeof(struct pmu_softc),
 };
 
-static devclass_t pmu_fdt_devclass;
-
-DRIVER_MODULE(pmu, simplebus, pmu_fdt_driver, pmu_fdt_devclass, 0, 0);
+DRIVER_MODULE(pmu, simplebus, pmu_fdt_driver, 0, 0);

@@ -111,11 +111,8 @@ static device_method_t nexus_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t nexus_devclass;
-
 DEFINE_CLASS_0(nexus, nexus_driver, nexus_methods, 1);
-EARLY_DRIVER_MODULE(nexus, root, nexus_driver, nexus_devclass, 0, 0,
-    BUS_PASS_BUS);
+EARLY_DRIVER_MODULE(nexus, root, nexus_driver, 0, 0, BUS_PASS_BUS);
 MODULE_VERSION(nexus, 1);
 
 static int
@@ -272,7 +269,7 @@ nexus_deactivate_resource(device_t bus __unused, device_t child __unused,
 		bus_size_t psize;
 
 		psize = rman_get_size(r);
-		pmap_unmapdev((vm_offset_t)rman_get_virtual(r), psize);
+		pmap_unmapdev(rman_get_virtual(r), psize);
 	}
 
 	return (rman_deactivate_resource(r));
@@ -352,7 +349,7 @@ nexus_unmap_resource(device_t bus, device_t child, int type, struct resource *r,
 	 */
 	switch (type) {
 	case SYS_RES_MEMORY:
-		pmap_unmapdev((vm_offset_t)map->r_vaddr, map->r_size);
+		pmap_unmapdev(map->r_vaddr, map->r_size);
 		/* FALLTHROUGH */
 	case SYS_RES_IOPORT:
 		break;

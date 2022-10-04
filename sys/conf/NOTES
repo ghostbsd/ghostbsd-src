@@ -651,13 +651,13 @@ options 	INET6			#IPv6 communications protocols
 #
 # Note if you include INET/INET6 or both options
 # You *must* define at least one of the congestion control
-# options or the compile will fail. Generic defines
-# options CC_NEWRENO. You also will need to specify
-# a default or the compile of your kernel will fail
-# as well. The string in default is the name of the
+# options or the compile will fail. GENERIC defines
+# options CC_CUBIC. You may want to specify a default
+# if multiple congestion controls are compiled in.
+# The string in default is the name of the
 # cc module as it would appear in the sysctl for
-# setting the default. Generic defines newreno
-# as shown below.
+# setting the default. The code defines CUBIC
+# as default, or the sole cc_module compiled in.
 #
 options 	CC_CDG
 options 	CC_CHD
@@ -667,8 +667,8 @@ options 	CC_HD
 options 	CC_HTCP
 options 	CC_NEWRENO
 options 	CC_VEGAS
-options		CC_DEFAULT=\"newreno\"
-options		RATELIMIT		# TX rate limiting support
+options 	CC_DEFAULT=\"cubic\"
+options 	RATELIMIT		# TX rate limiting support
 
 options 	ROUTETABLES=2		# allocated fibs up to 65536. default is 1.
 					# but that would be a bad idea as they are large.
@@ -1235,6 +1235,7 @@ options 	AUDIT
 options 	MAC
 options 	MAC_BIBA
 options 	MAC_BSDEXTENDED
+options 	MAC_DDB
 options 	MAC_IFOFF
 options 	MAC_LOMAC
 options 	MAC_MLS
@@ -1246,6 +1247,12 @@ options 	MAC_PRIORITY
 options 	MAC_SEEOTHERUIDS
 options 	MAC_STUB
 options 	MAC_TEST
+options 	MAC_VERIEXEC
+options 	MAC_VERIEXEC_SHA1
+options 	MAC_VERIEXEC_SHA256
+options 	MAC_VERIEXEC_SHA384
+options 	MAC_VERIEXEC_SHA512
+device		mac_veriexec_parser
 
 # Support for Capsicum
 options 	CAPABILITIES	# fine-grained rights on file descriptors
@@ -2012,8 +2019,8 @@ device		rtwnfw
 # mismatch between the mbuf size assumed by the kernel and the mbuf size
 # assumed by a module.  The only driver that currently has the ability to
 # detect a mismatch is ti(4).
-options 	MCLSHIFT=12	# mbuf cluster shift in bits, 12 == 4KB
-options 	MSIZE=512	# mbuf size in bytes
+options 	MCLSHIFT=11	# mbuf cluster shift in bits, 11 == 2KB
+options 	MSIZE=256	# mbuf size in bytes
 
 #
 # Sound drivers
@@ -2034,7 +2041,6 @@ device		sound
 #		    zero if don't know what to put in (and you don't,
 #		    since this is unsupported at the moment...).
 #
-# snd_ad1816:		Analog Devices AD1816 ISA PnP/non-PnP.
 # snd_als4000:		Avance Logic ALS4000 PCI.
 # snd_atiixp:		ATI IXP 200/300/400 PCI.
 # snd_cmi:		CMedia CMI8338/CMI8738 PCI.
@@ -2046,10 +2052,7 @@ device		sound
 # snd_envy24:		VIA Envy24 and compatible, needs snd_spicds.
 # snd_envy24ht:		VIA Envy24HT and compatible, needs snd_spicds.
 # snd_es137x:		Ensoniq AudioPCI ES137x PCI.
-# snd_ess:		Ensoniq ESS ISA PnP/non-PnP, to be used in
-#			conjunction with snd_sbc.
 # snd_fm801:		Forte Media FM801 PCI.
-# snd_gusc:		Gravis UltraSound ISA PnP/non-PnP.
 # snd_hda:		Intel High Definition Audio (Controller) and
 #			compatible.
 # snd_hdspe:		RME HDSPe AIO and RayDAT.
@@ -2057,14 +2060,7 @@ device		sound
 #			embedded in a chipset, for example nVidia
 #			nForce controllers.
 # snd_maestro3:		ESS Technology Maestro-3/Allegro PCI.
-# snd_mss:		Microsoft Sound System ISA PnP/non-PnP.
 # snd_neomagic:		Neomagic 256 AV/ZX PCI.
-# snd_sb16:		Creative SoundBlaster16, to be used in
-#			conjunction with snd_sbc.
-# snd_sb8:		Creative SoundBlaster (pre-16), to be used in
-#			conjunction with snd_sbc.
-# snd_sbc:		Creative SoundBlaster ISA PnP/non-PnP.
-#			Supports ESS and Avance ISA chips as well.
 # snd_solo:		ESS Solo-1x PCI.
 # snd_spicds:		SPI codec driver, needed by Envy24/Envy24HT drivers.
 # snd_t4dwave:		Trident 4DWave DX/NX PCI, Sis 7018 PCI and Acer Labs
@@ -2074,7 +2070,6 @@ device		sound
 # snd_via82c686:	VIA VT82C686A PCI.
 # snd_vibes:		S3 Sonicvibes PCI.
 
-device		snd_ad1816
 device		snd_als4000
 device		snd_atiixp
 device		snd_cmi
@@ -2085,18 +2080,12 @@ device		snd_emu10kx
 device		snd_envy24
 device		snd_envy24ht
 device		snd_es137x
-device		snd_ess
 device		snd_fm801
-device		snd_gusc
 device		snd_hda
 device		snd_hdspe
 device		snd_ich
 device		snd_maestro3
-device		snd_mss
 device		snd_neomagic
-device		snd_sb16
-device		snd_sb8
-device		snd_sbc
 device		snd_solo
 device		snd_spicds
 device		snd_t4dwave

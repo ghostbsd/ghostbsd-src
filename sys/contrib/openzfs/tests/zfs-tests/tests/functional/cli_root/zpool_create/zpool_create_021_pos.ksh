@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -49,12 +49,13 @@ verify_runnable "global"
 function cleanup
 {
 	datasetexists $TESTPOOL && destroy_pool $TESTPOOL
+	log_must rm -df "/tmp/mnt$$"
 }
 
 log_onexit cleanup
 
-log_assert "'zpool create -O property=value pool' can successfully create a pool \
-		with correct filesystem property set."
+log_assert "'zpool create -O property=value pool' can successfully create a pool" \
+		"with correct filesystem property set."
 
 set -A RW_FS_PROP "quota=536870912" \
 		  "reservation=536870912" \
@@ -80,14 +81,11 @@ fi
 typeset -i i=0
 while (( $i < ${#RW_FS_PROP[*]} )); do
 	log_must zpool create -O ${RW_FS_PROP[$i]} -f $TESTPOOL $DISKS
-	datasetexists $TESTPOOL || \
-		log_fail "zpool create $TESTPOOL fail."
-	propertycheck $TESTPOOL ${RW_FS_PROP[i]} || \
-		log_fail "${RW_FS_PROP[i]} is failed to set."
+	log_must datasetexists $TESTPOOL
+	log_must propertycheck $TESTPOOL ${RW_FS_PROP[i]}
 	log_must zpool destroy $TESTPOOL
 	(( i = i + 1 ))
 done
 
-log_pass "'zpool create -O property=value pool' can successfully create a pool \
-		with correct filesystem property set."
-
+log_pass "'zpool create -O property=value pool' can successfully create a pool" \
+		"with correct filesystem property set."

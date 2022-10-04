@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -50,8 +50,8 @@ verify_runnable "global"
 function cleanup {
 	if ismounted /tmp/$NEWFS_DEFAULT_FS.$$ $NEWFS_DEFAULT_FS; then
 		log_must umount /tmp/$NEWFS_DEFAULT_FS.$$
-		log_must rm -rf /tmp/$NEWFS_DEFAULT_FS.$$
 	fi
+	log_must rm -rf /tmp/$NEWFS_DEFAULT_FS.$$
 }
 
 log_assert "Files from $NEWFS_DEFAULT_FS with xattrs copied to zfs retain xattr info."

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -553,6 +553,7 @@ struct metaslab {
 	 * log space maps.
 	 */
 	uint64_t	ms_unflushed_txg;
+	boolean_t	ms_unflushed_dirty;
 
 	/* updated every time we are done syncing the metaslab's space map */
 	uint64_t	ms_synced_length;

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -46,7 +46,7 @@
 verify_runnable "both"
 
 set -A dataset "$TESTPOOL" "$TESTPOOL/$TESTFS" "$TESTPOOL/$TESTVOL"
-set -A values "on" "off" "fletcher2" "fletcher4" "sha256" "sha512" "skein" "edonr" "noparity"
+set -A values "on" "off" "fletcher2" "fletcher4" "sha256" "sha512" "skein" "edonr" "blake3" "noparity"
 
 log_assert "Setting a valid checksum on a file system, volume," \
 	"it should be successful."

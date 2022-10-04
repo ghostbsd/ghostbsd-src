@@ -89,15 +89,18 @@ SRCS+=	_setjmp.S
 # NOTE: to actually test this functionality after libbz2 upgrade compile
 # loader(8) with LOADER_BZIP2_SUPPORT defined
 .PATH: ${SRCTOP}/contrib/bzip2
-CFLAGS+= -DBZ_NO_STDIO -DBZ_NO_COMPRESS
-
-SRCS+=bzlib.c crctable.c decompress.c huffman.c randtable.c
+.for i in bzlib.c crctable.c decompress.c huffman.c randtable.c
+CFLAGS.${i}+= -DBZ_NO_STDIO -DBZ_NO_COMPRESS
+SRCS+=${i}
+.endfor
 
 # decompression functionality from zlib
 .PATH: ${SRCTOP}/sys/contrib/zlib
-CFLAGS+=-DHAVE_MEMCPY -I${SRCTOP}/sys/contrib/zlib
-SRCS+=	adler32.c crc32.c
-SRCS+=	infback.c inffast.c inflate.c inftrees.c zutil.c
+ZLIB_CFLAGS=-DHAVE_MEMCPY -I${SRCTOP}/sys/contrib/zlib
+.for i in adler32.c crc32.c infback.c inffast.c inflate.c inftrees.c zutil.c
+CFLAGS.${i}+=${ZLIB_CFLAGS}
+SRCS+=	${i}
+.endfor
 
 # lz4 decompression functionality
 .PATH: ${SRCTOP}/sys/cddl/contrib/opensolaris/common/lz4
@@ -167,10 +170,20 @@ SRCS+=	time.c
 .PATH: ${SRCTOP}/sys/ufs/ffs
 SRCS+=ffs_subr.c ffs_tables.c
 
-CFLAGS.dosfs.c+= -I${LDRSRC}
-CFLAGS.tftp.c+= -I${LDRSRC}
-CFLAGS.ufs.c+= -I${LDRSRC}
-CFLAGS.bzipfs.c+= -I${SRCTOP}/contrib/bzip2
+#
+# i386 has a constrained space for its /boot/loader, so compile out the
+# extensive messages diagnosing bad superblocks. i386 doesn't support UEFI
+# booting, so doing it always makes sense natively there. When we compile
+# for 32-bit on amd64, LIBSA_CPUARCH is also i386 and we use libsa32 only
+# for the BIOS /boot/loader which has the same constraints.
+#
+.if ${LIBSA_CPUARCH} == "i386"
+CFLAGS.ffs_subr.c+= -DSTANDALONE_SMALL
+.endif
+
+CFLAGS.gzipfs.c+= ${ZLIB_CFLAGS}
+CFLAGS.pkgfs.c+= ${ZLIB_CFLAGS}
+CFLAGS.bzipfs.c+= -I${SRCTOP}/contrib/bzip2  -DBZ_NO_STDIO -DBZ_NO_COMPRESS
 
 # explicit_bzero and calculate_crc32c
 .PATH: ${SYSDIR}/libkern
@@ -182,6 +195,7 @@ SRCS+=  explicit_bzero.c crc32_libkern.c
 .endif
 
 .if ${MK_LOADER_VERIEXEC} == "yes" && ${MK_BEARSSL} == "yes"
+# XXX Note that these pollutes CFLAGS in a way that's not easy to fix
 .include "${SRCTOP}/lib/libbearssl/Makefile.libsa.inc"
 .include "${SRCTOP}/lib/libsecureboot/Makefile.libsa.inc"
 .endif
@@ -189,6 +203,10 @@ SRCS+=  explicit_bzero.c crc32_libkern.c
 # Maybe ZFS
 .if ${MK_LOADER_ZFS} == "yes"
 .include "${SASRC}/zfs/Makefile.inc"
+.endif
+
+.if ${DO32:U0} == 0
+MAN=libsa.3
 .endif
 
 .include <bsd.lib.mk>

@@ -1189,7 +1189,7 @@ agp_i810_install_gatt(device_t dev)
 		sc->dcache_size = 0;
 
 	/* According to the specs the gatt on the i810 must be 64k. */
-	sc->gatt->ag_virtual = (void *)kmem_alloc_contig(64 * 1024, M_NOWAIT |
+	sc->gatt->ag_virtual = kmem_alloc_contig(64 * 1024, M_NOWAIT |
 	    M_ZERO, 0, ~0, PAGE_SIZE, 0, VM_MEMATTR_WRITE_COMBINING);
 	if (sc->gatt->ag_virtual == NULL) {
 		if (bootverbose)
@@ -1329,7 +1329,7 @@ agp_i810_deinstall_gatt(device_t dev)
 
 	sc = device_get_softc(dev);
 	bus_write_4(sc->sc_res[0], AGP_I810_PGTBL_CTL, 0);
-	kmem_free((vm_offset_t)sc->gatt->ag_virtual, 64 * 1024);
+	kmem_free(sc->gatt->ag_virtual, 64 * 1024);
 }
 
 static void
@@ -1744,7 +1744,7 @@ agp_i810_alloc_memory(device_t dev, int type, vm_size_t size)
 	mem->am_size = size;
 	mem->am_type = type;
 	if (type != 1 && (type != 2 || size == AGP_PAGE_SIZE))
-		mem->am_obj = vm_object_allocate(OBJT_DEFAULT,
+		mem->am_obj = vm_object_allocate(OBJT_SWAP,
 		    atop(round_page(size)));
 	else
 		mem->am_obj = 0;
@@ -1924,9 +1924,7 @@ static driver_t agp_i810_driver = {
 	sizeof(struct agp_i810_softc),
 };
 
-static devclass_t agp_devclass;
-
-DRIVER_MODULE(agp_i810, vgapci, agp_i810_driver, agp_devclass, 0, 0);
+DRIVER_MODULE(agp_i810, vgapci, agp_i810_driver, 0, 0);
 MODULE_DEPEND(agp_i810, agp, 1, 1, 1);
 MODULE_DEPEND(agp_i810, pci, 1, 1, 1);
 

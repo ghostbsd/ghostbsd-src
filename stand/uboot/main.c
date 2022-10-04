@@ -475,6 +475,13 @@ main(int argc, char **argv)
 
 	meminfo();
 
+	archsw.arch_loadaddr = uboot_loadaddr;
+	archsw.arch_getdev = uboot_getdev;
+	archsw.arch_copyin = uboot_copyin;
+	archsw.arch_copyout = uboot_copyout;
+	archsw.arch_readin = uboot_readin;
+	archsw.arch_autoload = uboot_autoload;
+
 	/* Set up currdev variable to have hooks in place. */
 	env_setenv("currdev", EV_VOLATILE, "", uboot_setcurrdev, env_nounset);
 
@@ -526,7 +533,7 @@ main(int argc, char **argv)
 		return (0xbadef1ce);
 	}
 
-	ldev = uboot_fmtdev(&currdev);
+	ldev = devformat(&currdev.dd);
 	env_setenv("currdev", EV_VOLATILE, ldev, uboot_setcurrdev, env_nounset);
 	env_setenv("loaddev", EV_VOLATILE, ldev, env_noset, env_nounset);
 	printf("Booting from %s\n", ldev);
@@ -537,13 +544,6 @@ do_interact:
 #ifdef __powerpc__
 	setenv("usefdt", "1", 1);
 #endif
-
-	archsw.arch_loadaddr = uboot_loadaddr;
-	archsw.arch_getdev = uboot_getdev;
-	archsw.arch_copyin = uboot_copyin;
-	archsw.arch_copyout = uboot_copyout;
-	archsw.arch_readin = uboot_readin;
-	archsw.arch_autoload = uboot_autoload;
 
 	interact();				/* doesn't return */
 

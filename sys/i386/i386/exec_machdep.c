@@ -237,8 +237,8 @@ osendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_esp = (int)fp;
-	if (p->p_sysent->sv_sigcode_base != 0) {
-		regs->tf_eip = p->p_sysent->sv_sigcode_base + szsigcode -
+	if (PROC_HAS_SHP(p)) {
+		regs->tf_eip = PROC_SIGCODE(p) + szsigcode -
 		    szosigcode;
 	} else {
 		/* a.out sysentvec does not use shared page */
@@ -363,7 +363,7 @@ freebsd4_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_esp = (int)sfp;
-	regs->tf_eip = p->p_sysent->sv_sigcode_base + szsigcode -
+	regs->tf_eip = PROC_SIGCODE(p) + szsigcode -
 	    szfreebsd4_sigcode;
 	regs->tf_eflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucodesel;
@@ -525,7 +525,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_esp = (int)sfp;
-	regs->tf_eip = p->p_sysent->sv_sigcode_base;
+	regs->tf_eip = PROC_SIGCODE(p);
 	if (regs->tf_eip == 0)
 		regs->tf_eip = PROC_PS_STRINGS(p) - szsigcode;
 	regs->tf_eflags &= ~(PSL_T | PSL_D);
@@ -640,6 +640,7 @@ osigreturn(struct thread *td, struct osigreturn_args *uap)
 	regs->tf_esp = scp->sc_sp;
 	regs->tf_eip = scp->sc_pc;
 	regs->tf_eflags = eflags;
+	regs->tf_trapno = T_RESERVED;
 
 #if defined(COMPAT_43)
 	if (scp->sc_onstack & 1)
@@ -739,6 +740,7 @@ freebsd4_sigreturn(struct thread *td, struct freebsd4_sigreturn_args *uap)
 
 		bcopy(&ucp->uc_mcontext.mc_fs, regs, sizeof(*regs));
 	}
+	regs->tf_trapno = T_RESERVED;
 
 #if defined(COMPAT_43)
 	if (ucp->uc_mcontext.mc_onstack & 1)
@@ -873,6 +875,7 @@ sys_sigreturn(struct thread *td, struct sigreturn_args *uap)
 			return (ret);
 		bcopy(&ucp->uc_mcontext.mc_fs, regs, sizeof(*regs));
 	}
+	regs->tf_trapno = T_RESERVED;
 
 #if defined(COMPAT_43)
 	if (ucp->uc_mcontext.mc_onstack & 1)

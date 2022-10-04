@@ -34,6 +34,7 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_ddb.h"
+#include "opt_ktrace.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -51,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/syscallsubr.h>
+#include <sys/sysent.h>
 #include <sys/capsicum.h>
 #include <sys/cpuset.h>
 #include <sys/domainset.h>
@@ -61,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/interrupt.h>
 #include <sys/vmmeter.h>
+#include <sys/ktrace.h>
 
 #include <vm/uma.h>
 #include <vm/vm.h>
@@ -1740,6 +1743,43 @@ cpuset_check_capabilities(struct thread *td, cpulevel_t level, cpuwhich_t which,
 	return (0);
 }
 
+#if defined(__powerpc__)
+/*
+ * TODO: At least powerpc64 and powerpc64le kernels panic with
+ * exception 0x480 (instruction segment exception) when copyin/copyout,
+ * are set as a function pointer in cpuset_copy_cb struct and called by
+ * an external module (like pfsync). Tip: copyin/copyout have an ifunc
+ * resolver function.
+ *
+ * Bisect of LLVM shows that the behavior changed on LLVM 10.0 with
+ * https://reviews.llvm.org/rGdc06b0bc9ad055d06535462d91bfc2a744b2f589
+ *
+ * This is a hack/workaround while problem is being discussed with LLVM
+ * community
+ */
+static int
+cpuset_copyin(const void *uaddr, void *kaddr, size_t len)
+{
+	return(copyin(uaddr, kaddr, len));
+}
+
+static int
+cpuset_copyout(const void *kaddr, void *uaddr, size_t len)
+{
+	return(copyout(kaddr, uaddr, len));
+}
+
+static const struct cpuset_copy_cb copy_set = {
+	.cpuset_copyin = cpuset_copyin,
+	.cpuset_copyout = cpuset_copyout
+};
+#else
+static const struct cpuset_copy_cb copy_set = {
+        .cpuset_copyin = copyin,
+        .cpuset_copyout = copyout
+};
+#endif
+
 #ifndef _SYS_SYSPROTO_H_
 struct cpuset_args {
 	cpusetid_t	*setid;
@@ -1880,32 +1920,26 @@ int
 sys_cpuset_getaffinity(struct thread *td, struct cpuset_getaffinity_args *uap)
 {
 
-	return (kern_cpuset_getaffinity(td, uap->level, uap->which,
-	    uap->id, uap->cpusetsize, uap->mask));
+	return (user_cpuset_getaffinity(td, uap->level, uap->which,
+	    uap->id, uap->cpusetsize, uap->mask, &copy_set));
 }
 
 int
 kern_cpuset_getaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
-    id_t id, size_t cpusetsize, cpuset_t *maskp)
+    id_t id, size_t cpusetsize, cpuset_t *mask)
 {
 	struct thread *ttd;
 	struct cpuset *nset;
 	struct cpuset *set;
 	struct proc *p;
-	cpuset_t *mask;
 	int error;
-	size_t size;
 
-	if (cpusetsize < sizeof(cpuset_t) || cpusetsize > CPU_MAXSIZE / NBBY)
-		return (ERANGE);
 	error = cpuset_check_capabilities(td, level, which, id);
 	if (error != 0)
 		return (error);
-	size = cpusetsize;
-	mask = malloc(size, M_TEMP, M_WAITOK | M_ZERO);
 	error = cpuset_which(which, id, &p, &ttd, &set);
-	if (error)
-		goto out;
+	if (error != 0)
+		return (error);
 	switch (level) {
 	case CPU_LEVEL_ROOT:
 	case CPU_LEVEL_CPUSET:
@@ -1923,8 +1957,7 @@ kern_cpuset_getaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
 		case CPU_WHICH_INTRHANDLER:
 		case CPU_WHICH_ITHREAD:
 		case CPU_WHICH_DOMAIN:
-			error = EINVAL;
-			goto out;
+			return (EINVAL);
 		}
 		if (level == CPU_LEVEL_ROOT)
 			nset = cpuset_refroot(set);
@@ -1972,8 +2005,50 @@ kern_cpuset_getaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
 		cpuset_rel(set);
 	if (p)
 		PROC_UNLOCK(p);
-	if (error == 0)
-		error = copyout(mask, maskp, size);
+	if (error == 0) {
+		if (cpusetsize < howmany(CPU_FLS(mask), NBBY))
+			return (ERANGE);
+#ifdef KTRACE
+		if (KTRPOINT(td, KTR_STRUCT))
+			ktrcpuset(mask, cpusetsize);
+#endif
+	}
+	return (error);
+}
+
+int
+user_cpuset_getaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
+    id_t id, size_t cpusetsize, cpuset_t *maskp, const struct cpuset_copy_cb *cb)
+{
+	cpuset_t *mask;
+	size_t size;
+	int error;
+
+	mask = malloc(sizeof(cpuset_t), M_TEMP, M_WAITOK | M_ZERO);
+	size = min(cpusetsize, sizeof(cpuset_t));
+	error = kern_cpuset_getaffinity(td, level, which, id, size, mask);
+	if (error == 0) {
+		error = cb->cpuset_copyout(mask, maskp, size);
+		if (error != 0)
+			goto out;
+		if (cpusetsize > size) {
+			char *end;
+			char *cp;
+			int rv;
+
+			end = cp = (char *)&maskp->__bits;
+			end += cpusetsize;
+			cp += size;
+			while (cp != end) {
+				rv = subyte(cp, 0);
+				if (rv == -1) {
+					error = EFAULT;
+					goto out;
+				}
+				cp++;
+			}
+		}
+	}
 out:
 	free(mask, M_TEMP);
 	return (error);
@@ -1992,50 +2067,29 @@ int
 sys_cpuset_setaffinity(struct thread *td, struct cpuset_setaffinity_args *uap)
 {
 
-	return (kern_cpuset_setaffinity(td, uap->level, uap->which,
-	    uap->id, uap->cpusetsize, uap->mask));
+	return (user_cpuset_setaffinity(td, uap->level, uap->which,
+	    uap->id, uap->cpusetsize, uap->mask, &copy_set));
 }
 
 int
 kern_cpuset_setaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
-    id_t id, size_t cpusetsize, const cpuset_t *maskp)
+    id_t id, cpuset_t *mask)
 {
 	struct cpuset *nset;
 	struct cpuset *set;
 	struct thread *ttd;
 	struct proc *p;
-	cpuset_t *mask;
 	int error;
 
-	if (cpusetsize < sizeof(cpuset_t) || cpusetsize > CPU_MAXSIZE / NBBY)
-		return (ERANGE);
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_STRUCT))
+		ktrcpuset(mask, sizeof(cpuset_t));
+#endif
 	error = cpuset_check_capabilities(td, level, which, id);
 	if (error != 0)
 		return (error);
-	mask = malloc(cpusetsize, M_TEMP, M_WAITOK | M_ZERO);
-	error = copyin(maskp, mask, cpusetsize);
-	if (error)
-		goto out;
-	/*
-	 * Verify that no high bits are set.
-	 */
-	if (cpusetsize > sizeof(cpuset_t)) {
-		char *end;
-		char *cp;
-
-		end = cp = (char *)&mask->__bits;
-		end += cpusetsize;
-		cp += sizeof(cpuset_t);
-		while (cp != end)
-			if (*cp++ != 0) {
-				error = EINVAL;
-				goto out;
-			}
-	}
-	if (CPU_EMPTY(mask)) {
-		error = EDEADLK;
-		goto out;
-	}
+	if (CPU_EMPTY(mask))
+		return (EDEADLK);
 	switch (level) {
 	case CPU_LEVEL_ROOT:
 	case CPU_LEVEL_CPUSET:
@@ -2057,8 +2111,7 @@ kern_cpuset_setaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
 		case CPU_WHICH_INTRHANDLER:
 		case CPU_WHICH_ITHREAD:
 		case CPU_WHICH_DOMAIN:
-			error = EINVAL;
-			goto out;
+			return (EINVAL);
 		}
 		if (level == CPU_LEVEL_ROOT)
 			nset = cpuset_refroot(set);
@@ -2098,6 +2151,47 @@ kern_cpuset_setaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
 		error = EINVAL;
 		break;
 	}
+	return (error);
+}
+
+int
+user_cpuset_setaffinity(struct thread *td, cpulevel_t level, cpuwhich_t which,
+    id_t id, size_t cpusetsize, const cpuset_t *maskp, const struct cpuset_copy_cb *cb)
+{
+	cpuset_t *mask;
+	int error;
+	size_t size;
+
+	size = min(cpusetsize, sizeof(cpuset_t));
+	mask = malloc(sizeof(cpuset_t), M_TEMP, M_WAITOK | M_ZERO);
+	error = cb->cpuset_copyin(maskp, mask, size);
+	if (error)
+		goto out;
+	/*
+	 * Verify that no high bits are set.
+	 */
+	if (cpusetsize > sizeof(cpuset_t)) {
+		const char *end, *cp;
+		int val;
+		end = cp = (const char *)&maskp->__bits;
+		end += cpusetsize;
+		cp += sizeof(cpuset_t);
+
+		while (cp != end) {
+			val = fubyte(cp);
+			if (val == -1) {
+				error = EFAULT;
+				goto out;
+			}
+			if (val != 0) {
+				error = EINVAL;
+				goto out;
+			}
+			cp++;
+		}
+	}
+	error = kern_cpuset_setaffinity(td, level, which, id, mask);
+
 out:
 	free(mask, M_TEMP);
 	return (error);
@@ -2118,12 +2212,13 @@ sys_cpuset_getdomain(struct thread *td, struct cpuset_getdomain_args *uap)
 {
 
 	return (kern_cpuset_getdomain(td, uap->level, uap->which,
-	    uap->id, uap->domainsetsize, uap->mask, uap->policy));
+	    uap->id, uap->domainsetsize, uap->mask, uap->policy, &copy_set));
 }
 
 int
 kern_cpuset_getdomain(struct thread *td, cpulevel_t level, cpuwhich_t which,
-    id_t id, size_t domainsetsize, domainset_t *maskp, int *policyp)
+    id_t id, size_t domainsetsize, domainset_t *maskp, int *policyp,
+    const struct cpuset_copy_cb *cb)
 {
 	struct domainset outset;
 	struct thread *ttd;
@@ -2221,7 +2316,7 @@ kern_cpuset_getdomain(struct thread *td, cpulevel_t level, cpuwhich_t which,
 	}
 	DOMAINSET_COPY(&outset.ds_mask, mask);
 	if (error == 0)
-		error = copyout(mask, maskp, domainsetsize);
+		error = cb->cpuset_copyout(mask, maskp, domainsetsize);
 	if (error == 0)
 		if (suword32(policyp, outset.ds_policy) != 0)
 			error = EFAULT;
@@ -2245,12 +2340,13 @@ sys_cpuset_setdomain(struct thread *td, struct cpuset_setdomain_args *uap)
 {
 
 	return (kern_cpuset_setdomain(td, uap->level, uap->which,
-	    uap->id, uap->domainsetsize, uap->mask, uap->policy));
+	    uap->id, uap->domainsetsize, uap->mask, uap->policy, &copy_set));
 }
 
 int
 kern_cpuset_setdomain(struct thread *td, cpulevel_t level, cpuwhich_t which,
-    id_t id, size_t domainsetsize, const domainset_t *maskp, int policy)
+    id_t id, size_t domainsetsize, const domainset_t *maskp, int policy,
+    const struct cpuset_copy_cb *cb)
 {
 	struct cpuset *nset;
 	struct cpuset *set;
@@ -2271,7 +2367,7 @@ kern_cpuset_setdomain(struct thread *td, cpulevel_t level, cpuwhich_t which,
 		return (error);
 	memset(&domain, 0, sizeof(domain));
 	mask = malloc(domainsetsize, M_TEMP, M_WAITOK | M_ZERO);
-	error = copyin(maskp, mask, domainsetsize);
+	error = cb->cpuset_copyin(maskp, mask, domainsetsize);
 	if (error)
 		goto out;
 	/*
@@ -2421,7 +2517,7 @@ ddb_display_domainset(const domainset_t *set)
 	ddb_display_bitset((const struct bitset *)set, DOMAINSET_SETSIZE);
 }
 
-DB_SHOW_COMMAND(cpusets, db_show_cpusets)
+DB_SHOW_COMMAND_FLAGS(cpusets, db_show_cpusets, DB_CMD_MEMSAFE)
 {
 	struct cpuset *set;
 
@@ -2441,7 +2537,7 @@ DB_SHOW_COMMAND(cpusets, db_show_cpusets)
 	}
 }
 
-DB_SHOW_COMMAND(domainsets, db_show_domainsets)
+DB_SHOW_COMMAND_FLAGS(domainsets, db_show_domainsets, DB_CMD_MEMSAFE)
 {
 	struct domainset *set;
 

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -165,10 +165,9 @@ for option in "" "-Df"; do
 					fi
 					log_note "Import with $nfs_flag and " \
 					    "$guid_flag"
-					zpool import $option ${devs[i]} \
-					    ${options[j]} $target
-					#import by GUID if import by pool name fails
-					if [[ $? != 0 ]]; then
+					if ! zpool import $option ${devs[i]} \
+					    ${options[j]} $target; then
+						# import by GUID if import by pool name fails
 						log_note "Possible pool name" \
 						    "duplicates. Try GUID import"
 						target=$guid

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -65,8 +65,8 @@ log_must file_write -o $OP -f $TESTDIR1/$TESTFILE1 -b $BLOCKSZ \
 
 sleep 60
 
-FILE0_BLKS=`du -k $TESTDIR1/$TESTFILE0 | awk '{ print $1}'`
-FILE1_BLKS=`du -k $TESTDIR1/$TESTFILE1 | awk '{ print $1}'`
+FILE0_BLKS=`du -k $TESTDIR1/$TESTFILE0 | awk '{print $1}'`
+FILE1_BLKS=`du -k $TESTDIR1/$TESTFILE1 | awk '{print $1}'`
 
 if [[ $FILE0_BLKS -le $FILE1_BLKS ]]; then
 	log_fail "$TESTFILE0 is smaller than $TESTFILE1" \

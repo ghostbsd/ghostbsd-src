@@ -629,6 +629,10 @@ pfctl_nveth_rule_to_eth_rule(const nvlist_t *nvl, struct pfctl_eth_rule *rule)
 	rule->ifnot = nvlist_get_bool(nvl, "ifnot");
 	rule->direction = nvlist_get_number(nvl, "direction");
 	rule->proto = nvlist_get_number(nvl, "proto");
+	strlcpy(rule->match_tagname, nvlist_get_string(nvl, "match_tagname"),
+	    PF_TAG_NAME_SIZE);
+	rule->match_tag = nvlist_get_number(nvl, "match_tag");
+	rule->match_tag_not = nvlist_get_bool(nvl, "match_tag_not");
 
 	pfctl_nveth_addr_to_eth_addr(nvlist_get_nvlist(nvl, "src"),
 	    &rule->src);
@@ -780,6 +784,8 @@ pfctl_add_eth_rule(int dev, const struct pfctl_eth_rule *r, const char *anchor,
 	nvlist_add_bool(nvl, "ifnot", r->ifnot);
 	nvlist_add_number(nvl, "direction", r->direction);
 	nvlist_add_number(nvl, "proto", r->proto);
+	nvlist_add_string(nvl, "match_tagname", r->match_tagname);
+	nvlist_add_bool(nvl, "match_tag_not", r->match_tag_not);
 
 	addr = pfctl_eth_addr_to_nveth_addr(&r->src);
 	if (addr == NULL) {
@@ -1329,17 +1335,25 @@ pfctl_set_syncookies(int dev, const struct pfctl_syncookies *s)
 	nvlist_t	*nvl;
 	int		 ret;
 	uint		 state_limit;
+	uint64_t	 lim, hi, lo;
 
 	ret = pfctl_get_limit(dev, PF_LIMIT_STATES, &state_limit);
 	if (ret != 0)
 		return (ret);
 
+	lim = state_limit;
+	hi = lim * s->highwater / 100;
+	lo = lim * s->lowwater / 100;
+
+	if (lo == hi)
+		hi++;
+
 	nvl = nvlist_create(0);
 
 	nvlist_add_bool(nvl, "enabled", s->mode != PFCTL_SYNCOOKIES_NEVER);
 	nvlist_add_bool(nvl, "adaptive", s->mode == PFCTL_SYNCOOKIES_ADAPTIVE);
-	nvlist_add_number(nvl, "highwater", state_limit * s->highwater / 100);
-	nvlist_add_number(nvl, "lowwater", state_limit * s->lowwater / 100);
+	nvlist_add_number(nvl, "highwater", hi);
+	nvlist_add_number(nvl, "lowwater", lo);
 
 	nv.data = nvlist_pack(nvl, &nv.len);
 	nv.size = nv.len;

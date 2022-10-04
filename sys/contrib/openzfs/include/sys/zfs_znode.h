@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -199,6 +199,8 @@ typedef struct znode {
 	uint64_t	z_size;		/* file size (cached) */
 	uint64_t	z_pflags;	/* pflags (cached) */
 	uint32_t	z_sync_cnt;	/* synchronous open count */
+	uint32_t	z_sync_writes_cnt; /* synchronous write count */
+	uint32_t	z_async_writes_cnt; /* asynchronous write count */
 	mode_t		z_mode;		/* mode (cached) */
 	kmutex_t	z_acl_lock;	/* acl data lock */
 	zfs_acl_t	*z_acl_cached;	/* cached acl */
@@ -215,6 +217,29 @@ typedef struct znode {
 	 */
 	ZNODE_OS_FIELDS;
 } znode_t;
+
+/* Verifies the znode is valid. */
+static inline int
+zfs_verify_zp(znode_t *zp)
+{
+	if (unlikely(zp->z_sa_hdl == NULL))
+		return (SET_ERROR(EIO));
+	return (0);
+}
+
+/* zfs_enter and zfs_verify_zp together */
+static inline int
+zfs_enter_verify_zp(zfsvfs_t *zfsvfs, znode_t *zp, const char *tag)
+{
+	int error;
+	if ((error = zfs_enter(zfsvfs, tag)) != 0)
+		return (error);
+	if ((error = zfs_verify_zp(zp)) != 0) {
+		zfs_exit(zfsvfs, tag);
+		return (error);
+	}
+	return (0);
+}
 
 typedef struct znode_hold {
 	uint64_t	zh_obj;		/* object id */

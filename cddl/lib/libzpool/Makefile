@@ -56,6 +56,7 @@ KERNEL_C = \
 	aggsum.c \
 	arc.c \
 	arc_os.c \
+        blake3_zfs.c \
 	blkptr.c \
 	bplist.c \
 	bpobj.c \
@@ -118,7 +119,6 @@ KERNEL_C = \
 	sha256.c \
 	skein_zfs.c \
 	spa.c \
-	spa_boot.c \
 	spa_checkpoint.c \
 	spa_config.c \
 	spa_errlog.c \
@@ -169,6 +169,7 @@ KERNEL_C = \
 	zcp_synctask.c \
 	zfeature.c \
 	zfs_byteswap.c \
+        zfs_chksum.c \
 	zfs_debug.c \
 	zfs_fm.c \
 	zfs_fuid.c \
@@ -285,6 +286,10 @@ CSTD=	c99
 
 CFLAGS+=	-g -DDEBUG=1
 
+# Pointer values are used as debugging "tags" to mark reference count
+# ownerships and in some cases the tag reference is dropped after an
+# object is freed.
+CFLAGS.dbuf.c=			${NO_WUSE_AFTER_FREE}
 CFLAGS.entropy_common.c=	-fno-tree-vectorize
 CFLAGS.entropy_common.c+=	${NO_WBITWISE_INSTEAD_OF_LOGICAL}
 CFLAGS.error_private.c=		-fno-tree-vectorize

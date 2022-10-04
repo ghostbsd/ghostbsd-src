@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -59,8 +59,8 @@ create_xattr $testfile passwd /etc/passwd
 
 log_must chmod 000 $testfile
 if is_illumos; then
-	log_mustnot su $ZFS_USER -c "runat $testfile cat passwd"
-	log_mustnot su $ZFS_USER -c "runat $testfile cp /etc/passwd ."
+	log_mustnot user_run $ZFS_USER runat $testfile cat passwd
+	log_mustnot user_run $ZFS_USER runat $testfile cp /etc/passwd .
 else
 	log_mustnot user_run $ZFS_USER "
 . $STF_SUITE/include/libtest.shlib

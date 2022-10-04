@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -66,6 +66,6 @@ log_must wait
 
 log_must_busy zpool export $TESTPOOL
 log_must zpool import $TESTPOOL
-log_must ls -lR "/$TEST_FS/" >/dev/null 2>&1
+log_must eval "ls -lR /$TEST_FS/ >/dev/null 2>&1"
 log_must zdb -d $TESTPOOL
 log_pass

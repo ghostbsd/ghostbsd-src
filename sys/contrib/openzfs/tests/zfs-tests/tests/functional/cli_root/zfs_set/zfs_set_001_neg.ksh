@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -77,9 +77,9 @@ while (( i < ${#dataset[@]} )); do
 		done
 		(( j += 1 ))
 	done
-        # Additional recordsize
-        set_n_check_prop "recordsize" "2048K" "${dataset[i]}" false
-        set_n_check_prop "recordsize" "128B" "${dataset[i]}" false
+	# Additional recordsize
+	set_n_check_prop "32768K" "recordsize" "${dataset[i]}" false
+	set_n_check_prop "128B" "recordsize" "${dataset[i]}" false
 	(( i += 1 ))
 done
 

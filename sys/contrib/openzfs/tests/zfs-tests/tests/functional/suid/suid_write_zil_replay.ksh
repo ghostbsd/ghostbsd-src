@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -65,10 +65,10 @@ log_must zpool freeze $TESTPOOL
 #
 # 3. Unprivileged write to a setuid file
 #
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "NONE"      "PRECRASH"
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "SUID"      "PRECRASH"
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "SGID"      "PRECRASH"
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "SUID_SGID" "PRECRASH"
+log_must suid_write_to_file "NONE"      "PRECRASH"
+log_must suid_write_to_file "SUID"      "PRECRASH"
+log_must suid_write_to_file "SGID"      "PRECRASH"
+log_must suid_write_to_file "SUID_SGID" "PRECRASH"
 
 #
 # 4. Unmount filesystem and export the pool
@@ -91,9 +91,9 @@ log_must zpool export $TESTPOOL
 #
 log_must zpool import -f -d $VDIR $TESTPOOL
 
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "NONE"      "REPLAY"
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "SUID"      "REPLAY"
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "SGID"      "REPLAY"
-log_must $STF_SUITE/tests/functional/suid/suid_write_to_file "SUID_SGID" "REPLAY"
+log_must suid_write_to_file "NONE"      "REPLAY"
+log_must suid_write_to_file "SUID"      "REPLAY"
+log_must suid_write_to_file "SGID"      "REPLAY"
+log_must suid_write_to_file "SUID_SGID" "REPLAY"
 
 log_pass

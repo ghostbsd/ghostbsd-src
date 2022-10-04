@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -162,7 +162,7 @@ zio_match_handler(const zbookmark_phys_t *zb, uint64_t type, int dva,
  * specified by tag.
  */
 void
-zio_handle_panic_injection(spa_t *spa, char *tag, uint64_t type)
+zio_handle_panic_injection(spa_t *spa, const char *tag, uint64_t type)
 {
 	inject_handler_t *handler;
 
@@ -887,7 +887,7 @@ zio_inject_list_next(int *id, char *name, size_t buflen,
 	if (handler) {
 		*record = handler->zi_record;
 		*id = handler->zi_id;
-		(void) strncpy(name, spa_name(handler->zi_spa), buflen);
+		(void) strlcpy(name, spa_name(handler->zi_spa), buflen);
 		ret = 0;
 	} else {
 		ret = SET_ERROR(ENOENT);

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -195,6 +195,10 @@ zio_checksum_info_t zio_checksum_table[ZIO_CHECKSUM_FUNCTIONS] = {
 	    abd_checksum_edonr_tmpl_init, abd_checksum_edonr_tmpl_free,
 	    ZCHECKSUM_FLAG_METADATA | ZCHECKSUM_FLAG_SALTED |
 	    ZCHECKSUM_FLAG_NOPWRITE, "edonr"},
+	{{abd_checksum_blake3_native,	abd_checksum_blake3_byteswap},
+	    abd_checksum_blake3_tmpl_init, abd_checksum_blake3_tmpl_free,
+	    ZCHECKSUM_FLAG_METADATA | ZCHECKSUM_FLAG_DEDUP |
+	    ZCHECKSUM_FLAG_SALTED | ZCHECKSUM_FLAG_NOPWRITE, "blake3"},
 };
 
 /*
@@ -207,6 +211,8 @@ zio_checksum_to_feature(enum zio_checksum cksum)
 	VERIFY((cksum & ~ZIO_CHECKSUM_MASK) == 0);
 
 	switch (cksum) {
+	case ZIO_CHECKSUM_BLAKE3:
+		return (SPA_FEATURE_BLAKE3);
 	case ZIO_CHECKSUM_SHA512:
 		return (SPA_FEATURE_SHA512);
 	case ZIO_CHECKSUM_SKEIN:

@@ -802,7 +802,7 @@ usbhid_probe(device_t dev)
 	if (hid_test_quirk(&sc->sc_hw, HQ_HID_IGNORE))
 		return (ENXIO);
 
-	return (BUS_PROBE_GENERIC + 1);
+	return (BUS_PROBE_DEFAULT + 1);
 }
 
 static int
@@ -860,8 +860,6 @@ usbhid_detach(device_t dev)
 	return (0);
 }
 
-static devclass_t usbhid_devclass;
-
 static device_method_t usbhid_methods[] = {
 	DEVMETHOD(device_probe,		usbhid_probe),
 	DEVMETHOD(device_attach,	usbhid_attach),
@@ -892,7 +890,7 @@ static driver_t usbhid_driver = {
 	.size = sizeof(struct usbhid_softc),
 };
 
-DRIVER_MODULE(usbhid, uhub, usbhid_driver, usbhid_devclass, NULL, 0);
+DRIVER_MODULE(usbhid, uhub, usbhid_driver, NULL, NULL);
 MODULE_DEPEND(usbhid, usb, 1, 1, 1);
 MODULE_DEPEND(usbhid, hid, 1, 1, 1);
 MODULE_DEPEND(usbhid, hidbus, 1, 1, 1);

@@ -92,7 +92,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/in6_fib.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/in6_pcb.h>
-#include <netinet6/ip6protosw.h>
 #include <netinet6/nd6.h>
 #include <netinet6/scope6_var.h>
 #endif				/* INET6 */
@@ -381,6 +380,8 @@ typedef struct callout sctp_os_timer_t;
 #define SCTP_SORESERVE(so, send, recv)	soreserve(so, send, recv)
 /* wakeup a socket */
 #define SCTP_SOWAKEUP(so)	wakeup(&(so)->so_timeo)
+/* number of bytes ready to read */
+#define SCTP_SBAVAIL(sb)	sbavail(sb)
 /* clear the socket buffer state */
 #define SCTP_SB_CLEAR(sb)	\
 	(sb).sb_cc = 0;		\

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -45,10 +45,8 @@ log_must add_user $PGROUP $PUSER
 #
 # chmod 0750 $HOME
 #
-user_run $PUSER zfs list
-if [ $? -ne 0 ]; then
+user_run $PUSER zfs list ||
 	log_unsupported "Test user $PUSER cannot execute zfs utilities"
-fi
 
 DISK=${DISKS%% *}
 default_setup_noexit $DISK

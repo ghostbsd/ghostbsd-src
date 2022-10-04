@@ -127,6 +127,11 @@ struct pcicfg_msix {
     struct resource *msix_pba_res;	/* Resource containing PBA. */
 };
 
+struct pci_id_ofw_iommu {
+	uint32_t id;
+	uint32_t xref;
+};
+
 /* Interesting values for HyperTransport */
 struct pcicfg_ht {
     uint8_t	ht_slave;	/* Non-zero if device is an HT slave. */
@@ -712,6 +717,8 @@ extern struct devlist	pci_devq;
 extern uint32_t	pci_generation;
 
 struct pci_map *pci_find_bar(device_t dev, int reg);
+struct pci_map *pci_first_bar(device_t dev);
+struct pci_map *pci_next_bar(struct pci_map *pm);
 int	pci_bar_enabled(device_t dev, struct pci_map *pm);
 struct pcicfg_vpd *pci_fetch_vpd_list(device_t dev);
 

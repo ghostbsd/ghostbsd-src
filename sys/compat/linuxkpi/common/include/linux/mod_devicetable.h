@@ -55,7 +55,8 @@ enum dmi_field {
 };
 
 struct dmi_strmatch {
-	unsigned char slot;
+	unsigned char slot : 7;
+	unsigned char exact_match : 1;
 	char substr[79];
 };
 
@@ -67,6 +68,9 @@ struct dmi_system_id {
 };
 
 #define DMI_MATCH(a, b) { .slot = a, .substr = b }
-#define DMI_EXACT_MATCH(a, b)   { .slot = a, .substr = b, }
+#define DMI_EXACT_MATCH(a, b)   { .slot = a, .substr = b, .exact_match = 1 }
+
+#define	I2C_NAME_SIZE		20
+#define	I2C_MODULE_PREFIX	"i2c:"
 
 #endif	/* __LINUXKPI_LINUX_MOD_DEVICETABLE_H__ */

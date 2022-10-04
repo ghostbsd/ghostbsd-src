@@ -1604,7 +1604,7 @@ smsc_attach_post(struct usb_ether *ue)
  *	@ue: the USB ethernet device
  *
  *	Most of this is boilerplate code and copied from the base USB ethernet
- *	driver.  It has been overriden so that we can indicate to the system that
+ *	driver.  It has been overridden so that we can indicate to the system that
  *	the chip supports H/W checksumming.
  *
  *	RETURNS:
@@ -1769,10 +1769,8 @@ static driver_t smsc_driver = {
 	.size = sizeof(struct smsc_softc),
 };
 
-static devclass_t smsc_devclass;
-
-DRIVER_MODULE(smsc, uhub, smsc_driver, smsc_devclass, NULL, 0);
-DRIVER_MODULE(miibus, smsc, miibus_driver, miibus_devclass, 0, 0);
+DRIVER_MODULE(smsc, uhub, smsc_driver, NULL, NULL);
+DRIVER_MODULE(miibus, smsc, miibus_driver, 0, 0);
 MODULE_DEPEND(smsc, uether, 1, 1, 1);
 MODULE_DEPEND(smsc, usb, 1, 1, 1);
 MODULE_DEPEND(smsc, ether, 1, 1, 1);

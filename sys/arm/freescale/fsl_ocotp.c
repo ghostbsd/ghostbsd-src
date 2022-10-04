@@ -81,7 +81,7 @@ fsl_ocotp_devmap(void)
 
 	ocotp_size = (vm_size_t)size;
 
-	if ((ocotp_regs = pmap_mapdev((vm_offset_t)base, ocotp_size)) == NULL)
+	if ((ocotp_regs = pmap_mapdev((vm_paddr_t)base, ocotp_size)) == NULL)
 		goto fatal;
 
 	return;
@@ -135,7 +135,7 @@ ocotp_attach(device_t dev)
 
 	/* We're done with the temporary mapping now. */
 	if (ocotp_regs != NULL)
-		pmap_unmapdev((vm_offset_t)ocotp_regs, ocotp_size);
+		pmap_unmapdev(ocotp_regs, ocotp_size);
 
 	err = 0;
 
@@ -200,7 +200,5 @@ static driver_t ocotp_driver = {
 	sizeof(struct ocotp_softc)
 };
 
-static devclass_t ocotp_devclass;
-
-EARLY_DRIVER_MODULE(ocotp, simplebus, ocotp_driver, ocotp_devclass, 0, 0,
+EARLY_DRIVER_MODULE(ocotp, simplebus, ocotp_driver, 0, 0,
     BUS_PASS_CPU + BUS_PASS_ORDER_FIRST);

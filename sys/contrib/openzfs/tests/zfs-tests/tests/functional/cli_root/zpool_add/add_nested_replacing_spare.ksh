@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -90,10 +90,8 @@ do
 	log_must wait_vdev_state $TESTPOOL $REPLACE_DEV "ONLINE" 60
 	zpool status | awk -v poolname="$TESTPOOL" -v type="$type" 'BEGIN {s=""}
 	    $1 ~ poolname {c=4}; (c && c--) { s=s$1":" }
-	    END { if (s != poolname":"type"-0:spare-0:replacing-0:") exit 1; }'
-	if [[ $? -ne 0 ]]; then
+	    END { if (s != poolname":"type"-0:spare-0:replacing-0:") exit 1; }' ||
 		log_fail "Pool does not contain nested replacing/spare vdevs"
-	fi
 
 	# 3. Verify 'zpool add' is able to add new devices
 	log_must zpool add $TESTPOOL spare $SPARE_DEV2

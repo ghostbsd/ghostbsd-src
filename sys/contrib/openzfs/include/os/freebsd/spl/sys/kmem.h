@@ -52,8 +52,10 @@ MALLOC_DECLARE(M_SOLARIS);
 
 typedef struct vmem vmem_t;
 
-extern char	*kmem_asprintf(const char *, ...);
-extern char *kmem_vasprintf(const char *fmt, va_list ap);
+extern char	*kmem_asprintf(const char *, ...)
+    __attribute__((format(printf, 1, 2)));
+extern char *kmem_vasprintf(const char *fmt, va_list ap)
+    __attribute__((format(printf, 1, 0)));
 
 typedef struct kmem_cache {
 	char		kc_name[32];
@@ -70,10 +72,11 @@ typedef struct kmem_cache {
 extern uint64_t spl_kmem_cache_inuse(kmem_cache_t *cache);
 extern uint64_t spl_kmem_cache_entry_size(kmem_cache_t *cache);
 
+__attribute__((alloc_size(1)))
 void *zfs_kmem_alloc(size_t size, int kmflags);
 void zfs_kmem_free(void *buf, size_t size);
 uint64_t kmem_size(void);
-kmem_cache_t *kmem_cache_create(char *name, size_t bufsize, size_t align,
+kmem_cache_t *kmem_cache_create(const char *name, size_t bufsize, size_t align,
     int (*constructor)(void *, void *, int), void (*destructor)(void *, void *),
     void (*reclaim)(void *) __unused, void *private, vmem_t *vmp, int cflags);
 void kmem_cache_destroy(kmem_cache_t *cache);

@@ -118,10 +118,8 @@ static device_method_t mv_twsi_methods[] = {
 DEFINE_CLASS_1(twsi, mv_twsi_driver, mv_twsi_methods,
     sizeof(struct twsi_softc), twsi_driver);
 
-static devclass_t mv_twsi_devclass;
-
-DRIVER_MODULE(twsi, simplebus, mv_twsi_driver, mv_twsi_devclass, 0, 0);
-DRIVER_MODULE(iicbus, twsi, iicbus_driver, iicbus_devclass, 0, 0);
+DRIVER_MODULE(twsi, simplebus, mv_twsi_driver, 0, 0);
+DRIVER_MODULE(iicbus, twsi, iicbus_driver, 0, 0);
 MODULE_DEPEND(twsi, iicbus, 1, 1, 1);
 SIMPLEBUS_PNP_INFO(compat_data);
 
@@ -159,11 +157,7 @@ mv_twsi_cal_baud_rate(struct twsi_softc *sc, const uint32_t target,
 	/* Calculate baud rate. */
 	m0 = n0 = 4;	/* Default values on reset */
 	diff0 = 0xffffffff;
-#ifdef __aarch64__
 	clk_get_freq(sc->clk_core, &clk);
-#else
-	clk = get_tclk();
-#endif
 
 	for (n = 0; n < 8; n++) {
 		for (m = 0; m < 16; m++) {
@@ -186,14 +180,11 @@ static int
 mv_twsi_attach(device_t dev)
 {
 	struct twsi_softc *sc;
-#ifdef __aarch64__
 	int error;
-#endif
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
 
-#ifdef __aarch64__
 	/* Activate clock */
 	error = clk_get_by_ofw_index(dev, 0, 0, &sc->clk_core);
 	if (error != 0) {
@@ -213,7 +204,6 @@ mv_twsi_attach(device_t dev)
 			return (error);
 		}
 	}
-#endif
 
 	mv_twsi_cal_baud_rate(sc, TWSI_BAUD_RATE_SLOW, &sc->baud_rate[IIC_SLOW]);
 	mv_twsi_cal_baud_rate(sc, TWSI_BAUD_RATE_FAST, &sc->baud_rate[IIC_FAST]);

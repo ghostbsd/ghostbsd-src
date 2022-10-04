@@ -74,7 +74,7 @@ void		 print_fromto(struct pf_rule_addr *, pf_osfp_t,
 		    struct pf_rule_addr *, u_int8_t, u_int8_t, int, int);
 int		 ifa_skip_if(const char *filter, struct node_host *p);
 
-struct node_host	*host_if(const char *, int);
+struct node_host	*host_if(const char *, int, int *);
 struct node_host	*host_v4(const char *, int);
 struct node_host	*host_v6(const char *, int);
 struct node_host	*host_dns(const char *, int, int);
@@ -791,6 +791,11 @@ print_eth_rule(struct pfctl_eth_rule *r, const char *anchor_call,
 		printf(" queue %s", r->qname);
 	if (r->tagname[0])
 		printf(" tag %s", r->tagname);
+	if (r->match_tagname[0]) {
+		if (r->match_tag_not)
+			printf(" !");
+		printf(" tagged %s", r->match_tagname);
+	}
 	if (r->dnpipe)
 		printf(" %s %d",
 		    r->dnflags & PFRULE_DN_IS_PIPE ? "dnpipe" : "dnqueue",
@@ -806,6 +811,7 @@ print_rule(struct pfctl_rule *r, const char *anchor_call, int verbose, int numer
 	    "anchor", "nat-anchor", "nat-anchor", "binat-anchor",
 	    "binat-anchor", "rdr-anchor", "rdr-anchor" };
 	int	i, opts;
+	char	*p;
 
 	if (verbose)
 		printf("@%d ", r->nr);
@@ -814,9 +820,10 @@ print_rule(struct pfctl_rule *r, const char *anchor_call, int verbose, int numer
 	else if (r->action > PF_NORDR)
 		printf("action(%d)", r->action);
 	else if (anchor_call[0]) {
-		if (anchor_call[0] == '_') {
+		p = strrchr(anchor_call, '/');
+		if (p ? p[1] == '_' : anchor_call[0] == '_')
 			printf("%s", anchortypes[r->action]);
-		} else
+		else
 			printf("%s \"%s\"", anchortypes[r->action],
 			    anchor_call);
 	} else {
@@ -1690,7 +1697,7 @@ host(const char *s)
 
 	/* interface with this name exists? */
 	/* expensive with thousands of interfaces - prioritze IPv4/6 check */
-	if (cont && (h = host_if(ps, mask)) != NULL)
+	if (cont && (h = host_if(ps, mask, &cont)) != NULL)
 		cont = 0;
 
 	/* dns lookup */
@@ -1706,7 +1713,7 @@ host(const char *s)
 }
 
 struct node_host *
-host_if(const char *s, int mask)
+host_if(const char *s, int mask, int *cont)
 {
 	struct node_host	*n, *h = NULL;
 	char			*p, *ps;
@@ -1728,6 +1735,7 @@ host_if(const char *s, int mask)
 			return (NULL);
 		}
 		*p = '\0';
+		*cont = 0;
 	}
 	if (flags & (flags - 1) & PFI_AFLAG_MODEMASK) { /* Yep! */
 		fprintf(stderr, "illegal combination of interface modifiers\n");

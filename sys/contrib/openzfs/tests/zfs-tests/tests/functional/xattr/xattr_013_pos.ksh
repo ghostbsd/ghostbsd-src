@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -51,12 +51,6 @@ function cleanup {
 
 log_assert "The noxattr mount option functions as expected"
 log_onexit cleanup
-
-zfs set 2>&1 | grep xattr > /dev/null
-if [ $? -ne 0 ]
-then
-	log_unsupported "noxattr mount option not supported on this release."
-fi
 
 log_must touch $TESTDIR/myfile.$$
 create_xattr $TESTDIR/myfile.$$ passwd /etc/passwd

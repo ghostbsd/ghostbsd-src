@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -76,6 +76,8 @@ typedef enum spa_feature {
 	SPA_FEATURE_ZSTD_COMPRESS,
 	SPA_FEATURE_DRAID,
 	SPA_FEATURE_ZILSAXATTR,
+	SPA_FEATURE_HEAD_ERRLOG,
+	SPA_FEATURE_BLAKE3,
 	SPA_FEATURES
 } spa_feature_t;
 

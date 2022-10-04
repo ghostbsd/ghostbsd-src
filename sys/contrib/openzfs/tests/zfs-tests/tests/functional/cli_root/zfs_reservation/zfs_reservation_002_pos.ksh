@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -73,16 +73,8 @@ log_must zfs set reservation=none $TESTPOOL/$RESERVATION2
 
 for FS in $TESTPOOL/$RESERVATION $TESTPOOL/$RESERVATION2
 do
-
-	reserve=`zfs get -pH reservation $FS | awk '{print $3}'`
-	if [[ $reserve -ne 0 ]]; then
-		log_fail "ZFS get -p reservation did not return 0"
-	fi
-
-	reserve=`zfs get -H reservation $FS | awk '{print $3}'`
-	if [[ $reserve != "none" ]]; then
-		log_fail "ZFS get reservation did not return 'none'"
-	fi
+	log_must [ $(zfs get -pHo value reservation $FS) -eq 0    ]
+	log_must [ $(zfs get  -Ho value reservation $FS) =   none ]
 done
 
 log_pass "Successfully set reservation to 0 and 'none'"

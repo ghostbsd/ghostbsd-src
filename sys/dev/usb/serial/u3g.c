@@ -188,8 +188,6 @@ static device_method_t u3g_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t u3g_devclass;
-
 static driver_t u3g_driver = {
 	.name = "u3g",
 	.methods = u3g_methods,
@@ -232,6 +230,14 @@ static const STRUCT_USB_HOST_ID u3g_devs[] = {
 	U3G_DEV(DELL, U5730_2, 0),
 	U3G_DEV(DELL, U5730_3, 0),
 	U3G_DEV(DELL, U740, 0),
+	U3G_DEV(DELL, DW5809, 0),
+	U3G_DEV(DELL, DW5809_2, 0),
+	U3G_DEV(DELL, DW5811, 0),
+	U3G_DEV(DELL, DW5811_2, 0),
+	U3G_DEV(DELL, DW5816, 0),
+	U3G_DEV(DELL, DW5816_2, 0),
+	U3G_DEV(DELL, DW5818, 0),
+	U3G_DEV(DELL, DW5818_2, 0),
 	U3G_DEV(DLINK, DWR510_CD, U3GINIT_SCSIEJECT),
 	U3G_DEV(DLINK, DWR510, 0),
 	U3G_DEV(DLINK, DWM157_CD, U3GINIT_SCSIEJECT),
@@ -563,6 +569,12 @@ static const STRUCT_USB_HOST_ID u3g_devs[] = {
 	U3G_DEV(SIERRA, MINI5725, 0),
 	U3G_DEV(SIERRA, T11, 0),
 	U3G_DEV(SIERRA, T598, 0),
+	U3G_DEV(SIERRA, EM7430, 0),
+	U3G_DEV(SIERRA, EM7430_2, 0),
+	U3G_DEV(SIERRA, EM7455, 0),
+	U3G_DEV(SIERRA, EM7455_2, 0),
+	U3G_DEV(SIERRA, EM7565, 0),
+	U3G_DEV(SIERRA, EM7565_2, 0),
 	U3G_DEV(SILABS, SAEL, U3GINIT_SAEL_M460),
 	U3G_DEV(STELERA, C105, 0),
 	U3G_DEV(STELERA, E1003, 0),
@@ -600,7 +612,7 @@ static const STRUCT_USB_HOST_ID u3g_devs[] = {
 #undef	U3G_DEV
 };
 
-DRIVER_MODULE(u3g, uhub, u3g_driver, u3g_devclass, u3g_driver_loaded, 0);
+DRIVER_MODULE(u3g, uhub, u3g_driver, u3g_driver_loaded, NULL);
 MODULE_DEPEND(u3g, ucom, 1, 1, 1);
 MODULE_DEPEND(u3g, usb, 1, 1, 1);
 MODULE_VERSION(u3g, 1);

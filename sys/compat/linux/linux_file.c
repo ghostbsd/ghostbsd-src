@@ -741,7 +741,7 @@ linux_unlink(struct thread *td, struct linux_unlink_args *args)
 		if (error == EPERM) {
 			/* Introduce POSIX noncompliant behaviour of Linux */
 			if (kern_statat(td, 0, AT_FDCWD, args->path,
-			    UIO_SYSSPACE, &st, NULL) == 0) {
+			    UIO_USERSPACE, &st, NULL) == 0) {
 				if (S_ISDIR(st.st_mode))
 					error = EISDIR;
 			}
@@ -778,7 +778,7 @@ linux_unlinkat_impl(struct thread *td, enum uio_seg pathseg, const char *path,
 	if (error == EPERM && !(args->flag & LINUX_AT_REMOVEDIR)) {
 		/* Introduce POSIX noncompliant behaviour of Linux */
 		if (kern_statat(td, AT_SYMLINK_NOFOLLOW, dfd, path,
-		    UIO_SYSSPACE, &st, NULL) == 0 && S_ISDIR(st.st_mode))
+		    pathseg, &st, NULL) == 0 && S_ISDIR(st.st_mode))
 			error = EISDIR;
 	}
 	return (error);
@@ -1268,6 +1268,15 @@ linux_pwrite(struct thread *td, struct linux_pwrite_args *uap)
 	return (kern_pwrite(td, uap->fd, uap->buf, uap->nbyte, offset));
 }
 
+#define HALF_LONG_BITS ((sizeof(l_long) * NBBY / 2))
+
+static inline off_t
+pos_from_hilo(unsigned long high, unsigned long low)
+{
+
+	return (((off_t)high << HALF_LONG_BITS) << HALF_LONG_BITS) | low;
+}
+
 int
 linux_preadv(struct thread *td, struct linux_preadv_args *uap)
 {
@@ -1280,8 +1289,7 @@ linux_preadv(struct thread *td, struct linux_preadv_args *uap)
 	 * pos_l and pos_h, respectively, contain the
 	 * low order and high order 32 bits of offset.
 	 */
-	offset = (((off_t)uap->pos_h << (sizeof(offset) * 4)) <<
-	    (sizeof(offset) * 4)) | uap->pos_l;
+	offset = pos_from_hilo(uap->pos_h, uap->pos_l);
 	if (offset < 0)
 		return (EINVAL);
 #ifdef COMPAT_LINUX32
@@ -1308,8 +1316,7 @@ linux_pwritev(struct thread *td, struct linux_pwritev_args *uap)
 	 * pos_l and pos_h, respectively, contain the
 	 * low order and high order 32 bits of offset.
 	 */
-	offset = (((off_t)uap->pos_h << (sizeof(offset) * 4)) <<
-	    (sizeof(offset) * 4)) | uap->pos_l;
+	offset = pos_from_hilo(uap->pos_h, uap->pos_l);
 	if (offset < 0)
 		return (EINVAL);
 #ifdef COMPAT_LINUX32

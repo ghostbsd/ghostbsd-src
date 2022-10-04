@@ -192,9 +192,8 @@ static device_method_t nexus_methods[] = {
 };
 
 DEFINE_CLASS_0(nexus, nexus_driver, nexus_methods, 1);
-static devclass_t nexus_devclass;
 
-DRIVER_MODULE(nexus, root, nexus_driver, nexus_devclass, 0, 0);
+DRIVER_MODULE(nexus, root, nexus_driver, 0, 0);
 
 static int
 nexus_probe(device_t dev)
@@ -543,7 +542,7 @@ nexus_unmap_resource(device_t bus, device_t child, int type, struct resource *r,
 	 */
 	switch (type) {
 	case SYS_RES_MEMORY:
-		pmap_unmapdev((vm_offset_t)map->r_vaddr, map->r_size);
+		pmap_unmapdev(map->r_vaddr, map->r_size);
 		/* FALLTHROUGH */
 	case SYS_RES_IOPORT:
 		break;
@@ -867,9 +866,7 @@ static driver_t ram_driver = {
 	1,		/* no softc */
 };
 
-static devclass_t ram_devclass;
-
-DRIVER_MODULE(ram, nexus, ram_driver, ram_devclass, 0, 0);
+DRIVER_MODULE(ram, nexus, ram_driver, 0, 0);
 
 #ifdef DEV_ISA
 /*
@@ -916,8 +913,6 @@ static driver_t sysresource_driver = {
 	1,		/* no softc */
 };
 
-static devclass_t sysresource_devclass;
-
-DRIVER_MODULE(sysresource, isa, sysresource_driver, sysresource_devclass, 0, 0);
+DRIVER_MODULE(sysresource, isa, sysresource_driver, 0, 0);
 ISA_PNP_INFO(sysresource_ids);
 #endif /* DEV_ISA */

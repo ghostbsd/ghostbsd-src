@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-4-Clause
- *
  * Copyright (c) 1996 John S. Dyson
  * Copyright (c) 2012 Giovanni Trematerra
  * All rights reserved.
@@ -651,8 +649,8 @@ pipelock(struct pipe *cpipe, int catch)
 		    ("%s: bad waiter count %d", __func__,
 		    cpipe->pipe_waiters));
 		cpipe->pipe_waiters++;
-		error = msleep(cpipe, PIPE_MTX(cpipe),
-		    prio, "pipelk", 0);
+		error = msleep(&cpipe->pipe_waiters, PIPE_MTX(cpipe), prio,
+		    "pipelk", 0);
 		cpipe->pipe_waiters--;
 		if (error != 0)
 			return (error);
@@ -675,9 +673,8 @@ pipeunlock(struct pipe *cpipe)
 	    ("%s: bad waiter count %d", __func__,
 	    cpipe->pipe_waiters));
 	cpipe->pipe_state &= ~PIPE_LOCKFL;
-	if (cpipe->pipe_waiters > 0) {
-		wakeup_one(cpipe);
-	}
+	if (cpipe->pipe_waiters > 0)
+		wakeup_one(&cpipe->pipe_waiters);
 }
 
 void
@@ -722,6 +719,25 @@ pipe_read(struct file *fp, struct uio *uio, struct ucred *active_cred,
 	int size;
 
 	rpipe = fp->f_data;
+
+	/*
+	 * Try to avoid locking the pipe if we have nothing to do.
+	 *
+	 * There are programs which share one pipe amongst multiple processes
+	 * and perform non-blocking reads in parallel, even if the pipe is
+	 * empty.  This in particular is the case with BSD make, which when
+	 * spawned with a high -j number can find itself with over half of the
+	 * calls failing to find anything.
+	 */
+	if ((fp->f_flag & FNONBLOCK) != 0 && !mac_pipe_check_read_enabled()) {
+		if (__predict_false(uio->uio_resid == 0))
+			return (0);
+		if ((atomic_load_short(&rpipe->pipe_state) & PIPE_EOF) == 0 &&
+		    atomic_load_int(&rpipe->pipe_buffer.cnt) == 0 &&
+		    atomic_load_int(&rpipe->pipe_pages.cnt) == 0)
+			return (EAGAIN);
+	}
+
 	PIPE_LOCK(rpipe);
 	++rpipe->pipe_busy;
 	error = pipelock(rpipe, 1);
@@ -1614,6 +1630,9 @@ pipe_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
 	kif->kf_un.kf_pipe.kf_pipe_addr = (uintptr_t)pi;
 	kif->kf_un.kf_pipe.kf_pipe_peer = (uintptr_t)pi->pipe_peer;
 	kif->kf_un.kf_pipe.kf_pipe_buffer_cnt = pi->pipe_buffer.cnt;
+	kif->kf_un.kf_pipe.kf_pipe_buffer_in = pi->pipe_buffer.in;
+	kif->kf_un.kf_pipe.kf_pipe_buffer_out = pi->pipe_buffer.out;
+	kif->kf_un.kf_pipe.kf_pipe_buffer_size = pi->pipe_buffer.size;
 	return (0);
 }
 

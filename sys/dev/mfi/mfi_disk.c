@@ -68,8 +68,6 @@ static disk_close_t	mfi_disk_close;
 static disk_strategy_t	mfi_disk_strategy;
 static dumper_t		mfi_disk_dump;
 
-static devclass_t	mfi_disk_devclass;
-
 static device_method_t mfi_disk_methods[] = {
 	DEVMETHOD(device_probe,		mfi_disk_probe),
 	DEVMETHOD(device_attach,	mfi_disk_attach),
@@ -83,7 +81,7 @@ static driver_t mfi_disk_driver = {
 	sizeof(struct mfi_disk)
 };
 
-DRIVER_MODULE(mfid, mfi, mfi_disk_driver, mfi_disk_devclass, 0, 0);
+DRIVER_MODULE(mfid, mfi, mfi_disk_driver, 0, 0);
 
 static int
 mfi_disk_probe(device_t dev)
@@ -317,7 +315,7 @@ mfi_disk_complete(struct bio *bio)
 }
 
 static int
-mfi_disk_dump(void *arg, void *virt, vm_offset_t phys, off_t offset, size_t len)
+mfi_disk_dump(void *arg, void *virt, off_t offset, size_t len)
 {
 	struct mfi_disk *sc;
 	struct mfi_softc *parent_sc;

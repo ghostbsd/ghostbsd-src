@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -66,10 +66,8 @@ add_user $HIST_GROUP $HIST_USER
 #
 # chmod 0750 $HOME
 #
-user_run $HIST_USER zfs list
-if [ $? -ne 0 ]; then
-        log_unsupported "Test user $HIST_USER cannot execute zfs utilities"
-fi
+user_run $HIST_USER zfs list ||
+    log_unsupported "Test user $HIST_USER cannot execute zfs utilities"
 
 run_and_verify "zfs create $root_testfs" "-l"
 run_and_verify "zfs allow $HIST_GROUP snapshot,mount $root_testfs" "-l"

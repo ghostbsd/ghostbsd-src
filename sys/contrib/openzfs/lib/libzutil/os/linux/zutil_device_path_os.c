@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -81,7 +81,7 @@ zfs_append_partition(char *path, size_t max_len)
  * caller must free the returned string
  */
 char *
-zfs_strip_partition(char *path)
+zfs_strip_partition(const char *path)
 {
 	char *tmp = strdup(path);
 	char *part = NULL, *d = NULL;
@@ -117,7 +117,7 @@ zfs_strip_partition(char *path)
  * Returned string must be freed.
  */
 static char *
-zfs_strip_partition_path(char *path)
+zfs_strip_partition_path(const char *path)
 {
 	char *newpath = strdup(path);
 	char *sd_offset;
@@ -148,10 +148,18 @@ zfs_strip_partition_path(char *path)
 /*
  * Strip the unwanted portion of a device path.
  */
-char *
-zfs_strip_path(char *path)
+const char *
+zfs_strip_path(const char *path)
 {
-	return (strrchr(path, '/') + 1);
+	size_t spath_count;
+	const char *const *spaths = zpool_default_search_paths(&spath_count);
+
+	for (size_t i = 0; i < spath_count; ++i)
+		if (strncmp(path, spaths[i], strlen(spaths[i])) == 0 &&
+		    path[strlen(spaths[i])] == '/')
+			return (path + strlen(spaths[i]) + 1);
+
+	return (path);
 }
 
 /*
@@ -265,7 +273,6 @@ zfs_get_pci_slots_sys_path(const char *dev_name)
 			free(address2);
 			if (asprintf(&path, "/sys/bus/pci/slots/%s",
 			    ep->d_name) == -1) {
-				free(tmp);
 				continue;
 			}
 			break;
@@ -337,6 +344,8 @@ zfs_get_enclosure_sysfs_path(const char *dev_name)
 		if (strstr(ep->d_name, "enclosure_device") == NULL)
 			continue;
 
+		if (tmp2 != NULL)
+			free(tmp2);
 		if (asprintf(&tmp2, "%s/%s", tmp1, ep->d_name) == -1) {
 			tmp2 = NULL;
 			break;
@@ -365,14 +374,13 @@ zfs_get_enclosure_sysfs_path(const char *dev_name)
 		if (tmp3 == NULL)
 			break;
 
+		if (path != NULL)
+			free(path);
 		if (asprintf(&path, "/sys/class/%s", tmp3) == -1) {
 			/* If asprintf() fails, 'path' is undefined */
 			path = NULL;
 			break;
 		}
-
-		if (path == NULL)
-			break;
 	}
 
 end:

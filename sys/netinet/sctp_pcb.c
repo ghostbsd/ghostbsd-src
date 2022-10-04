@@ -3409,7 +3409,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 			if ((stcb->asoc.size_on_reasm_queue > 0) ||
 			    (stcb->asoc.control_pdapi) ||
 			    (stcb->asoc.size_on_all_streams > 0) ||
-			    (so && (so->so_rcv.sb_cc > 0))) {
+			    ((so != NULL) && (SCTP_SBAVAIL(&so->so_rcv) > 0))) {
 				/* Left with Data unread */
 				struct mbuf *op_err;
 
@@ -3504,8 +3504,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 		}
 	}
 	inp->sctp_socket = NULL;
-	if ((inp->sctp_flags & SCTP_PCB_FLAGS_UNBOUND) !=
-	    SCTP_PCB_FLAGS_UNBOUND) {
+	if ((inp->sctp_flags & SCTP_PCB_FLAGS_UNBOUND) == 0) {
 		/*
 		 * ok, this guy has been bound. It's port is somewhere in
 		 * the SCTP_BASE_INFO(hash table). Remove it!
@@ -4265,7 +4264,7 @@ sctp_aloc_assoc_locked(struct sctp_inpcb *inp, struct sockaddr *firstaddr,
 			    (sin->sin_addr.s_addr == INADDR_ANY) ||
 			    (sin->sin_addr.s_addr == INADDR_BROADCAST) ||
 			    IN_MULTICAST(ntohl(sin->sin_addr.s_addr)) ||
-			    (((inp->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) != 0) &&
+			    ((inp->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) &&
 			    (SCTP_IPV6_V6ONLY(inp) != 0))) {
 				/* Invalid address */
 				SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_PCB, EINVAL);
@@ -6687,7 +6686,8 @@ sctp_set_primary_addr(struct sctp_tcb *stcb, struct sockaddr *sa,
 			return (0);
 		}
 		stcb->asoc.primary_destination = net;
-		if (!(net->dest_state & SCTP_ADDR_PF) && (stcb->asoc.alternate)) {
+		if (((net->dest_state & SCTP_ADDR_PF) == 0) &&
+		    (stcb->asoc.alternate != NULL)) {
 			sctp_free_remote_addr(stcb->asoc.alternate);
 			stcb->asoc.alternate = NULL;
 		}
@@ -6942,15 +6942,18 @@ sctp_drain_mbufs(struct sctp_tcb *stcb)
 	 */
 }
 
-void
-sctp_drain()
+static void
+sctp_drain(void)
 {
+	struct epoch_tracker et;
+	VNET_ITERATOR_DECL(vnet_iter);
+
+	NET_EPOCH_ENTER(et);
 	/*
 	 * We must walk the PCB lists for ALL associations here. The system
 	 * is LOW on MBUF's and needs help. This is where reneging will
 	 * occur. We really hope this does NOT happen!
 	 */
-	VNET_ITERATOR_DECL(vnet_iter);
 	VNET_LIST_RLOCK_NOSLEEP();
 	VNET_FOREACH(vnet_iter) {
 		CURVNET_SET(vnet_iter);
@@ -6962,6 +6965,7 @@ sctp_drain()
 #ifdef VIMAGE
 			continue;
 #else
+			NET_EPOCH_EXIT(et);
 			return;
 #endif
 		}
@@ -6981,7 +6985,10 @@ sctp_drain()
 		CURVNET_RESTORE();
 	}
 	VNET_LIST_RUNLOCK_NOSLEEP();
+	NET_EPOCH_EXIT(et);
 }
+EVENTHANDLER_DEFINE(vm_lowmem, sctp_drain, NULL, LOWMEM_PRI_DEFAULT);
+EVENTHANDLER_DEFINE(mbuf_lowmem, sctp_drain, NULL, LOWMEM_PRI_DEFAULT);
 
 /*
  * start a new iterator
@@ -7066,4 +7073,19 @@ sctp_initiate_iterator(inp_func inpf,
 	SCTP_IPI_ITERATOR_WQ_UNLOCK();
 	/* sa_ignore MEMLEAK {memory is put on the tailq for the iterator} */
 	return (0);
+}
+
+/*
+ * Atomically add flags to the sctp_flags of an inp.
+ * To be used when the write lock of the inp is not held.
+ */
+void
+sctp_pcb_add_flags(struct sctp_inpcb *inp, uint32_t flags)
+{
+	uint32_t old_flags, new_flags;
+
+	do {
+		old_flags = inp->sctp_flags;
+		new_flags = old_flags | flags;
+	} while (atomic_cmpset_int(&inp->sctp_flags, old_flags, new_flags) == 0);
 }

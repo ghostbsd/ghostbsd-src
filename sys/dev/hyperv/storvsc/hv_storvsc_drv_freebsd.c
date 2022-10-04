@@ -371,8 +371,7 @@ static driver_t storvsc_driver = {
 	"storvsc", storvsc_methods, sizeof(struct storvsc_softc),
 };
 
-static devclass_t storvsc_devclass;
-DRIVER_MODULE(storvsc, vmbus, storvsc_driver, storvsc_devclass, 0, 0);
+DRIVER_MODULE(storvsc, vmbus, storvsc_driver, 0, 0);
 MODULE_VERSION(storvsc, 1);
 MODULE_DEPEND(storvsc, vmbus, 1, 1, 1);
 
@@ -719,7 +718,7 @@ hv_storvsc_io_request(struct storvsc_softc *sc,
 	 * always uses sc->hs_chan, then we must send to that channel or a poll
 	 * timeout will occur.
 	 */
-	if (panicstr) {
+	if (KERNEL_PANICKED()) {
 		outgoing_channel = sc->hs_chan;
 	} else {
 		outgoing_channel = sc->hs_sel_chan[ch_sel];
@@ -1831,6 +1830,7 @@ storvsc_xferbuf_prepare(void *arg, bus_dma_segment_t *segs, int nsegs, int error
 
 	for (i = 0; i < nsegs; i++) {
 #ifdef INVARIANTS
+#if !defined(__aarch64__)
 		if (nsegs > 1) {
 			if (i == 0) {
 				KASSERT((segs[i].ds_addr & PAGE_MASK) +
@@ -1851,9 +1851,22 @@ storvsc_xferbuf_prepare(void *arg, bus_dma_segment_t *segs, int nsegs, int error
 			}
 		}
 #endif
+#endif
 		prplist->gpa_page[i] = atop(segs[i].ds_addr);
 	}
 	reqp->prp_cnt = nsegs;
+
+	if ((ccb->ccb_h.flags & CAM_DIR_MASK) != CAM_DIR_NONE) {
+		bus_dmasync_op_t op;
+
+		if ((ccb->ccb_h.flags & CAM_DIR_MASK) == CAM_DIR_IN)
+			op = BUS_DMASYNC_PREREAD;
+		else
+			op = BUS_DMASYNC_PREWRITE;
+
+		bus_dmamap_sync(reqp->softc->storvsc_req_dtag,
+		    reqp->data_dmap, op);
+	}
 }
 
 /**
@@ -2113,6 +2126,19 @@ storvsc_io_done(struct hv_storvsc_request *reqp)
 	bus_dma_segment_t *ori_sglist = NULL;
 	int ori_sg_count = 0;
 	const struct scsi_generic *cmd;
+
+	if ((ccb->ccb_h.flags & CAM_DIR_MASK) != CAM_DIR_NONE) {
+		bus_dmasync_op_t op;
+
+		if ((ccb->ccb_h.flags & CAM_DIR_MASK) == CAM_DIR_IN)
+			op = BUS_DMASYNC_POSTREAD;
+		else
+			op = BUS_DMASYNC_POSTWRITE;
+
+		bus_dmamap_sync(reqp->softc->storvsc_req_dtag,
+		    reqp->data_dmap, op);
+		bus_dmamap_unload(sc->storvsc_req_dtag, reqp->data_dmap);
+	}
 
 	/* destroy bounce buffer if it is used */
 	if (reqp->bounce_sgl_count) {

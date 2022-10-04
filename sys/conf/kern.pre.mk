@@ -245,8 +245,8 @@ ZFS_CFLAGS+=	${CDDL_CFLAGS} -DBUILDING_ZFS -DHAVE_UIO_ZEROCOPY \
 	-DIN_FREEBSD_BASE
 
 .if ${MACHINE_ARCH} == "amd64"
-ZFS_CFLAGS+= -DHAVE_AVX2 -DHAVE_AVX -D__x86_64 -DHAVE_SSE2 -DHAVE_AVX512F \
-	-DHAVE_SSSE3 -DHAVE_AVX512BW
+ZFS_CFLAGS+= -D__x86_64 -DHAVE_SSE2 -DHAVE_SSSE3 -DHAVE_SSE4_1 -DHAVE_SSE4_2 \
+	-DHAVE_AVX -DHAVE_AVX2 -DHAVE_AVX512F -DHAVE_AVX512VL -DHAVE_AVX512BW
 .endif
 
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "powerpc" || \
@@ -293,7 +293,8 @@ NORMAL_CTFCONVERT=	@:
 .endif
 
 # Linux Kernel Programming Interface C-flags
-LINUXKPI_INCLUDES=	-I$S/compat/linuxkpi/common/include
+LINUXKPI_INCLUDES=	-I$S/compat/linuxkpi/common/include \
+			-I$S/compat/linuxkpi/dummy/include
 LINUXKPI_C=		${NORMAL_C} ${LINUXKPI_INCLUDES}
 
 # Infiniband C flags.  Correct include paths and omit errors that linux

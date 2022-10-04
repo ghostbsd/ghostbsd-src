@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -61,7 +61,7 @@ priv_policy_ns(const cred_t *cr, int capability, int err,
 static int
 priv_policy(const cred_t *cr, int capability, int err)
 {
-	return (priv_policy_ns(cr, capability, err, NULL));
+	return (priv_policy_ns(cr, capability, err, cr->user_ns));
 }
 
 static int

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -33,11 +33,7 @@
 
 default_cleanup_noexit
 
-if [[ -d $TESTDIR2 ]]; then
-        rm -rf $TESTDIR2
-        if (( $? != 0 )); then
-                log_unresolved Could not remove $TESTDIR2
-        fi
-fi
+rm -rf $TESTDIR2 ||
+        log_unresolved Could not remove $TESTDIR2
 
 log_pass

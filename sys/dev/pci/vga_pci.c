@@ -285,7 +285,7 @@ vga_pci_unmap_bios(device_t dev, void *bios)
 #if defined(__amd64__) || defined(__i386__)
 	if (vga_pci_is_boot_display(dev)) {
 		/* We mapped the BIOS shadow copy located at 0xC0000. */
-		pmap_unmapdev((vm_offset_t)bios, VGA_PCI_BIOS_SHADOW_SIZE);
+		pmap_unmapdev(bios, VGA_PCI_BIOS_SHADOW_SIZE);
 
 		return;
 	}
@@ -787,7 +787,5 @@ static driver_t vga_pci_driver = {
 	sizeof(struct vga_pci_softc),
 };
 
-static devclass_t vga_devclass;
-
-DRIVER_MODULE(vgapci, pci, vga_pci_driver, vga_devclass, 0, 0);
+DRIVER_MODULE(vgapci, pci, vga_pci_driver, 0, 0);
 MODULE_DEPEND(vgapci, x86bios, 1, 1, 1);

@@ -1,4 +1,4 @@
-#! /bin/ksh -p
+#!/bin/ksh -p
 #
 # CDDL HEADER START
 #
@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -27,6 +27,8 @@
 
 . $STF_SUITE/include/libtest.shlib
 
+is_freebsd && ! python3 -c 'import sysctl' 2>/dev/null && log_unsupported "python3 sysctl module missing"
+
 set -A args  "" "-s \",\"" "-x" "-v" \
     "-f time,hit%,dh%,ph%,mh%"
 
@@ -38,4 +40,3 @@ while [[ $i -lt ${#args[*]} ]]; do
         ((i = i + 1))
 done
 log_pass "arcstat generates output and doesn't return an error code"
-

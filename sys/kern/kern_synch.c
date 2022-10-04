@@ -87,7 +87,7 @@ struct loadavg averunnable =
  * Constants for averages over 1, 5, and 15 minutes
  * when sampling at 5 second intervals.
  */
-static fixpt_t cexp[3] = {
+static uint64_t cexp[3] = {
 	0.9200444146293232 * FSCALE,	/* exp(-1/12) */
 	0.9834714538216174 * FSCALE,	/* exp(-1/60) */
 	0.9944598480048967 * FSCALE,	/* exp(-1/180) */
@@ -611,14 +611,15 @@ setrunnable(struct thread *td, int srqflags)
 static void
 loadav(void *arg)
 {
-	int i, nrun;
+	int i;
+	uint64_t nrun;
 	struct loadavg *avg;
 
-	nrun = sched_load();
+	nrun = (uint64_t)sched_load();
 	avg = &averunnable;
 
 	for (i = 0; i < 3; i++)
-		avg->ldavg[i] = (cexp[i] * avg->ldavg[i] +
+		avg->ldavg[i] = (cexp[i] * (uint64_t)avg->ldavg[i] +
 		    nrun * FSCALE * (FSCALE - cexp[i])) >> FSHIFT;
 
 	/*
@@ -631,11 +632,27 @@ loadav(void *arg)
 	    loadav, NULL, C_DIRECT_EXEC | C_PREL(32));
 }
 
-/* ARGSUSED */
 static void
-synch_setup(void *dummy)
+ast_scheduler(struct thread *td, int tda __unused)
+{
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_CSW))
+		ktrcsw(1, 1, __func__);
+#endif
+	thread_lock(td);
+	sched_prio(td, td->td_user_pri);
+	mi_switch(SW_INVOL | SWT_NEEDRESCHED);
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_CSW))
+		ktrcsw(0, 1, __func__);
+#endif
+}
+
+static void
+synch_setup(void *dummy __unused)
 {
 	callout_init(&loadav_callout, 1);
+	ast_register(TDA_SCHED, ASTR_ASTF_REQUIRED, 0, ast_scheduler);
 
 	/* Kick off timeout driven events by calling first time. */
 	loadav(NULL);

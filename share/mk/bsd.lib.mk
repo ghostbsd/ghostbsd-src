@@ -79,6 +79,13 @@ TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
 .if ${MK_BIND_NOW} != "no"
 LDFLAGS+= -Wl,-znow
 .endif
+.if ${LINKER_TYPE} != "mac"
+.if ${MK_RELRO} == "no"
+LDFLAGS+= -Wl,-znorelro
+.else
+LDFLAGS+= -Wl,-zrelro
+.endif
+.endif
 .if ${MK_RETPOLINE} != "no"
 .if ${COMPILER_FEATURES:Mretpoline} && ${LINKER_FEATURES:Mretpoline}
 CFLAGS+= -mretpoline
@@ -463,7 +470,7 @@ installpcfiles: installpcfiles-${pcfile}
 installpcfiles-${pcfile}: ${pcfile}
 	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
 	    ${_INSTALLFLAGS} \
-	    ${.ALLSRC} ${DESTDIR}${LIBDATADIR}/pkgconfig
+	    ${.ALLSRC} ${DESTDIR}${LIBDATADIR}/pkgconfig/
 .endfor
 .endif
 installpcfiles: .PHONY

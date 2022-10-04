@@ -67,12 +67,16 @@ void rtw_tx_fill_tx_desc(struct rtw_tx_pkt_info *pkt_info, struct sk_buff *skb)
 	SET_TX_DESC_HW_SSN_SEL(txdesc, pkt_info->hw_ssn_sel);
 	SET_TX_DESC_NAVUSEHDR(txdesc, pkt_info->nav_use_hdr);
 	SET_TX_DESC_BT_NULL(txdesc, pkt_info->bt_null);
+	if (pkt_info->tim_offset) {
+		SET_TX_DESC_TIM_EN(txdesc, 1);
+		SET_TX_DESC_TIM_OFFSET(txdesc, pkt_info->tim_offset);
+	}
 }
 EXPORT_SYMBOL(rtw_tx_fill_tx_desc);
 
 static u8 get_tx_ampdu_factor(struct ieee80211_sta *sta)
 {
-	u8 exp = sta->ht_cap.ampdu_factor;
+	u8 exp = sta->deflink.ht_cap.ampdu_factor;
 
 	/* the least ampdu factor is 8K, and the value in the tx desc is the
 	 * max aggregation num, which represents val * 2 packets can be
@@ -83,7 +87,7 @@ static u8 get_tx_ampdu_factor(struct ieee80211_sta *sta)
 
 static u8 get_tx_ampdu_density(struct ieee80211_sta *sta)
 {
-	return sta->ht_cap.ampdu_density;
+	return sta->deflink.ht_cap.ampdu_density;
 }
 
 static u8 get_highest_ht_tx_rate(struct rtw_dev *rtwdev,
@@ -91,7 +95,7 @@ static u8 get_highest_ht_tx_rate(struct rtw_dev *rtwdev,
 {
 	u8 rate;
 
-	if (rtwdev->hal.rf_type == RF_2T2R && sta->ht_cap.mcs.rx_mask[1] != 0)
+	if (rtwdev->hal.rf_type == RF_2T2R && sta->deflink.ht_cap.mcs.rx_mask[1] != 0)
 		rate = DESC_RATEMCS15;
 	else
 		rate = DESC_RATEMCS7;
@@ -106,7 +110,7 @@ static u8 get_highest_vht_tx_rate(struct rtw_dev *rtwdev,
 	u8 rate;
 	u16 tx_mcs_map;
 
-	tx_mcs_map = le16_to_cpu(sta->vht_cap.vht_mcs.tx_mcs_map);
+	tx_mcs_map = le16_to_cpu(sta->deflink.vht_cap.vht_mcs.tx_mcs_map);
 	if (efuse->hw_cap.nss == 1) {
 		switch (tx_mcs_map & 0x3) {
 		case IEEE80211_VHT_MCS_SUPPORT_0_7:
@@ -159,6 +163,7 @@ void rtw_tx_report_purge_timer(struct timer_list *t)
 	struct rtw_tx_report *tx_report = &rtwdev->tx_report;
 	unsigned long flags;
 
+#if defined(__linux__)
 	if (skb_queue_len(&tx_report->queue) == 0)
 		return;
 
@@ -167,6 +172,25 @@ void rtw_tx_report_purge_timer(struct timer_list *t)
 	spin_lock_irqsave(&tx_report->q_lock, flags);
 	skb_queue_purge(&tx_report->queue);
 	spin_unlock_irqrestore(&tx_report->q_lock, flags);
+#elif defined(__FreeBSD__)
+	uint32_t qlen;
+
+	spin_lock_irqsave(&tx_report->q_lock, flags);
+	qlen = skb_queue_len(&tx_report->queue);
+	if (qlen > 0)
+		skb_queue_purge(&tx_report->queue);
+	spin_unlock_irqrestore(&tx_report->q_lock, flags);
+
+	/*
+	 * XXX while there could be a new enqueue in the queue
+	 * simply not yet processed given the timer is updated without
+	 * locks after enqueue in rtw_tx_report_enqueue(), the numbers
+	 * seen can be in the 100s.  We revert to rtw_dbg from
+	 * Linux git 584dce175f0461d5d9d63952a1e7955678c91086 .
+	 */
+	rtw_dbg(rtwdev, RTW_DBG_TX, "failed to get tx report from firmware: "
+	    "txreport qlen %u\n", qlen);
+#endif
 }
 
 void rtw_tx_report_enqueue(struct rtw_dev *rtwdev, struct sk_buff *skb, u8 sn)
@@ -340,11 +364,11 @@ static void rtw_tx_data_pkt_info_update(struct rtw_dev *rtwdev,
 	if (info->control.use_rts || skb->len > hw->wiphy->rts_threshold)
 		pkt_info->rts = true;
 
-	if (sta->vht_cap.vht_supported)
+	if (sta->deflink.vht_cap.vht_supported)
 		rate = get_highest_vht_tx_rate(rtwdev, sta);
-	else if (sta->ht_cap.ht_supported)
+	else if (sta->deflink.ht_cap.ht_supported)
 		rate = get_highest_ht_tx_rate(rtwdev, sta);
-	else if (sta->supp_rates[0] <= 0xf)
+	else if (sta->deflink.supp_rates[0] <= 0xf)
 		rate = DESC_RATE11M;
 	else
 		rate = DESC_RATE54M;
@@ -353,7 +377,7 @@ static void rtw_tx_data_pkt_info_update(struct rtw_dev *rtwdev,
 
 	bw = si->bw_mode;
 	rate_id = si->rate_id;
-	stbc = si->stbc_en;
+	stbc = rtwdev->hal.txrx_1ss ? false : si->stbc_en;
 	ldpc = si->ldpc_en;
 
 out:
@@ -448,6 +472,19 @@ void rtw_tx_rsvd_page_pkt_info_update(struct rtw_dev *rtwdev,
 	if (type == RSVD_QOS_NULL)
 		pkt_info->bt_null = true;
 
+	if (type == RSVD_BEACON) {
+		struct rtw_rsvd_page *rsvd_pkt;
+		int hdr_len;
+
+		rsvd_pkt = list_first_entry_or_null(&rtwdev->rsvd_page_list,
+						    struct rtw_rsvd_page,
+						    build_list);
+		if (rsvd_pkt && rsvd_pkt->tim_offset != 0) {
+			hdr_len = sizeof(struct ieee80211_hdr_3addr);
+			pkt_info->tim_offset = rsvd_pkt->tim_offset - hdr_len;
+		}
+	}
+
 	rtw_tx_pkt_info_update_sec(rtwdev, pkt_info, skb);
 
 	/* TODO: need to change hw port and hw ssn sel for multiple vifs */
@@ -515,7 +552,11 @@ void rtw_tx(struct rtw_dev *rtwdev,
 	rtw_tx_pkt_info_update(rtwdev, &pkt_info, control->sta, skb);
 	ret = rtw_hci_tx_write(rtwdev, &pkt_info, skb);
 	if (ret) {
+#if defined(__linux__)
 		rtw_err(rtwdev, "failed to write TX skb to HCI\n");
+#elif defined(__FreeBSD__)
+		rtw_err(rtwdev, "%s: failed to write TX skb to HCI: %d\n", __func__, ret);
+#endif
 		goto out;
 	}
 
@@ -572,7 +613,11 @@ static int rtw_txq_push_skb(struct rtw_dev *rtwdev,
 	rtw_tx_pkt_info_update(rtwdev, &pkt_info, txq->sta, skb);
 	ret = rtw_hci_tx_write(rtwdev, &pkt_info, skb);
 	if (ret) {
+#if defined(__linux__)
 		rtw_err(rtwdev, "failed to write TX skb to HCI\n");
+#elif defined(__FreeBSD__)
+		rtw_err(rtwdev, "%s: failed to write TX skb to HCI: %d\n", __func__, ret);
+#endif
 		return ret;
 	}
 	rtwtxq->last_push = jiffies;
@@ -610,7 +655,12 @@ static void rtw_txq_push(struct rtw_dev *rtwdev,
 
 		ret = rtw_txq_push_skb(rtwdev, rtwtxq, skb);
 		if (ret) {
+#if defined(__FreeBSD__)
+			dev_kfree_skb_any(skb);
+			rtw_err(rtwdev, "failed to push skb, ret %d\n", ret);
+#else
 			rtw_err(rtwdev, "failed to pusk skb, ret %d\n", ret);
+#endif
 			break;
 		}
 	}

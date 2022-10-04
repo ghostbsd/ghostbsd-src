@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/jail.h>
 #include <sys/linker.h>
 #include <sys/lock.h>
+#include <sys/mman.h>
 #include <sys/mutex.h>
 #include <sys/racct.h>
 #include <sys/rctl.h>
@@ -143,8 +144,11 @@ static void prison_complete(void *context, int pending);
 static void prison_deref(struct prison *pr, int flags);
 static void prison_deref_kill(struct prison *pr, struct prisonlist *freeprison);
 static int prison_lock_xlock(struct prison *pr, int flags);
+static void prison_cleanup(struct prison *pr);
 static void prison_free_not_last(struct prison *pr);
 static void prison_proc_free_not_last(struct prison *pr);
+static void prison_proc_relink(struct prison *opr, struct prison *npr,
+    struct proc *p);
 static void prison_set_allow_locked(struct prison *pr, unsigned flag,
     int enable);
 static char *prison_path(struct prison *pr1, struct prison *pr2);
@@ -2646,6 +2650,7 @@ do_jail_attach(struct thread *td, struct prison *pr, int drflags)
 	rctl_proc_ucred_changed(p, newcred);
 	crfree(newcred);
 #endif
+	prison_proc_relink(oldcred->cr_prison, pr, p);
 	prison_deref(oldcred->cr_prison, drflags);
 	crfree(oldcred);
 
@@ -2846,7 +2851,7 @@ prison_free_not_last(struct prison *pr)
 /*
  * Hold a prison for user visibility, by incrementing pr_uref.
  * It is generally an error to hold a prison that isn't already
- * user-visible, except through the the jail system calls.  It is also
+ * user-visible, except through the jail system calls.  It is also
  * an error to hold an invalid prison.  A prison record will remain
  * alive as long as it has at least one user reference, and will not
  * be set to the dying state until the prison mutex and allprison_lock
@@ -2917,6 +2922,32 @@ prison_proc_free_not_last(struct prison *pr)
 #endif
 }
 
+void
+prison_proc_link(struct prison *pr, struct proc *p)
+{
+
+	sx_assert(&allproc_lock, SA_XLOCKED);
+	LIST_INSERT_HEAD(&pr->pr_proclist, p, p_jaillist);
+}
+
+void
+prison_proc_unlink(struct prison *pr, struct proc *p)
+{
+
+	sx_assert(&allproc_lock, SA_XLOCKED);
+	LIST_REMOVE(p, p_jaillist);
+}
+
+static void
+prison_proc_relink(struct prison *opr, struct prison *npr, struct proc *p)
+{
+
+	sx_xlock(&allproc_lock);
+	prison_proc_unlink(opr, p);
+	prison_proc_link(npr, p);
+	sx_xunlock(&allproc_lock);
+}
+
 /*
  * Complete a call to either prison_free or prison_proc_free.
  */
@@ -2938,6 +2969,60 @@ prison_complete(void *context, int pending)
 	prison_deref(pr, drflags);
 }
 
+static void
+prison_kill_processes_cb(struct proc *p, void *arg __unused)
+{
+
+	kern_psignal(p, SIGKILL);
+}
+
+/*
+ * Note the iteration does not guarantee acting on all processes.
+ * Most notably there may be fork or jail_attach in progress.
+ */
+void
+prison_proc_iterate(struct prison *pr, void (*cb)(struct proc *, void *),
+    void *cbarg)
+{
+	struct prison *ppr;
+	struct proc *p;
+
+	if (atomic_load_int(&pr->pr_childcount) == 0) {
+		sx_slock(&allproc_lock);
+		LIST_FOREACH(p, &pr->pr_proclist, p_jaillist) {
+			if (p->p_state == PRS_NEW)
+				continue;
+			PROC_LOCK(p);
+			cb(p, cbarg);
+			PROC_UNLOCK(p);
+		}
+		sx_sunlock(&allproc_lock);
+		if (atomic_load_int(&pr->pr_childcount) == 0)
+			return;
+		/*
+		 * Some jails popped up during the iteration, fall through to a
+		 * system-wide search.
+		 */
+	}
+
+	sx_slock(&allproc_lock);
+	FOREACH_PROC_IN_SYSTEM(p) {
+		PROC_LOCK(p);
+		if (p->p_state != PRS_NEW && p->p_ucred != NULL) {
+			for (ppr = p->p_ucred->cr_prison;
+			    ppr != &prison0;
+			    ppr = ppr->pr_parent) {
+				if (ppr == pr) {
+					cb(p, cbarg);
+					break;
+				}
+			}
+		}
+		PROC_UNLOCK(p);
+	}
+	sx_sunlock(&allproc_lock);
+}
+
 /*
  * Remove a prison reference and/or user reference (usually).
  * This assumes context that allows sleeping (for allprison_lock),
@@ -2951,7 +3036,6 @@ prison_deref(struct prison *pr, int flags)
 {
 	struct prisonlist freeprison;
 	struct prison *killpr, *rpr, *ppr, *tpr;
-	struct proc *p;
 
 	killpr = NULL;
 	TAILQ_INIT(&freeprison);
@@ -2994,8 +3078,7 @@ prison_deref(struct prison *pr, int flags)
 					pr->pr_state = PRISON_STATE_DYING;
 					mtx_unlock(&pr->pr_mtx);
 					flags &= ~PD_LOCKED;
-					(void)osd_jail_call(pr,
-					    PR_METHOD_REMOVE, NULL);
+					prison_cleanup(pr);
 				}
 			}
 		}
@@ -3063,23 +3146,8 @@ prison_deref(struct prison *pr, int flags)
 		sx_xunlock(&allprison_lock);
 
 	/* Kill any processes attached to a killed prison. */
-	if (killpr != NULL) {
-		sx_slock(&allproc_lock);
-		FOREACH_PROC_IN_SYSTEM(p) {
-			PROC_LOCK(p);
-			if (p->p_state != PRS_NEW && p->p_ucred != NULL) {
-				for (ppr = p->p_ucred->cr_prison;
-				     ppr != &prison0;
-				     ppr = ppr->pr_parent)
-					if (ppr == killpr) {
-						kern_psignal(p, SIGKILL);
-						break;
-					}
-			}
-			PROC_UNLOCK(p);
-		}
-		sx_sunlock(&allproc_lock);
-	}
+	if (killpr != NULL)
+		prison_proc_iterate(killpr, prison_kill_processes_cb, NULL);
 
 	/*
 	 * Finish removing any unreferenced prisons, which couldn't happen
@@ -3150,7 +3218,7 @@ prison_deref_kill(struct prison *pr, struct prisonlist *freeprison)
 		}
 		if (!(cpr->pr_flags & PR_REMOVE))
 			continue;
-		(void)osd_jail_call(cpr, PR_METHOD_REMOVE, NULL);
+		prison_cleanup(cpr);
 		mtx_lock(&cpr->pr_mtx);
 		cpr->pr_flags &= ~PR_REMOVE;
 		if (cpr->pr_flags & PR_PERSIST) {
@@ -3186,7 +3254,7 @@ prison_deref_kill(struct prison *pr, struct prisonlist *freeprison)
 	if (rpr != NULL)
 		LIST_REMOVE(rpr, pr_sibling);
 
-	(void)osd_jail_call(pr, PR_METHOD_REMOVE, NULL);
+	prison_cleanup(pr);
 	mtx_lock(&pr->pr_mtx);
 	if (pr->pr_flags & PR_PERSIST) {
 		pr->pr_flags &= ~PR_PERSIST;
@@ -3230,6 +3298,19 @@ prison_lock_xlock(struct prison *pr, int flags)
 		flags |= PD_LOCKED;
 	}
 	return flags;
+}
+
+/*
+ * Release a prison's resources when it starts dying (when the last user
+ * reference is dropped, or when it is killed).
+ */
+static void
+prison_cleanup(struct prison *pr)
+{
+	sx_assert(&allprison_lock, SA_XLOCKED);
+	mtx_assert(&pr->pr_mtx, MA_NOTOWNED);
+	shm_remove_prison(pr);
+	(void)osd_jail_call(pr, PR_METHOD_REMOVE, NULL);
 }
 
 /*
@@ -3675,6 +3756,7 @@ prison_priv_check(struct ucred *cred, int priv)
 	case PRIV_NET_GIF:
 	case PRIV_NET_SETIFVNET:
 	case PRIV_NET_SETIFFIB:
+	case PRIV_NET_OVPN:
 
 		/*
 		 * 802.11-related privileges.
@@ -4473,7 +4555,7 @@ prison_add_allow(const char *prefix, const char *name, const char *prefix_descr,
 	mtx_unlock(&prison0.pr_mtx);
 
 	/*
-	 * Create sysctls for the paramter, and the back-compat global
+	 * Create sysctls for the parameter, and the back-compat global
 	 * permission.
 	 */
 	parent = prefix

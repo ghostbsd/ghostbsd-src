@@ -4173,7 +4173,8 @@ mountcheckdirs(struct vnode *olddp, struct vnode *newdp)
 }
 
 struct filedesc_to_leader *
-filedesc_to_leader_alloc(struct filedesc_to_leader *old, struct filedesc *fdp, struct proc *leader)
+filedesc_to_leader_alloc(struct filedesc_to_leader *old, struct filedesc *fdp,
+    struct proc *leader)
 {
 	struct filedesc_to_leader *fdtol;
 
@@ -4194,6 +4195,15 @@ filedesc_to_leader_alloc(struct filedesc_to_leader *old, struct filedesc *fdp, s
 		fdtol->fdl_next = fdtol;
 		fdtol->fdl_prev = fdtol;
 	}
+	return (fdtol);
+}
+
+struct filedesc_to_leader *
+filedesc_to_leader_share(struct filedesc_to_leader *fdtol, struct filedesc *fdp)
+{
+	FILEDESC_XLOCK(fdp);
+	fdtol->fdl_refcount++;
+	FILEDESC_XUNLOCK(fdp);
 	return (fdtol);
 }
 
@@ -4971,7 +4981,7 @@ DB_SHOW_COMMAND(file, db_show_file)
 	db_print_file(fp, 1);
 }
 
-DB_SHOW_COMMAND(files, db_show_files)
+DB_SHOW_COMMAND_FLAGS(files, db_show_files, DB_CMD_MEMSAFE)
 {
 	struct filedesc *fdp;
 	struct file *fp;

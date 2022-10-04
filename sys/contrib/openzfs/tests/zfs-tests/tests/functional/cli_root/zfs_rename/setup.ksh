@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -36,12 +36,9 @@ DISK=${DISKS%% *}
 
 default_setup_noexit "$DISK" "true" "true"
 
-if [[ -d $TESTDIR2 ]]; then
-	rm -rf $TESTDIR2
-	if (( $? != 0 )); then
-		log_unresolved Could not remove $TESTDIR2
-	fi
-fi
+rm -rf $TESTDIR2 ||
+	log_unresolved Could not remove $TESTDIR2
+
 log_must zfs set compression=off $TESTPOOL/$TESTFS
 log_must zfs create -o compression=off $TESTPOOL/$DATAFS
 log_must zfs set mountpoint=$TESTDIR2 $TESTPOOL/$DATAFS

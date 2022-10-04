@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -43,7 +43,3 @@ typedef struct smb_share_s {
 
 	struct smb_share_s *next;
 } smb_share_t;
-
-extern smb_share_t *smb_shares;
-
-void libshare_smb_init(void);

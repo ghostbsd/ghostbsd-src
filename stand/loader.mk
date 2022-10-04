@@ -6,6 +6,7 @@ CFLAGS+=-I${LDRSRC}
 
 SRCS+=	boot.c commands.c console.c devopen.c interp.c 
 SRCS+=	interp_backslash.c interp_parse.c ls.c misc.c 
+SRCS+=	modinfo.c
 SRCS+=	module.c nvstore.c pnglite.c tslog.c
 
 CFLAGS.module.c += -I$(SRCTOP)/sys/teken -I${SRCTOP}/contrib/pnglite
@@ -50,7 +51,7 @@ SRCS+=	md.c
 CLEANFILES+=	md.o
 .endif
 
-# Machine-independant ISA PnP
+# Machine-independent ISA PnP
 .if defined(HAVE_ISABUS)
 SRCS+=	isapnp.c
 .endif

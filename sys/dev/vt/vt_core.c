@@ -87,7 +87,7 @@ static tc_opened_t	vtterm_opened;
 static tc_ioctl_t	vtterm_ioctl;
 static tc_mmap_t	vtterm_mmap;
 
-const struct terminal_class vt_termclass = {
+static const struct terminal_class vt_termclass = {
 	.tc_bell	= vtterm_bell,
 	.tc_cursor	= vtterm_cursor,
 	.tc_putchar	= vtterm_putchar,
@@ -202,7 +202,7 @@ SET_DECLARE(vt_drv_set, struct vt_driver);
 #define	_VTDEFH	MAX(100, PIXEL_HEIGHT(VT_FB_MAX_HEIGHT))
 #define	_VTDEFW	MAX(200, PIXEL_WIDTH(VT_FB_MAX_WIDTH))
 
-struct terminal	vt_consterm;
+static struct terminal	vt_consterm;
 static struct vt_window	vt_conswindow;
 #ifndef SC_NO_CONSDRAWN
 static term_char_t vt_consdrawn[PIXEL_HEIGHT(VT_FB_MAX_HEIGHT) * PIXEL_WIDTH(VT_FB_MAX_WIDTH)];
@@ -262,19 +262,9 @@ static struct vt_window	vt_conswindow = {
 	.vw_bell_pitch = VT_BELLPITCH,
 	.vw_bell_duration = VT_BELLDURATION,
 };
-struct terminal vt_consterm = {
-	.tm_class = &vt_termclass,
-	.tm_softc = &vt_conswindow,
-	.tm_flags = TF_CONS,
-};
-static struct consdev vt_consterm_consdev = {
-	.cn_ops = &termcn_cnops,
-	.cn_arg = &vt_consterm,
-	.cn_name = "ttyv0",
-};
 
 /* Add to set of consoles. */
-DATA_SET(cons_set, vt_consterm_consdev);
+TERMINAL_DECLARE_EARLY(vt_consterm, vt_termclass, &vt_conswindow);
 
 /*
  * Right after kmem is done to allow early drivers to use locking and allocate
@@ -348,7 +338,7 @@ vt_suspend_flush_timer(struct vt_device *vd)
 }
 
 static void
-vt_switch_timer(void *arg)
+vt_switch_timer(void *arg, int pending)
 {
 
 	(void)vt_late_window_switch((struct vt_window *)arg);
@@ -452,8 +442,7 @@ vt_window_preswitch(struct vt_window *vw, struct vt_window *curvw)
 	DPRINTF(40, "%s\n", __func__);
 	curvw->vw_switch_to = vw;
 	/* Set timer to allow switch in case when process hang. */
-	callout_reset(&vw->vw_proc_dead_timer, hz * vt_deadtimer,
-	    vt_switch_timer, (void *)vw);
+	taskqueue_enqueue_timeout(taskqueue_thread, &vw->vw_timeout_task_dead, hz * vt_deadtimer);
 	/* Notify process about vt switch attempt. */
 	DPRINTF(30, "%s: Notify process.\n", __func__);
 	signal_vt_rel(curvw);
@@ -476,7 +465,7 @@ vt_late_window_switch(struct vt_window *vw)
 	struct vt_window *curvw;
 	int ret;
 
-	callout_stop(&vw->vw_proc_dead_timer);
+	taskqueue_cancel_timeout(taskqueue_thread, &vw->vw_timeout_task_dead, NULL);
 
 	ret = vt_window_switch(vw);
 	if (ret != 0) {
@@ -603,7 +592,8 @@ vt_window_switch(struct vt_window *vw)
 		 * switch to console mode when panicking, making sure the panic
 		 * is readable (even when a GUI was using ttyv0).
 		 */
-		if ((kdb_active || panicstr) && vd->vd_driver->vd_postswitch)
+		if ((kdb_active || KERNEL_PANICKED()) &&
+		    vd->vd_driver->vd_postswitch)
 			vd->vd_driver->vd_postswitch(vd);
 		VT_UNLOCK(vd);
 		return (0);
@@ -2054,7 +2044,7 @@ finish_vt_rel(struct vt_window *vw, int release, int *s)
 	if (vw->vw_flags & VWF_SWWAIT_REL) {
 		vw->vw_flags &= ~VWF_SWWAIT_REL;
 		if (release) {
-			callout_drain(&vw->vw_proc_dead_timer);
+			taskqueue_drain_timeout(taskqueue_thread, &vw->vw_timeout_task_dead);
 			(void)vt_late_window_switch(vw->vw_switch_to);
 		}
 		return (0);
@@ -2135,7 +2125,7 @@ vt_mouse_terminput(struct vt_device *vd, int type, int x, int y, int event,
 }
 
 static void
-vt_mouse_paste()
+vt_mouse_paste(void)
 {
 	term_char_t *buf;
 	int i, len;
@@ -2144,7 +2134,7 @@ vt_mouse_paste()
 	buf = VD_PASTEBUF(main_vd);
 	len /= sizeof(term_char_t);
 	for (i = 0; i < len; i++) {
-		if (buf[i] == '\0')
+		if (TCHAR_CHARACTER(buf[i]) == '\0')
 			continue;
 		terminal_input_char(main_vd->vd_curwindow->vw_terminal,
 		    buf[i]);
@@ -2296,8 +2286,7 @@ vt_mouse_event(int type, int x, int y, int event, int cnt, int mlevel)
 			VD_PASTEBUFSZ(vd) = len;
 		}
 		/* Request copy/paste buffer data, no more than `len' */
-		vtbuf_extract_marked(&vw->vw_buf, VD_PASTEBUF(vd),
-		    VD_PASTEBUFSZ(vd));
+		vtbuf_extract_marked(&vw->vw_buf, VD_PASTEBUF(vd), len);
 
 		VD_PASTEBUFLEN(vd) = len;
 
@@ -2939,7 +2928,7 @@ vt_allocate_window(struct vt_device *vd, unsigned int window)
 
 	terminal_set_winsize(tm, &wsz);
 	vd->vd_windows[window] = vw;
-	callout_init(&vw->vw_proc_dead_timer, 1);
+	TIMEOUT_TASK_INIT(taskqueue_thread, &vw->vw_timeout_task_dead, 0, &vt_switch_timer, vw);
 
 	return (vw);
 }
@@ -2963,7 +2952,7 @@ vt_upgrade(struct vt_device *vd)
 			vw = vt_allocate_window(vd, i);
 		}
 		if (!(vw->vw_flags & VWF_READY)) {
-			callout_init(&vw->vw_proc_dead_timer, 1);
+			TIMEOUT_TASK_INIT(taskqueue_thread, &vw->vw_timeout_task_dead, 0, &vt_switch_timer, vw);
 			terminal_maketty(vw->vw_terminal, "v%r", VT_UNIT(vw));
 			vw->vw_flags |= VWF_READY;
 			if (vw->vw_flags & VWF_CONSOLE) {

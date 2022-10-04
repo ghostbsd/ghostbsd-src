@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -66,11 +66,7 @@ function set_n_check # data-set
 	orig_val=$(get_prop version $obj)
 
 	while (($i < ${#values[*]})); do
-		zfs set version=${values[$i]} $obj  > /dev/null 2>&1
-		if [[ $? -eq 0 ]]; then
-			log_note "zfs set version=${values[$i]} $obj"
-			log_fail "The above version set returned 0!"
-		fi
+		log_mustnot eval "zfs set version=${values[$i]} $obj > /dev/null 2>&1"
 
 		new_val=$(get_prop version $obj)
 

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -56,8 +56,7 @@ function testdbufstat # stat_name dbufstat_filter
         [[ -n "$2" ]] && filter="-F $2"
 
 	if is_linux; then
-		from_dbufstat=$(grep -w "$name" "$DBUFSTATS_FILE" |
-		    awk '{ print $3 }')
+		read -r _ _ from_dbufstat _ < <(grep -w "$name" "$DBUFSTATS_FILE")
 	else
 		from_dbufstat=$(awk "/dbufstats\.$name:/ { print \$2 }" \
 		    "$DBUFSTATS_FILE")

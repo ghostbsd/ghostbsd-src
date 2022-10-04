@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -48,11 +48,11 @@ volsize=$(zfs get -H -o value volsize $TESTPOOL/$TESTVOL)
 
 function cleanup
 {
-	snapexists $TESTPOOL/$TESTVOL@snap && \
+	snapexists $TESTPOOL/$TESTVOL@snap &&
 		destroy_dataset $TESTPOOL/$TESTVOL@snap
 
-	ismounted $TESTDIR $NEWFS_DEFAULT_FS
-	(( $? == 0 )) && log_must umount $TESTDIR
+	ismounted $TESTDIR $NEWFS_DEFAULT_FS &&
+		log_must umount $TESTDIR
 
 	zfs set volsize=$volsize $TESTPOOL/$TESTVOL
 }
@@ -73,13 +73,8 @@ log_must mount ${ZVOL_DEVDIR}/$TESTPOOL/$TESTVOL $TESTDIR
 typeset -i fn=0
 typeset -i retval=0
 
-while (( 1 )); do
-	file_write -o create -f $TESTDIR/testfile$$.$fn \
-	    -b $BLOCKSZ -c $NUM_WRITES
-	retval=$?
-	if (( $retval != 0 )); then
-		break
-	fi
+while file_write -o create -f $TESTDIR/testfile$$.$fn \
+	    -b $BLOCKSZ -c $NUM_WRITES; do
 	(( fn = fn + 1 ))
 done
 

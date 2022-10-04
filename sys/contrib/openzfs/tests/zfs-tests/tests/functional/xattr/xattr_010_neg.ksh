@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -61,6 +61,6 @@ log_mustnot runat $TESTDIR/myfile.$$ mknod block b 888 888
 
 log_mustnot runat $TESTDIR/myfile.$$ mknod char c
 
-log_mustnot runat $TESTDIR/myfile.$$ mknod fifo p
+log_mustnot runat $TESTDIR/myfile.$$ mkfifo fifo
 
 log_pass "mkdir, mknod fail"

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -70,7 +70,7 @@ static int zfs_nopwrite_enabled = 1;
  * will wait until the next TXG.
  * A value of zero will disable this throttle.
  */
-static unsigned long zfs_per_txg_dirty_frees_percent = 5;
+static unsigned long zfs_per_txg_dirty_frees_percent = 30;
 
 /*
  * Enable/disable forcing txg sync when dirty checking for holes with lseek().
@@ -86,7 +86,7 @@ static int zfs_dmu_offset_next_sync = 1;
  * helps to limit the amount of memory that can be used by prefetching.
  * Larger objects should be prefetched a bit at a time.
  */
-static int dmu_prefetch_max = 8 * SPA_MAXBLOCKSIZE;
+uint_t dmu_prefetch_max = 8 * SPA_MAXBLOCKSIZE;
 
 const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{DMU_BSWAP_UINT8,  TRUE,  FALSE, FALSE, "unallocated"		},
@@ -145,7 +145,7 @@ const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "bpobj subobj"		}
 };
 
-const dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
+dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
 	{	byteswap_uint8_array,	"uint8"		},
 	{	byteswap_uint16_array,	"uint16"	},
 	{	byteswap_uint32_array,	"uint32"	},
@@ -160,7 +160,7 @@ const dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
 
 static int
 dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
-    void *tag, dmu_buf_t **dbp)
+    const void *tag, dmu_buf_t **dbp)
 {
 	uint64_t blkid;
 	dmu_buf_impl_t *db;
@@ -180,7 +180,7 @@ dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
 }
 int
 dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
-    void *tag, dmu_buf_t **dbp)
+    const void *tag, dmu_buf_t **dbp)
 {
 	dnode_t *dn;
 	uint64_t blkid;
@@ -207,7 +207,7 @@ dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
 
 int
 dmu_buf_hold_by_dnode(dnode_t *dn, uint64_t offset,
-    void *tag, dmu_buf_t **dbp, int flags)
+    const void *tag, dmu_buf_t **dbp, int flags)
 {
 	int err;
 	int db_flags = DB_RF_CANFAIL;
@@ -232,7 +232,7 @@ dmu_buf_hold_by_dnode(dnode_t *dn, uint64_t offset,
 
 int
 dmu_buf_hold(objset_t *os, uint64_t object, uint64_t offset,
-    void *tag, dmu_buf_t **dbp, int flags)
+    const void *tag, dmu_buf_t **dbp, int flags)
 {
 	int err;
 	int db_flags = DB_RF_CANFAIL;
@@ -342,7 +342,7 @@ dmu_rm_spill(objset_t *os, uint64_t object, dmu_tx_t *tx)
  * has not yet been allocated a new bonus dbuf a will be allocated.
  * Returns ENOENT, EIO, or 0.
  */
-int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
+int dmu_bonus_hold_by_dnode(dnode_t *dn, const void *tag, dmu_buf_t **dbp,
     uint32_t flags)
 {
 	dmu_buf_impl_t *db;
@@ -389,7 +389,7 @@ int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
 }
 
 int
-dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **dbp)
+dmu_bonus_hold(objset_t *os, uint64_t object, const void *tag, dmu_buf_t **dbp)
 {
 	dnode_t *dn;
 	int error;
@@ -414,7 +414,8 @@ dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **dbp)
  * dmu_spill_hold_existing() should be used.
  */
 int
-dmu_spill_hold_by_dnode(dnode_t *dn, uint32_t flags, void *tag, dmu_buf_t **dbp)
+dmu_spill_hold_by_dnode(dnode_t *dn, uint32_t flags, const void *tag,
+    dmu_buf_t **dbp)
 {
 	dmu_buf_impl_t *db = NULL;
 	int err;
@@ -442,7 +443,7 @@ dmu_spill_hold_by_dnode(dnode_t *dn, uint32_t flags, void *tag, dmu_buf_t **dbp)
 }
 
 int
-dmu_spill_hold_existing(dmu_buf_t *bonus, void *tag, dmu_buf_t **dbp)
+dmu_spill_hold_existing(dmu_buf_t *bonus, const void *tag, dmu_buf_t **dbp)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)bonus;
 	dnode_t *dn;
@@ -471,7 +472,7 @@ dmu_spill_hold_existing(dmu_buf_t *bonus, void *tag, dmu_buf_t **dbp)
 }
 
 int
-dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, void *tag,
+dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, const void *tag,
     dmu_buf_t **dbp)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)bonus;
@@ -498,7 +499,8 @@ dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, void *tag,
  */
 int
 dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
-    boolean_t read, void *tag, int *numbufsp, dmu_buf_t ***dbpp, uint32_t flags)
+    boolean_t read, const void *tag, int *numbufsp, dmu_buf_t ***dbpp,
+    uint32_t flags)
 {
 	dmu_buf_t **dbp;
 	zstream_t *zs = NULL;
@@ -517,6 +519,9 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 	 */
 	dbuf_flags = DB_RF_CANFAIL | DB_RF_NEVERWAIT | DB_RF_HAVESTRUCT |
 	    DB_RF_NOPREFETCH;
+
+	if ((flags & DMU_READ_NO_DECRYPT) != 0)
+		dbuf_flags |= DB_RF_NO_DECRYPT;
 
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
 	if (dn->dn_datablkshift) {
@@ -619,7 +624,8 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 
 int
 dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
-    uint64_t length, int read, void *tag, int *numbufsp, dmu_buf_t ***dbpp)
+    uint64_t length, int read, const void *tag, int *numbufsp,
+    dmu_buf_t ***dbpp)
 {
 	dnode_t *dn;
 	int err;
@@ -638,7 +644,7 @@ dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
 
 int
 dmu_buf_hold_array_by_bonus(dmu_buf_t *db_fake, uint64_t offset,
-    uint64_t length, boolean_t read, void *tag, int *numbufsp,
+    uint64_t length, boolean_t read, const void *tag, int *numbufsp,
     dmu_buf_t ***dbpp)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
@@ -655,7 +661,7 @@ dmu_buf_hold_array_by_bonus(dmu_buf_t *db_fake, uint64_t offset,
 }
 
 void
-dmu_buf_rele_array(dmu_buf_t **dbp_fake, int numbufs, void *tag)
+dmu_buf_rele_array(dmu_buf_t **dbp_fake, int numbufs, const void *tag)
 {
 	int i;
 	dmu_buf_impl_t **dbp = (dmu_buf_impl_t **)dbp_fake;
@@ -2356,5 +2362,5 @@ ZFS_MODULE_PARAM(zfs, zfs_, dmu_offset_next_sync, INT, ZMOD_RW,
 	"Enable forcing txg sync to find holes");
 
 /* CSTYLED */
-ZFS_MODULE_PARAM(zfs, , dmu_prefetch_max, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, , dmu_prefetch_max, UINT, ZMOD_RW,
 	"Limit one prefetch call to this size");

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -62,7 +62,7 @@ fi
 
 zpool iostat $TESTPOOL 1 4 > $tmpfile 2>&1 &
 sleep 4
-stat_count=$(grep $TESTPOOL $tmpfile | wc -l)
+stat_count=$(grep -c $TESTPOOL $tmpfile)
 
 if [[ $stat_count -ne 4 ]]; then
 	log_fail "zpool iostat [pool_name] [interval] [count] failed"

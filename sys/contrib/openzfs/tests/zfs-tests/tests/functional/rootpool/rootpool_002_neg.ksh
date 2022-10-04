@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -54,7 +54,7 @@ typeset tmpfile="$TEST_BASE_DIR/mounted-datasets.$$"
 # damage done by the attempted pool destroy. The destroy itself should fail,
 # but some filesystems can become unmounted in the process, and aren't
 # automatically remounted.
-mount -p | awk '{if ($4 == "zfs") print $1}' > $tmpfile
+mount -p | awk '$4 == "zfs" {print $1}' > $tmpfile
 
 log_mustnot zpool destroy $rootpool
 

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -59,12 +59,6 @@ function cleanup {
 	fi
 }
 
-
-zpool set 2>&1 | grep bootfs > /dev/null
-if [ $? -ne 0 ]
-then
-	log_unsupported "bootfs pool property not supported on this release."
-fi
 
 log_assert "Invalid datasets are rejected as boot property values"
 log_onexit cleanup

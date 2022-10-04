@@ -6,7 +6,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -59,7 +59,7 @@ function cleanup
 	if poolexists $POOL ; then
 		log_must destroy_pool $POOL
 	fi
-	log_must rm -f $VDEV1 $VDEV2 $VDEV3
+	log_must rm -fd $VDEV1 $VDEV2 $VDEV3 $MOUNTDIR
 }
 
 log_assert "Check that the number of zpool errors match the number of events"
@@ -115,7 +115,7 @@ function do_test
 	out="$(zpool status -p | grep $VDEV1)"
 
 	if [ "$ERR" == "corrupt" ] ; then
-		events=$(zpool events | grep checksum | wc -l)
+		events=$(zpool events | grep -c checksum)
 		val=$(echo "$out" | awk '{print $5}')
 		str="checksum"
 	elif [ "$ERR" == "io" ] ; then

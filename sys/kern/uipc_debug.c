@@ -158,10 +158,6 @@ db_print_sostate(short so_state)
 	int comma;
 
 	comma = 0;
-	if (so_state & SS_NOFDREF) {
-		db_printf("%sSS_NOFDREF", comma ? ", " : "");
-		comma = 1;
-	}
 	if (so_state & SS_ISCONNECTED) {
 		db_printf("%sSS_ISCONNECTED", comma ? ", " : "");
 		comma = 1;
@@ -184,10 +180,6 @@ db_print_sostate(short so_state)
 	}
 	if (so_state & SS_ISCONFIRMING) {
 		db_printf("%sSS_ISCONFIRMING", comma ? ", " : "");
-		comma = 1;
-	}
-	if (so_state & SS_PROTOREF) {
-		db_printf("%sSS_PROTOREF", comma ? ", " : "");
 		comma = 1;
 	}
 }
@@ -256,7 +248,7 @@ db_print_domain(struct domain *d, const char *domain_name, int indent)
 
 	db_print_indent(indent);
 	db_printf("dom_protosw: %p   ", d->dom_protosw);
-	db_printf("dom_next: %p\n", d->dom_next);
+	db_printf("dom_next: %p\n", d->dom_next.sle_next);
 
 	db_print_indent(indent);
 	db_printf("dom_rtattach: %p   ", d->dom_rtattach);
@@ -296,10 +288,6 @@ db_print_prflags(short pr_flags)
 		db_printf("%sPR_IMPLOPCL", comma ? ", " : "");
 		comma = 1;
 	}
-	if (pr_flags & PR_LASTHDR) {
-		db_printf("%sPR_LASTHDR", comma ? ", " : "");
-		comma = 1;
-	}
 }
 
 static void
@@ -326,15 +314,7 @@ db_print_protosw(struct protosw *pr, const char *prname, int indent)
 	db_printf(")\n");
 
 	db_print_indent(indent);
-	db_printf("pr_input: %p   ", pr->pr_input);
-	db_printf("pr_output: %p   ", pr->pr_output);
-	db_printf("pr_ctlinput: %p\n", pr->pr_ctlinput);
 	db_printf("pr_ctloutput: %p   ", pr->pr_ctloutput);
-
-	db_print_indent(indent);
-	db_printf("pr_fasttimo: %p   ", pr->pr_fasttimo);
-	db_printf("pr_slowtimo: %p   ", pr->pr_slowtimo);
-	db_printf("pr_drain: %p\n", pr->pr_drain);
 }
 
 static void
@@ -408,8 +388,6 @@ db_print_sockbuf(struct sockbuf *sb, const char *sockbufname, int indent)
 	db_printf("sb_mbmax: %u\n", sb->sb_mbmax);
 
 	db_print_indent(indent);
-	db_printf("sb_mcnt: %u   ", sb->sb_mcnt);
-	db_printf("sb_ccnt: %u   ", sb->sb_ccnt);
 	db_printf("sb_ctl: %u   ", sb->sb_ctl);
 	db_printf("sb_lowat: %d   ", sb->sb_lowat);
 	db_printf("sb_timeo: %jd\n", sb->sb_timeo);

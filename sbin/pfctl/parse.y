@@ -891,7 +891,12 @@ pfa_anchor	: '{'
 			pf->asd++;
 			pf->bn++;
 
-			/* create a holding ruleset in the root */
+			/*
+			* Anchor contents are parsed before the anchor rule
+			* production completes, so we don't know the real
+			* location yet. Create a holding ruleset in the root;
+			* contents will be moved afterwards.
+			*/
 			snprintf(ta, PF_ANCHOR_NAME_SIZE, "_%d", pf->bn);
 			rs = pf_find_or_create_ruleset(ta);
 			if (rs == NULL)
@@ -928,7 +933,14 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 
 			memset(&r, 0, sizeof(r));
 			if (pf->astack[pf->asd + 1]) {
-				/* move inline rules into relative location */
+				if ($2 && strchr($2, '/') != NULL) {
+					free($2);
+					yyerror("anchor paths containing '/' "
+					   "cannot be used for inline anchors.");
+					YYERROR;
+				}
+
+				/* Move inline rules into relative location. */
 				pfctl_anchor_setup(&r,
 				    &pf->astack[pf->asd]->ruleset,
 				    $2 ? $2 : pf->alast->name);
@@ -1197,6 +1209,14 @@ etherrule	: ETHER action dir quick interface etherproto etherfromto l3fromto eth
 			r.quick = $4.quick;
 			if ($9.tag != NULL)
 				memcpy(&r.tagname, $9.tag, sizeof(r.tagname));
+			if ($9.match_tag)
+				if (strlcpy(r.match_tagname, $9.match_tag,
+				    PF_TAG_NAME_SIZE) >= PF_TAG_NAME_SIZE) {
+					yyerror("tag too long, max %u chars",
+					    PF_TAG_NAME_SIZE - 1);
+					YYERROR;
+				}
+			r.match_tag_not = $9.match_tag_not;
 			if ($9.queues.qname != NULL)
 				memcpy(&r.qname, $9.queues.qname, sizeof(r.qname));
 			r.dnpipe = $9.dnpipe;
@@ -1256,7 +1276,14 @@ etheranchorrule	: ETHER ANCHOR anchorname dir quick interface etherproto etherfr
 
 			memset(&r, 0, sizeof(r));
 			if (pf->eastack[pf->asd + 1]) {
-				/* move inline rules into relative location */
+				if ($3 && strchr($3, '/') != NULL) {
+					free($3);
+					yyerror("anchor paths containing '/' "
+					   "cannot be used for inline anchors.");
+					YYERROR;
+				}
+
+				/* Move inline rules into relative location. */
 				pfctl_eth_anchor_setup(pf, &r,
 				    &pf->eastack[pf->asd]->ruleset,
 				    $3 ? $3 : pf->ealast->name);
@@ -1319,6 +1346,10 @@ etherfilter_opt	: etherqname	{
 		}
 		| TAG string				{
 			filter_opts.tag = $2;
+		}
+		| not TAGGED string			{
+			filter_opts.match_tag = $3;
+			filter_opts.match_tag_not = $1;
 		}
 		| DNPIPE number {
 			filter_opts.dnpipe = $2;
@@ -4454,7 +4485,7 @@ pool_opt	: BITMASK	{
 			pool_opts.staticport = 1;
 		}
 		| STICKYADDRESS	{
-			if (filter_opts.marker & POM_STICKYADDRESS) {
+			if (pool_opts.marker & POM_STICKYADDRESS) {
 				yyerror("sticky-address cannot be redefined");
 				YYERROR;
 			}
@@ -5772,6 +5803,18 @@ expand_eth_rule(struct pfctl_eth_rule *r,
     struct node_mac *srcs, struct node_mac *dsts,
     struct node_host *ipsrcs, struct node_host *ipdsts, const char *anchor_call)
 {
+	char tagname[PF_TAG_NAME_SIZE];
+	char match_tagname[PF_TAG_NAME_SIZE];
+	char qname[PF_QNAME_SIZE];
+
+	if (strlcpy(tagname, r->tagname, sizeof(tagname)) >= sizeof(tagname))
+		errx(1, "expand_eth_rule: tagname");
+	if (strlcpy(match_tagname, r->match_tagname, sizeof(match_tagname)) >=
+	    sizeof(match_tagname))
+		errx(1, "expand_eth_rule: match_tagname");
+	if (strlcpy(qname, r->qname, sizeof(qname)) >= sizeof(qname))
+		errx(1, "expand_eth_rule: qname");
+
 	LOOP_THROUGH(struct node_if, interface, interfaces,
 	LOOP_THROUGH(struct node_etherproto, proto, protos,
 	LOOP_THROUGH(struct node_mac, src, srcs,
@@ -5799,6 +5842,15 @@ expand_eth_rule(struct pfctl_eth_rule *r,
 		r->dst.neg = dst->neg;
 		r->dst.isset = dst->isset;
 		r->nr = pf->eastack[pf->asd]->match++;
+
+		if (strlcpy(r->tagname, tagname, sizeof(r->tagname)) >=
+		    sizeof(r->tagname))
+			errx(1, "expand_eth_rule: r->tagname");
+		if (strlcpy(r->match_tagname, match_tagname,
+		    sizeof(r->match_tagname)) >= sizeof(r->match_tagname))
+			errx(1, "expand_eth_rule: r->match_tagname");
+		if (strlcpy(r->qname, qname, sizeof(r->qname)) >= sizeof(r->qname))
+			errx(1, "expand_eth_rule: r->qname");
 
 		pfctl_append_eth_rule(pf, r, anchor_call);
 	))))));

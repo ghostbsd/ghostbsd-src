@@ -221,6 +221,7 @@ static MALLOC_DEFINE(M_VLAN, vlanname, "802.1Q Virtual LAN Interface");
 
 static eventhandler_tag ifdetach_tag;
 static eventhandler_tag iflladdr_tag;
+static eventhandler_tag ifevent_tag;
 
 /*
  * if_vlan uses two module-level synchronizations primitives to allow concurrent
@@ -322,11 +323,13 @@ static	void vlan_trunk_capabilities(struct ifnet *ifp);
 
 static	struct ifnet *vlan_clone_match_ethervid(const char *, int *);
 static	int vlan_clone_match(struct if_clone *, const char *);
-static	int vlan_clone_create(struct if_clone *, char *, size_t, caddr_t);
-static	int vlan_clone_destroy(struct if_clone *, struct ifnet *);
+static	int vlan_clone_create(struct if_clone *, char *, size_t,
+    struct ifc_data *, struct ifnet **);
+static	int vlan_clone_destroy(struct if_clone *, struct ifnet *, uint32_t);
 
 static	void vlan_ifdetach(void *arg, struct ifnet *ifp);
 static  void vlan_iflladdr(void *arg, struct ifnet *ifp);
+static  void vlan_ifevent(void *arg, struct ifnet *ifp, int event);
 
 static  void vlan_lladdr_fn(void *arg, int pending);
 
@@ -462,7 +465,7 @@ vlan_remhash(struct ifvlantrunk *trunk, struct ifvlan *ifv)
 	VLAN_XLOCK_ASSERT();
 	KASSERT(trunk->hwidth > 0, ("%s: hwidth not positive", __func__));
 
-	b = 1 << trunk->hwidth;
+	b = 1 << (trunk->hwidth - 1);
 	i = HASH(ifv->ifv_vid, trunk->hmask);
 	CK_SLIST_FOREACH(ifv2, &trunk->hash[i], ifv_list)
 		if (ifv2 == ifv) {
@@ -674,6 +677,34 @@ vlan_setmulti(struct ifnet *ifp)
 }
 
 /*
+ * A handler for interface ifnet events.
+ */
+static void
+vlan_ifevent(void *arg __unused, struct ifnet *ifp, int event)
+{
+	struct epoch_tracker et;
+	struct ifvlan *ifv;
+	struct ifvlantrunk *trunk;
+
+	if (event != IFNET_EVENT_UPDATE_BAUDRATE)
+		return;
+
+	NET_EPOCH_ENTER(et);
+	trunk = ifp->if_vlantrunk;
+	if (trunk == NULL) {
+		NET_EPOCH_EXIT(et);
+		return;
+	}
+
+	TRUNK_WLOCK(trunk);
+	VLAN_FOREACH(ifv, trunk) {
+		ifv->ifv_ifp->if_baudrate = ifp->if_baudrate;
+	}
+	TRUNK_WUNLOCK(trunk);
+	NET_EPOCH_EXIT(et);
+}
+
+/*
  * A handler for parent interface link layer address changes.
  * If the parent interface link layer address is changed we
  * should also change it on all children vlans.
@@ -872,6 +903,12 @@ extern	void (*vlan_input_p)(struct ifnet *, struct mbuf *);
 /* For if_link_state_change() eyes only... */
 extern	void (*vlan_link_state_p)(struct ifnet *);
 
+static struct if_clone_addreq vlan_addreq = {
+	.match_f = vlan_clone_match,
+	.create_f = vlan_clone_create,
+	.destroy_f = vlan_clone_destroy,
+};
+
 static int
 vlan_modevent(module_t mod, int type, void *data)
 {
@@ -886,6 +923,10 @@ vlan_modevent(module_t mod, int type, void *data)
 		    vlan_iflladdr, NULL, EVENTHANDLER_PRI_ANY);
 		if (iflladdr_tag == NULL)
 			return (ENOMEM);
+		ifevent_tag = EVENTHANDLER_REGISTER(ifnet_event,
+		    vlan_ifevent, NULL, EVENTHANDLER_PRI_ANY);
+		if (ifevent_tag == NULL)
+			return (ENOMEM);
 		VLAN_LOCKING_INIT();
 		vlan_input_p = vlan_input;
 		vlan_link_state_p = vlan_link_state;
@@ -897,8 +938,7 @@ vlan_modevent(module_t mod, int type, void *data)
 		vlan_pcp_p = vlan_pcp;
 		vlan_devat_p = vlan_devat;
 #ifndef VIMAGE
-		vlan_cloner = if_clone_advanced(vlanname, 0, vlan_clone_match,
-		    vlan_clone_create, vlan_clone_destroy);
+		vlan_cloner = ifc_attach_cloner(vlanname, &vlan_addreq);
 #endif
 		if (bootverbose)
 			printf("vlan: initialized, using "
@@ -912,10 +952,11 @@ vlan_modevent(module_t mod, int type, void *data)
 		break;
 	case MOD_UNLOAD:
 #ifndef VIMAGE
-		if_clone_detach(vlan_cloner);
+		ifc_detach_cloner(vlan_cloner);
 #endif
 		EVENTHANDLER_DEREGISTER(ifnet_departure_event, ifdetach_tag);
 		EVENTHANDLER_DEREGISTER(iflladdr_event, iflladdr_tag);
+		EVENTHANDLER_DEREGISTER(ifnet_event, ifevent_tag);
 		vlan_input_p = NULL;
 		vlan_link_state_p = NULL;
 		vlan_trunk_cap_p = NULL;
@@ -947,9 +988,7 @@ MODULE_VERSION(if_vlan, 3);
 static void
 vnet_vlan_init(const void *unused __unused)
 {
-
-	vlan_cloner = if_clone_advanced(vlanname, 0, vlan_clone_match,
-		    vlan_clone_create, vlan_clone_destroy);
+	vlan_cloner = ifc_attach_cloner(vlanname, &vlan_addreq);
 	V_vlan_cloner = vlan_cloner;
 }
 VNET_SYSINIT(vnet_vlan_init, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
@@ -959,7 +998,7 @@ static void
 vnet_vlan_uninit(const void *unused __unused)
 {
 
-	if_clone_detach(V_vlan_cloner);
+	ifc_detach_cloner(V_vlan_cloner);
 }
 VNET_SYSUNINIT(vnet_vlan_uninit, SI_SUB_INIT_IF, SI_ORDER_ANY,
     vnet_vlan_uninit, NULL);
@@ -1023,7 +1062,8 @@ vlan_clone_match(struct if_clone *ifc, const char *name)
 }
 
 static int
-vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
+vlan_clone_create(struct if_clone *ifc, char *name, size_t len,
+    struct ifc_data *ifd, struct ifnet **ifpp)
 {
 	char *dp;
 	bool wildcard = false;
@@ -1054,8 +1094,8 @@ vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	 * called for.
 	 */
 
-	if (params) {
-		error = copyin(params, &vlr, sizeof(vlr));
+	if (ifd->params != NULL) {
+		error = ifc_copyin(ifd, &vlr, sizeof(vlr));
 		if (error)
 			return error;
 		vid = vlr.vlr_tag;
@@ -1184,12 +1224,13 @@ vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 			return (error);
 		}
 	}
+	*ifpp = ifp;
 
 	return (0);
 }
 
 static int
-vlan_clone_destroy(struct if_clone *ifc, struct ifnet *ifp)
+vlan_clone_destroy(struct if_clone *ifc, struct ifnet *ifp, uint32_t flags)
 {
 	struct ifvlan *ifv = ifp->if_softc;
 	int unit = ifp->if_dunit;
@@ -1503,8 +1544,24 @@ vlan_config(struct ifvlan *ifv, struct ifnet *p, uint16_t vid,
 	 */
 	if (vid == 0 || vid == 0xFFF || (vid & ~EVL_VLID_MASK))
 		return (EINVAL);
-	if (ifv->ifv_trunk)
-		return (EBUSY);
+	if (ifv->ifv_trunk) {
+		trunk = ifv->ifv_trunk;
+		if (trunk->parent != p)
+			return (EBUSY);
+
+		VLAN_XLOCK();
+
+		ifv->ifv_proto = proto;
+
+		if (ifv->ifv_vid != vid) {
+			/* Re-hash */
+			vlan_remhash(trunk, ifv);
+			ifv->ifv_vid = vid;
+			error = vlan_inshash(trunk, ifv);
+		}
+		/* Will unlock */
+		goto done;
+	}
 
 	VLAN_XLOCK();
 	if (p->if_vlantrunk == NULL) {
@@ -2169,7 +2226,11 @@ vlan_snd_tag_alloc(struct ifnet *ifp,
 	struct vlan_snd_tag *vst;
 	struct ifvlan *ifv;
 	struct ifnet *parent;
+	struct m_snd_tag *mst;
 	int error;
+
+	NET_EPOCH_ENTER(et);
+	ifv = ifp->if_softc;
 
 	switch (params->hdr.type) {
 #ifdef RATELIMIT
@@ -2184,6 +2245,12 @@ vlan_snd_tag_alloc(struct ifnet *ifp,
 	case IF_SND_TAG_TYPE_TLS:
 		sw = &vlan_snd_tag_tls_sw;
 		break;
+	case IF_SND_TAG_TYPE_TLS_RX:
+		sw = NULL;
+		if (params->tls_rx.vlan_id != 0)
+			goto failure;
+		params->tls_rx.vlan_id = ifv->ifv_vid;
+		break;
 #ifdef RATELIMIT
 	case IF_SND_TAG_TYPE_TLS_RATE_LIMIT:
 		sw = &vlan_snd_tag_tls_rl_sw;
@@ -2191,39 +2258,46 @@ vlan_snd_tag_alloc(struct ifnet *ifp,
 #endif
 #endif
 	default:
-		return (EOPNOTSUPP);
+		goto failure;
 	}
 
-	NET_EPOCH_ENTER(et);
-	ifv = ifp->if_softc;
 	if (ifv->ifv_trunk != NULL)
 		parent = PARENT(ifv);
 	else
 		parent = NULL;
-	if (parent == NULL) {
-		NET_EPOCH_EXIT(et);
-		return (EOPNOTSUPP);
-	}
+	if (parent == NULL)
+		goto failure;
 	if_ref(parent);
 	NET_EPOCH_EXIT(et);
 
-	vst = malloc(sizeof(*vst), M_VLAN, M_NOWAIT);
-	if (vst == NULL) {
-		if_rele(parent);
-		return (ENOMEM);
-	}
+	if (sw != NULL) {
+		vst = malloc(sizeof(*vst), M_VLAN, M_NOWAIT);
+		if (vst == NULL) {
+			if_rele(parent);
+			return (ENOMEM);
+		}
+	} else
+		vst = NULL;
 
-	error = m_snd_tag_alloc(parent, params, &vst->tag);
+	error = m_snd_tag_alloc(parent, params, &mst);
 	if_rele(parent);
 	if (error) {
 		free(vst, M_VLAN);
 		return (error);
 	}
 
-	m_snd_tag_init(&vst->com, ifp, sw);
+	if (sw != NULL) {
+		m_snd_tag_init(&vst->com, ifp, sw);
+		vst->tag = mst;
 
-	*ppmt = &vst->com;
+		*ppmt = &vst->com;
+	} else
+		*ppmt = mst;
+
 	return (0);
+failure:
+	NET_EPOCH_EXIT(et);
+	return (EOPNOTSUPP);
 }
 
 static struct m_snd_tag *

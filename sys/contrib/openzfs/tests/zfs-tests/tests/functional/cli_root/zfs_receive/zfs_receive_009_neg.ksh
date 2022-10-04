@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -92,11 +92,10 @@ typeset -i i=0
 while (( i < ${#validopts[*]} )); do
 	log_mustnot eval "zfs recv < $bkup"
 
-	echo ${validopts[i]} | grep "d" >/dev/null 2>&1
-	if (( $? != 0 )); then
-		log_mustnot eval "zfs recv ${validopts[i]} $fs2 $fs3 < $bkup"
-	else
+	if echo ${validopts[i]} | grep -q "d"; then
 		log_mustnot eval "zfs recv ${validopts[i]} $ctr1 $ctr2 < $bkup"
+	else
+		log_mustnot eval "zfs recv ${validopts[i]} $fs2 $fs3 < $bkup"
 	fi
 
 	(( i += 1 ))

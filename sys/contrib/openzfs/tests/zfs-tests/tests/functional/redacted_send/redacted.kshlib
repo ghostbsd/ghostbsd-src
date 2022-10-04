@@ -8,7 +8,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -28,6 +28,10 @@
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/rsend/rsend.kshlib
 . $STF_SUITE/tests/functional/redacted_send/redacted.cfg
+
+if ! is_linux; then
+	alias udevadm=:
+fi
 
 function setup_dataset
 {
@@ -227,7 +231,7 @@ function compare_files
 	[[ -f $file2 ]] || log_fail "File $file2 does not exist."
 
 	log_must eval "get_diff $file1 $file2 >$tmpfile"
-	typeset range="$(cat $tmpfile)"
+	typeset range="$(<$tmpfile)"
 	log_must unmount_redacted $recvfs
 	[[ "$expected" = "$range" ]] || log_fail "Unexpected range: $range"
 }

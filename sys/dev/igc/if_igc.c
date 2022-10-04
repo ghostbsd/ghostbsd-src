@@ -59,6 +59,7 @@ static pci_vendor_info_t igc_vendor_info_array[] =
 	PVID(0x8086, IGC_DEV_ID_I225_K2, "Intel(R) Ethernet Controller I225-K(2)"),
 	PVID(0x8086, IGC_DEV_ID_I225_LMVP, "Intel(R) Ethernet Controller I225-LMvP(2)"),
 	PVID(0x8086, IGC_DEV_ID_I226_K, "Intel(R) Ethernet Controller I226-K"),
+	PVID(0x8086, IGC_DEV_ID_I226_LMVP, "Intel(R) Ethernet Controller I226-LMvP"),
 	PVID(0x8086, IGC_DEV_ID_I225_IT, "Intel(R) Ethernet Controller I225-IT(2)"),
 	PVID(0x8086, IGC_DEV_ID_I226_LM, "Intel(R) Ethernet Controller I226-LM"),
 	PVID(0x8086, IGC_DEV_ID_I226_V, "Intel(R) Ethernet Controller I226-V"),
@@ -167,8 +168,7 @@ static driver_t igc_driver = {
 	"igc", igc_methods, sizeof(struct igc_adapter),
 };
 
-static devclass_t igc_devclass;
-DRIVER_MODULE(igc, pci, igc_driver, igc_devclass, 0, 0);
+DRIVER_MODULE(igc, pci, igc_driver, 0, 0);
 
 MODULE_DEPEND(igc, pci, 1, 1, 1);
 MODULE_DEPEND(igc, ether, 1, 1, 1);
@@ -858,7 +858,7 @@ igc_if_init(if_ctx_t ctx)
 	}
 
 	/* Don't lose promiscuous settings */
-	igc_if_set_promisc(ctx, IFF_PROMISC);
+	igc_if_set_promisc(ctx, if_getflags(ifp));
 	igc_clear_hw_cntrs_base_generic(&adapter->hw);
 
 	if (adapter->intr_type == IFLIB_INTR_MSIX) /* Set up queue routing */
@@ -1070,16 +1070,16 @@ igc_if_media_change(if_ctx_t ctx)
 		adapter->hw.phy.autoneg_advertised = ADVERTISE_1000_FULL;
 		break;
 	case IFM_100_TX:
-		if ((ifm->ifm_media & IFM_GMASK) == IFM_HDX)
-			adapter->hw.phy.autoneg_advertised = ADVERTISE_100_HALF;
-		else
+		if ((ifm->ifm_media & IFM_GMASK) == IFM_FDX)
 			adapter->hw.phy.autoneg_advertised = ADVERTISE_100_FULL;
+		else
+			adapter->hw.phy.autoneg_advertised = ADVERTISE_100_HALF;
 		break;
 	case IFM_10_T:
-		if ((ifm->ifm_media & IFM_GMASK) == IFM_HDX)
-			adapter->hw.phy.autoneg_advertised = ADVERTISE_10_HALF;
-		else
+		if ((ifm->ifm_media & IFM_GMASK) == IFM_FDX)
 			adapter->hw.phy.autoneg_advertised = ADVERTISE_10_FULL;
+		else
+			adapter->hw.phy.autoneg_advertised = ADVERTISE_10_HALF;
 		break;
 	default:
 		device_printf(adapter->dev, "Unsupported media type\n");
@@ -1609,7 +1609,7 @@ igc_reset(if_ctx_t ctx)
 	device_t dev = iflib_get_dev(ctx);
 	struct igc_adapter *adapter = iflib_get_softc(ctx);
 	struct igc_hw *hw = &adapter->hw;
-	u16 rx_buffer_size;
+	u32 rx_buffer_size;
 	u32 pba;
 
 	INIT_DEBUGOUT("igc_reset: begin");

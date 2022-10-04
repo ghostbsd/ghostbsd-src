@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -38,7 +38,6 @@
 # Description:
 # Once set zpool autoexpand=off, zpool can *NOT* autoexpand by
 # Dynamic VDEV Expansion
-#
 #
 # STRATEGY:
 # 1) Create three vdevs (loopback, scsi_debug, and file)
@@ -73,7 +72,7 @@ log_onexit cleanup
 
 log_assert "zpool can not expand if set autoexpand=off after vdev expansion"
 
-for type in " " mirror raidz draid; do
+for type in "" mirror raidz draid; do
 	log_note "Setting up loopback, scsi_debug, and file vdevs"
 	log_must truncate -s $org_size $FILE_LO
 	DEV1=$(losetup -f)
@@ -89,11 +88,7 @@ for type in " " mirror raidz draid; do
 	# The -f is required since we're mixing disk and file vdevs.
 	log_must zpool create -f $TESTPOOL1 $type $DEV1 $DEV2 $DEV3
 
-	typeset autoexp=$(get_pool_prop autoexpand $TESTPOOL1)
-	if [[ $autoexp != "off" ]]; then
-		log_fail "zpool $TESTPOOL1 autoexpand should be off but is " \
-		    "$autoexp"
-	fi
+	log_must [ "$(get_pool_prop autoexpand $TESTPOOL1)" = "off" ]
 
 	typeset prev_size=$(get_pool_prop size $TESTPOOL1)
 
@@ -107,8 +102,8 @@ for type in " " mirror raidz draid; do
 	log_must losetup -c $DEV1
 	sleep 3
 
-	echo "2" > /sys/bus/pseudo/drivers/scsi_debug/virtual_gb
-	echo "1" > /sys/class/block/$DEV2/device/rescan
+	log_must eval "echo 2 > /sys/bus/pseudo/drivers/scsi_debug/virtual_gb"
+	log_must eval "echo 1 > /sys/class/block/$DEV2/device/rescan"
 	block_device_wait
 	sleep 3
 
@@ -118,19 +113,11 @@ for type in " " mirror raidz draid; do
 	sleep 5
 
 	# check for zpool history for the pool size expansion
-	zpool history -il $TESTPOOL1 | grep "pool '$TESTPOOL1' size:" | \
-	    grep "vdev online" >/dev/null 2>&1
+	zpool history -il $TESTPOOL1 | grep "pool '$TESTPOOL1' size:" |
+	    grep "vdev online" &&
+	    log_fail "pool $TESTPOOL1 is not autoexpand after vdev expansion"
 
-	if [[ $? -eq 0 ]]; then
-		log_fail "pool $TESTPOOL1 is not autoexpand after vdev " \
-		    "expansion"
-	fi
-
-	typeset expand_size=$(get_pool_prop size $TESTPOOL1)
-
-	if [[ "$prev_size" != "$expand_size" ]]; then
-		log_fail "pool $TESTPOOL1 size changed after vdev expansion"
-	fi
+	log_must [ "$(get_pool_prop size $TESTPOOL1)" = "$prev_size" ]
 
 	cleanup
 done

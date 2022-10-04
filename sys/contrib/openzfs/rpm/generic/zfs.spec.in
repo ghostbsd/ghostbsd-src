@@ -90,13 +90,13 @@ License:        @ZFS_META_LICENSE@
 URL:            https://github.com/openzfs/zfs
 Source0:        %{name}-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:       libzpool5 = %{version}
-Requires:       libnvpair3 = %{version}
-Requires:       libuutil3 = %{version}
-Requires:       libzfs5 = %{version}
+Requires:       libzpool5%{?_isa} = %{version}-%{release}
+Requires:       libnvpair3%{?_isa} = %{version}-%{release}
+Requires:       libuutil3%{?_isa} = %{version}-%{release}
+Requires:       libzfs5%{?_isa} = %{version}-%{release}
 Requires:       %{name}-kmod = %{version}
-Provides:       %{name}-kmod-common = %{version}
-Obsoletes:      spl
+Provides:       %{name}-kmod-common = %{version}-%{release}
+Obsoletes:      spl <= %{version}
 
 # zfs-fuse provides the same commands and man pages that OpenZFS does.
 # Renaming those on either side would conflict with all available documentation.
@@ -110,12 +110,15 @@ BuildRequires:  libblkid-devel
 BuildRequires:  libudev-devel
 BuildRequires:  libattr-devel
 BuildRequires:  openssl-devel
+%if 0%{?fedora} || 0%{?rhel} >= 8 || 0%{?centos} >= 8
+BuildRequires:  libtirpc-devel
+%endif
+
+%if (0%{?fedora}%{?suse_version}) || (0%{?rhel} && 0%{?rhel} < 9)
 # We don't directly use it, but if this isn't installed, rpmbuild as root can
 # crash+corrupt rpmdb
 # See issue #12071
 BuildRequires:  ncompress
-%if 0%{?fedora} || 0%{?rhel} >= 8 || 0%{?centos} >= 8
-BuildRequires:  libtirpc-devel
 %endif
 
 Requires:       openssl
@@ -141,8 +144,8 @@ This package contains the core ZFS command line utilities.
 %package -n libzpool5
 Summary:        Native ZFS pool library for Linux
 Group:          System Environment/Kernel
-Obsoletes:      libzpool2
-Obsoletes:      libzpool4
+Obsoletes:      libzpool2 <= %{version}
+Obsoletes:      libzpool4 <= %{version}
 
 %description -n libzpool5
 This package contains the zpool library, which provides support
@@ -158,7 +161,7 @@ for managing zpools
 %package -n libnvpair3
 Summary:        Solaris name-value library for Linux
 Group:          System Environment/Kernel
-Obsoletes:      libnvpair1
+Obsoletes:      libnvpair1 <= %{version}
 
 %description -n libnvpair3
 This package contains routines for packing and unpacking name-value
@@ -176,7 +179,7 @@ to write self describing data structures on disk.
 %package -n libuutil3
 Summary:        Solaris userland utility library for Linux
 Group:          System Environment/Kernel
-Obsoletes:      libuutil1
+Obsoletes:      libuutil1 <= %{version}
 
 %description -n libuutil3
 This library provides a variety of compatibility functions for OpenZFS:
@@ -202,8 +205,8 @@ This library provides a variety of compatibility functions for OpenZFS:
 %package -n libzfs5
 Summary:        Native ZFS filesystem library for Linux
 Group:          System Environment/Kernel
-Obsoletes:      libzfs2
-Obsoletes:      libzfs4
+Obsoletes:      libzfs2 <= %{version}
+Obsoletes:      libzfs4 <= %{version}
 
 %description -n libzfs5
 This package provides support for managing ZFS filesystems
@@ -218,16 +221,16 @@ This package provides support for managing ZFS filesystems
 %package -n libzfs5-devel
 Summary:        Development headers
 Group:          System Environment/Kernel
-Requires:       libzfs5 = %{version}
-Requires:       libzpool5 = %{version}
-Requires:       libnvpair3 = %{version}
-Requires:       libuutil3 = %{version}
-Provides:       libzpool5-devel
-Provides:       libnvpair3-devel
-Provides:       libuutil3-devel
-Obsoletes:      zfs-devel
-Obsoletes:      libzfs2-devel
-Obsoletes:      libzfs4-devel
+Requires:       libzfs5%{?_isa} = %{version}-%{release}
+Requires:       libzpool5%{?_isa} = %{version}-%{release}
+Requires:       libnvpair3%{?_isa} = %{version}-%{release}
+Requires:       libuutil3%{?_isa} = %{version}-%{release}
+Provides:       libzpool5-devel = %{version}-%{release}
+Provides:       libnvpair3-devel = %{version}-%{release}
+Provides:       libuutil3-devel = %{version}-%{release}
+Obsoletes:      zfs-devel <= %{version}
+Obsoletes:      libzfs2-devel <= %{version}
+Obsoletes:      libzfs4-devel <= %{version}
 
 %description -n libzfs5-devel
 This package contains the header files needed for building additional
@@ -278,8 +281,8 @@ Summary:        Python %{python_version} wrapper for libzfs_core
 Group:          Development/Languages/Python
 License:        Apache-2.0
 BuildArch:      noarch
-Requires:       libzfs5 = %{version}
-Requires:       libnvpair3 = %{version}
+Requires:       libzfs5 = %{version}-%{release}
+Requires:       libnvpair3 = %{version}-%{release}
 Requires:       libffi
 Requires:       python%{__python_pkg_version}
 
@@ -314,7 +317,6 @@ This package provides a python wrapper for the libzfs_core C library.
 Summary:        Initramfs module
 Group:          System Environment/Kernel
 Requires:       %{name}%{?_isa} = %{version}-%{release}
-Requires:       %{name} = %{version}-%{release}
 Requires:       initramfs-tools
 
 %description initramfs
@@ -407,7 +409,8 @@ make install DESTDIR=%{?buildroot}
 find %{?buildroot}%{_libdir} -name '*.la' -exec rm -f {} \;
 %if 0%{!?__brp_mangle_shebangs:1}
 find %{?buildroot}%{_bindir} \
-    \( -name arc_summary -or -name arcstat -or -name dbufstat \) \
+    \( -name arc_summary -or -name arcstat -or -name dbufstat \
+    -or -name zilstat \) \
     -exec %{__sed} -i 's|^#!.*|#!%{__python}|' {} \;
 find %{?buildroot}%{_datadir} \
     \( -name test-runner.py -or -name zts-report.py \) \
@@ -485,6 +488,7 @@ systemctl --system daemon-reload >/dev/null || true
 %{_bindir}/arc_summary
 %{_bindir}/arcstat
 %{_bindir}/dbufstat
+%{_bindir}/zilstat
 # Man pages
 %{_mandir}/man1/*
 %{_mandir}/man4/*
@@ -517,6 +521,8 @@ systemctl --system daemon-reload >/dev/null || true
 %config(noreplace) %{_sysconfdir}/%{name}/zpool.d/*
 %config(noreplace) %{_sysconfdir}/%{name}/vdev_id.conf.*.example
 %attr(440, root, root) %config(noreplace) %{_sysconfdir}/sudoers.d/*
+
+%config(noreplace) %{_sysconfdir}/bash_completion.d/zfs
 
 %files -n libzpool5
 %{_libdir}/libzpool.so.*

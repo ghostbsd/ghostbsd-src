@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -63,8 +63,7 @@ while (( $j < ${#size[*]} )); do
 	typeset cmdline="zfs create -s -V ${size[j]} \
 			 $TESTPOOL/${LONGFSNAME}${size[j]}"
 
-	str=$(eval $cmdline 2>&1)
-	if (( $? == 0 )); then
+	if str=$(eval $cmdline 2>&1); then
 		log_note "SUCCESS: $cmdline"
 		log_must datasetexists $TESTPOOL/${LONGFSNAME}${size[j]}
 	elif [[ $str == *${VOL_LIMIT_KEYWORD1}* || \

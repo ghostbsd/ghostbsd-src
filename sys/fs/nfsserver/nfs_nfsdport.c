@@ -686,8 +686,6 @@ nfsvno_namei(struct nfsrv_descript *nd, struct nameidata *ndp,
 		 * termination occurs if no symlink encountered.
 		 */
 		if ((cnp->cn_flags & ISSYMLINK) == 0) {
-			if ((cnp->cn_flags & (SAVENAME | SAVESTART)) == 0)
-				nfsvno_relpathbuf(ndp);
 			if (ndp->ni_vp && !lockleaf)
 				NFSVOPUNLOCK(ndp->ni_vp);
 			break;
@@ -796,7 +794,7 @@ nfsvno_setpathbuf(struct nameidata *ndp, char **bufpp, u_long **hashpp)
 {
 	struct componentname *cnp = &ndp->ni_cnd;
 
-	cnp->cn_flags |= (NOMACCHECK | HASBUF);
+	cnp->cn_flags |= (NOMACCHECK);
 	cnp->cn_pnbuf = uma_zalloc(namei_zone, M_WAITOK);
 	if (hashpp != NULL)
 		*hashpp = NULL;
@@ -810,10 +808,8 @@ void
 nfsvno_relpathbuf(struct nameidata *ndp)
 {
 
-	if ((ndp->ni_cnd.cn_flags & HASBUF) == 0)
-		panic("nfsrelpath");
 	uma_zfree(namei_zone, ndp->ni_cnd.cn_pnbuf);
-	ndp->ni_cnd.cn_flags &= ~HASBUF;
+	ndp->ni_cnd.cn_pnbuf = NULL;
 }
 
 /*
@@ -1260,8 +1256,8 @@ nfsvno_createsub(struct nfsrv_descript *nd, struct nameidata *ndp,
 				tempsize = nvap->na_size;
 				NFSVNO_ATTRINIT(nvap);
 				nvap->na_size = tempsize;
-				error = VOP_SETATTR(*vpp,
-				    &nvap->na_vattr, nd->nd_cred);
+				error = nfsvno_setattr(*vpp, nvap,
+				    nd->nd_cred, p, exp);
 			}
 		}
 		if (error)
@@ -1478,8 +1474,7 @@ nfsvno_removesub(struct nameidata *ndp, int is_v4, struct ucred *cred,
 	else
 		vput(ndp->ni_dvp);
 	vput(vp);
-	if ((ndp->ni_cnd.cn_flags & SAVENAME) != 0)
-		nfsvno_relpathbuf(ndp);
+	nfsvno_relpathbuf(ndp);
 	NFSEXITCODE(error);
 	return (error);
 }
@@ -1519,8 +1514,7 @@ out:
 	else
 		vput(ndp->ni_dvp);
 	vput(vp);
-	if ((ndp->ni_cnd.cn_flags & SAVENAME) != 0)
-		nfsvno_relpathbuf(ndp);
+	nfsvno_relpathbuf(ndp);
 	NFSEXITCODE(error);
 	return (error);
 }
@@ -1930,8 +1924,8 @@ nfsvno_open(struct nfsrv_descript *nd, struct nameidata *ndp,
 					tempsize = nvap->na_size;
 					NFSVNO_ATTRINIT(nvap);
 					nvap->na_size = tempsize;
-					nd->nd_repstat = VOP_SETATTR(vp,
-					    &nvap->na_vattr, cred);
+					nd->nd_repstat = nfsvno_setattr(vp,
+					    nvap, cred, p, exp);
 				}
 			} else if (vp->v_type == VREG) {
 				nd->nd_repstat = nfsrv_opencheck(clientid,
@@ -1939,8 +1933,7 @@ nfsvno_open(struct nfsrv_descript *nd, struct nameidata *ndp,
 			}
 		}
 	} else {
-		if (ndp->ni_cnd.cn_flags & HASBUF)
-			nfsvno_relpathbuf(ndp);
+		nfsvno_relpathbuf(ndp);
 		if (ndp->ni_startdir && create == NFSV4OPEN_CREATE) {
 			vrele(ndp->ni_startdir);
 			if (ndp->ni_dvp == ndp->ni_vp)
@@ -4578,7 +4571,7 @@ nfsrv_dsremove(struct vnode *dvp, char *fname, struct ucred *tcred,
 	named.ni_cnd.cn_nameiop = DELETE;
 	named.ni_cnd.cn_lkflags = LK_EXCLUSIVE | LK_RETRY;
 	named.ni_cnd.cn_cred = tcred;
-	named.ni_cnd.cn_flags = ISLASTCN | LOCKPARENT | LOCKLEAF | SAVENAME;
+	named.ni_cnd.cn_flags = ISLASTCN | LOCKPARENT | LOCKLEAF;
 	nfsvno_setpathbuf(&named, &bufp, &hashp);
 	named.ni_cnd.cn_nameptr = bufp;
 	named.ni_cnd.cn_namelen = strlen(fname);
@@ -5234,7 +5227,7 @@ nfsrv_readdsrpc(fhandle_t *fhp, off_t off, int len, struct ucred *cred,
 	st.other[2] = 0x55555555;
 	st.seqid = 0xffffffff;
 	nfscl_reqstart(nd, NFSPROC_READDS, nmp, (u_int8_t *)fhp, sizeof(*fhp),
-	    NULL, NULL, 0, 0);
+	    NULL, NULL, 0, 0, cred);
 	nfsm_stateidtom(nd, &st, NFSSTATEID_PUTSTATEID);
 	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED * 3);
 	txdr_hyper(off, tl);
@@ -5342,7 +5335,7 @@ nfsrv_writedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off, int len,
 
 	nd = malloc(sizeof(*nd), M_TEMP, M_WAITOK | M_ZERO);
 	nfscl_reqstart(nd, NFSPROC_WRITE, nmp, (u_int8_t *)fhp,
-	    sizeof(fhandle_t), NULL, NULL, 0, 0);
+	    sizeof(fhandle_t), NULL, NULL, 0, 0, cred);
 
 	/*
 	 * Use a stateid where other is an alternating 01010 pattern and
@@ -5564,7 +5557,7 @@ nfsrv_allocatedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off,
 
 	nd = malloc(sizeof(*nd), M_TEMP, M_WAITOK | M_ZERO);
 	nfscl_reqstart(nd, NFSPROC_ALLOCATE, nmp, (u_int8_t *)fhp,
-	    sizeof(fhandle_t), NULL, NULL, 0, 0);
+	    sizeof(fhandle_t), NULL, NULL, 0, 0, cred);
 
 	/*
 	 * Use a stateid where other is an alternating 01010 pattern and
@@ -5724,7 +5717,7 @@ nfsrv_deallocatedsdorpc(struct nfsmount *nmp, fhandle_t *fhp, off_t off,
 
 	nd = malloc(sizeof(*nd), M_TEMP, M_WAITOK | M_ZERO);
 	nfscl_reqstart(nd, NFSPROC_DEALLOCATE, nmp, (u_int8_t *)fhp,
-	    sizeof(fhandle_t), NULL, NULL, 0, 0);
+	    sizeof(fhandle_t), NULL, NULL, 0, 0, cred);
 
 	/*
 	 * Use a stateid where other is an alternating 01010 pattern and
@@ -5899,7 +5892,7 @@ nfsrv_setattrdsdorpc(fhandle_t *fhp, struct ucred *cred, NFSPROC_T *p,
 	st.other[2] = 0x55555555;
 	st.seqid = 0xffffffff;
 	nfscl_reqstart(nd, NFSPROC_SETATTR, nmp, (u_int8_t *)fhp, sizeof(*fhp),
-	    NULL, NULL, 0, 0);
+	    NULL, NULL, 0, 0, cred);
 	nfsm_stateidtom(nd, &st, NFSSTATEID_PUTSTATEID);
 	nfscl_fillsattr(nd, &nap->na_vattr, vp, NFSSATTR_FULL, 0);
 
@@ -6084,7 +6077,7 @@ nfsrv_setacldsdorpc(fhandle_t *fhp, struct ucred *cred, NFSPROC_T *p,
 	st.other[2] = 0x55555555;
 	st.seqid = 0xffffffff;
 	nfscl_reqstart(nd, NFSPROC_SETACL, nmp, (u_int8_t *)fhp, sizeof(*fhp),
-	    NULL, NULL, 0, 0);
+	    NULL, NULL, 0, 0, cred);
 	nfsm_stateidtom(nd, &st, NFSSTATEID_PUTSTATEID);
 	NFSZERO_ATTRBIT(&attrbits);
 	NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_ACL);
@@ -6219,7 +6212,7 @@ nfsrv_getattrdsrpc(fhandle_t *fhp, struct ucred *cred, NFSPROC_T *p,
 	NFSD_DEBUG(4, "in nfsrv_getattrdsrpc\n");
 	nd = malloc(sizeof(*nd), M_TEMP, M_WAITOK | M_ZERO);
 	nfscl_reqstart(nd, NFSPROC_GETATTR, nmp, (u_int8_t *)fhp,
-	    sizeof(fhandle_t), NULL, NULL, 0, 0);
+	    sizeof(fhandle_t), NULL, NULL, 0, 0, cred);
 	NFSZERO_ATTRBIT(&attrbits);
 	NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_SIZE);
 	NFSSETBIT_ATTRBIT(&attrbits, NFSATTRBIT_CHANGE);
@@ -6287,7 +6280,7 @@ nfsrv_seekdsrpc(fhandle_t *fhp, off_t *offp, int content, bool *eofp,
 	st.seqid = 0xffffffff;
 	nd = malloc(sizeof(*nd), M_TEMP, M_WAITOK | M_ZERO);
 	nfscl_reqstart(nd, NFSPROC_SEEKDS, nmp, (u_int8_t *)fhp,
-	    sizeof(fhandle_t), NULL, NULL, 0, 0);
+	    sizeof(fhandle_t), NULL, NULL, 0, 0, cred);
 	nfsm_stateidtom(nd, &st, NFSSTATEID_PUTSTATEID);
 	NFSM_BUILD(tl, uint32_t *, NFSX_HYPER + NFSX_UNSIGNED);
 	txdr_hyper(*offp, tl); tl += 2;
@@ -6351,7 +6344,7 @@ nfsrv_pnfslookupds(struct vnode *vp, struct vnode *dvp, struct pnfsdsfile *pf,
 	named.ni_cnd.cn_nameiop = LOOKUP;
 	named.ni_cnd.cn_lkflags = LK_SHARED | LK_RETRY;
 	named.ni_cnd.cn_cred = tcred;
-	named.ni_cnd.cn_flags = ISLASTCN | LOCKPARENT | LOCKLEAF | SAVENAME;
+	named.ni_cnd.cn_flags = ISLASTCN | LOCKPARENT | LOCKLEAF;
 	nfsvno_setpathbuf(&named, &bufp, &hashp);
 	named.ni_cnd.cn_nameptr = bufp;
 	named.ni_cnd.cn_namelen = strlen(pf->dsf_filename);

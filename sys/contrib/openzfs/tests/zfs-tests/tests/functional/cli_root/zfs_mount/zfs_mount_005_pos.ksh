@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -77,14 +77,13 @@ cd $TESTDIR || \
 zfs $mountcmd $TESTPOOL/$TESTFS
 ret=$?
 if is_linux || is_freebsd; then
-    (( ret == 0 )) || \
-        log_fail "'zfs $mountcmd $TESTPOOL/$TESTFS' " \
-            "unexpected return code of $ret."
+	expected=0
 else
-    (( ret == 1 )) || \
-        log_fail "'zfs $mountcmd $TESTPOOL/$TESTFS' " \
-            "unexpected return code of $ret."
+	expected=1
 fi
+(( ret == expected )) || \
+    log_fail "'zfs $mountcmd $TESTPOOL/$TESTFS' " \
+        "unexpected return code of $ret."
 
 log_note "Make sure the filesystem $TESTPOOL/$TESTFS is unmounted"
 if is_linux || is_freebsd; then

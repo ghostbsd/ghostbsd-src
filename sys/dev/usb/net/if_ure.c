@@ -103,6 +103,7 @@ static const STRUCT_USB_HOST_ID ure_devs[] = {
 	URE_DEV(LENOVO, TBT3LAN, 0),
 	URE_DEV(LENOVO, TBT3LANGEN2, 0),
 	URE_DEV(LENOVO, ONELINK, 0),
+	URE_DEV(LENOVO, RTL8153_04, URE_FLAG_8153),
 	URE_DEV(LENOVO, USBCLAN, 0),
 	URE_DEV(LENOVO, USBCLANGEN2, 0),
 	URE_DEV(NVIDIA, RTL8153, URE_FLAG_8153),
@@ -189,10 +190,8 @@ static driver_t ure_driver = {
 	.size = sizeof(struct ure_softc),
 };
 
-static devclass_t ure_devclass;
-
-DRIVER_MODULE(ure, uhub, ure_driver, ure_devclass, NULL, NULL);
-DRIVER_MODULE(miibus, ure, miibus_driver, miibus_devclass, NULL, NULL);
+DRIVER_MODULE(ure, uhub, ure_driver, NULL, NULL);
+DRIVER_MODULE(miibus, ure, miibus_driver, NULL, NULL);
 MODULE_DEPEND(ure, uether, 1, 1, 1);
 MODULE_DEPEND(ure, usb, 1, 1, 1);
 MODULE_DEPEND(ure, ether, 1, 1, 1);

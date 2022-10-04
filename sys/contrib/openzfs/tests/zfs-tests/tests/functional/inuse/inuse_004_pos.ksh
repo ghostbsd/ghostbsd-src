@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -52,10 +52,10 @@ function cleanup
 	# to work correctly.  So its reproduced below.  Still need to fully
 	# understand why default_cleanup does not work correctly from here.
 	#
-        log_must zfs umount $TESTPOOL/$TESTFS
+    log_must zfs umount $TESTPOOL/$TESTFS
 
-        rm -rf $TESTDIR || \
-            log_unresolved Could not remove $TESTDIR
+    rm -rf $TESTDIR ||
+        log_unresolved Could not remove $TESTDIR
 
 	log_must zfs destroy $TESTPOOL/$TESTFS
 	destroy_pool $TESTPOOL
@@ -71,21 +71,11 @@ function mini_format
 
 	if is_linux; then
 		parted $disk -s -- mklabel gpt
-		typeset -i retval=$?
 	elif is_freebsd; then
 		gpart create -s gpt $disk
-		typeset -i retval=$?
 	else
-		typeset format_file=$TEST_BASE_DIR/format_in.$$.1
-		echo "partition" > $format_file
-		echo "modify" >> $format_file
-
-		format -e -s -d $disk -f $format_file
-		typeset -i retval=$?
-
-		rm -rf $format_file
+		format -e -s -d $disk -f <(printf '%s\n' partition modify)
 	fi
-	return $retval
 }
 
 log_assert "format will disallow modification of a mounted zfs disk partition"\

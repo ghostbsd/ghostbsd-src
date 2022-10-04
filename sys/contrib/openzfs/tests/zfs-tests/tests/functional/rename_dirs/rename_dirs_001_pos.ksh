@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -61,10 +61,7 @@ mkdir -p 1/2/3/4/5 a/b/c/d/e
 rename_dir &
 
 sleep 10
-typeset -i retval=1
-pgrep -x rename_dir >/dev/null 2>&1
-retval=$?
-if (( $retval == 0 )); then
+if pgrep -x rename_dir >/dev/null 2>&1; then
 	pkill -9 -x rename_dir >/dev/null 2>&1
 fi
 

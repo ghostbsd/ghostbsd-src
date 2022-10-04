@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -73,7 +73,7 @@ log_must zfs umount $TEST_FS
 
 for ((i=0; i < ${#dnsizes[*]}; i++)) ; do
 	dnsize=$(zdb -dddd $TEST_FS ${inodes[$i]} |
-	    awk '/ZFS plain file/ {print $6}' | tr K k)
+	    awk '/ZFS plain file/ {gsub(/K/, "k", $6); print $6}')
 	if [[ "$dnsize" != "${dnsizes[$i]}" ]]; then
 		log_fail "dnode size is $dnsize (expected ${dnsizes[$i]})"
 	fi

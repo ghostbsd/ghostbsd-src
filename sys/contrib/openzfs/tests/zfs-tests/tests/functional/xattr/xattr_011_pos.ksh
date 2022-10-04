@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -126,12 +126,8 @@ if is_illumos; then
 	log_must mkdir $TESTDIR/noxattrs
 	log_must touch $TESTDIR/noxattrs/no-xattr
 
-	find $TESTDIR -xattr | grep myfile.$$
-	[[ $? -ne 0 ]] && \
-		log_fail "find -xattr didn't find our file that had an xattr."
-	find $TESTDIR -xattr | grep no-xattr
-	[[ $? -eq 0 ]] && \
-		log_fail "find -xattr found a file that didn't have an xattr."
+	log_must eval "find $TESTDIR -xattr | grep -q myfile.$$"
+	log_mustnot eval "find $TESTDIR -xattr | grep -q no-xattr"
 	log_must rm -rf $TESTDIR/noxattrs
 else
 	log_note "Checking find - unsupported"

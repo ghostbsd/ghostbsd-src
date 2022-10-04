@@ -89,7 +89,7 @@ static void	 netdump_cleanup(void);
 static int	 netdump_configure(struct diocskerneldump_arg *,
 		    struct thread *);
 static int	 netdump_dumper(void *priv __unused, void *virtual,
-		    vm_offset_t physical __unused, off_t offset, size_t length);
+		    off_t offset, size_t length);
 static bool	 netdump_enabled(void);
 static int	 netdump_enabled_sysctl(SYSCTL_HANDLER_ARGS);
 static int	 netdump_ioctl(struct cdev *dev __unused, u_long cmd,
@@ -227,7 +227,6 @@ netdump_flush_buf(void)
  * Parameters:
  *	priv	 Unused. Optional private pointer.
  *	virtual  Virtual address (where to read the data from)
- *	physical Unused. Physical memory address.
  *	offset	 Offset from start of core file
  *	length	 Data length
  *
@@ -236,8 +235,7 @@ netdump_flush_buf(void)
  *	errno on error
  */
 static int
-netdump_dumper(void *priv __unused, void *virtual,
-    vm_offset_t physical __unused, off_t offset, size_t length)
+netdump_dumper(void *priv __unused, void *virtual, off_t offset, size_t length)
 {
 	int error;
 
@@ -454,6 +452,10 @@ netdump_configure(struct diocskerneldump_arg *conf, struct thread *td)
 		CURVNET_SET(vnet0);
 		ifp = ifunit_ref(conf->kda_iface);
 		CURVNET_RESTORE();
+		if (!DEBUGNET_SUPPORTED_NIC(ifp)) {
+			if_rele(ifp);
+			return (ENODEV);
+		}
 	} else
 		ifp = NULL;
 
@@ -607,7 +609,7 @@ netdump_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t addr,
  *	priv, Unused.
  *
  * Returns:
- *	int, An errno value if an error occured, 0 otherwise.
+ *	int, An errno value if an error occurred, 0 otherwise.
  */
 static int
 netdump_modevent(module_t mod __unused, int what, void *priv __unused)
@@ -687,7 +689,7 @@ DECLARE_MODULE(netdump, netdump_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
  * Currently, this command does not support configuring encryption or
  * compression.
  */
-DB_FUNC(netdump, db_netdump_cmd, db_cmd_table, CS_OWN, NULL)
+DB_COMMAND_FLAGS(netdump, db_netdump_cmd, CS_OWN)
 {
 	static struct diocskerneldump_arg conf;
 	static char blockbuf[NETDUMP_DATASIZE];

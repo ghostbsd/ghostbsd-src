@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -94,11 +94,9 @@ done
 log_note "Verify df(1) can correctly display the space charged."
 for val in 1 2 3; do
 	if is_freebsd; then
-		used=`df -m /$TESTPOOL/fs_$val | grep $TESTPOOL/fs_$val \
-			| awk -v fs=fs_$val '$4 ~ fs {print $3}'`
+		used=`df -m /$TESTPOOL/fs_$val | awk -v pa=$TESTPOOL/fs_$val -v fs=fs_$val '$0 ~ pa && $4 ~ fs {print $3}'`
 	else
-		used=`df -F zfs -k /$TESTPOOL/fs_$val/$FILE | grep $TESTPOOL/fs_$val \
-			| awk '{print $3}'`
+		used=`df -F zfs -k /$TESTPOOL/fs_$val/$FILE | awk -v pa=$TESTPOOL/fs_$val '$0 ~ pa {print $3}'`
 		(( used = used * 1024 )) # kb -> bytes
 	fi
 	check_used $used $val

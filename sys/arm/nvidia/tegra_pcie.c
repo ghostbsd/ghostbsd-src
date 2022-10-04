@@ -1382,14 +1382,14 @@ tegra_pcib_attach_msi(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	sc->msi_page = kmem_alloc_contig(PAGE_SIZE, M_WAITOK, 0,
+	sc->msi_page = (uintptr_t)kmem_alloc_contig(PAGE_SIZE, M_WAITOK, 0,
 	    BUS_SPACE_MAXADDR, PAGE_SIZE, 0, VM_MEMATTR_DEFAULT);
 
 	/* MSI BAR */
 	tegra_pcib_set_bar(sc, 9, vtophys(sc->msi_page), vtophys(sc->msi_page),
 	    PAGE_SIZE, 0);
 
-	/* Disble and clear all interrupts. */
+	/* Disable and clear all interrupts. */
 	for (i = 0; i < AFI_MSI_REGS; i++) {
 		AFI_WR4(sc, AFI_MSI_EN_VEC(i), 0);
 		AFI_WR4(sc, AFI_MSI_VEC(i), 0xFFFFFFFF);
@@ -1616,8 +1616,6 @@ static device_method_t tegra_pcib_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t pcib_devclass;
 DEFINE_CLASS_1(pcib, tegra_pcib_driver, tegra_pcib_methods,
     sizeof(struct tegra_pcib_softc), ofw_pcib_driver);
-DRIVER_MODULE(tegra_pcib, simplebus, tegra_pcib_driver, pcib_devclass,
-    NULL, NULL);
+DRIVER_MODULE(tegra_pcib, simplebus, tegra_pcib_driver, NULL, NULL);

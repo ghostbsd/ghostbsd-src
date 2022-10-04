@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -47,8 +47,7 @@ log_assert "zpool set version can upgrade a pool"
 for version in 1 2 3 4 5 6 7 8
 do
 	log_must zpool set version=$version $TESTPOOL
-	ACTUAL=$(zpool get version $TESTPOOL | grep version \
-		| awk '{print $3}')
+	ACTUAL=$(get_pool_prop version $TESTPOOL)
 	if [ "$ACTUAL" != "$version" ]
 	then
 		log_fail "v. $ACTUAL set for $TESTPOOL, expected v. $version!"

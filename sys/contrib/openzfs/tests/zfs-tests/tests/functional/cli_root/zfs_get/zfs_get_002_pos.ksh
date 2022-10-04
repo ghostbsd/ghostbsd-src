@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -85,7 +85,7 @@ for dst in ${dataset[@]}; do
 	for opt in "" $(gen_option_str "${options[*]}" "-" "" $opt_numb); do
 		for prop in $(gen_option_str "${props[*]}" "" "," $prop_numb)
 		do
-			log_must eval "zfs get $opt $prop $dst > /dev/null"
+			log_must eval "zfs get $opt $prop $dst > /dev/null 2>&1"
 		done
 	done
 done

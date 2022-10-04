@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -124,6 +124,13 @@ typedef enum drr_headertype {
  * default use of "zfs send" won't encounter the bug mentioned above.
  */
 #define	DMU_BACKUP_FEATURE_SWITCH_TO_LARGE_BLOCKS (1 << 27)
+/* flag #28 is reserved for a Nutanix feature */
+/*
+ * flag #29 is the last unused bit. It is reserved to indicate a to-be-designed
+ * extension to the stream format which will accomodate more feature flags.
+ * If you need to add another feature flag, please reach out to the OpenZFS
+ * community, e.g., on GitHub or Slack.
+ */
 
 /*
  * Mask of all supported backup features

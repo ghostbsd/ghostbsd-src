@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -59,7 +59,6 @@ log_assert "Verify zpool sub-commands which modify state are logged."
 log_onexit cleanup
 
 mntpnt=$(get_prop mountpoint $TESTPOOL)
-(( $? != 0)) && log_fail "get_prop($TESTPOOL mountpoint)"
 VDEV1=$mntpnt/vdev1; VDEV2=$mntpnt/vdev2;
 VDEV3=$mntpnt/vdev3; VDEV4=$mntpnt/vdev4;
 

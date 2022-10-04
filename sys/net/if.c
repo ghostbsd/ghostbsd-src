@@ -58,6 +58,7 @@
 #include <sys/lock.h>
 #include <sys/refcount.h>
 #include <sys/module.h>
+#include <sys/nv.h>
 #include <sys/rwlock.h>
 #include <sys/sockio.h>
 #include <sys/syslog.h>
@@ -513,7 +514,9 @@ vnet_if_return(const void *unused __unused)
 	IFNET_WUNLOCK();
 
 	for (int j = 0; j < i; j++) {
+		sx_xlock(&ifnet_detach_sxlock);
 		if_vmove(pending[j], pending[j]->if_home_vnet);
+		sx_xunlock(&ifnet_detach_sxlock);
 	}
 
 	free(pending, M_IFNET);
@@ -650,7 +653,7 @@ if_free_deferred(epoch_context_t ctx)
 	for (int i = 0; i < IFCOUNTERS; i++)
 		counter_u64_free(ifp->if_counters[i]);
 
-	free(ifp->if_description, M_IFDESCR);
+	if_freedescr(ifp->if_description);
 	free(ifp->if_hw_addr, M_IFADDR);
 	free(ifp, M_IFNET);
 }
@@ -954,9 +957,6 @@ if_attach_internal(struct ifnet *ifp, bool vmove)
 	EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
 	if (IS_DEFAULT_VNET(curvnet))
 		devctl_notify("IFNET", ifp->if_xname, "ATTACH", NULL);
-
-	/* Announce the interface. */
-	rt_ifannouncemsg(ifp, IFAN_ARRIVAL);
 }
 
 static void
@@ -999,7 +999,7 @@ if_attachdomain1(struct ifnet *ifp)
 
 	/* address family dependent data region */
 	bzero(ifp->if_afdata, sizeof(ifp->if_afdata));
-	for (dp = domains; dp; dp = dp->dom_next) {
+	SLIST_FOREACH(dp, &domains, dom_next) {
 		if (dp->dom_ifattach)
 			ifp->if_afdata[dp->dom_family] =
 			    (*dp->dom_ifattach)(ifp);
@@ -1014,6 +1014,16 @@ if_purgeaddrs(struct ifnet *ifp)
 {
 	struct ifaddr *ifa;
 
+#ifdef INET6
+	/*
+	 * Need to leave multicast addresses of proxy NDP llentries
+	 * before in6_purgeifaddr() because the llentries are keys
+	 * for in6_multi objects of proxy NDP entries.
+	 * in6_purgeifaddr()s clean up llentries including proxy NDPs
+	 * then we would lose the keys if they are called earlier.
+	 */
+	in6_purge_proxy_ndp(ifp);
+#endif
 	while (1) {
 		struct epoch_tracker et;
 
@@ -1130,7 +1140,7 @@ if_detach_internal(struct ifnet *ifp, bool vmove)
 	 * which lead to leave group calls, which in turn access the
 	 * belonging ifnet structure:
 	 */
-	epoch_drain_callbacks(net_epoch_preempt);
+	NET_EPOCH_DRAIN_CALLBACKS();
 
 	/*
 	 * In any case (destroy or vmove) detach us from the groups
@@ -1197,8 +1207,6 @@ if_detach_internal(struct ifnet *ifp, bool vmove)
 #endif
 	if_purgemaddrs(ifp);
 
-	/* Announce that the interface is gone. */
-	rt_ifannouncemsg(ifp, IFAN_DEPARTURE);
 	EVENTHANDLER_INVOKE(ifnet_departure_event, ifp);
 	if (IS_DEFAULT_VNET(curvnet))
 		devctl_notify("IFNET", ifp->if_xname, "DETACH", NULL);
@@ -1236,7 +1244,9 @@ finish_vnet_shutdown:
 	i = ifp->if_afdata_initialized;
 	ifp->if_afdata_initialized = 0;
 	IF_AFDATA_UNLOCK(ifp);
-	for (dp = domains; i > 0 && dp; dp = dp->dom_next) {
+	if (i == 0)
+		return (0);
+	SLIST_FOREACH(dp, &domains, dom_next) {
 		if (dp->dom_ifdetach && ifp->if_afdata[dp->dom_family]) {
 			(*dp->dom_ifdetach)(ifp,
 			    ifp->if_afdata[dp->dom_family]);
@@ -1312,6 +1322,8 @@ if_vmove_loan(struct thread *td, struct ifnet *ifp, char *ifname, int jid)
 	bool found __diagused;
 	bool shutdown;
 
+	MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
+
 	/* Try to find the prison within our visibility. */
 	sx_slock(&allprison_lock);
 	pr = prison_find_child(td->td_ucred->cr_prison, jid);
@@ -1336,10 +1348,12 @@ if_vmove_loan(struct thread *td, struct ifnet *ifp, char *ifname, int jid)
 		prison_free(pr);
 		return (EEXIST);
 	}
+	sx_xlock(&ifnet_detach_sxlock);
 
 	/* Make sure the VNET is stable. */
 	shutdown = VNET_IS_SHUTTING_DOWN(ifp->if_vnet);
 	if (shutdown) {
+		sx_xunlock(&ifnet_detach_sxlock);
 		CURVNET_RESTORE();
 		prison_free(pr);
 		return (EBUSY);
@@ -1347,7 +1361,12 @@ if_vmove_loan(struct thread *td, struct ifnet *ifp, char *ifname, int jid)
 	CURVNET_RESTORE();
 
 	found = if_unlink_ifnet(ifp, true);
-	MPASS(found);
+	if (! found) {
+		sx_xunlock(&ifnet_detach_sxlock);
+		CURVNET_RESTORE();
+		prison_free(pr);
+		return (ENODEV);
+	}
 
 	/* Move the interface into the child jail/vnet. */
 	error = if_vmove(ifp, pr->pr_vnet);
@@ -1355,6 +1374,8 @@ if_vmove_loan(struct thread *td, struct ifnet *ifp, char *ifname, int jid)
 	/* Report the new if_xname back to the userland on success. */
 	if (error == 0)
 		sprintf(ifname, "%s", ifp->if_xname);
+
+	sx_xunlock(&ifnet_detach_sxlock);
 
 	prison_free(pr);
 	return (error);
@@ -1406,7 +1427,9 @@ if_vmove_reclaim(struct thread *td, char *ifname, int jid)
 	/* Get interface back from child jail/vnet. */
 	found = if_unlink_ifnet(ifp, true);
 	MPASS(found);
+	sx_xlock(&ifnet_detach_sxlock);
 	error = if_vmove(ifp, vnet_dst);
+	sx_xunlock(&ifnet_detach_sxlock);
 	CURVNET_RESTORE();
 
 	/* Report the new if_xname back to the userland on success. */
@@ -2106,18 +2129,11 @@ link_init_sdl(struct ifnet *ifp, struct sockaddr *paddr, u_char iftype)
 static void
 if_unroute(struct ifnet *ifp, int flag, int fam)
 {
-	struct ifaddr *ifa;
-	struct epoch_tracker et;
 
 	KASSERT(flag == IFF_UP, ("if_unroute: flag != IFF_UP"));
 
 	ifp->if_flags &= ~flag;
 	getmicrotime(&ifp->if_lastchange);
-	NET_EPOCH_ENTER(et);
-	CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link)
-		if (fam == PF_UNSPEC || (fam == ifa->ifa_addr->sa_family))
-			pfctlinput(PRC_IFDOWN, ifa->ifa_addr);
-	NET_EPOCH_EXIT(et);
 	ifp->if_qflush(ifp);
 
 	if (ifp->if_carp)
@@ -2132,18 +2148,11 @@ if_unroute(struct ifnet *ifp, int flag, int fam)
 static void
 if_route(struct ifnet *ifp, int flag, int fam)
 {
-	struct ifaddr *ifa;
-	struct epoch_tracker et;
 
 	KASSERT(flag == IFF_UP, ("if_route: flag != IFF_UP"));
 
 	ifp->if_flags |= flag;
 	getmicrotime(&ifp->if_lastchange);
-	NET_EPOCH_ENTER(et);
-	CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link)
-		if (fam == PF_UNSPEC || (fam == ifa->ifa_addr->sa_family))
-			pfctlinput(PRC_IFUP, ifa->ifa_addr);
-	NET_EPOCH_EXIT(et);
 	if (ifp->if_carp)
 		(*carp_linkstate_p)(ifp);
 	rt_ifmsg(ifp);
@@ -2283,8 +2292,11 @@ ifunit_ref(const char *name)
 		    !(ifp->if_flags & IFF_DYING))
 			break;
 	}
-	if (ifp != NULL)
+	if (ifp != NULL) {
 		if_ref(ifp);
+		MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
+	}
+
 	NET_EPOCH_EXIT(et);
 	return (ifp);
 }
@@ -2373,6 +2385,88 @@ ifr_data_get_ptr(void *ifrp)
 		return (ifrup->ifr.ifr_ifru.ifru_data);
 }
 
+struct ifcap_nv_bit_name {
+	int cap_bit;
+	const char *cap_name;
+};
+#define CAPNV(x) {.cap_bit = IFCAP_##x, \
+    .cap_name = __CONCAT(IFCAP_, __CONCAT(x, _NAME)) }
+const struct ifcap_nv_bit_name ifcap_nv_bit_names[] = {
+	CAPNV(RXCSUM),
+	CAPNV(TXCSUM),
+	CAPNV(NETCONS),
+	CAPNV(VLAN_MTU),
+	CAPNV(VLAN_HWTAGGING),
+	CAPNV(JUMBO_MTU),
+	CAPNV(POLLING),
+	CAPNV(VLAN_HWCSUM),
+	CAPNV(TSO4),
+	CAPNV(TSO6),
+	CAPNV(LRO),
+	CAPNV(WOL_UCAST),
+	CAPNV(WOL_MCAST),
+	CAPNV(WOL_MAGIC),
+	CAPNV(TOE4),
+	CAPNV(TOE6),
+	CAPNV(VLAN_HWFILTER),
+	CAPNV(VLAN_HWTSO),
+	CAPNV(LINKSTATE),
+	CAPNV(NETMAP),
+	CAPNV(RXCSUM_IPV6),
+	CAPNV(TXCSUM_IPV6),
+	CAPNV(HWSTATS),
+	CAPNV(TXRTLMT),
+	CAPNV(HWRXTSTMP),
+	CAPNV(MEXTPG),
+	CAPNV(TXTLS4),
+	CAPNV(TXTLS6),
+	CAPNV(VXLAN_HWCSUM),
+	CAPNV(VXLAN_HWTSO),
+	CAPNV(TXTLS_RTLMT),
+	{0, NULL}
+};
+#define CAP2NV(x) {.cap_bit = IFCAP2_##x, \
+    .cap_name = __CONCAT(IFCAP2_, __CONCAT(x, _NAME)) }
+const struct ifcap_nv_bit_name ifcap2_nv_bit_names[] = {
+	CAP2NV(RXTLS4),
+	CAP2NV(RXTLS6),
+	{0, NULL}
+};
+#undef CAPNV
+#undef CAP2NV
+
+int
+if_capnv_to_capint(const nvlist_t *nv, int *old_cap,
+    const struct ifcap_nv_bit_name *nn, bool all)
+{
+	int i, res;
+
+	res = 0;
+	for (i = 0; nn[i].cap_name != NULL; i++) {
+		if (nvlist_exists_bool(nv, nn[i].cap_name)) {
+			if (all || nvlist_get_bool(nv, nn[i].cap_name))
+				res |= nn[i].cap_bit;
+		} else {
+			res |= *old_cap & nn[i].cap_bit;
+		}
+	}
+	return (res);
+}
+
+void
+if_capint_to_capnv(nvlist_t *nv, const struct ifcap_nv_bit_name *nn,
+    int ifr_cap, int ifr_req)
+{
+	int i;
+
+	for (i = 0; nn[i].cap_name != NULL; i++) {
+		if ((nn[i].cap_bit & ifr_cap) != 0) {
+			nvlist_add_bool(nv, nn[i].cap_name,
+			    (nn[i].cap_bit & ifr_req) != 0);
+		}
+	}
+}
+
 /*
  * Hardware specific interface ioctls.
  */
@@ -2383,12 +2477,15 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 	int error = 0, do_ifup = 0;
 	int new_flags, temp_flags;
 	size_t namelen, onamelen;
-	size_t descrlen;
-	char *descrbuf, *odescrbuf;
+	size_t descrlen, nvbuflen;
+	char *descrbuf;
 	char new_name[IFNAMSIZ];
 	char old_name[IFNAMSIZ], strbuf[IFNAMSIZ + 8];
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
+	void *buf;
+	nvlist_t *nvcap;
+	struct siocsifcapnv_driver_data drv_ioctl_data;
 
 	ifr = (struct ifreq *)data;
 	switch (cmd) {
@@ -2405,6 +2502,47 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 	case SIOCGIFCAP:
 		ifr->ifr_reqcap = ifp->if_capabilities;
 		ifr->ifr_curcap = ifp->if_capenable;
+		break;
+
+	case SIOCGIFCAPNV:
+		if ((ifp->if_capabilities & IFCAP_NV) == 0) {
+			error = EINVAL;
+			break;
+		}
+		buf = NULL;
+		nvcap = nvlist_create(0);
+		for (;;) {
+			if_capint_to_capnv(nvcap, ifcap_nv_bit_names,
+			    ifp->if_capabilities, ifp->if_capenable);
+			if_capint_to_capnv(nvcap, ifcap2_nv_bit_names,
+			    ifp->if_capabilities2, ifp->if_capenable2);
+			error = (*ifp->if_ioctl)(ifp, SIOCGIFCAPNV,
+			    __DECONST(caddr_t, nvcap));
+			if (error != 0) {
+				if_printf(ifp,
+			    "SIOCGIFCAPNV driver mistake: nvlist error %d\n",
+				    error);
+				break;
+			}
+			buf = nvlist_pack(nvcap, &nvbuflen);
+			if (buf == NULL) {
+				error = nvlist_error(nvcap);
+				if (error == 0)
+					error = EDOOFUS;
+				break;
+			}
+			if (nvbuflen > ifr->ifr_cap_nv.buf_length) {
+				ifr->ifr_cap_nv.length = nvbuflen;
+				ifr->ifr_cap_nv.buffer = NULL;
+				error = EFBIG;
+				break;
+			}
+			ifr->ifr_cap_nv.length = nvbuflen;
+			error = copyout(buf, ifr->ifr_cap_nv.buffer, nvbuflen);
+			break;
+		}
+		free(buf, M_NVLIST);
+		nvlist_destroy(nvcap);
 		break;
 
 	case SIOCGIFDATA:
@@ -2477,18 +2615,13 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 			error = copyin(ifr_buffer_get_buffer(ifr), descrbuf,
 			    ifr_buffer_get_length(ifr) - 1);
 			if (error) {
-				free(descrbuf, M_IFDESCR);
+				if_freedescr(descrbuf);
 				break;
 			}
 		}
 
-		sx_xlock(&ifdescr_sx);
-		odescrbuf = ifp->if_description;
-		ifp->if_description = descrbuf;
-		sx_xunlock(&ifdescr_sx);
-
+		if_setdescr(ifp, descrbuf);
 		getmicrotime(&ifp->if_lastchange);
-		free(odescrbuf, M_IFDESCR);
 		break;
 
 	case SIOCGIFFIB:
@@ -2545,13 +2678,60 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 
 	case SIOCSIFCAP:
 		error = priv_check(td, PRIV_NET_SETIFCAP);
-		if (error)
+		if (error != 0)
 			return (error);
 		if (ifp->if_ioctl == NULL)
 			return (EOPNOTSUPP);
 		if (ifr->ifr_reqcap & ~ifp->if_capabilities)
 			return (EINVAL);
 		error = (*ifp->if_ioctl)(ifp, cmd, data);
+		if (error == 0)
+			getmicrotime(&ifp->if_lastchange);
+		break;
+
+	case SIOCSIFCAPNV:
+		error = priv_check(td, PRIV_NET_SETIFCAP);
+		if (error != 0)
+			return (error);
+		if (ifp->if_ioctl == NULL)
+			return (EOPNOTSUPP);
+		if ((ifp->if_capabilities & IFCAP_NV) == 0)
+			return (EINVAL);
+		if (ifr->ifr_cap_nv.length > IFR_CAP_NV_MAXBUFSIZE)
+			return (EINVAL);
+		nvcap = NULL;
+		buf = malloc(ifr->ifr_cap_nv.length, M_TEMP, M_WAITOK);
+		for (;;) {
+			error = copyin(ifr->ifr_cap_nv.buffer, buf,
+			    ifr->ifr_cap_nv.length);
+			if (error != 0)
+				break;
+			nvcap = nvlist_unpack(buf, ifr->ifr_cap_nv.length, 0);
+			if (nvcap == NULL) {
+				error = EINVAL;
+				break;
+			}
+			drv_ioctl_data.reqcap = if_capnv_to_capint(nvcap,
+			    &ifp->if_capenable, ifcap_nv_bit_names, false);
+			if ((drv_ioctl_data.reqcap &
+			    ~ifp->if_capabilities) != 0) {
+				error = EINVAL;
+				break;
+			}
+			drv_ioctl_data.reqcap2 = if_capnv_to_capint(nvcap,
+			    &ifp->if_capenable2, ifcap2_nv_bit_names, false);
+			if ((drv_ioctl_data.reqcap2 &
+			    ~ifp->if_capabilities2) != 0) {
+				error = EINVAL;
+				break;
+			}
+			drv_ioctl_data.nvcap = nvcap;
+			error = (*ifp->if_ioctl)(ifp, SIOCSIFCAPNV,
+			    (caddr_t)&drv_ioctl_data);
+			break;
+		}
+		nvlist_destroy(nvcap);
+		free(buf, M_TEMP);
 		if (error == 0)
 			getmicrotime(&ifp->if_lastchange);
 		break;
@@ -2585,8 +2765,6 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		 */
 		ifp->if_flags |= IFF_RENAMING;
 		
-		/* Announce the departure of the interface. */
-		rt_ifannouncemsg(ifp, IFAN_DEPARTURE);
 		EVENTHANDLER_INVOKE(ifnet_departure_event, ifp);
 
 		if_printf(ifp, "changing name to '%s'\n", new_name);
@@ -2616,8 +2794,6 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		IF_ADDR_WUNLOCK(ifp);
 
 		EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
-		/* Announce the return of the interface. */
-		rt_ifannouncemsg(ifp, IFAN_ARRIVAL);
 
 		ifp->if_flags &= ~IFF_RENAMING;
 
@@ -2984,8 +3160,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 	 * layer, and do not perform any credentials checks or input
 	 * validation.
 	 */
-	error = ((*so->so_proto->pr_usrreqs->pru_control)(so, cmd, data,
-	    ifp, td));
+	error = so->so_proto->pr_control(so, cmd, data, ifp, td);
 	if (error == EOPNOTSUPP && ifp != NULL && ifp->if_ioctl != NULL &&
 	    cmd != SIOCSIFADDR && cmd != SIOCSIFBRDADDR &&
 	    cmd != SIOCSIFDSTADDR && cmd != SIOCSIFNETMASK)
@@ -4004,7 +4179,7 @@ if_deregister_com_alloc(u_char type)
 	 * fixes issues about late invocation of if_destroy(), which leads
 	 * to memory leak from if_com_alloc[type] allocated if_l2com.
 	 */
-	epoch_drain_callbacks(net_epoch_preempt);
+	NET_EPOCH_DRAIN_CALLBACKS();
 
 	if_com_alloc[type] = NULL;
 	if_com_free[type] = NULL;
@@ -4085,6 +4260,23 @@ int
 if_getcapenable(if_t ifp)
 {
 	return ((struct ifnet *)ifp)->if_capenable;
+}
+
+void
+if_setdescr(if_t ifp, char *descrbuf)
+{
+	sx_xlock(&ifdescr_sx);
+	char *odescrbuf = ifp->if_description;
+	ifp->if_description = descrbuf;
+	sx_xunlock(&ifdescr_sx);
+
+	if_freedescr(odescrbuf);
+}
+
+void
+if_freedescr(char *descrbuf)
+{
+	free(descrbuf, M_IFDESCR);
 }
 
 /*
@@ -4191,7 +4383,7 @@ if_getmtu_family(if_t ifp, int family)
 {
 	struct domain *dp;
 
-	for (dp = domains; dp; dp = dp->dom_next) {
+	SLIST_FOREACH(dp, &domains, dom_next) {
 		if (dp->dom_family == family && dp->dom_ifmtu != NULL)
 			return (dp->dom_ifmtu((struct ifnet *)ifp));
 	}

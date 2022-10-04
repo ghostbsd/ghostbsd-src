@@ -1112,10 +1112,10 @@ static void
 print_map_success(struct amd_ntb_softc *ntb, struct amd_ntb_pci_bar_info *bar,
     const char *kind)
 {
-	amd_ntb_printf(0, "Mapped BAR%d v:[%p-%p] p:[%p-%p] (0x%jx bytes) (%s)\n",
+	amd_ntb_printf(0, "Mapped BAR%d v:[%p-%p] p:[0x%jx-0x%jx] (0x%jx bytes) (%s)\n",
 	    PCI_RID2BAR(bar->pci_resource_id), bar->vbase,
-	    (char *)bar->vbase + bar->size - 1, (void *)bar->pbase,
-	    (void *)(bar->pbase + bar->size - 1), (uintmax_t)bar->size, kind);
+	    (char *)bar->vbase + bar->size - 1, (uintmax_t)bar->pbase,
+	    (uintmax_t)(bar->pbase + bar->size - 1), (uintmax_t)bar->size, kind);
 }
 
 static void
@@ -1310,7 +1310,7 @@ static device_method_t ntb_amd_methods[] = {
 
 static DEFINE_CLASS_0(ntb_hw, ntb_amd_driver, ntb_amd_methods,
     sizeof(struct amd_ntb_softc));
-DRIVER_MODULE(ntb_hw_amd, pci, ntb_amd_driver, ntb_hw_devclass, NULL, NULL);
+DRIVER_MODULE(ntb_hw_amd, pci, ntb_amd_driver, NULL, NULL);
 MODULE_DEPEND(ntb_hw_amd, ntb, 1, 1, 1);
 MODULE_VERSION(ntb_hw_amd, 1);
 PCI_PNP_INFO(amd_ntb_devs);

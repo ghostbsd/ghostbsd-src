@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -101,7 +101,7 @@ log_onexit cleanup
 log_assert "Verify that an imported pool can be renamed."
 
 setup_filesystem "$DEVICE_FILES" $TESTPOOL1 $TESTFS $TESTDIR1
-checksum1=$(sum $MYTESTFILE | awk '{print $1}')
+read -r checksum1 _ < <(cksum $MYTESTFILE)
 
 typeset -i i=0
 typeset -i j=0
@@ -140,9 +140,8 @@ while (( i < ${#pools[*]} )); do
 		[[ ! -e $basedir/$TESTFILE0 ]] && \
 			log_fail "$basedir/$TESTFILE0 missing after import."
 
-		checksum2=$(sum $basedir/$TESTFILE0 | awk '{print $1}')
-		[[ "$checksum1" != "$checksum2" ]] && \
-			log_fail "Checksums differ ($checksum1 != $checksum2)"
+		read -r checksum2 _ < <(cksum $basedir/$TESTFILE0)
+		log_must [ "$checksum1" = "$checksum2" ]
 
 		log_must zpool export "${pools[i]}-new"
 

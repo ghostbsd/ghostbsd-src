@@ -130,7 +130,7 @@ MODULE_DEPEND(bge, miibus, 1, 1, 1);
 /*
  * Various supported device vendors/types and their names. Note: the
  * spec seems to indicate that the hardware still has Alteon's vendor
- * ID burned into it, though it will always be overriden by the vendor
+ * ID burned into it, though it will always be overridden by the vendor
  * ID in the EEPROM. Just to be safe, we cover all possibilities.
  */
 static const struct bge_type {
@@ -532,12 +532,10 @@ static driver_t bge_driver = {
 	sizeof(struct bge_softc)
 };
 
-static devclass_t bge_devclass;
-
-DRIVER_MODULE(bge, pci, bge_driver, bge_devclass, 0, 0);
+DRIVER_MODULE(bge, pci, bge_driver, 0, 0);
 MODULE_PNP_INFO("U16:vendor;U16:device", pci, bge, bge_devs,
     nitems(bge_devs) - 1);
-DRIVER_MODULE(miibus, bge, miibus_driver, miibus_devclass, 0, 0);
+DRIVER_MODULE(miibus, bge, miibus_driver, 0, 0);
 
 static int bge_allow_asf = 1;
 
@@ -6783,7 +6781,14 @@ bge_debugnet_init(if_t ifp, int *nrxr, int *ncl, int *clsize)
 
 	sc = if_getsoftc(ifp);
 	BGE_LOCK(sc);
-	*nrxr = sc->bge_return_ring_cnt;
+	/*
+	 * There is only one logical receive ring, but it is backed
+	 * by two actual rings, for cluster- and jumbo-sized mbufs.
+	 * Debugnet expects only one size, so if jumbo is in use,
+	 * this says we have two rings of jumbo mbufs, but that's
+	 * only a little wasteful.
+	 */
+	*nrxr = 2;
 	*ncl = DEBUGNET_MAX_IN_FLIGHT;
 	if ((sc->bge_flags & BGE_FLAG_JUMBO_STD) != 0 &&
 	    (if_getmtu(sc->bge_ifp) + ETHER_HDR_LEN + ETHER_CRC_LEN +

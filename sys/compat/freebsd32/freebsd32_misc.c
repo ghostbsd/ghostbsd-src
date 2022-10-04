@@ -1535,6 +1535,7 @@ freebsd32_copyin_control(struct mbuf **mp, caddr_t buf, u_int buflen)
 	u_int msglen, outlen;
 	int error;
 
+	/* Enforce the size limit of the native implementation. */
 	if (buflen > MCLBYTES)
 		return (EINVAL);
 
@@ -1555,35 +1556,39 @@ freebsd32_copyin_control(struct mbuf **mp, caddr_t buf, u_int buflen)
 			break;
 		}
 		cm = (struct cmsghdr *)in1;
-		if (cm->cmsg_len < FREEBSD32_ALIGN(sizeof(*cm))) {
+		if (cm->cmsg_len < FREEBSD32_ALIGN(sizeof(*cm)) ||
+		    cm->cmsg_len > buflen) {
 			error = EINVAL;
 			break;
 		}
 		msglen = FREEBSD32_ALIGN(cm->cmsg_len);
-		if (msglen > buflen || msglen < cm->cmsg_len) {
+		if (msglen < cm->cmsg_len) {
 			error = EINVAL;
 			break;
 		}
+		/* The native ABI permits the final padding to be omitted. */
+		if (msglen > buflen)
+			msglen = buflen;
 		buflen -= msglen;
 
 		in1 = (char *)in1 + msglen;
 		outlen += CMSG_ALIGN(sizeof(*cm)) +
 		    CMSG_ALIGN(msglen - FREEBSD32_ALIGN(sizeof(*cm)));
 	}
-	if (error == 0 && outlen > MCLBYTES) {
-		/*
-		 * XXXMJ This implies that the upper limit on 32-bit aligned
-		 * control messages is less than MCLBYTES, and so we are not
-		 * perfectly compatible.  However, there is no platform
-		 * guarantee that mbuf clusters larger than MCLBYTES can be
-		 * allocated.
-		 */
-		error = EINVAL;
-	}
 	if (error != 0)
 		goto out;
 
+	/*
+	 * Allocate up to MJUMPAGESIZE space for the re-aligned and
+	 * re-padded control messages.  This allows a full MCLBYTES of
+	 * 32-bit sized and aligned messages to fit and avoids an ABI
+	 * mismatch with the native implementation.
+	 */
 	m = m_get2(outlen, M_WAITOK, MT_CONTROL, 0);
+	if (m == NULL) {
+		error = EINVAL;
+		goto out;
+	}
 	m->m_len = outlen;
 	md = mtod(m, void *);
 
@@ -3310,13 +3315,72 @@ freebsd32_cpuset_getid(struct thread *td,
 	    PAIR32TO64(id_t, uap->id), uap->setid));
 }
 
+static int
+copyin32_set(const void *u, void *k, size_t size)
+{
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	int rv;
+	struct bitset *kb = k;
+	int *p;
+
+	rv = copyin(u, k, size);
+	if (rv != 0)
+		return (rv);
+
+	p = (int *)kb->__bits;
+	/* Loop through swapping words.
+	 * `size' is in bytes, we need bits. */
+	for (int i = 0; i < __bitset_words(size * 8); i++) {
+		int tmp = p[0];
+		p[0] = p[1];
+		p[1] = tmp;
+		p += 2;
+	}
+	return (0);
+#else
+	return (copyin(u, k, size));
+#endif
+}
+
+static int
+copyout32_set(const void *k, void *u, size_t size)
+{
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	const struct bitset *kb = k;
+	struct bitset *ub = u;
+	const int *kp = (const int *)kb->__bits;
+	int *up = (int *)ub->__bits;
+	int rv;
+
+	for (int i = 0; i < __bitset_words(CPU_SETSIZE); i++) {
+		/* `size' is in bytes, we need bits. */
+		for (int i = 0; i < __bitset_words(size * 8); i++) {
+			rv = suword32(up, kp[1]);
+			if (rv == 0)
+				rv = suword32(up + 1, kp[0]);
+			if (rv != 0)
+				return (EFAULT);
+		}
+	}
+	return (0);
+#else
+	return (copyout(k, u, size));
+#endif
+}
+
+static const struct cpuset_copy_cb cpuset_copy32_cb = {
+	.cpuset_copyin = copyin32_set,
+	.cpuset_copyout = copyout32_set
+};
+
 int
 freebsd32_cpuset_getaffinity(struct thread *td,
     struct freebsd32_cpuset_getaffinity_args *uap)
 {
 
-	return (kern_cpuset_getaffinity(td, uap->level, uap->which,
-	    PAIR32TO64(id_t,uap->id), uap->cpusetsize, uap->mask));
+	return (user_cpuset_getaffinity(td, uap->level, uap->which,
+	    PAIR32TO64(id_t,uap->id), uap->cpusetsize, uap->mask,
+	    &cpuset_copy32_cb));
 }
 
 int
@@ -3324,8 +3388,9 @@ freebsd32_cpuset_setaffinity(struct thread *td,
     struct freebsd32_cpuset_setaffinity_args *uap)
 {
 
-	return (kern_cpuset_setaffinity(td, uap->level, uap->which,
-	    PAIR32TO64(id_t,uap->id), uap->cpusetsize, uap->mask));
+	return (user_cpuset_setaffinity(td, uap->level, uap->which,
+	    PAIR32TO64(id_t,uap->id), uap->cpusetsize, uap->mask,
+	    &cpuset_copy32_cb));
 }
 
 int
@@ -3334,7 +3399,8 @@ freebsd32_cpuset_getdomain(struct thread *td,
 {
 
 	return (kern_cpuset_getdomain(td, uap->level, uap->which,
-	    PAIR32TO64(id_t,uap->id), uap->domainsetsize, uap->mask, uap->policy));
+	    PAIR32TO64(id_t,uap->id), uap->domainsetsize, uap->mask, uap->policy,
+	    &cpuset_copy32_cb));
 }
 
 int
@@ -3343,7 +3409,8 @@ freebsd32_cpuset_setdomain(struct thread *td,
 {
 
 	return (kern_cpuset_setdomain(td, uap->level, uap->which,
-	    PAIR32TO64(id_t,uap->id), uap->domainsetsize, uap->mask, uap->policy));
+	    PAIR32TO64(id_t,uap->id), uap->domainsetsize, uap->mask, uap->policy,
+	    &cpuset_copy32_cb));
 }
 
 int
@@ -3463,7 +3530,7 @@ freebsd32_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	/*
 	 * Install sigcode.
 	 */
-	if (sysent->sv_sigcode_base == 0) {
+	if (!PROC_HAS_SHP(imgp->proc)) {
 		szsigcode = *sysent->sv_szsigcode;
 		destp -= szsigcode;
 		destp = rounddown2(destp, sizeof(uint32_t));

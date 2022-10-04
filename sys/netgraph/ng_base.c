@@ -978,7 +978,7 @@ ng_unname(node_p node)
  * Allocate a bigger name hash.
  */
 static void
-ng_name_rehash()
+ng_name_rehash(void)
 {
 	struct nodehash *new;
 	uint32_t hash;
@@ -1009,7 +1009,7 @@ ng_name_rehash()
  * Allocate a bigger ID hash.
  */
 static void
-ng_ID_rehash()
+ng_ID_rehash(void)
 {
 	struct nodehash *new;
 	uint32_t hash;
@@ -3439,7 +3439,19 @@ ngthread(void *arg)
 			} else {
 				NG_QUEUE_UNLOCK(&node->nd_input_queue);
 				NGI_GET_NODE(item, node); /* zaps stored node */
-				ng_apply_item(node, item, rw);
+
+				if ((item->el_flags & NGQF_TYPE) == NGQF_MESG) {
+					/*
+					 * NGQF_MESG items should never be processed in
+					 * NET_EPOCH context. So, temporary exit from EPOCH.
+					 */
+					NET_EPOCH_EXIT(et);
+					ng_apply_item(node, item, rw);
+					NET_EPOCH_ENTER(et);
+				} else {
+					ng_apply_item(node, item, rw);
+				}
+
 				NG_NODE_UNREF(node);
 			}
 		}

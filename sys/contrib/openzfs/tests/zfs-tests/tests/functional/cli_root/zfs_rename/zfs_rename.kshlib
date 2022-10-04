@@ -6,7 +6,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -92,8 +92,7 @@ function cleanup
 		fi
 
                 if [[ ${dataset[i]}-new != *@* ]] ; then
-                        zfs rename ${dataset[i]}-new ${dataset[i]}
-                        if [[ $? -ne 0 ]]; then
+                        if ! zfs rename ${dataset[i]}-new ${dataset[i]}; then
                                 typeset newfs=${dataset[i]}-new
                                 typeset oldfs=${dataset[i]}
                                 typeset mntp=$(get_prop mountpoint  $newfs)
@@ -120,8 +119,6 @@ function cmp_data #<$1 src data, $2 tgt data>
         typeset src=$1
         typeset tgt=$2
 
-        cmp $src $tgt >/dev/null 2>&1
-
-        return $?
+        cmp $src $tgt >/dev/null
 }
 

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -100,7 +100,7 @@ log_must zfs snapshot $SNAPPOOL.1
 #
 # https://github.com/openzfs/zfs/issues/6143
 #
-log_must df >/dev/null
+log_must eval "df >/dev/null"
 
 export __ZFS_POOL_RESTRICT="$TESTPOOL"
 log_must zfs unmount -a
@@ -110,6 +110,6 @@ unset __ZFS_POOL_RESTRICT
 log_must touch /$TESTPOOL/$TESTFILE/$TESTFILE.1
 
 log_must zfs rollback $SNAPPOOL.1
-log_must df >/dev/null
+log_must eval "df >/dev/null"
 
 log_pass "Rollbacks succeed when nested file systems are present."

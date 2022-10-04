@@ -103,12 +103,8 @@ static device_method_t thunder_pcie_fdt_methods[] = {
 DEFINE_CLASS_1(pcib, thunder_pcie_fdt_driver, thunder_pcie_fdt_methods,
     sizeof(struct generic_pcie_fdt_softc), generic_pcie_fdt_driver);
 
-static devclass_t thunder_pcie_fdt_devclass;
-
-DRIVER_MODULE(thunder_pcib, simplebus, thunder_pcie_fdt_driver,
-    thunder_pcie_fdt_devclass, 0, 0);
-DRIVER_MODULE(thunder_pcib, ofwbus, thunder_pcie_fdt_driver,
-    thunder_pcie_fdt_devclass, 0, 0);
+DRIVER_MODULE(thunder_pcib, simplebus, thunder_pcie_fdt_driver, 0, 0);
+DRIVER_MODULE(thunder_pcib, ofwbus, thunder_pcie_fdt_driver, 0, 0);
 
 static const struct ofw_bus_devinfo *
 thunder_pcie_ofw_get_devinfo(device_t bus __unused, device_t child)
@@ -209,7 +205,7 @@ thunder_pcie_fdt_attach(device_t dev)
 	if (thunder_pcie_ofw_bus_attach(dev) != 0)
 		return (ENXIO);
 
-	return (pci_host_generic_attach(dev));
+	return (pci_host_generic_fdt_attach(dev));
 }
 
 static int

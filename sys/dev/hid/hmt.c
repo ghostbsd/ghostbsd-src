@@ -886,15 +886,13 @@ hmt_set_input_mode(struct hmt_softc *sc, enum hconf_input_mode mode)
 	if (device_get_devclass(hconf) != hconf_devclass)
 		return (ENXIO);
 
-	/* hconf_set_input_mode can drop the the topo lock while sleeping */
+	/* hconf_set_input_mode can drop the topo lock while sleeping */
 	device_busy(hconf);
 	err = hconf_set_input_mode(hconf, mode);
 	device_unbusy(hconf);
 
 	return (err);
 }
-
-static devclass_t hmt_devclass;
 
 static device_method_t hmt_methods[] = {
 	DEVMETHOD(device_probe,		hmt_probe),
@@ -910,7 +908,7 @@ static driver_t hmt_driver = {
 	.size = sizeof(struct hmt_softc),
 };
 
-DRIVER_MODULE(hmt, hidbus, hmt_driver, hmt_devclass, NULL, 0);
+DRIVER_MODULE(hmt, hidbus, hmt_driver, NULL, NULL);
 MODULE_DEPEND(hmt, hidbus, 1, 1, 1);
 MODULE_DEPEND(hmt, hid, 1, 1, 1);
 MODULE_DEPEND(hmt, hconf, 1, 1, 1);

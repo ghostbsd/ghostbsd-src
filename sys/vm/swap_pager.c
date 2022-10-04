@@ -169,8 +169,8 @@ SYSCTL_PROC(_vm, OID_AUTO, swap_total, CTLTYPE_U64 | CTLFLAG_RD | CTLFLAG_MPSAFE
     &swap_total, 0, sysctl_page_shift, "QU",
     "Total amount of available swap storage.");
 
-static int overcommit = 0;
-SYSCTL_INT(_vm, VM_OVERCOMMIT, overcommit, CTLFLAG_RW, &overcommit, 0,
+int vm_overcommit __read_mostly = 0;
+SYSCTL_INT(_vm, VM_OVERCOMMIT, overcommit, CTLFLAG_RW, &vm_overcommit, 0,
     "Configure virtual memory overcommit behavior. See tuning(7) "
     "for details.");
 static unsigned long swzone;
@@ -189,11 +189,6 @@ static COUNTER_U64_DEFINE_EARLY(swap_free_completed);
 SYSCTL_COUNTER_U64(_vm_stats_swap, OID_AUTO, free_completed,
     CTLFLAG_RD, &swap_free_completed,
     "Number of deferred frees completed");
-
-/* bits from overcommit */
-#define	SWAP_RESERVE_FORCE_ON		(1 << 0)
-#define	SWAP_RESERVE_RLIMIT_ON		(1 << 1)
-#define	SWAP_RESERVE_ALLOW_NONWIRED	(1 << 2)
 
 static int
 sysctl_page_shift(SYSCTL_HANDLER_ARGS)
@@ -218,7 +213,8 @@ swap_reserve_by_cred_rlimit(u_long pincr, struct ucred *cred, int oc)
 	    prev + pincr > lim_cur(curthread, RLIMIT_SWAP) &&
 	    priv_check(curthread, PRIV_VM_SWAP_NORLIMIT) != 0) {
 		prev = atomic_fetchadd_long(&uip->ui_vmsize, -pincr);
-		KASSERT(prev >= pincr, ("negative vmsize for uid = %d\n", uip->ui_uid));
+		KASSERT(prev >= pincr,
+		    ("negative vmsize for uid %d\n", uip->ui_uid));
 		return (false);
 	}
 	return (true);
@@ -236,7 +232,8 @@ swap_release_by_cred_rlimit(u_long pdecr, struct ucred *cred)
 
 #ifdef INVARIANTS
 	prev = atomic_fetchadd_long(&uip->ui_vmsize, -pdecr);
-	KASSERT(prev >= pdecr, ("negative vmsize for uid = %d\n", uip->ui_uid));
+	KASSERT(prev >= pdecr,
+	    ("negative vmsize for uid %d\n", uip->ui_uid));
 #else
 	atomic_subtract_long(&uip->ui_vmsize, pdecr);
 #endif
@@ -269,8 +266,8 @@ swap_reserve_by_cred(vm_ooffset_t incr, struct ucred *cred)
 	static int curfail;
 	static struct timeval lastfail;
 
-	KASSERT((incr & PAGE_MASK) == 0, ("%s: incr: %ju & PAGE_MASK", __func__,
-	    (uintmax_t)incr));
+	KASSERT((incr & PAGE_MASK) == 0, ("%s: incr: %ju & PAGE_MASK",
+	    __func__, (uintmax_t)incr));
 
 #ifdef RACCT
 	if (RACCT_ENABLED()) {
@@ -286,7 +283,7 @@ swap_reserve_by_cred(vm_ooffset_t incr, struct ucred *cred)
 	prev = atomic_fetchadd_long(&swap_reserved, pincr);
 	r = prev + pincr;
 	s = swap_total;
-	oc = atomic_load_int(&overcommit);
+	oc = atomic_load_int(&vm_overcommit);
 	if (r > s && (oc & SWAP_RESERVE_ALLOW_NONWIRED) != 0) {
 		s += vm_cnt.v_page_count - vm_cnt.v_free_reserved -
 		    vm_wire_count();
@@ -294,13 +291,15 @@ swap_reserve_by_cred(vm_ooffset_t incr, struct ucred *cred)
 	if ((oc & SWAP_RESERVE_FORCE_ON) != 0 && r > s &&
 	    priv_check(curthread, PRIV_VM_SWAP_NOQUOTA) != 0) {
 		prev = atomic_fetchadd_long(&swap_reserved, -pincr);
-		KASSERT(prev >= pincr, ("swap_reserved < incr on overcommit fail"));
+		KASSERT(prev >= pincr,
+		    ("swap_reserved < incr on overcommit fail"));
 		goto out_error;
 	}
 
 	if (!swap_reserve_by_cred_rlimit(pincr, cred, oc)) {
 		prev = atomic_fetchadd_long(&swap_reserved, -pincr);
-		KASSERT(prev >= pincr, ("swap_reserved < incr on overcommit fail"));
+		KASSERT(prev >= pincr,
+		    ("swap_reserved < incr on overcommit fail"));
 		goto out_error;
 	}
 
@@ -308,7 +307,8 @@ swap_reserve_by_cred(vm_ooffset_t incr, struct ucred *cred)
 
 out_error:
 	if (ppsratecheck(&lastfail, &curfail, 1)) {
-		printf("uid %d, pid %d: swap reservation for %jd bytes failed\n",
+		printf("uid %d, pid %d: swap reservation "
+		    "for %jd bytes failed\n",
 		    cred->cr_ruidinfo->ui_uid, curproc->p_pid, incr);
 	}
 #ifdef RACCT
@@ -327,8 +327,8 @@ swap_reserve_force(vm_ooffset_t incr)
 {
 	u_long pincr;
 
-	KASSERT((incr & PAGE_MASK) == 0, ("%s: incr: %ju & PAGE_MASK", __func__,
-	    (uintmax_t)incr));
+	KASSERT((incr & PAGE_MASK) == 0, ("%s: incr: %ju & PAGE_MASK",
+	    __func__, (uintmax_t)incr));
 
 #ifdef RACCT
 	if (RACCT_ENABLED()) {
@@ -361,8 +361,8 @@ swap_release_by_cred(vm_ooffset_t decr, struct ucred *cred)
 	u_long prev;
 #endif
 
-	KASSERT((decr & PAGE_MASK) == 0, ("%s: decr: %ju & PAGE_MASK", __func__,
-	    (uintmax_t)decr));
+	KASSERT((decr & PAGE_MASK) == 0, ("%s: decr: %ju & PAGE_MASK",
+	    __func__, (uintmax_t)decr));
 
 	pdecr = atop(decr);
 #ifdef INVARIANTS
@@ -787,6 +787,20 @@ swap_pager_dealloc(vm_object_t object)
 	swp_pager_meta_free_all(object);
 	object->handle = NULL;
 	object->type = OBJT_DEAD;
+
+	/*
+	 * Release the allocation charge.
+	 */
+	if (object->cred != NULL) {
+		swap_release_by_cred(object->charge, object->cred);
+		object->charge = 0;
+		crfree(object->cred);
+		object->cred = NULL;
+	}
+
+	/*
+	 * Hide the object from swap_pager_swapoff().
+	 */
 	vm_object_clear_flag(object, OBJ_SWAP);
 }
 
@@ -1018,9 +1032,11 @@ swp_pager_xfer_source(vm_object_t srcobject, vm_object_t dstobject,
 	daddr_t dstaddr __diagused;
 
 	KASSERT((srcobject->flags & OBJ_SWAP) != 0,
-	    ("%s: Srcobject not swappable", __func__));
-	if ((dstobject->flags & OBJ_SWAP) != 0 &&
-	    swp_pager_meta_lookup(dstobject, pindex) != SWAPBLK_NONE) {
+	    ("%s: srcobject not swappable", __func__));
+	KASSERT((dstobject->flags & OBJ_SWAP) != 0,
+	    ("%s: dstobject not swappable", __func__));
+
+	if (swp_pager_meta_lookup(dstobject, pindex) != SWAPBLK_NONE) {
 		/* Caller should destroy the source block. */
 		return (false);
 	}
@@ -1051,8 +1067,6 @@ swp_pager_xfer_source(vm_object_t srcobject, vm_object_t dstobject,
  *
  *	The source object contains no vm_page_t's (which is just as well)
  *
- *	The source object is of type OBJT_SWAP.
- *
  *	The source and destination objects must be locked.
  *	Both object locks may temporarily be released.
  */
@@ -1060,7 +1074,6 @@ void
 swap_pager_copy(vm_object_t srcobject, vm_object_t dstobject,
     vm_pindex_t offset, int destroysource)
 {
-
 	VM_OBJECT_ASSERT_WLOCKED(srcobject);
 	VM_OBJECT_ASSERT_WLOCKED(dstobject);
 
@@ -1087,21 +1100,9 @@ swap_pager_copy(vm_object_t srcobject, vm_object_t dstobject,
 
 	/*
 	 * Free left over swap blocks in source.
-	 *
-	 * We have to revert the type to OBJT_DEFAULT so we do not accidentally
-	 * double-remove the object from the swap queues.
 	 */
-	if (destroysource) {
+	if (destroysource)
 		swp_pager_meta_free_all(srcobject);
-		/*
-		 * Reverting the type is not necessary, the caller is going
-		 * to destroy srcobject directly, but I'm doing it here
-		 * for consistency since we've removed the object from its
-		 * queues.
-		 */
-		srcobject->type = OBJT_DEFAULT;
-		vm_object_clear_flag(srcobject, OBJ_SWAP);
-	}
 }
 
 /*
@@ -1454,9 +1455,6 @@ swap_pager_getpages_async(vm_object_t object, vm_page_t *ma, int count,
  *
  *	Assign swap (if necessary) and initiate I/O on the specified pages.
  *
- *	We support both OBJT_DEFAULT and OBJT_SWAP objects.  DEFAULT objects
- *	are automatically converted to SWAP objects.
- *
  *	In a low memory situation we may block in VOP_STRATEGY(), but the new
  *	vm_page reservation system coupled with properly written VFS devices
  *	should ensure that no low-memory deadlock occurs.  This is an area
@@ -1485,23 +1483,11 @@ swap_pager_putpages(vm_object_t object, vm_page_t *ma, int count,
 	    ("%s: object mismatch %p/%p",
 	    __func__, object, ma[0]->object));
 
-	/*
-	 * Step 1
-	 *
-	 * Turn object into OBJT_SWAP.  Force sync if not a pageout process.
-	 */
-	if ((object->flags & OBJ_SWAP) == 0) {
-		addr = swp_pager_meta_build(object, 0, SWAPBLK_NONE);
-		KASSERT(addr == SWAPBLK_NONE,
-		    ("unexpected object swap block"));
-	}
 	VM_OBJECT_WUNLOCK(object);
 	async = curproc == pageproc && (flags & VM_PAGER_PUT_SYNC) == 0;
 	swp_pager_init_freerange(&s_free, &n_free);
 
 	/*
-	 * Step 2
-	 *
 	 * Assign swap blocks and issue I/O.  We reallocate swap on the fly.
 	 * The page is left dirty until the pageout operation completes
 	 * successfully.
@@ -1520,10 +1506,8 @@ swap_pager_putpages(vm_object_t object, vm_page_t *ma, int count,
 		}
 
 		/* Get a block of swap of size up to size n. */
-		VM_OBJECT_WLOCK(object);
 		blk = swp_pager_getswapspace(&n);
 		if (blk == SWAPBLK_NONE) {
-			VM_OBJECT_WUNLOCK(object);
 			mtx_lock(&swbuf_mtx);
 			if (++nsw_wcount_async == 1)
 				wakeup(&nsw_wcount_async);
@@ -1532,6 +1516,7 @@ swap_pager_putpages(vm_object_t object, vm_page_t *ma, int count,
 				rtvals[i + j] = VM_PAGER_FAIL;
 			continue;
 		}
+		VM_OBJECT_WLOCK(object);
 		for (j = 0; j < n; ++j) {
 			mreq = ma[i + j];
 			vm_page_aflag_clear(mreq, PGA_SWAP_FREE);
@@ -1795,7 +1780,8 @@ swap_pager_swapped_pages(vm_object_t object)
 	int i;
 
 	VM_OBJECT_ASSERT_LOCKED(object);
-	if ((object->flags & OBJ_SWAP) == 0)
+
+	if (pctrie_is_empty(&object->un_pager.swp.swp_blks))
 		return (0);
 
 	for (res = 0, pi = 0; (sb = SWAP_PCTRIE_LOOKUP_GE(
@@ -2025,9 +2011,6 @@ swp_pager_free_empty_swblk(vm_object_t object, struct swblk *sb)
 /*
  * SWP_PAGER_META_BUILD() -	add swap block to swap meta data for object
  *
- *	We first convert the object to a swap object if it is a default
- *	object.
- *
  *	The specified swapblk is added to the object's swap metadata.  If
  *	the swapblk is not valid, it is freed instead.  Any previously
  *	assigned swapblk is returned.
@@ -2042,27 +2025,6 @@ swp_pager_meta_build(vm_object_t object, vm_pindex_t pindex, daddr_t swapblk)
 	int error, i;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
-
-	/*
-	 * Convert default object to swap object if necessary
-	 */
-	if ((object->flags & OBJ_SWAP) == 0) {
-		pctrie_init(&object->un_pager.swp.swp_blks);
-
-		/*
-		 * Ensure that swap_pager_swapoff()'s iteration over
-		 * object_list does not see a garbage pctrie.
-		 */
-		atomic_thread_fence_rel();
-
-		object->type = OBJT_SWAP;
-		vm_object_set_flag(object, OBJ_SWAP);
-		object->un_pager.swp.writemappings = 0;
-		KASSERT((object->flags & OBJ_ANON) != 0 ||
-		    object->handle == NULL,
-		    ("default pager %p with handle %p",
-		    object, object->handle));
-	}
 
 	rdpi = rounddown(pindex, SWAP_META_PAGES);
 	sb = SWAP_PCTRIE_LOOKUP(&object->un_pager.swp.swp_blks, rdpi);
@@ -2165,7 +2127,7 @@ swp_pager_meta_transfer(vm_object_t srcobject, vm_object_t dstobject,
 	int i, limit, start;
 
 	VM_OBJECT_ASSERT_WLOCKED(srcobject);
-	if ((srcobject->flags & OBJ_SWAP) == 0 || count == 0)
+	if (count == 0 || pctrie_is_empty(&srcobject->un_pager.swp.swp_blks))
 		return;
 
 	swp_pager_init_freerange(&s_free, &n_free);
@@ -2232,7 +2194,8 @@ swp_pager_meta_free_all(vm_object_t object)
 	int i;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
-	if ((object->flags & OBJ_SWAP) == 0)
+
+	if (pctrie_is_empty(&object->un_pager.swp.swp_blks))
 		return;
 
 	swp_pager_init_freerange(&s_free, &n_free);
@@ -2296,9 +2259,9 @@ swap_pager_find_least(vm_object_t object, vm_pindex_t pindex)
 	int i;
 
 	VM_OBJECT_ASSERT_LOCKED(object);
-	if ((object->flags & OBJ_SWAP) == 0)
-		return (object->size);
 
+	if (pctrie_is_empty(&object->un_pager.swp.swp_blks))
+		return (object->size);
 	sb = SWAP_PCTRIE_LOOKUP_GE(&object->un_pager.swp.swp_blks,
 	    rounddown(pindex, SWAP_META_PAGES));
 	if (sb == NULL)

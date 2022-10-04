@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -54,12 +54,12 @@ while [[ $i -lt ${#args[*]} ]]
 do
 	PROP=${props[$i]}
 	EXPECTED=${prop_vals[$i]}
-	ACTUAL=$( zpool get $PROP $TESTPOOL | grep $PROP | awk '{print $1}' )
+	ACTUAL=$( zpool get $PROP $TESTPOOL | awk -v p=$PROP '$0 ~ p {print $1}' )
 	if [ "$ACTUAL" != "$EXPECTED" ]
 	then
 		log_fail "Property $PROP value was $ACTUAL, expected $EXPECTED"
 	fi
-        i=$(( $i + 1 ))
+	i=$(( $i + 1 ))
 done
 
 log_must zpool get all $TESTPOOL

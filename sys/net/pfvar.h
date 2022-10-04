@@ -672,6 +672,10 @@ struct pf_keth_rule {
 	uint16_t		 proto;
 	struct pf_keth_rule_addr src, dst;
 	struct pf_rule_addr	 ipsrc, ipdst;
+	char			 match_tagname[PF_TAG_NAME_SIZE];
+	uint16_t		 match_tag;
+	bool			 match_tag_not;
+
 
 	/* Stats */
 	counter_u64_t		 evaluations;
@@ -1063,7 +1067,7 @@ struct pfsync_state {
 
 #ifdef _KERNEL
 /* pfsync */
-typedef int		pfsync_state_import_t(struct pfsync_state *, u_int8_t);
+typedef int		pfsync_state_import_t(struct pfsync_state *, int);
 typedef	void		pfsync_insert_state_t(struct pf_kstate *);
 typedef	void		pfsync_update_state_t(struct pf_kstate *);
 typedef	void		pfsync_delete_state_t(struct pf_kstate *);

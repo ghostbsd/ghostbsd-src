@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_ipsec.h"
 #include "opt_route.h"
 #include "opt_rss.h"
+#include "opt_sctp.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -76,12 +77,17 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_fib.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip_var.h>
+#include <netinet/ip_encap.h>
 #include <netinet/ip_fw.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/igmp_var.h>
 #include <netinet/ip_options.h>
 #include <machine/in_cksum.h>
 #include <netinet/ip_carp.h>
 #include <netinet/in_rss.h>
+#ifdef SCTP
+#include <netinet/sctp_var.h>
+#endif
 
 #include <netipsec/ipsec_support.h>
 
@@ -95,8 +101,7 @@ CTASSERT(sizeof(struct ip) == 20);
 
 /* IP reassembly functions are defined in ip_reass.c. */
 extern void ipreass_init(void);
-extern void ipreass_drain(void);
-extern void ipreass_slowtimo(void);
+extern void ipreass_vnet_init(void);
 #ifdef VIMAGE
 extern void ipreass_destroy(void);
 #endif
@@ -162,9 +167,11 @@ static struct netisr_handler ip_direct_nh = {
 };
 #endif
 
-extern	struct domain inetdomain;
-extern	struct protosw inetsw[];
-u_char	ip_protox[IPPROTO_MAX];
+ipproto_input_t		*ip_protox[IPPROTO_MAX] = {
+			    [0 ... IPPROTO_MAX - 1] = rip_input };
+ipproto_ctlinput_t	*ip_ctlprotox[IPPROTO_MAX] = {
+			    [0 ... IPPROTO_MAX - 1] = rip_ctlinput };
+
 VNET_DEFINE(struct in_ifaddrhead, in_ifaddrhead);  /* first inet address */
 VNET_DEFINE(struct in_ifaddrhashhead *, in_ifaddrhashtbl); /* inet addr hash table  */
 VNET_DEFINE(u_long, in_ifaddrhmask);		/* mask for hash table */
@@ -309,7 +316,7 @@ ip_vnet_init(void *arg __unused)
 	V_in_ifaddrhashtbl = hashinit(INADDR_NHASH, M_IFADDR, &V_in_ifaddrhmask);
 
 	/* Initialize IP reassembly queue. */
-	ipreass_init();
+	ipreass_vnet_init();
 
 	/* Initialize packet filter hooks. */
 	args.pa_version = PFIL_VERSION;
@@ -339,30 +346,28 @@ ip_vnet_init(void *arg __unused)
 VNET_SYSINIT(ip_vnet_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
     ip_vnet_init, NULL);
 
-
 static void
 ip_init(const void *unused __unused)
 {
-	struct protosw *pr;
 
-	pr = pffindproto(PF_INET, IPPROTO_RAW, SOCK_RAW);
-	KASSERT(pr, ("%s: PF_INET not found", __func__));
+	ipreass_init();
 
-	/* Initialize the entire ip_protox[] array to IPPROTO_RAW. */
-	for (int i = 0; i < IPPROTO_MAX; i++)
-		ip_protox[i] = pr - inetsw;
 	/*
-	 * Cycle through IP protocols and put them into the appropriate place
-	 * in ip_protox[].
+	 * Register statically compiled protocols, that are unlikely to
+	 * ever become dynamic.
 	 */
-	for (pr = inetdomain.dom_protosw;
-	    pr < inetdomain.dom_protoswNPROTOSW; pr++)
-		if (pr->pr_domain->dom_family == PF_INET &&
-		    pr->pr_protocol && pr->pr_protocol != IPPROTO_RAW) {
-			/* Be careful to only index valid IP protocols. */
-			if (pr->pr_protocol < IPPROTO_MAX)
-				ip_protox[pr->pr_protocol] = pr - inetsw;
-		}
+	IPPROTO_REGISTER(IPPROTO_ICMP, icmp_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_IGMP, igmp_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_RSVP, rsvp_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_IPV4, encap4_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_MOBILE, encap4_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_ETHERIP, encap4_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_GRE, encap4_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_IPV6, encap4_input, NULL);
+	IPPROTO_REGISTER(IPPROTO_PIM, encap4_input, NULL);
+#ifdef SCTP	/* XXX: has a loadable & static version */
+	IPPROTO_REGISTER(IPPROTO_SCTP, sctp_input, sctp_ctlinput);
+#endif
 
 	netisr_register(&ip_nh);
 #ifdef	RSS
@@ -435,8 +440,7 @@ ip_direct_input(struct mbuf *m)
 	}
 #endif /* IPSEC */
 	IPSTAT_INC(ips_delivered);
-	(*inetsw[ip_protox[ip->ip_p]].pr_input)(&m, &hlen, ip->ip_p);
-	return;
+	ip_protox[ip->ip_p](&m, &hlen, ip->ip_p);
 }
 #endif
 
@@ -528,12 +532,6 @@ ip_input(struct mbuf *m)
 		goto bad;
 	}
 
-#ifdef ALTQ
-	if (altq_input != NULL && (*altq_input)(m, AF_INET) == 0)
-		/* packet is dropped by traffic conditioner */
-		return;
-#endif
-
 	ip_len = ntohs(ip->ip_len);
 	if (__predict_false(ip_len < hlen)) {
 		IPSTAT_INC(ips_badlen);
@@ -611,7 +609,7 @@ tooshort:
 		goto passin;
 
 	odst = ip->ip_dst;
-	if (pfil_run_hooks(V_inet_pfil_head, &m, ifp, PFIL_IN, NULL) !=
+	if (pfil_mbuf_in(V_inet_pfil_head, &m, ifp, NULL) !=
 	    PFIL_PASS)
 		return;
 	if (m == NULL)			/* consumed by filter */
@@ -837,109 +835,43 @@ ours:
 	 */
 	IPSTAT_INC(ips_delivered);
 
-	(*inetsw[ip_protox[ip->ip_p]].pr_input)(&m, &hlen, ip->ip_p);
+	ip_protox[ip->ip_p](&m, &hlen, ip->ip_p);
 	return;
 bad:
 	m_freem(m);
 }
 
-/*
- * IP timer processing;
- * if a timer expires on a reassembly
- * queue, discard it.
- */
-void
-ip_slowtimo(void)
-{
-	VNET_ITERATOR_DECL(vnet_iter);
-
-	VNET_LIST_RLOCK_NOSLEEP();
-	VNET_FOREACH(vnet_iter) {
-		CURVNET_SET(vnet_iter);
-		ipreass_slowtimo();
-		CURVNET_RESTORE();
-	}
-	VNET_LIST_RUNLOCK_NOSLEEP();
-}
-
-void
-ip_drain(void)
-{
-	VNET_ITERATOR_DECL(vnet_iter);
-
-	VNET_LIST_RLOCK_NOSLEEP();
-	VNET_FOREACH(vnet_iter) {
-		CURVNET_SET(vnet_iter);
-		ipreass_drain();
-		CURVNET_RESTORE();
-	}
-	VNET_LIST_RUNLOCK_NOSLEEP();
-}
-
-/*
- * The protocol to be inserted into ip_protox[] must be already registered
- * in inetsw[], either statically or through pf_proto_register().
- */
 int
-ipproto_register(short ipproto)
+ipproto_register(uint8_t proto, ipproto_input_t input, ipproto_ctlinput_t ctl)
 {
-	struct protosw *pr;
 
-	/* Sanity checks. */
-	if (ipproto <= 0 || ipproto >= IPPROTO_MAX)
-		return (EPROTONOSUPPORT);
+	MPASS(proto > 0);
 
 	/*
 	 * The protocol slot must not be occupied by another protocol
-	 * already.  An index pointing to IPPROTO_RAW is unused.
+	 * already.  An index pointing to rip_input() is unused.
 	 */
-	pr = pffindproto(PF_INET, IPPROTO_RAW, SOCK_RAW);
-	if (pr == NULL)
-		return (EPFNOSUPPORT);
-	if (ip_protox[ipproto] != pr - inetsw)	/* IPPROTO_RAW */
+	if (ip_protox[proto] == rip_input) {
+		ip_protox[proto] = input;
+		ip_ctlprotox[proto] = ctl;
+		return (0);
+	} else
 		return (EEXIST);
-
-	/* Find the protocol position in inetsw[] and set the index. */
-	for (pr = inetdomain.dom_protosw;
-	     pr < inetdomain.dom_protoswNPROTOSW; pr++) {
-		if (pr->pr_domain->dom_family == PF_INET &&
-		    pr->pr_protocol && pr->pr_protocol == ipproto) {
-			ip_protox[pr->pr_protocol] = pr - inetsw;
-			return (0);
-		}
-	}
-	return (EPROTONOSUPPORT);
 }
 
 int
-ipproto_unregister(short ipproto)
+ipproto_unregister(uint8_t proto)
 {
-	struct protosw *pr;
 
-	/* Sanity checks. */
-	if (ipproto <= 0 || ipproto >= IPPROTO_MAX)
-		return (EPROTONOSUPPORT);
+	MPASS(proto > 0);
 
-	/* Check if the protocol was indeed registered. */
-	pr = pffindproto(PF_INET, IPPROTO_RAW, SOCK_RAW);
-	if (pr == NULL)
-		return (EPFNOSUPPORT);
-	if (ip_protox[ipproto] == pr - inetsw)  /* IPPROTO_RAW */
+	if (ip_protox[proto] != rip_input) {
+		ip_protox[proto] = rip_input;
+		ip_ctlprotox[proto] = rip_ctlinput;
+		return (0);
+	} else
 		return (ENOENT);
-
-	/* Reset the protocol slot to IPPROTO_RAW. */
-	ip_protox[ipproto] = pr - inetsw;
-	return (0);
 }
-
-u_char inetctlerrmap[PRC_NCMDS] = {
-	0,		0,		0,		0,
-	0,		EMSGSIZE,	EHOSTDOWN,	EHOSTUNREACH,
-	EHOSTUNREACH,	EHOSTUNREACH,	ECONNREFUSED,	ECONNREFUSED,
-	EMSGSIZE,	EHOSTUNREACH,	0,		0,
-	0,		0,		EHOSTUNREACH,	0,
-	ENOPROTOOPT,	ECONNREFUSED
-};
 
 /*
  * Forward a packet.  If some error occurs return the sender
@@ -1167,8 +1099,8 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 		} else {
 			bintime(&bt);
 		}
-		*mp = sbcreatecontrol((caddr_t)&bt, sizeof(bt),
-		    SCM_BINTIME, SOL_SOCKET);
+		*mp = sbcreatecontrol(&bt, sizeof(bt), SCM_BINTIME,
+		    SOL_SOCKET, M_NOWAIT);
 		if (*mp != NULL) {
 			mp = &(*mp)->m_next;
 			stamped = true;
@@ -1189,8 +1121,8 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 		} else {
 			microtime(&tv);
 		}
-		*mp = sbcreatecontrol((caddr_t)&tv, sizeof(tv),
-		    SCM_TIMESTAMP, SOL_SOCKET);
+		*mp = sbcreatecontrol((caddr_t)&tv, sizeof(tv), SCM_TIMESTAMP,
+		    SOL_SOCKET, M_NOWAIT);
 		if (*mp != NULL) {
 			mp = &(*mp)->m_next;
 			stamped = true;
@@ -1208,8 +1140,8 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 		} else {
 			nanotime(&ts);
 		}
-		*mp = sbcreatecontrol((caddr_t)&ts, sizeof(ts),
-		    SCM_REALTIME, SOL_SOCKET);
+		*mp = sbcreatecontrol(&ts, sizeof(ts), SCM_REALTIME,
+		    SOL_SOCKET, M_NOWAIT);
 		if (*mp != NULL) {
 			mp = &(*mp)->m_next;
 			stamped = true;
@@ -1222,8 +1154,8 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 			mbuf_tstmp2timespec(m, &ts);
 		else
 			nanouptime(&ts);
-		*mp = sbcreatecontrol((caddr_t)&ts, sizeof(ts),
-		    SCM_MONOTONIC, SOL_SOCKET);
+		*mp = sbcreatecontrol(&ts, sizeof(ts), SCM_MONOTONIC,
+		    SOL_SOCKET, M_NOWAIT);
 		if (*mp != NULL) {
 			mp = &(*mp)->m_next;
 			stamped = true;
@@ -1237,20 +1169,20 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 		sti.st_info_flags = ST_INFO_HW;
 		if ((m->m_flags & M_TSTMP_HPREC) != 0)
 			sti.st_info_flags |= ST_INFO_HW_HPREC;
-		*mp = sbcreatecontrol((caddr_t)&sti, sizeof(sti), SCM_TIME_INFO,
-		    SOL_SOCKET);
+		*mp = sbcreatecontrol(&sti, sizeof(sti), SCM_TIME_INFO,
+		    SOL_SOCKET, M_NOWAIT);
 		if (*mp != NULL)
 			mp = &(*mp)->m_next;
 	}
 	if (inp->inp_flags & INP_RECVDSTADDR) {
-		*mp = sbcreatecontrol((caddr_t)&ip->ip_dst,
-		    sizeof(struct in_addr), IP_RECVDSTADDR, IPPROTO_IP);
+		*mp = sbcreatecontrol(&ip->ip_dst, sizeof(struct in_addr),
+		    IP_RECVDSTADDR, IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
 	}
 	if (inp->inp_flags & INP_RECVTTL) {
-		*mp = sbcreatecontrol((caddr_t)&ip->ip_ttl,
-		    sizeof(u_char), IP_RECVTTL, IPPROTO_IP);
+		*mp = sbcreatecontrol(&ip->ip_ttl, sizeof(u_char), IP_RECVTTL,
+		    IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
 	}
@@ -1261,15 +1193,15 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 	 */
 	/* options were tossed already */
 	if (inp->inp_flags & INP_RECVOPTS) {
-		*mp = sbcreatecontrol((caddr_t)opts_deleted_above,
-		    sizeof(struct in_addr), IP_RECVOPTS, IPPROTO_IP);
+		*mp = sbcreatecontrol(opts_deleted_above,
+		    sizeof(struct in_addr), IP_RECVOPTS, IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
 	}
 	/* ip_srcroute doesn't do what we want here, need to fix */
 	if (inp->inp_flags & INP_RECVRETOPTS) {
-		*mp = sbcreatecontrol((caddr_t)ip_srcroute(m),
-		    sizeof(struct in_addr), IP_RECVRETOPTS, IPPROTO_IP);
+		*mp = sbcreatecontrol(ip_srcroute(m), sizeof(struct in_addr),
+		    IP_RECVRETOPTS, IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
 	}
@@ -1301,14 +1233,14 @@ makedummy:
 			sdl2->sdl_index = 0;
 			sdl2->sdl_nlen = sdl2->sdl_alen = sdl2->sdl_slen = 0;
 		}
-		*mp = sbcreatecontrol((caddr_t)sdl2, sdl2->sdl_len,
-		    IP_RECVIF, IPPROTO_IP);
+		*mp = sbcreatecontrol(sdl2, sdl2->sdl_len, IP_RECVIF,
+		    IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
 	}
 	if (inp->inp_flags & INP_RECVTOS) {
-		*mp = sbcreatecontrol((caddr_t)&ip->ip_tos,
-		    sizeof(u_char), IP_RECVTOS, IPPROTO_IP);
+		*mp = sbcreatecontrol(&ip->ip_tos, sizeof(u_char), IP_RECVTOS,
+		    IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
 	}
@@ -1323,12 +1255,12 @@ makedummy:
 		 * XXX should handle the failure of one or the
 		 * other - don't populate both?
 		 */
-		*mp = sbcreatecontrol((caddr_t) &flowid,
-		    sizeof(uint32_t), IP_FLOWID, IPPROTO_IP);
+		*mp = sbcreatecontrol(&flowid, sizeof(uint32_t), IP_FLOWID,
+		    IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
-		*mp = sbcreatecontrol((caddr_t) &flow_type,
-		    sizeof(uint32_t), IP_FLOWTYPE, IPPROTO_IP);
+		*mp = sbcreatecontrol(&flow_type, sizeof(uint32_t),
+		    IP_FLOWTYPE, IPPROTO_IP, M_NOWAIT);
 		if (*mp)
 			mp = &(*mp)->m_next;
 	}
@@ -1342,8 +1274,8 @@ makedummy:
 		flow_type = M_HASHTYPE_GET(m);
 
 		if (rss_hash2bucket(flowid, flow_type, &rss_bucketid) == 0) {
-			*mp = sbcreatecontrol((caddr_t) &rss_bucketid,
-			   sizeof(uint32_t), IP_RSSBUCKETID, IPPROTO_IP);
+			*mp = sbcreatecontrol(&rss_bucketid, sizeof(uint32_t),
+			    IP_RSSBUCKETID, IPPROTO_IP, M_NOWAIT);
 			if (*mp)
 				mp = &(*mp)->m_next;
 		}
@@ -1365,10 +1297,6 @@ VNET_DEFINE(struct socket *, ip_rsvpd);
 int
 ip_rsvp_init(struct socket *so)
 {
-
-	if (so->so_type != SOCK_RAW ||
-	    so->so_proto->pr_protocol != IPPROTO_RSVP)
-		return EOPNOTSUPP;
 
 	if (V_ip_rsvpd != NULL)
 		return EADDRINUSE;

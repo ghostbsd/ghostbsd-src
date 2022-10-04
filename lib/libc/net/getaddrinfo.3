@@ -18,7 +18,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd February 10, 2019
+.Dd June 27, 2022
 .Dt GETADDRINFO 3
 .Os
 .Sh NAME
@@ -353,7 +353,7 @@ structure created by a call to
 .Fn getaddrinfo .
 .Sh IMPLEMENTATION NOTES
 The behavior of
-.Li freeadrinfo(NULL)
+.Li freeaddrinfo(NULL)
 is left unspecified by both
 .St -susv4
 and
@@ -482,8 +482,7 @@ freeaddrinfo(res0);
 .Xr hosts 5 ,
 .Xr resolv.conf 5 ,
 .Xr services 5 ,
-.Xr hostname 7 ,
-.Xr named 8
+.Xr hostname 7
 .Rs
 .%A R. Gilligan
 .%A S. Thomson

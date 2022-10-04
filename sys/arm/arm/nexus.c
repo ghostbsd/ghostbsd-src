@@ -142,13 +142,13 @@ static device_method_t nexus_methods[] = {
 	{ 0, 0 }
 };
 
-static devclass_t nexus_devclass;
 static driver_t nexus_driver = {
 	"nexus",
 	nexus_methods,
 	1			/* no softc */
 };
-EARLY_DRIVER_MODULE(nexus, root, nexus_driver, nexus_devclass, 0, 0,
+
+EARLY_DRIVER_MODULE(nexus, root, nexus_driver, 0, 0,
     BUS_PASS_BUS + BUS_PASS_ORDER_EARLY);
 
 static int
@@ -363,7 +363,7 @@ nexus_activate_resource(device_t bus, device_t child, int type, int rid,
 		}
 		rman_set_bustag(r, fdtbus_bs_tag);
 #else
-		vaddr = (bus_space_handle_t)pmap_mapdev((vm_offset_t)paddr,
+		vaddr = (bus_space_handle_t)pmap_mapdev((vm_paddr_t)paddr,
 		    (vm_size_t)psize);
 		if (vaddr == 0) {
 			rman_deactivate_resource(r);
@@ -399,7 +399,7 @@ nexus_deactivate_resource(device_t bus, device_t child, int type, int rid,
 #ifdef FDT
 			bus_space_unmap(fdtbus_bs_tag, vaddr, psize);
 #else
-			pmap_unmapdev((vm_offset_t)vaddr, (vm_size_t)psize);
+			pmap_unmapdev((void *)vaddr, (vm_size_t)psize);
 #endif
 			rman_set_virtual(r, NULL);
 			rman_set_bushandle(r, 0);

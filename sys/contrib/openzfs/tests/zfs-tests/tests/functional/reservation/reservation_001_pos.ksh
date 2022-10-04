@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -60,10 +60,10 @@ function cleanup
 
 log_onexit cleanup
 
-log_assert "Verify that to set a reservation on a filesystem or volume must " \
+log_assert "Verify that to set a reservation on a filesystem or volume must" \
     "use value smaller than space available property of pool"
 
-space_avail=`get_prop available $TESTPOOL`
+space_avail=$(get_prop available $TESTPOOL)
 
 if ! is_global_zone ; then
 	OBJ_LIST=""
@@ -103,7 +103,7 @@ for obj in $TESTPOOL/$TESTFS $OBJ_LIST; do
 
 	log_must zfs set reservation=$resv_size_set $obj
 
-	resv_size_get=`get_prop reservation $obj`
+	resv_size_get=$(get_prop reservation $obj)
 	if [[ $resv_size_set != $resv_size_get ]]; then
 		log_fail "Reservation not the expected value " \
 		    "($resv_size_set != $resv_size_get)"
@@ -111,7 +111,7 @@ for obj in $TESTPOOL/$TESTFS $OBJ_LIST; do
 
 	log_must zero_reservation $obj
 
-	new_space_avail=`get_prop available $obj`
+	new_space_avail=$(get_prop available $obj)
 
 	#
 	# Due to the way space is consumed and released by metadata we

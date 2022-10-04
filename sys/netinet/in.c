@@ -76,9 +76,9 @@ __FBSDID("$FreeBSD$");
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
 
-static int in_aifaddr_ioctl(u_long, caddr_t, struct ifnet *, struct thread *);
-static int in_difaddr_ioctl(u_long, caddr_t, struct ifnet *, struct thread *);
-static int in_gifaddr_ioctl(u_long, caddr_t, struct ifnet *, struct thread *);
+static int in_aifaddr_ioctl(u_long, caddr_t, struct ifnet *, struct ucred *);
+static int in_difaddr_ioctl(u_long, caddr_t, struct ifnet *, struct ucred *);
+static int in_gifaddr_ioctl(u_long, caddr_t, struct ifnet *, struct ucred *);
 
 static void	in_socktrim(struct sockaddr_in *);
 static void	in_purgemaddrs(struct ifnet *);
@@ -96,6 +96,28 @@ VNET_DEFINE_STATIC(bool, broadcast_lowest);
 SYSCTL_BOOL(_net_inet_ip, OID_AUTO, broadcast_lowest, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(broadcast_lowest), 0,
 	"Treat lowest address on a subnet (host 0) as broadcast");
+
+VNET_DEFINE(bool, ip_allow_net240) = false;
+#define	V_ip_allow_net240		VNET(ip_allow_net240)
+SYSCTL_BOOL(_net_inet_ip, OID_AUTO, allow_net240,
+	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip_allow_net240), 0,
+	"Allow use of Experimental addresses, aka Class E (240/4)");
+/* see https://datatracker.ietf.org/doc/draft-schoen-intarea-unicast-240 */
+
+VNET_DEFINE(bool, ip_allow_net0) = false;
+SYSCTL_BOOL(_net_inet_ip, OID_AUTO, allow_net0,
+	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip_allow_net0), 0,
+	"Allow use of addresses in network 0/8");
+/* see https://datatracker.ietf.org/doc/draft-schoen-intarea-unicast-0 */
+
+VNET_DEFINE(uint32_t, in_loopback_mask) = IN_LOOPBACK_MASK_DFLT;
+#define	V_in_loopback_mask	VNET(in_loopback_mask)
+static int sysctl_loopback_prefixlen(SYSCTL_HANDLER_ARGS);
+SYSCTL_PROC(_net_inet_ip, OID_AUTO, loopback_prefixlen,
+	CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW,
+	NULL, 0, sysctl_loopback_prefixlen, "I",
+	"Prefix length of address space reserved for loopback");
+/* see https://datatracker.ietf.org/doc/draft-schoen-intarea-unicast-127 */
 
 VNET_DECLARE(struct inpcbinfo, ripcbinfo);
 #define	V_ripcbinfo			VNET(ripcbinfo)
@@ -251,10 +273,34 @@ in_canforward(struct in_addr in)
 {
 	u_long i = ntohl(in.s_addr);
 
-	if (IN_EXPERIMENTAL(i) || IN_MULTICAST(i) || IN_LINKLOCAL(i) ||
-	    IN_ZERONET(i) || IN_LOOPBACK(i))
+	if (IN_MULTICAST(i) || IN_LINKLOCAL(i) || IN_LOOPBACK(i))
+		return (0);
+	if (IN_EXPERIMENTAL(i) && !V_ip_allow_net240)
+		return (0);
+	if (IN_ZERONET(i) && !V_ip_allow_net0)
 		return (0);
 	return (1);
+}
+
+/*
+ * Sysctl to manage prefix of reserved loopback network; translate
+ * to/from mask.  The mask is always contiguous high-order 1 bits
+ * followed by all 0 bits.
+ */
+static int
+sysctl_loopback_prefixlen(SYSCTL_HANDLER_ARGS)
+{
+	int error, preflen;
+
+	/* ffs is 1-based; compensate. */
+	preflen = 33 - ffs(V_in_loopback_mask);
+	error = sysctl_handle_int(oidp, &preflen, 0, req);
+	if (error || !req->newptr)
+		return (error);
+	if (preflen < 8 || preflen > 31)
+		return (EINVAL);
+	V_in_loopback_mask = 0xffffffff << (32 - preflen);
+	return (0);
 }
 
 /*
@@ -278,7 +324,7 @@ in_socktrim(struct sockaddr_in *ap)
  * Generic internet control operations (ioctl's).
  */
 int
-in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
+in_control(struct socket *so, u_long cmd, void *data, struct ifnet *ifp,
     struct thread *td)
 {
 	struct ifreq *ifr = (struct ifreq *)data;
@@ -290,6 +336,8 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 
 	if (ifp == NULL)
 		return (EADDRNOTAVAIL);
+
+	struct ucred *cred = (td != NULL) ? td->td_ucred : NULL;
 
 	/*
 	 * Filter out 4 ioctls we implement directly.  Forward the rest
@@ -303,18 +351,18 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 		break;
 	case SIOCGIFALIAS:
 		sx_xlock(&in_control_sx);
-		error = in_gifaddr_ioctl(cmd, data, ifp, td);
+		error = in_gifaddr_ioctl(cmd, data, ifp, cred);
 		sx_xunlock(&in_control_sx);
 		return (error);
 	case SIOCDIFADDR:
 		sx_xlock(&in_control_sx);
-		error = in_difaddr_ioctl(cmd, data, ifp, td);
+		error = in_difaddr_ioctl(cmd, data, ifp, cred);
 		sx_xunlock(&in_control_sx);
 		return (error);
 	case OSIOCAIFADDR:	/* 9.x compat */
 	case SIOCAIFADDR:
 		sx_xlock(&in_control_sx);
-		error = in_aifaddr_ioctl(cmd, data, ifp, td);
+		error = in_aifaddr_ioctl(cmd, data, ifp, cred);
 		sx_xunlock(&in_control_sx);
 		return (error);
 	case SIOCSIFADDR:
@@ -330,7 +378,7 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 	}
 
 	if (addr->sin_addr.s_addr != INADDR_ANY &&
-	    prison_check_ip4(td->td_ucred, &addr->sin_addr) != 0)
+	    prison_check_ip4(cred, &addr->sin_addr) != 0)
 		return (EADDRNOTAVAIL);
 
 	/*
@@ -350,7 +398,7 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link)
 			if (ifa->ifa_addr->sa_family == AF_INET) {
 				ia = (struct in_ifaddr *)ifa;
-				if (prison_check_ip4(td->td_ucred,
+				if (prison_check_ip4(cred,
 				    &ia->ia_addr.sin_addr) == 0)
 					break;
 			}
@@ -393,7 +441,7 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 }
 
 static int
-in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
+in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct ucred *cred)
 {
 	const struct in_aliasreq *ifra = (struct in_aliasreq *)data;
 	const struct sockaddr_in *addr = &ifra->ifra_addr;
@@ -407,7 +455,7 @@ in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 	bool iaIsFirst;
 	int error = 0;
 
-	error = priv_check(td, PRIV_NET_ADDIFADDR);
+	error = priv_check_cred(cred, PRIV_NET_ADDIFADDR);
 	if (error)
 		return (error);
 
@@ -447,7 +495,7 @@ in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 
 		it = (struct in_ifaddr *)ifa;
 		if (it->ia_addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
-		    prison_check_ip4(td->td_ucred, &addr->sin_addr) == 0)
+		    prison_check_ip4(cred, &addr->sin_addr) == 0)
 			ia = it;
 		else
 			iaIsFirst = false;
@@ -455,7 +503,7 @@ in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 	NET_EPOCH_EXIT(et);
 
 	if (ia != NULL)
-		(void )in_difaddr_ioctl(cmd, data, ifp, td);
+		(void )in_difaddr_ioctl(cmd, data, ifp, cred);
 
 	ifa = ifa_alloc(sizeof(struct in_ifaddr), M_WAITOK);
 	ia = (struct in_ifaddr *)ifa;
@@ -608,7 +656,7 @@ fail1:
 }
 
 static int
-in_difaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
+in_difaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct ucred *cred)
 {
 	const struct ifreq *ifr = (struct ifreq *)data;
 	const struct sockaddr_in *addr = (const struct sockaddr_in *)
@@ -618,8 +666,8 @@ in_difaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 	bool deleteAny, iaIsLast;
 	int error;
 
-	if (td != NULL) {
-		error = priv_check(td, PRIV_NET_DELIFADDR);
+	if (cred != NULL) {
+		error = priv_check_cred(cred, PRIV_NET_DELIFADDR);
 		if (error)
 			return (error);
 	}
@@ -640,12 +688,12 @@ in_difaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 			continue;
 
 		it = (struct in_ifaddr *)ifa;
-		if (deleteAny && ia == NULL && (td == NULL ||
-		    prison_check_ip4(td->td_ucred, &it->ia_addr.sin_addr) == 0))
+		if (deleteAny && ia == NULL && (cred == NULL ||
+		    prison_check_ip4(cred, &it->ia_addr.sin_addr) == 0))
 			ia = it;
 
 		if (it->ia_addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
-		    (td == NULL || prison_check_ip4(td->td_ucred,
+		    (cred == NULL || prison_check_ip4(cred,
 		    &addr->sin_addr) == 0))
 			ia = it;
 
@@ -711,7 +759,7 @@ in_difaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 }
 
 static int
-in_gifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
+in_gifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct ucred *cred)
 {
 	struct in_aliasreq *ifra = (struct in_aliasreq *)data;
 	const struct sockaddr_in *addr = &ifra->ifra_addr;
@@ -739,7 +787,7 @@ in_gifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 
 		it = (struct in_ifaddr *)ifa;
 		if (it->ia_addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
-		    prison_check_ip4(td->td_ucred, &addr->sin_addr) == 0) {
+		    prison_check_ip4(cred, &addr->sin_addr) == 0) {
 			ia = it;
 			break;
 		}
@@ -908,7 +956,7 @@ ia_getrtprefix(const struct in_ifaddr *ia, struct in_addr *prefix, struct in_add
  * Adds or delete interface "prefix" route corresponding to @ifa.
  *  Returns 0 on success or errno.
  */
-int
+static int
 in_handle_ifaddr_route(int cmd, struct in_ifaddr *ia)
 {
 	struct ifaddr *ifa = &ia->ia_ifa;
@@ -1256,6 +1304,61 @@ in_ifdetach(struct ifnet *ifp)
 	 */
 	inm_release_wait(NULL);
 }
+
+static void
+in_ifnet_event(void *arg __unused, struct ifnet *ifp, int event)
+{
+	struct epoch_tracker et;
+	struct ifaddr *ifa;
+	struct in_ifaddr *ia;
+	int error;
+
+	NET_EPOCH_ENTER(et);
+	switch (event) {
+	case IFNET_EVENT_DOWN:
+		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+			if (ifa->ifa_addr->sa_family != AF_INET)
+				continue;
+			ia = (struct in_ifaddr *)ifa;
+			if ((ia->ia_flags & IFA_ROUTE) == 0)
+				continue;
+			ifa_ref(ifa);
+			/*
+			 * in_scrubprefix() kills the interface route.
+			 */
+			in_scrubprefix(ia, 0);
+			/*
+			 * in_ifadown gets rid of all the rest of the
+			 * routes.  This is not quite the right thing
+			 * to do, but at least if we are running a
+			 * routing process they will come back.
+			 */
+			in_ifadown(ifa, 0);
+			ifa_free(ifa);
+		}
+		break;
+
+	case IFNET_EVENT_UP:
+		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+			if (ifa->ifa_addr->sa_family != AF_INET)
+				continue;
+			ia = (struct in_ifaddr *)ifa;
+			if (ia->ia_flags & IFA_ROUTE)
+				continue;
+			ifa_ref(ifa);
+			error = ifa_del_loopback_route(ifa, ifa->ifa_addr);
+			rt_addrmsg(RTM_ADD, ifa, ifa->ifa_ifp->if_fib);
+			error = in_handle_ifaddr_route(RTM_ADD, ia);
+			if (error == 0)
+				ia->ia_flags |= IFA_ROUTE;
+			error = ifa_add_loopback_route(ifa, ifa->ifa_addr);
+			ifa_free(ifa);
+		}
+		break;
+	}
+	NET_EPOCH_EXIT(et);
+}
+EVENTHANDLER_DEFINE(ifnet_event, in_ifnet_event, NULL, EVENTHANDLER_PRI_ANY);
 
 /*
  * Delete all IPv4 multicast address records, and associated link-layer
@@ -1681,6 +1784,17 @@ in_lltable_dump_entry(struct lltable *llt, struct llentry *lle,
 	return (error);
 }
 
+static void
+in_lltable_post_resolved(struct lltable *llt, struct llentry *lle)
+{
+	struct ifnet *ifp = llt->llt_ifp;
+
+	/* gratuitous ARP */
+	if ((lle->la_flags & LLE_PUB) != 0)
+		arprequest(ifp, &lle->r_l3addr.addr4, &lle->r_l3addr.addr4,
+		    lle->ll_addr);
+}
+
 static struct lltable *
 in_lltattach(struct ifnet *ifp)
 {
@@ -1699,6 +1813,7 @@ in_lltattach(struct ifnet *ifp)
 	llt->llt_free_entry = in_lltable_free_entry;
 	llt->llt_match_prefix = in_lltable_match_prefix;
 	llt->llt_mark_used = llentry_mark_used;
+	llt->llt_post_resolved = in_lltable_post_resolved;
  	lltable_link(llt);
 
 	return (llt);

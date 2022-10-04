@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -72,8 +72,8 @@ echo "alias scsidebug /dev/disk/by-id/$SD_DEVICE_ID" >>$VDEVID_CONF
 block_device_wait
 
 SD_DEVICE=$(udevadm info -q all -n $DEV_DSKDIR/$SD | \
-    awk -F'=' '/ID_VDEV=/{print $2; exit}')
-[[ -z $SD_DEVICE ]] && log_fail "vdev rule was not registered properly"
+    awk -F'=' '/ID_VDEV=/ {print $2; exit}')
+[ -z $SD_DEVICE ] && log_fail "vdev rule was not registered properly"
 
 log_must zpool events -c
 log_must zpool create -f $TESTPOOL raidz1 $SD_DEVICE $DISK1 $DISK2 $DISK3

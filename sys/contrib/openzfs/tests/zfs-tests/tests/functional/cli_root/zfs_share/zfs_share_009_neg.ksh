@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -63,8 +63,7 @@ if [[ $sharenfs_val == off ]]; then
 	log_must zfs set sharenfs=on $fs
 fi
 
-showshares_nfs | grep $mpt >/dev/null 2>&1
-if (( $? != 0 )); then
+if ! showshares_nfs | grep -q $mpt; then
 	log_must zfs share $fs
 fi
 

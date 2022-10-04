@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -58,10 +58,7 @@ function cleanup
 		safe_dumpadm $savedumpdev
 	fi
 
-	swap -l | grep -w $voldev > /dev/null 2>&1
-        if (( $? == 0 ));  then
-		log_must swap -d $voldev
-	fi
+	swap -l | grep -qw $voldev && log_must swap -d $voldev
 
 	typeset snap
 	for snap in snap0 snap1 ; do

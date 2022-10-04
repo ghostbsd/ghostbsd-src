@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -60,7 +60,7 @@ while ((ret == 0)); do
 	ret=$?
 
 	if ((ret != 0)); then
-		len=$(echo $basefs | wc -c)
+		len=$(( ${#basefs} + 1 )) # +1 for NUL
 		log_note "The deeply-nested filesystem len: $len"
 
 		#
@@ -71,7 +71,7 @@ while ((ret == 0)); do
 		if ((len >= 255)); then
 			datasetexists $basefs && destroy_dataset $basefs -r
 			basefs=${basefs%/*}
-			len=$(echo $basefs| wc -c)
+			len=$(( ${#basefs} + 1 ))
 		fi
 		break
 	fi

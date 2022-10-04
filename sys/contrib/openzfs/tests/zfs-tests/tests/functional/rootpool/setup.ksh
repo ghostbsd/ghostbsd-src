@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -35,7 +35,7 @@ verify_runnable "global"
 
 #
 # This functionality is supported under Linux, but these test cases
-# are disabled by default since they manipulate the systems root pool.
+# are disabled by default since they manipulate the system's root pool.
 #
 if is_linux || is_freebsd; then
         log_unsupported "Supported but disabled by default"

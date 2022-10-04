@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -40,7 +40,7 @@
  * Note: The caller must free the returned string.
  */
 char *
-zfs_strip_partition(char *dev)
+zfs_strip_partition(const char *dev)
 {
 	return (strdup(dev));
 }
@@ -56,8 +56,8 @@ zfs_append_partition(char *path, size_t max_len)
  * On FreeBSD we only want to remove "/dev/" from the beginning of
  * paths if present.
  */
-char *
-zfs_strip_path(char *path)
+const char *
+zfs_strip_path(const char *path)
 {
 	if (strncmp(path, _PATH_DEV, sizeof (_PATH_DEV) - 1) == 0)
 		return (path + sizeof (_PATH_DEV) - 1);

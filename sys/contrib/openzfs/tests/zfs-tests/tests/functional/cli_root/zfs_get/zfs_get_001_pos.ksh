@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -102,16 +102,15 @@ function check_return_value
 		found=0
 
 		while read line; do
-			typeset item
-			typeset value
+			typeset item value _
 
-			item=$(echo $line | awk '{print $2}' 2>&1)
+			read -r _ item _ <<<"$line"
 			if [[ $item == $p ]]; then
 				((found += 1))
 				cols=$(echo $line | awk '{print NF}')
 			fi
 
-			value=$(echo $line | awk '{print $3}' 2>&1)
+			read -r _ _ value _ <<<"$line"
 			if [[ $value == $uint64_max ]]; then
 				log_fail "'zfs get $opt $props $dst' return " \
 				    "UINT64_MAX constant."

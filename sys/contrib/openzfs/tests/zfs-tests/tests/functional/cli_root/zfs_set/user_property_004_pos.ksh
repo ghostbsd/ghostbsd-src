@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -68,32 +68,19 @@ function nonexist_user_prop
 log_assert "User property has no effect to snapshot until 'Snapshot properties' supported."
 log_onexit cleanup
 
-typeset snap_property=
-
-zpool upgrade -v | grep "Snapshot properties" > /dev/null 2>&1
-if (( $? == 0 )) ; then
-	snap_property="true"
-fi
-
 for fs in $TESTPOOL/$TESTFS $TESTPOOL/$TESTVOL $TESTPOOL ; do
 	typeset fssnap=$fs@snap
 	prop_name=$(valid_user_property 10)
 	value=$(user_property_value 16)
-	log_must eval "zfs set $prop_name='$value' $fs"
-	log_must eval "check_user_prop $fs $prop_name '$value'"
+	log_must zfs set $prop_name="$value" $fs
+	log_must check_user_prop $fs $prop_name "$value"
 
 	log_must zfs snapshot $fssnap
 
-	if [[ -n $snap_property ]] ; then
-		log_mustnot nonexist_user_prop $prop_name $fssnap
+	log_mustnot nonexist_user_prop $prop_name $fssnap
 
-		log_must eval "zfs set $prop_name='$value' $fssnap"
-		log_mustnot nonexist_user_prop $prop_name $fssnap
-	else
-		log_must nonexist_user_prop $prop_name $fssnap
-		log_mustnot eval "zfs set $prop_name='$value' $fssnap"
-		log_must nonexist_user_prop $prop_name $fssnap
-	fi
+	log_must zfs set $prop_name="$value" $fssnap
+	log_mustnot nonexist_user_prop $prop_name $fssnap
 done
 
 log_pass "User properties has effect upon snapshot."

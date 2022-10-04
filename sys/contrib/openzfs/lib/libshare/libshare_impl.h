@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -22,44 +22,26 @@
 /*
  * Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 Gunnar Beutner
- * Copyright (c) 2019, 2020 by Delphix. All rights reserved.
+ * Copyright (c) 2019, 2022 by Delphix. All rights reserved.
  */
 #ifndef _LIBSPL_LIBSHARE_IMPL_H
 #define	_LIBSPL_LIBSHARE_IMPL_H
 
-typedef struct sa_share_fsinfo {
-	char *shareopts;
-} sa_share_fsinfo_t;
-
-typedef struct sa_share_impl {
-	char *sa_mountpoint;
-	char *sa_zfsname;
-
-	sa_share_fsinfo_t *sa_fsinfo; /* per-fstype information */
+typedef const struct sa_share_impl {
+	const char *sa_zfsname;
+	const char *sa_mountpoint;
+	const char *sa_shareopts;
 } *sa_share_impl_t;
 
-#define	FSINFO(impl_share, fstype) \
-	(&(impl_share->sa_fsinfo[fstype->fsinfo_index]))
-
-typedef struct sa_share_ops {
-	int (*enable_share)(sa_share_impl_t share);
-	int (*disable_share)(sa_share_impl_t share);
-	boolean_t (*is_shared)(sa_share_impl_t share);
-	int (*validate_shareopts)(const char *shareopts);
-	int (*update_shareopts)(sa_share_impl_t impl_share,
-	    const char *shareopts);
-	void (*clear_shareopts)(sa_share_impl_t impl_share);
-	int (*commit_shares)(void);
-} sa_share_ops_t;
-
-typedef struct sa_fstype {
-	struct sa_fstype *next;
-
-	const char *name;
-	const sa_share_ops_t *ops;
-	int fsinfo_index;
+typedef struct {
+	int (*const enable_share)(sa_share_impl_t share);
+	int (*const disable_share)(sa_share_impl_t share);
+	boolean_t (*const is_shared)(sa_share_impl_t share);
+	int (*const validate_shareopts)(const char *shareopts);
+	int (*const commit_shares)(void);
+	void (*const truncate_shares)(void);
 } sa_fstype_t;
 
-sa_fstype_t *register_fstype(const char *name, const sa_share_ops_t *ops);
+extern const sa_fstype_t libshare_nfs_type, libshare_smb_type;
 
 #endif /* _LIBSPL_LIBSHARE_IMPL_H */

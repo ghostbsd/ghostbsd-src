@@ -96,8 +96,7 @@ static driver_t acpi_timer_driver = {
     0,
 };
 
-static devclass_t acpi_timer_devclass;
-DRIVER_MODULE(acpi_timer, acpi, acpi_timer_driver, acpi_timer_devclass, 0, 0);
+DRIVER_MODULE(acpi_timer, acpi, acpi_timer_driver, 0, 0);
 MODULE_DEPEND(acpi_timer, acpi, 1, 1, 1);
 
 static struct timecounter acpi_timer_timecounter = {
@@ -400,7 +399,7 @@ SYSCTL_PROC(_machdep, OID_AUTO, acpi_timer_freq,
  */
 #define N 2000
 static int
-acpi_timer_test()
+acpi_timer_test(void)
 {
     uint32_t last, this;
     int delta, max, max2, min, n;

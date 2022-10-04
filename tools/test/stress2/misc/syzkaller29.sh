@@ -26,7 +26,7 @@
 
 # Fixed by r368116
 
-# May change policy for random threads to to domainset_fixed
+# May change policy for random threads to domainset_fixed
 exit 0
 
 . ../default.cfg
@@ -127,5 +127,5 @@ mycc -o /tmp/syzkaller29 -Wall -Wextra -O0 /tmp/syzkaller29.c ||
 
 (cd /tmp; timeout 3m ./syzkaller29)
 
-rm -rf /tmp/syzkaller29 syzkaller29.c /tmp/syzkaller.*
+rm -rf /tmp/syzkaller29 /tmp/syzkaller29.c /tmp/syzkaller.*
 exit 0

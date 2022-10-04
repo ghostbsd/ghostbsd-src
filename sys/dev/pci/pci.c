@@ -226,9 +226,7 @@ static device_method_t pci_methods[] = {
 
 DEFINE_CLASS_0(pci, pci_driver, pci_methods, sizeof(struct pci_softc));
 
-static devclass_t pci_devclass;
-EARLY_DRIVER_MODULE(pci, pcib, pci_driver, pci_devclass, pci_modevent, NULL,
-    BUS_PASS_BUS);
+EARLY_DRIVER_MODULE(pci, pcib, pci_driver, pci_modevent, NULL, BUS_PASS_BUS);
 MODULE_VERSION(pci, 1);
 
 static char	*pci_vendordata;
@@ -1251,7 +1249,7 @@ pci_read_vpd(device_t pcib, pcicfgregs *cfg)
 				    M_DEVBUF, M_WAITOK);
 			remain -= 3;
 			i = 0;
-			/* keep in sync w/ state 3's transistions */
+			/* keep in sync w/ state 3's transitions */
 			if (dflen == 0 && remain == 0)
 				state = 0;
 			else if (dflen == 0)
@@ -1278,7 +1276,7 @@ pci_read_vpd(device_t pcib, pcicfgregs *cfg)
 			}
 			dflen--;
 			remain--;
-			/* keep in sync w/ state 2's transistions */
+			/* keep in sync w/ state 2's transitions */
 			if (dflen == 0)
 				cfg->vpd.vpd_ros[off++].value[i++] = '\0';
 			if (dflen == 0 && remain == 0) {
@@ -1320,7 +1318,7 @@ pci_read_vpd(device_t pcib, pcicfgregs *cfg)
 			    M_DEVBUF, M_WAITOK);
 			remain -= 3;
 			i = 0;
-			/* keep in sync w/ state 6's transistions */
+			/* keep in sync w/ state 6's transitions */
 			if (dflen == 0 && remain == 0)
 				state = 0;
 			else if (dflen == 0)
@@ -1333,7 +1331,7 @@ pci_read_vpd(device_t pcib, pcicfgregs *cfg)
 			cfg->vpd.vpd_w[off].value[i++] = byte;
 			dflen--;
 			remain--;
-			/* keep in sync w/ state 5's transistions */
+			/* keep in sync w/ state 5's transitions */
 			if (dflen == 0)
 				cfg->vpd.vpd_w[off++].value[i++] = '\0';
 			if (dflen == 0 && remain == 0) {
@@ -3172,6 +3170,21 @@ pci_find_bar(device_t dev, int reg)
 	return (NULL);
 }
 
+struct pci_map *
+pci_first_bar(device_t dev)
+{
+	struct pci_devinfo *dinfo;
+
+	dinfo = device_get_ivars(dev);
+	return (STAILQ_FIRST(&dinfo->cfg.maps));
+}
+
+struct pci_map *
+pci_next_bar(struct pci_map *pm)
+{
+	return (STAILQ_NEXT(pm, pm_link));
+}
+
 int
 pci_bar_enabled(device_t dev, struct pci_map *pm)
 {
@@ -3318,7 +3331,7 @@ pci_add_map(device_t bus, device_t dev, int reg, struct resource_list *rl,
 	 * not allow that.  It is best to ignore such entries for the
 	 * moment.  These will be allocated later if the driver specifically
 	 * requests them.  However, some removable buses look better when
-	 * all resources are allocated, so allow '0' to be overriden.
+	 * all resources are allocated, so allow '0' to be overridden.
 	 *
 	 * Similarly treat maps whose values is the same as the test value
 	 * read back.  These maps have had all f's written to them by the
@@ -5378,7 +5391,7 @@ pci_write_ivar(device_t dev, device_t child, int which, uintptr_t value)
  * List resources based on pci map registers, used for within ddb
  */
 
-DB_SHOW_COMMAND(pciregs, db_pci_dump)
+DB_SHOW_COMMAND_FLAGS(pciregs, db_pci_dump, DB_CMD_MEMSAFE)
 {
 	struct pci_devinfo *dinfo;
 	struct devlist *devlist_head;
@@ -6789,7 +6802,7 @@ pci_print_faulted_dev(void)
 }
 
 #ifdef DDB
-DB_SHOW_COMMAND(pcierr, pci_print_faulted_dev_db)
+DB_SHOW_COMMAND_FLAGS(pcierr, pci_print_faulted_dev_db, DB_CMD_MEMSAFE)
 {
 
 	pci_print_faulted_dev();
@@ -6818,7 +6831,7 @@ db_clear_pcie_errors(const struct pci_devinfo *dinfo)
 		pci_write_config(dev, aer + PCIR_AER_COR_STATUS, r, 4);
 }
 
-DB_COMMAND(pci_clearerr, db_pci_clearerr)
+DB_COMMAND_FLAGS(pci_clearerr, db_pci_clearerr, DB_CMD_MEMSAFE)
 {
 	struct pci_devinfo *dinfo;
 	device_t dev;

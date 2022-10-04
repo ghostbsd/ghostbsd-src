@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -56,8 +56,8 @@ typedef const struct pool_config_ops {
 /*
  * An instance of pool_config_ops_t is expected in the caller's binary.
  */
-_LIBZUTIL_H const pool_config_ops_t libzfs_config_ops;
-_LIBZUTIL_H const pool_config_ops_t libzpool_config_ops;
+_LIBZUTIL_H pool_config_ops_t libzfs_config_ops;
+_LIBZUTIL_H pool_config_ops_t libzpool_config_ops;
 
 typedef struct importargs {
 	char **path;		/* a list of paths to search		*/
@@ -71,9 +71,9 @@ typedef struct importargs {
 } importargs_t;
 
 _LIBZUTIL_H nvlist_t *zpool_search_import(void *, importargs_t *,
-    const pool_config_ops_t *);
+    pool_config_ops_t *);
 _LIBZUTIL_H int zpool_find_config(void *, const char *, nvlist_t **,
-    importargs_t *, const pool_config_ops_t *);
+    importargs_t *, pool_config_ops_t *);
 
 _LIBZUTIL_H const char * const * zpool_default_search_paths(size_t *count);
 _LIBZUTIL_H int zpool_read_label(int, nvlist_t **, int *);
@@ -97,8 +97,8 @@ _LIBZUTIL_H int zfs_append_partition(char *path, size_t max_len);
 _LIBZUTIL_H int zfs_resolve_shortname(const char *name, char *path,
     size_t pathlen);
 
-_LIBZUTIL_H char *zfs_strip_partition(char *);
-_LIBZUTIL_H char *zfs_strip_path(char *);
+_LIBZUTIL_H char *zfs_strip_partition(const char *);
+_LIBZUTIL_H const char *zfs_strip_path(const char *);
 
 _LIBZUTIL_H int zfs_strcmp_pathname(const char *, const char *, int);
 
@@ -155,9 +155,9 @@ struct zfs_cmd;
 #define	ANSI_RESET	"\033[0m"
 #define	ANSI_BOLD	"\033[1m"
 
-_LIBZUTIL_H void color_start(char *color);
+_LIBZUTIL_H void color_start(const char *color);
 _LIBZUTIL_H void color_end(void);
-_LIBZUTIL_H int printf_color(char *color, char *format, ...);
+_LIBZUTIL_H int printf_color(const char *color, const char *format, ...);
 
 _LIBZUTIL_H const char *zfs_basename(const char *path);
 _LIBZUTIL_H ssize_t zfs_dirnamelen(const char *path);

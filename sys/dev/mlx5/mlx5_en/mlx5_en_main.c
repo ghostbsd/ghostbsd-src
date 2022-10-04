@@ -1363,7 +1363,7 @@ mlx5e_enable_rq(struct mlx5e_rq *rq, struct mlx5e_rq_param *param)
 	if (priv->counter_set_id >= 0)
 		MLX5_SET(rqc, rqc, counter_set_id, priv->counter_set_id);
 	MLX5_SET(wq, wq, log_wq_pg_sz, rq->wq_ctrl.buf.page_shift -
-	    PAGE_SHIFT);
+	    MLX5_ADAPTER_PAGE_SHIFT);
 	MLX5_SET64(wq, wq, dbr_addr, rq->wq_ctrl.db.dma);
 
 	mlx5_fill_page_array(&rq->wq_ctrl.buf,
@@ -1779,7 +1779,7 @@ mlx5e_enable_sq(struct mlx5e_sq *sq, struct mlx5e_sq_param *param,
 	MLX5_SET(wq, wq, wq_type, MLX5_WQ_TYPE_CYCLIC);
 	MLX5_SET(wq, wq, uar_page, bfreg->index);
 	MLX5_SET(wq, wq, log_wq_pg_sz, sq->wq_ctrl.buf.page_shift -
-	    PAGE_SHIFT);
+	    MLX5_ADAPTER_PAGE_SHIFT);
 	MLX5_SET64(wq, wq, dbr_addr, sq->wq_ctrl.db.dma);
 
 	mlx5_fill_page_array(&sq->wq_ctrl.buf,
@@ -2067,7 +2067,7 @@ mlx5e_enable_cq(struct mlx5e_cq *cq, struct mlx5e_cq_param *param, int eq_ix)
 
 	MLX5_SET(cqc, cqc, c_eqn, eqn);
 	MLX5_SET(cqc, cqc, log_page_size, cq->wq_ctrl.buf.page_shift -
-	    PAGE_SHIFT);
+	    MLX5_ADAPTER_PAGE_SHIFT);
 	MLX5_SET64(cqc, cqc, dbr_addr, cq->wq_ctrl.db.dma);
 
 	err = mlx5_core_create_cq(cq->priv->mdev, mcq, in, inlen, out, sizeof(out));
@@ -3434,8 +3434,9 @@ mlx5e_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 	struct ifi2creq i2c;
 	struct ifrsskey *ifrk;
 	struct ifrsshash *ifrh;
+	struct siocsifcapnv_driver_data *drv_ioctl_data, drv_ioctl_data_d;
 	int error = 0;
-	int mask = 0;
+	int mask;
 	int size_read = 0;
 	int module_status;
 	int module_num;
@@ -3512,10 +3513,22 @@ mlx5e_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 		ifr = (struct ifreq *)data;
 		error = ifmedia_ioctl(ifp, ifr, &priv->media, command);
 		break;
+	case SIOCGIFCAPNV:
+		error = 0;
+		break;
 	case SIOCSIFCAP:
 		ifr = (struct ifreq *)data;
+		drv_ioctl_data = &drv_ioctl_data_d;
+		drv_ioctl_data->reqcap = ifr->ifr_reqcap;
 		PRIV_LOCK(priv);
-		mask = ifr->ifr_reqcap ^ ifp->if_capenable;
+		drv_ioctl_data->reqcap2 = ifp->if_capenable2;
+		drv_ioctl_data->nvcap = NULL;
+		goto siocsifcap_driver;
+	case SIOCSIFCAPNV:
+		drv_ioctl_data = (struct siocsifcapnv_driver_data *)data;
+		PRIV_LOCK(priv);
+siocsifcap_driver:
+		mask = drv_ioctl_data->reqcap ^ ifp->if_capenable;
 
 		if (mask & IFCAP_TXCSUM) {
 			ifp->if_capenable ^= IFCAP_TXCSUM;
@@ -3650,6 +3663,11 @@ mlx5e_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 				priv->clbr_done = 0;
 			}
 		}
+		mask = drv_ioctl_data->reqcap2 ^ ifp->if_capenable2;
+		if (mask & IFCAP2_RXTLS4)
+			ifp->if_capenable2 ^= IFCAP2_RXTLS4;
+		if (mask & IFCAP2_RXTLS6)
+			ifp->if_capenable2 ^= IFCAP2_RXTLS6;
 out:
 		PRIV_UNLOCK(priv);
 		break;
@@ -4518,6 +4536,7 @@ mlx5e_create_ifp(struct mlx5_core_dev *mdev)
 	/*
          * Set driver features
          */
+	ifp->if_capabilities |= IFCAP_NV;
 	ifp->if_capabilities |= IFCAP_HWCSUM | IFCAP_HWCSUM_IPV6;
 	ifp->if_capabilities |= IFCAP_VLAN_MTU | IFCAP_VLAN_HWTAGGING;
 	ifp->if_capabilities |= IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWFILTER;
@@ -4531,6 +4550,7 @@ mlx5e_create_ifp(struct mlx5_core_dev *mdev)
 	ifp->if_capabilities |= IFCAP_TXRTLMT | IFCAP_TXTLS_RTLMT;
 #endif
 	ifp->if_capabilities |= IFCAP_VXLAN_HWCSUM | IFCAP_VXLAN_HWTSO;
+	ifp->if_capabilities2 |= IFCAP2_RXTLS4 | IFCAP2_RXTLS6;
 	ifp->if_snd_tag_alloc = mlx5e_snd_tag_alloc;
 #ifdef RATELIMIT
 	ifp->if_ratelimit_query = mlx5e_ratelimit_query;
@@ -4541,6 +4561,7 @@ mlx5e_create_ifp(struct mlx5_core_dev *mdev)
 	ifp->if_hw_tsomaxsegsize = MLX5E_MAX_TX_MBUF_SIZE;
 
 	ifp->if_capenable = ifp->if_capabilities;
+	ifp->if_capenable2 = ifp->if_capabilities2;
 	ifp->if_hwassist = 0;
 	if (ifp->if_capenable & IFCAP_TSO)
 		ifp->if_hwassist |= CSUM_TSO;
@@ -4776,6 +4797,8 @@ mlx5e_create_ifp(struct mlx5_core_dev *mdev)
 	    &priv->clbr_done, 0,
 	    "RX timestamps calibration state");
 	callout_init(&priv->tstmp_clbr, 1);
+	/* Pull out the frequency of the clock in hz */
+	priv->cclk = (uint64_t)MLX5_CAP_GEN(mdev, device_frequency_khz) * 1000ULL;
 	mlx5e_reset_calibration_callout(priv);
 
 	pa.pa_version = PFIL_VERSION;

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -41,8 +41,7 @@
 
 function cleanup
 {
-	[[ -z $msgs1 ]] || log_must rm $msgs1
-	[[ -z $msgs2 ]] || log_must rm $msgs2
+	log_must rm -f $msgs1 $msgs2
 	datasetexists $FS && destroy_dataset $FS -r
 }
 
@@ -69,7 +68,7 @@ msgs2=$(mktemp) || log_fail
 # Start reading file, pause and read it from another process, and then finish
 # reading.
 #
-{ dd bs=512 count=4; cat $ZFS_DBGMSG >$msgs1; cat; } <$ZFS_DBGMSG >$msgs2
+{ dd bs=512 count=4; cp $ZFS_DBGMSG $msgs1; cat; } <$ZFS_DBGMSG >$msgs2
 
 #
 # Truncate the result of the read that completed second in case it picked up an

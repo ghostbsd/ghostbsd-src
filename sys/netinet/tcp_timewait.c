@@ -50,9 +50,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
-#ifndef INVARIANTS
 #include <sys/syslog.h>
-#endif
 #include <sys/protosw.h>
 #include <sys/random.h>
 
@@ -84,15 +82,9 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <netinet/tcp_hpts.h>
-#ifdef INET6
-#include <netinet6/tcp6_var.h>
-#endif
 #include <netinet/tcpip.h>
 #ifdef TCPDEBUG
 #include <netinet/tcp_debug.h>
-#endif
-#ifdef INET6
-#include <netinet6/ip6protosw.h>
 #endif
 
 #include <netinet/udp.h>
@@ -370,13 +362,9 @@ tcp_twstart(struct tcpcb *tp)
 	 * detach and free the socket as it is not needed in time wait.
 	 */
 	if (inp->inp_flags & INP_SOCKREF) {
-		KASSERT(so->so_state & SS_PROTOREF,
-		    ("tcp_twstart: !SS_PROTOREF"));
 		inp->inp_flags &= ~INP_SOCKREF;
 		INP_WUNLOCK(inp);
-		SOCK_LOCK(so);
-		so->so_state &= ~SS_PROTOREF;
-		sofree(so);
+		sorele(so);
 	} else
 		INP_WUNLOCK(inp);
 }
@@ -393,6 +381,7 @@ tcp_twcheck(struct inpcb *inp, struct tcpopt *to, struct tcphdr *th,
     struct mbuf *m, int tlen)
 {
 	struct tcptw *tw;
+	char *s;
 	int thflags;
 	tcp_seq seq;
 
@@ -451,6 +440,17 @@ tcp_twcheck(struct inpcb *inp, struct tcpopt *to, struct tcphdr *th,
 	 */
 #endif
 
+	/* Honor the drop_synfin sysctl variable. */
+	if ((thflags & TH_SYN) && (thflags & TH_FIN) && V_drop_synfin) {
+		if ((s = tcp_log_addrs(&inp->inp_inc, th, NULL, NULL))) {
+			log(LOG_DEBUG, "%s; %s: "
+			    "SYN|FIN segment ignored (based on "
+			    "sysctl setting)\n", s, __func__);
+			free(s, M_TCPLOG);
+		}
+		goto drop;
+	}
+
 	/*
 	 * If a new connection request is received
 	 * while in TIME_WAIT, drop the old connection
@@ -458,13 +458,13 @@ tcp_twcheck(struct inpcb *inp, struct tcpopt *to, struct tcphdr *th,
 	 * are above the previous ones.
 	 * Allow UDP port number changes in this case.
 	 */
-	if ((thflags & TH_SYN) && SEQ_GT(th->th_seq, tw->rcv_nxt)) {
+	if (((thflags & (TH_SYN | TH_ACK)) == TH_SYN) &&
+	    SEQ_GT(th->th_seq, tw->rcv_nxt)) {
 		/*
 		 * In case we can't upgrade our lock just pretend we have
 		 * lost this packet.
 		 */
-		if (((thflags & (TH_SYN | TH_ACK)) == TH_SYN) &&
-		    INP_TRY_UPGRADE(inp) == 0)
+		if (INP_TRY_UPGRADE(inp) == 0)
 			goto drop;
 		tcp_twclose(tw, 0);
 		TCPSTAT_INC(tcps_tw_recycles);
@@ -573,11 +573,7 @@ tcp_twclose(struct tcptw *tw, int reuse)
 		if (inp->inp_flags & INP_SOCKREF) {
 			inp->inp_flags &= ~INP_SOCKREF;
 			INP_WUNLOCK(inp);
-			SOCK_LOCK(so);
-			KASSERT(so->so_state & SS_PROTOREF,
-			    ("tcp_twclose: INP_SOCKREF && !SS_PROTOREF"));
-			so->so_state &= ~SS_PROTOREF;
-			sofree(so);
+			sorele(so);
 		} else {
 			/*
 			 * If we don't own the only reference, the socket and

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -22,9 +22,8 @@
 
 . $STF_SUITE/tests/functional/pam/utilities.kshlib
 
-if ! which pamtester; then
-        log_unsupported "pam tests require the pamtester utility to be installed"
-fi
+command -v pamtester > /dev/null || log_unsupported "pam tests require the pamtester utility to be installed"
+[ -f "$pammodule" ] || log_unsupported "$pammodule missing"
 
 DISK=${DISKS%% *}
 create_pool $TESTPOOL "$DISK"

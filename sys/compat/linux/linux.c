@@ -47,6 +47,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
+#include <netlink/netlink.h>
 
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -92,6 +93,8 @@ static int bsd_to_linux_sigtbl[LINUX_SIGTBLSZ] = {
 	LINUX_SIGUSR2	/* SIGUSR2 */
 };
 
+#define	LINUX_SIGPWREMU	(SIGRTMIN + (LINUX_SIGRTMAX - LINUX_SIGRTMIN) + 1)
+
 static int linux_to_bsd_sigtbl[LINUX_SIGTBLSZ] = {
 	SIGHUP,		/* LINUX_SIGHUP */
 	SIGINT,		/* LINUX_SIGINT */
@@ -127,7 +130,7 @@ static int linux_to_bsd_sigtbl[LINUX_SIGTBLSZ] = {
 	 * to the first unused FreeBSD signal number. Since Linux supports
 	 * signals from 1 to 64 we are ok here as our SIGRTMIN = 65.
 	 */
-	SIGRTMIN,	/* LINUX_SIGPWR */
+	LINUX_SIGPWREMU,/* LINUX_SIGPWR */
 	SIGSYS		/* LINUX_SIGSYS */
 };
 
@@ -144,14 +147,14 @@ static inline int
 linux_to_bsd_rt_signal(int sig)
 {
 
-	return (SIGRTMIN + 1 + sig - LINUX_SIGRTMIN);
+	return (SIGRTMIN + sig - LINUX_SIGRTMIN);
 }
 
 static inline int
 bsd_to_linux_rt_signal(int sig)
 {
 
-	return (sig - SIGRTMIN - 1 + LINUX_SIGRTMIN);
+	return (sig - SIGRTMIN + LINUX_SIGRTMIN);
 }
 
 int
@@ -172,7 +175,7 @@ bsd_to_linux_signal(int sig)
 
 	if (sig <= LINUX_SIGTBLSZ)
 		return (bsd_to_linux_sigtbl[_SIG_IDX(sig)]);
-	if (sig == SIGRTMIN)
+	if (sig == LINUX_SIGPWREMU)
 		return (LINUX_SIGPWR);
 
 	return (bsd_to_linux_rt_signal(sig));
@@ -362,6 +365,8 @@ linux_to_bsd_domain(int domain)
 		return (AF_IPX);
 	case LINUX_AF_APPLETALK:
 		return (AF_APPLETALK);
+	case LINUX_AF_NETLINK:
+		return (AF_NETLINK);
 	}
 	return (-1);
 }
@@ -385,6 +390,8 @@ bsd_to_linux_domain(int domain)
 		return (LINUX_AF_IPX);
 	case AF_APPLETALK:
 		return (LINUX_AF_APPLETALK);
+	case AF_NETLINK:
+		return (LINUX_AF_NETLINK);
 	}
 	return (-1);
 }
@@ -409,7 +416,7 @@ bsd_to_linux_sockaddr(const struct sockaddr *sa, struct l_sockaddr **lsa,
 	if (bdom == -1)
 		return (EAFNOSUPPORT);
 
-	kosa = malloc(len, M_SONAME, M_WAITOK);
+	kosa = malloc(len, M_LINUX, M_WAITOK);
 	bcopy(sa, kosa, len);
 	kosa->sa_family = bdom;
 	*lsa = kosa;
@@ -510,6 +517,14 @@ linux_to_bsd_sockaddr(const struct l_sockaddr *osa, struct sockaddr **sap,
 			error = ENAMETOOLONG;
 			goto out;
 		}
+	}
+
+	if (bdom == AF_NETLINK) {
+		if (salen < sizeof(struct sockaddr_nl)) {
+			error = EINVAL;
+			goto out;
+		}
+		salen = sizeof(struct sockaddr_nl);
 	}
 
 	sa = (struct sockaddr *)kosa;

@@ -1,6 +1,6 @@
 /* $FreeBSD$ */
 /*-
- * Copyright (c) 2010-2020 Hans Petter Selasky. All rights reserved.
+ * Copyright (c) 2010-2022 Hans Petter Selasky
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -63,6 +63,17 @@
 
 #include <fs/cuse/cuse_defs.h>
 #include <fs/cuse/cuse_ioctl.h>
+
+/* set this define to zero to disable this feature */
+#define	CUSE_COPY_BUFFER_MAX \
+	CUSE_BUFFER_MAX
+
+#define	CUSE_ALLOC_PAGES_MAX \
+	(CUSE_ALLOC_BYTES_MAX / PAGE_SIZE)
+
+#if (CUSE_ALLOC_PAGES_MAX == 0)
+#error "PAGE_SIZE is too big!"
+#endif
 
 static int
 cuse_modevent(module_t mod, int type, void *data)
@@ -147,6 +158,12 @@ struct cuse_client {
 	struct cuse_server *server;
 	struct cuse_server_dev *server_dev;
 
+	uintptr_t read_base;
+	uintptr_t write_base;
+	int read_length;
+	int write_length;
+	uint8_t	read_buffer[CUSE_COPY_BUFFER_MAX] __aligned(4);
+	uint8_t	write_buffer[CUSE_COPY_BUFFER_MAX] __aligned(4);
 	uint8_t	ioctl_buffer[CUSE_BUFFER_MAX] __aligned(4);
 
 	int	fflags;			/* file flags */
@@ -256,6 +273,12 @@ static void
 cuse_server_unlock(struct cuse_server *pcs)
 {
 	mtx_unlock(&pcs->mtx);
+}
+
+static bool
+cuse_server_is_locked(struct cuse_server *pcs)
+{
+	return (mtx_owned(&pcs->mtx));
 }
 
 static void
@@ -815,7 +838,7 @@ cuse_server_write(struct cdev *dev, struct uio *uio, int ioflag)
 static int
 cuse_server_ioctl_copy_locked(struct cuse_server *pcs,
     struct cuse_client_command *pccmd,
-    struct cuse_data_chunk *pchk, int isread)
+    struct cuse_data_chunk *pchk, bool isread)
 {
 	struct proc *p_proc;
 	uint32_t offset;
@@ -843,7 +866,7 @@ cuse_server_ioctl_copy_locked(struct cuse_server *pcs,
 
 	cuse_server_unlock(pcs);
 
-	if (isread == 0) {
+	if (!isread) {
 		error = copyin(
 		    (void *)pchk->local_ptr,
 		    pccmd->client->ioctl_buffer + offset,
@@ -922,7 +945,7 @@ cuse_proc2proc_copy(struct proc *proc_s, vm_offset_t data_s,
 static int
 cuse_server_data_copy_locked(struct cuse_server *pcs,
     struct cuse_client_command *pccmd,
-    struct cuse_data_chunk *pchk, int isread)
+    struct cuse_data_chunk *pchk, bool isread)
 {
 	struct proc *p_proc;
 	int error;
@@ -938,7 +961,7 @@ cuse_server_data_copy_locked(struct cuse_server *pcs,
 
 	cuse_server_unlock(pcs);
 
-	if (isread == 0) {
+	if (!isread) {
 		error = cuse_proc2proc_copy(
 		    curthread->td_proc, pchk->local_ptr,
 		    p_proc, pchk->peer_ptr,
@@ -957,6 +980,48 @@ cuse_server_data_copy_locked(struct cuse_server *pcs,
 	if (pccmd->proc_curr == NULL)
 		cv_signal(&pccmd->cv);
 
+	return (error);
+}
+
+static int
+cuse_server_data_copy_optimized_locked(struct cuse_server *pcs,
+    struct cuse_client_command *pccmd,
+    struct cuse_data_chunk *pchk, bool isread)
+{
+	uintptr_t offset;
+	int error;
+
+	/*
+	 * Check if data is stored locally to avoid accessing
+	 * other process's data space:
+	 */
+	if (isread) {
+		offset = pchk->peer_ptr - pccmd->client->write_base;
+
+		if (offset < (uintptr_t)pccmd->client->write_length &&
+		    pchk->length <= (unsigned long)pccmd->client->write_length &&
+		    offset + pchk->length <= (uintptr_t)pccmd->client->write_length) {
+			cuse_server_unlock(pcs);
+			error = copyout(pccmd->client->write_buffer + offset,
+			    (void *)pchk->local_ptr, pchk->length);
+			goto done;
+		}
+	} else {
+		offset = pchk->peer_ptr - pccmd->client->read_base;
+
+		if (offset < (uintptr_t)pccmd->client->read_length &&
+		    pchk->length <= (unsigned long)pccmd->client->read_length &&
+		    offset + pchk->length <= (uintptr_t)pccmd->client->read_length) {
+			cuse_server_unlock(pcs);
+			error = copyin((void *)pchk->local_ptr,
+			    pccmd->client->read_buffer + offset, pchk->length);
+			goto done;
+		}
+	}
+
+	/* use process to process copy function */
+	error = cuse_server_data_copy_locked(pcs, pccmd, pchk, isread);
+done:
 	return (error);
 }
 
@@ -1152,7 +1217,7 @@ cuse_server_ioctl(struct cdev *dev, unsigned long cmd,
 			error = ENOMEM;
 			break;
 		}
-		if (pai->page_count >= CUSE_ALLOC_PAGES_MAX) {
+		if (pai->page_count > CUSE_ALLOC_PAGES_MAX) {
 			error = ENOMEM;
 			break;
 		}
@@ -1287,14 +1352,22 @@ cuse_server_ioctl(struct cdev *dev, unsigned long cmd,
 			error = ENXIO;	/* invalid request */
 		} else if (pchk->peer_ptr < CUSE_BUF_MIN_PTR) {
 			error = EFAULT;	/* NULL pointer */
+		} else if (pchk->length == 0) {
+			/* NOP */
 		} else if (pchk->peer_ptr < CUSE_BUF_MAX_PTR) {
 			error = cuse_server_ioctl_copy_locked(pcs, pccmd,
 			    pchk, cmd == CUSE_IOCTL_READ_DATA);
 		} else {
-			error = cuse_server_data_copy_locked(pcs, pccmd,
-			    pchk, cmd == CUSE_IOCTL_READ_DATA);
+			error = cuse_server_data_copy_optimized_locked(
+			    pcs, pccmd, pchk, cmd == CUSE_IOCTL_READ_DATA);
 		}
-		cuse_server_unlock(pcs);
+
+		/*
+		 * Sometimes the functions above drop the server lock
+		 * early as an optimization:
+		 */
+		if (cuse_server_is_locked(pcs))
+			cuse_server_unlock(pcs);
 		break;
 
 	case CUSE_IOCTL_SELWAKEUP:
@@ -1322,12 +1395,49 @@ cuse_server_poll(struct cdev *dev, int events, struct thread *td)
 }
 
 static int
+cuse_common_mmap_single(struct cuse_server *pcs,
+    vm_ooffset_t *offset, vm_size_t size, struct vm_object **object)
+{
+  	struct cuse_memory *mem;
+	int error;
+
+	/* verify size */
+	if ((size % PAGE_SIZE) != 0 || (size < PAGE_SIZE))
+		return (EINVAL);
+
+	cuse_server_lock(pcs);
+	error = ENOMEM;
+
+	/* lookup memory structure, if any */
+	TAILQ_FOREACH(mem, &pcs->hmem, entry) {
+		vm_ooffset_t min_off;
+		vm_ooffset_t max_off;
+
+		min_off = (mem->alloc_nr << CUSE_ALLOC_UNIT_SHIFT);
+		max_off = min_off + (PAGE_SIZE * mem->page_count);
+
+		if (*offset >= min_off && *offset < max_off) {
+			/* range check size */
+			if (size > (max_off - *offset)) {
+				error = EINVAL;
+			} else {
+				/* get new VM object offset to use */
+				*offset -= min_off;
+				vm_object_reference(mem->object);
+				*object = mem->object;
+				error = 0;
+			}
+			break;
+		}
+	}
+	cuse_server_unlock(pcs);
+	return (error);
+}
+
+static int
 cuse_server_mmap_single(struct cdev *dev, vm_ooffset_t *offset,
     vm_size_t size, struct vm_object **object, int nprot)
 {
-	uint32_t page_nr = *offset / PAGE_SIZE;
-	uint32_t alloc_nr = page_nr / CUSE_ALLOC_PAGES_MAX;
-	struct cuse_memory *mem;
 	struct cuse_server *pcs;
 	int error;
 
@@ -1335,37 +1445,7 @@ cuse_server_mmap_single(struct cdev *dev, vm_ooffset_t *offset,
 	if (error != 0)
 		return (error);
 
-	cuse_server_lock(pcs);
-	/* lookup memory structure */
-	TAILQ_FOREACH(mem, &pcs->hmem, entry) {
-		if (mem->alloc_nr == alloc_nr)
-			break;
-	}
-	if (mem == NULL) {
-		cuse_server_unlock(pcs);
-		return (ENOMEM);
-	}
-	/* verify page offset */
-	page_nr %= CUSE_ALLOC_PAGES_MAX;
-	if (page_nr >= mem->page_count) {
-		cuse_server_unlock(pcs);
-		return (ENXIO);
-	}
-	/* verify mmap size */
-	if ((size % PAGE_SIZE) != 0 || (size < PAGE_SIZE) ||
-	    (size > ((mem->page_count - page_nr) * PAGE_SIZE))) {
-		cuse_server_unlock(pcs);
-		return (EINVAL);
-	}
-	vm_object_reference(mem->object);
-	*object = mem->object;
-	cuse_server_unlock(pcs);
-
-	/* set new VM object offset to use */
-	*offset = page_nr * PAGE_SIZE;
-
-	/* success */
-	return (0);
+	return (cuse_common_mmap_single(pcs, offset, size, object));
 }
 
 /*------------------------------------------------------------------------*
@@ -1567,6 +1647,7 @@ cuse_client_read(struct cdev *dev, struct uio *uio, int ioflag)
 	struct cuse_client *pcc;
 	struct cuse_server *pcs;
 	int error;
+	int temp;
 	int len;
 
 	error = cuse_client_get(&pcc);
@@ -1591,13 +1672,41 @@ cuse_client_read(struct cdev *dev, struct uio *uio, int ioflag)
 		len = uio->uio_iov->iov_len;
 
 		cuse_server_lock(pcs);
+		if (len <= CUSE_COPY_BUFFER_MAX) {
+			/* set read buffer region for small reads */
+			pcc->read_base = (uintptr_t)uio->uio_iov->iov_base;
+			pcc->read_length = len;
+		}
 		cuse_client_send_command_locked(pccmd,
 		    (uintptr_t)uio->uio_iov->iov_base,
 		    (unsigned long)(unsigned int)len, pcc->fflags, ioflag);
 
 		error = cuse_client_receive_command_locked(pccmd, 0, 0);
+		/*
+		 * After finishing reading data, disable the read
+		 * region for the cuse_server_data_copy_optimized_locked()
+		 * function:
+		 */
+		pcc->read_base = 0;
+		pcc->read_length = 0;
 		cuse_server_unlock(pcs);
 
+		/*
+		 * The return value indicates the read length, when
+		 * not negative. Range check it just in case to avoid
+		 * passing invalid length values to uiomove().
+		 */
+		if (error > len) {
+			error = ERANGE;
+			break;
+		} else if (error > 0 && len <= CUSE_COPY_BUFFER_MAX) {
+			temp = copyout(pcc->read_buffer,
+			    uio->uio_iov->iov_base, error);
+			if (temp != 0) {
+				error = temp;
+				break;
+			}
+		}
 		if (error < 0) {
 			error = cuse_convert_error(error);
 			break;
@@ -1650,15 +1759,43 @@ cuse_client_write(struct cdev *dev, struct uio *uio, int ioflag)
 		}
 		len = uio->uio_iov->iov_len;
 
+		if (len <= CUSE_COPY_BUFFER_MAX) {
+			error = copyin(uio->uio_iov->iov_base,
+			    pcc->write_buffer, len);
+			if (error != 0)
+				break;
+		}
+
 		cuse_server_lock(pcs);
+		if (len <= CUSE_COPY_BUFFER_MAX) {
+			/* set write buffer region for small writes */
+			pcc->write_base = (uintptr_t)uio->uio_iov->iov_base;
+			pcc->write_length = len;
+		}
 		cuse_client_send_command_locked(pccmd,
 		    (uintptr_t)uio->uio_iov->iov_base,
 		    (unsigned long)(unsigned int)len, pcc->fflags, ioflag);
 
 		error = cuse_client_receive_command_locked(pccmd, 0, 0);
+
+		/*
+		 * After finishing writing data, disable the write
+		 * region for the cuse_server_data_copy_optimized_locked()
+		 * function:
+		 */
+		pcc->write_base = 0;
+		pcc->write_length = 0;
 		cuse_server_unlock(pcs);
 
-		if (error < 0) {
+		/*
+		 * The return value indicates the write length, when
+		 * not negative. Range check it just in case to avoid
+		 * passing invalid length values to uiomove().
+		 */
+		if (error > len) {
+			error = ERANGE;
+			break;
+		} else if (error < 0) {
 			error = cuse_convert_error(error);
 			break;
 		} else if (error == len) {
@@ -1672,7 +1809,8 @@ cuse_client_write(struct cdev *dev, struct uio *uio, int ioflag)
 	}
 	cuse_cmd_unlock(pccmd);
 
-	uio->uio_segflg = UIO_USERSPACE;/* restore segment flag */
+	/* restore segment flag */
+	uio->uio_segflg = UIO_USERSPACE;
 
 	if (error == EWOULDBLOCK)
 		cuse_client_kqfilter_poll(dev, pcc);
@@ -1804,50 +1942,14 @@ static int
 cuse_client_mmap_single(struct cdev *dev, vm_ooffset_t *offset,
     vm_size_t size, struct vm_object **object, int nprot)
 {
-	uint32_t page_nr = *offset / PAGE_SIZE;
-	uint32_t alloc_nr = page_nr / CUSE_ALLOC_PAGES_MAX;
-	struct cuse_memory *mem;
 	struct cuse_client *pcc;
-	struct cuse_server *pcs;
 	int error;
 
 	error = cuse_client_get(&pcc);
 	if (error != 0)
 		return (error);
 
-	pcs = pcc->server;
-
-	cuse_server_lock(pcs);
-	/* lookup memory structure */
-	TAILQ_FOREACH(mem, &pcs->hmem, entry) {
-		if (mem->alloc_nr == alloc_nr)
-			break;
-	}
-	if (mem == NULL) {
-		cuse_server_unlock(pcs);
-		return (ENOMEM);
-	}
-	/* verify page offset */
-	page_nr %= CUSE_ALLOC_PAGES_MAX;
-	if (page_nr >= mem->page_count) {
-		cuse_server_unlock(pcs);
-		return (ENXIO);
-	}
-	/* verify mmap size */
-	if ((size % PAGE_SIZE) != 0 || (size < PAGE_SIZE) ||
-	    (size > ((mem->page_count - page_nr) * PAGE_SIZE))) {
-		cuse_server_unlock(pcs);
-		return (EINVAL);
-	}
-	vm_object_reference(mem->object);
-	*object = mem->object;
-	cuse_server_unlock(pcs);
-
-	/* set new VM object offset to use */
-	*offset = page_nr * PAGE_SIZE;
-
-	/* success */
-	return (0);
+	return (cuse_common_mmap_single(pcc->server, offset, size, object));
 }
 
 static void

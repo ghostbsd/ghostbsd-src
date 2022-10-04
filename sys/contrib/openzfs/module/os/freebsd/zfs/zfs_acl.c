@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -527,7 +527,7 @@ zfs_acl_valid_ace_type(uint_t type, uint_t flags)
 		    entry_type == ACE_EVERYONE || entry_type == 0 ||
 		    entry_type == ACE_IDENTIFIER_GROUP);
 	default:
-		if (type >= MIN_ACE_TYPE && type <= MAX_ACE_TYPE)
+		if (type <= MAX_ACE_TYPE)
 			return (B_TRUE);
 	}
 	return (B_FALSE);
@@ -1669,7 +1669,7 @@ zfs_acl_ids_create(znode_t *dzp, int flag, vattr_t *vap, cred_t *cr,
 				acl_ids->z_fgid = 0;
 		}
 		if (acl_ids->z_fgid == 0) {
-			char		*domain;
+			const char	*domain;
 			uint32_t	rid;
 
 			acl_ids->z_fgid = dzp->z_gid;

@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -67,15 +67,15 @@ log_must zfs snapshot $snap2
 # Save initial TESTPOOL history
 log_must eval "zpool history $TESTPOOL > $OLD_HISTORY"
 
-log_must zfs list $fs > /dev/null
-log_must zfs get mountpoint $fs > /dev/null
+log_must eval "zfs list $fs > /dev/null"
+log_must eval "zfs get mountpoint $fs > /dev/null"
 log_must zfs unmount $fs
 log_must zfs mount $fs
 if ! is_linux; then
 	log_must zfs share $fs
 	log_must zfs unshare $fs
 fi
-log_must zfs send -i $snap1 $snap2 > /dev/null
+log_must eval "zfs send -i $snap1 $snap2 > /dev/null"
 log_must zfs holds $snap1
 
 log_must eval "zpool history $TESTPOOL > $NEW_HISTORY"

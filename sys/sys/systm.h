@@ -150,7 +150,6 @@ void	*hashinit_flags(int count, struct malloc_type *type,
 void	*phashinit(int count, struct malloc_type *type, u_long *nentries);
 void	*phashinit_flags(int count, struct malloc_type *type, u_long *nentries,
     int flags);
-void	g_waitidle(void);
 
 void	cpu_flush_dcache(void *, size_t);
 void	cpu_rootconf(void);
@@ -360,8 +359,6 @@ int	SAN_INTERCEPTOR(casueword)(volatile u_long *p, u_long oldval,
 #endif /* !SAN_RUNTIME */
 #endif /* SAN_NEEDS_INTERCEPTORS && !KCSAN */
 
-void	realitexpire(void *);
-
 int	sysbeep(int hertz, sbintime_t duration);
 
 void	hardclock(int cnt, int usermode);
@@ -407,7 +404,7 @@ int	getenv_array(const char *name, void *data, int size, int *psize,
 #define	GETENV_SIGNED	true	/* negative numbers allowed */
 
 typedef uint64_t (cpu_tick_f)(void);
-void set_cputicker(cpu_tick_f *func, uint64_t freq, unsigned var);
+void set_cputicker(cpu_tick_f *func, uint64_t freq, bool isvariable);
 extern cpu_tick_f *cpu_ticks;
 uint64_t cpu_tickrate(void);
 uint64_t cputick2usec(uint64_t tick);
@@ -451,8 +448,11 @@ int	msleep_spin_sbt(const void * _Nonnull chan, struct mtx *mtx,
 	    0, C_HARDCLOCK)
 int	pause_sbt(const char *wmesg, sbintime_t sbt, sbintime_t pr,
 	    int flags);
-#define	pause(wmesg, timo)						\
-	pause_sbt((wmesg), tick_sbt * (timo), 0, C_HARDCLOCK)
+static __inline int
+pause(const char *wmesg, int timo)
+{
+	return (pause_sbt(wmesg, tick_sbt * timo, 0, C_HARDCLOCK));
+}
 #define	pause_sig(wmesg, timo)						\
 	pause_sbt((wmesg), tick_sbt * (timo), 0, C_HARDCLOCK | C_CATCH)
 #define	tsleep(chan, pri, wmesg, timo)					\
@@ -498,6 +498,7 @@ int root_mounted(void);
  * Unit number allocation API. (kern/subr_unit.c)
  */
 struct unrhdr;
+#define	UNR_NO_MTX	((void *)(uintptr_t)-1)
 struct unrhdr *new_unrhdr(int low, int high, struct mtx *mutex);
 void init_unrhdr(struct unrhdr *uh, int low, int high, struct mtx *mutex);
 void delete_unrhdr(struct unrhdr *uh);
@@ -554,10 +555,16 @@ void _gone_in_dev(device_t dev, int major, const char *msg);
 #define gone_in(major, msg)		__gone_ok(major, msg) _gone_in(major, msg)
 #define gone_in_dev(dev, major, msg)	__gone_ok(major, msg) _gone_in_dev(dev, major, msg)
 
-#if defined(INVARIANTS) || defined(WITNESS)
+#ifdef INVARIANTS
 #define	__diagused
 #else
 #define	__diagused	__unused
+#endif
+
+#ifdef WITNESS
+#define	__witness_used
+#else
+#define	__witness_used	__unused
 #endif
 
 #endif /* _KERNEL */

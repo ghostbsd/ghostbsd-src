@@ -57,7 +57,6 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libexecinfo \
 	libexpat \
 	libfetch \
-	libfigpar \
 	libgcc_eh \
 	libgcc_s \
 	libgeom \
@@ -78,7 +77,6 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libnetmap \
 	libnv \
 	libopenbsd \
-	libopie \
 	libpam \
 	libpathconv \
 	libpcap \
@@ -133,8 +131,7 @@ SUBDIR_DEPEND_libgeom= libexpat libsbuf
 SUBDIR_DEPEND_librpcsec_gss= libgssapi
 SUBDIR_DEPEND_libmagic= libz
 SUBDIR_DEPEND_libmemstat= libkvm
-SUBDIR_DEPEND_libopie= libmd
-SUBDIR_DEPEND_libpam= libcrypt libopie ${_libradius} librpcsvc libtacplus libutil ${_libypclnt} ${_libcom_err} 
+SUBDIR_DEPEND_libpam= libcrypt ${_libradius} librpcsvc libtacplus libutil ${_libypclnt} ${_libcom_err}
 SUBDIR_DEPEND_libpjdlog= libutil
 SUBDIR_DEPEND_libprocstat= libkvm libutil
 SUBDIR_DEPEND_libradius= libmd
@@ -170,7 +167,7 @@ SUBDIR+=	clang
 SUBDIR.${MK_CUSE}+= 	libcuse
 SUBDIR.${MK_CXX}+=	libdevdctl
 SUBDIR.${MK_TOOLCHAIN}+=libpe
-SUBDIR.${MK_DIALOG}+=	libdpv
+SUBDIR.${MK_DIALOG}+=	libdpv libfigpar
 SUBDIR.${MK_FILE}+=	libmagic
 SUBDIR.${MK_GPIO}+=	libgpio
 SUBDIR.${MK_GSSAPI}+=	libgssapi librpcsec_gss
@@ -180,11 +177,8 @@ SUBDIR.${MK_LDNS}+=	libldns
 SUBDIR.${MK_STATS}+=	libstats
 
 # The libraries under libclang_rt can only be built by clang and when we enable
-# C++ support.  Furthermore, they can only be built for certain architectures.
-.if ${COMPILER_TYPE} == "clang" && ${MK_CXX} != "no" && \
-    (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
-    ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "i386" || \
-    ${MACHINE_CPUARCH} == "powerpc" || ${MACHINE_CPUARCH} == "riscv")
+# C++ support.
+.if ${COMPILER_TYPE} == "clang" && ${MK_CXX} != "no"
 _libclang_rt=	libclang_rt
 .elif (${MK_ASAN} != "no" || ${MK_UBSAN} != "no") && make(all)
 .error Requested build with sanitizers but cannot build runtime libraries!

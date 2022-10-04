@@ -156,7 +156,7 @@ static ACPI_STATUS acpi_device_scan_cb(ACPI_HANDLE h, UINT32 level,
 		    void *context, void **retval);
 static ACPI_STATUS acpi_device_scan_children(device_t bus, device_t dev,
 		    int max_depth, acpi_scan_cb_t user_fn, void *arg);
-static ACPI_STATUS acpi_find_dsd(device_t bus, device_t dev);
+static ACPI_STATUS acpi_find_dsd(struct acpi_device *ad);
 static int	acpi_isa_pnp_probe(device_t bus, device_t child,
 		    struct isa_pnp_id *ids);
 static void	acpi_platform_osc(device_t dev);
@@ -249,8 +249,7 @@ static driver_t acpi_driver = {
     sizeof(struct acpi_softc),
 };
 
-static devclass_t acpi_devclass;
-EARLY_DRIVER_MODULE(acpi, nexus, acpi_driver, acpi_devclass, acpi_modevent, 0,
+EARLY_DRIVER_MODULE(acpi, nexus, acpi_driver, acpi_modevent, 0,
     BUS_PASS_BUS + BUS_PASS_ORDER_MIDDLE);
 MODULE_VERSION(acpi, 1);
 
@@ -932,7 +931,7 @@ acpi_child_pnpinfo_method(device_t cbdev, device_t child, struct sbuf *sb)
 }
 
 /*
- * Note: the check for ACPI locator may be reduntant. However, this routine is
+ * Note: the check for ACPI locator may be redundant. However, this routine is
  * suitable for both busses whose only locator is ACPI and as a building block
  * for busses that have multiple locators to cope with.
  */
@@ -1865,7 +1864,7 @@ acpi_device_get_prop(device_t bus, device_t dev, ACPI_STRING propname,
 		return (AE_BAD_PARAMETER);
 	if (ad->dsd_pkg == NULL) {
 		if (ad->dsd.Pointer == NULL) {
-			status = acpi_find_dsd(bus, dev);
+			status = acpi_find_dsd(ad);
 			if (ACPI_FAILURE(status))
 				return (status);
 		} else {
@@ -1894,18 +1893,16 @@ acpi_device_get_prop(device_t bus, device_t dev, ACPI_STRING propname,
 }
 
 static ACPI_STATUS
-acpi_find_dsd(device_t bus, device_t dev)
+acpi_find_dsd(struct acpi_device *ad)
 {
 	const ACPI_OBJECT *dsd, *guid, *pkg;
-	struct acpi_device *ad;
 	ACPI_STATUS status;
 
-	ad = device_get_ivars(dev);
 	ad->dsd.Length = ACPI_ALLOCATE_BUFFER;
 	ad->dsd.Pointer = NULL;
 	ad->dsd_pkg = NULL;
 
-	status = ACPI_EVALUATE_OBJECT(bus, dev, "_DSD", NULL, &ad->dsd);
+	status = AcpiEvaluateObject(ad->ad_handle, "_DSD", NULL, &ad->dsd);
 	if (ACPI_FAILURE(status))
 		return (status);
 

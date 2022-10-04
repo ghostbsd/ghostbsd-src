@@ -192,8 +192,6 @@ fail:
 static int
 ipq4018_usb_ss_usbphy_detach(device_t dev)
 {
-	struct ipq4018_usb_ss_phy_softc *sc;
-	sc = device_get_softc(dev);
 
 	return (0);
 }
@@ -206,11 +204,9 @@ static device_method_t ipq4018_usb_ss_usbphy_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t ipq4018_usb_ss_usbphy_devclass;
 static DEFINE_CLASS_0(ipq4018_usb_ss_usbphy, ipq4018_usb_ss_usbphy_driver,
     ipq4018_usb_ss_usbphy_methods,
     sizeof(struct ipq4018_usb_ss_phy_softc));
 EARLY_DRIVER_MODULE(ipq4018_usb_ss_usbphy, simplebus,
-    ipq4018_usb_ss_usbphy_driver,
-    ipq4018_usb_ss_usbphy_devclass, NULL, NULL,
+    ipq4018_usb_ss_usbphy_driver, NULL, NULL,
     BUS_PASS_TIMER + BUS_PASS_ORDER_LAST);

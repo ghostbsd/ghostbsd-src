@@ -69,11 +69,13 @@ init_hal(struct wtap_hal *hal)
 
 	hal->hal_md = (struct wtap_medium *)malloc(sizeof(struct wtap_medium),
 	    M_WTAP, M_NOWAIT | M_ZERO);
-	bzero(hal->hal_md, sizeof(struct wtap_medium));
 
 	init_medium(hal->hal_md);
 	/* register event handler for packets */
 	TASK_INIT(&hal->hal_md->tx_handler->proc, 0, hal_tx_proc, hal);
+
+	callout_init_mtx(&hal->hw.timer_intr, &hal->hal_mtx, 0);
+	hal->hw.timer_intr_intval = msecs_to_ticks(HAL_TIMER_INTVAL);
 }
 
 void
@@ -181,11 +183,11 @@ new_wtap(struct wtap_hal *hal, int32_t id)
 
 	hal->hal_devs[id] = (struct wtap_softc *)malloc(
 	    sizeof(struct wtap_softc), M_WTAP, M_NOWAIT | M_ZERO);
-	bzero(hal->hal_devs[id], sizeof(struct wtap_softc));
 	hal->hal_devs[id]->sc_md = hal->hal_md;
 	hal->hal_devs[id]->id = id;
+	hal->hal_devs[id]->hal = hal;
 	snprintf(hal->hal_devs[id]->name, sizeof(hal->hal_devs[id]->name),
-	    "wlan%d", id);
+	    "wtap%d", id);
 	mtx_init(&hal->hal_devs[id]->sc_mtx, "wtap_softc mtx", NULL,
 	    MTX_DEF | MTX_RECURSE);
 
@@ -213,4 +215,34 @@ free_wtap(struct wtap_hal *hal, int32_t id)
 	free(hal->hal_devs[id], M_WTAP);
 	hal->hal_devs[id] = NULL;
 	return 0;
+}
+
+void
+wtap_hal_timer_intr(void *arg)
+{
+	struct wtap_hal *hal = arg;
+	uint32_t intval = hal->hw.timer_intr_intval;
+
+	hal->hw.tsf += ticks_to_msecs(intval);
+
+	callout_schedule(&hal->hw.timer_intr, intval);
+}
+
+void
+wtap_hal_reset_tsf(struct wtap_hal *hal)
+{
+	mtx_lock(&hal->hal_mtx);
+
+	callout_stop(&hal->hw.timer_intr);
+	hal->hw.tsf = 0;
+	callout_reset(&hal->hw.timer_intr, hal->hw.timer_intr_intval,
+	    wtap_hal_timer_intr, hal);
+
+	mtx_unlock(&hal->hal_mtx);
+}
+
+uint64_t
+wtap_hal_get_tsf(struct wtap_hal *hal)
+{
+	return (hal->hw.tsf);
 }

@@ -49,10 +49,13 @@
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/types.h>
+#include <linux/typecheck.h>
 #include <linux/jiffies.h>
 #include <linux/log2.h>
 
 #include <asm/byteorder.h>
+#include <asm/cpufeature.h>
+#include <asm/processor.h>
 #include <asm/uaccess.h>
 
 #include <machine/stdarg.h>
@@ -597,10 +600,6 @@ extern bool linux_cpu_has_clflush;
 #define	cpu_has_clflush		linux_cpu_has_clflush
 #endif
 
-typedef struct pm_message {
-	int event;
-} pm_message_t;
-
 /* Swap values of a and b */
 #define swap(a, b) do {			\
 	typeof(a) _swap_tmp = a;	\
@@ -683,6 +682,8 @@ linux_ratelimited(linux_ratelimit_t *rl)
 
 #define	TAINT_WARN	0
 #define	test_taint(x)	(0)
+#define	add_taint(x,y)	do {	\
+	} while (0)
 
 static inline int
 _h2b(const char c)

@@ -620,7 +620,7 @@ sctp_handle_heartbeat_ack(struct sctp_heartbeat_chunk *cp,
 	/* Now lets do a RTO with this */
 	sctp_calculate_rto(stcb, &stcb->asoc, r_net, &tv,
 	    SCTP_RTT_FROM_NON_DATA);
-	if (!(r_net->dest_state & SCTP_ADDR_REACHABLE)) {
+	if ((r_net->dest_state & SCTP_ADDR_REACHABLE) == 0) {
 		r_net->dest_state |= SCTP_ADDR_REACHABLE;
 		sctp_ulp_notify(SCTP_NOTIFY_INTERFACE_UP, stcb,
 		    0, (void *)r_net, SCTP_SO_NOT_LOCKED);
@@ -992,7 +992,7 @@ sctp_handle_shutdown_ack(struct sctp_shutdown_ack_chunk *cp SCTP_UNUSED,
 	if (stcb->sctp_socket) {
 		if ((stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) ||
 		    (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_IN_TCPPOOL)) {
-			stcb->sctp_socket->so_snd.sb_cc = 0;
+			SCTP_SB_CLEAR(stcb->sctp_socket->so_snd);
 		}
 		sctp_ulp_notify(SCTP_NOTIFY_ASSOC_DOWN, stcb, 0, NULL, SCTP_SO_NOT_LOCKED);
 	}
@@ -1491,8 +1491,7 @@ sctp_process_cookie_existing(struct mbuf *m, int iphlen, int offset,
 				 * init/init-ack/cookie done before the
 				 * init-ack came back..
 				 */
-				stcb->sctp_ep->sctp_flags |=
-				    SCTP_PCB_FLAGS_CONNECTED;
+				sctp_pcb_add_flags(stcb->sctp_ep, SCTP_PCB_FLAGS_CONNECTED);
 				soisconnected(stcb->sctp_socket);
 			}
 			/* notify upper layer */
@@ -1689,7 +1688,7 @@ sctp_process_cookie_existing(struct mbuf *m, int iphlen, int offset,
 			if (((stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) ||
 			    (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_IN_TCPPOOL)) &&
 			    (!SCTP_IS_LISTENING(inp))) {
-				stcb->sctp_ep->sctp_flags |= SCTP_PCB_FLAGS_CONNECTED;
+				sctp_pcb_add_flags(stcb->sctp_ep, SCTP_PCB_FLAGS_CONNECTED);
 				soisconnected(stcb->sctp_socket);
 			}
 			if (SCTP_GET_STATE(stcb) == SCTP_STATE_COOKIE_ECHOED)
@@ -2182,7 +2181,7 @@ sctp_process_cookie_new(struct mbuf *m, int iphlen, int offset,
 		 *
 		 * XXXMJ unlocked
 		 */
-		stcb->sctp_ep->sctp_flags |= SCTP_PCB_FLAGS_CONNECTED;
+		sctp_pcb_add_flags(stcb->sctp_ep, SCTP_PCB_FLAGS_CONNECTED);
 		soisconnected(stcb->sctp_socket);
 	} else if ((stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) &&
 	    (SCTP_IS_LISTENING(inp))) {
@@ -2235,7 +2234,7 @@ sctp_process_cookie_new(struct mbuf *m, int iphlen, int offset,
 	head = &SCTP_BASE_INFO(sctp_asochash)[SCTP_PCBHASH_ASOC(tag,
 							    SCTP_BASE_INFO(hashasocmark))];
 	LIST_FOREACH(stcb, head, sctp_asocs) {
-	        if ((stcb->asoc.my_vtag == tag) && (stcb->rport == rport) && (inp == stcb->sctp_ep))  {
+	        if ((stcb->asoc.my_vtag == tag) && (stcb->rport == rport) && (inp == stcb->sctp_ep)) {
 		       -- SEND ABORT - TRY AGAIN --
 		}
 	}
@@ -2793,7 +2792,7 @@ sctp_handle_cookie_ack(struct sctp_cookie_ack_chunk *cp SCTP_UNUSED,
 		sctp_ulp_notify(SCTP_NOTIFY_ASSOC_UP, stcb, 0, NULL, SCTP_SO_NOT_LOCKED);
 		if ((stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) ||
 		    (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_IN_TCPPOOL)) {
-			stcb->sctp_ep->sctp_flags |= SCTP_PCB_FLAGS_CONNECTED;
+			sctp_pcb_add_flags(stcb->sctp_ep, SCTP_PCB_FLAGS_CONNECTED);
 			if ((stcb->asoc.state & SCTP_STATE_CLOSED_SOCKET) == 0) {
 				soisconnected(stcb->sctp_socket);
 			}
@@ -3616,7 +3615,7 @@ sctp_handle_str_reset_request_in(struct sctp_tcb *stcb,
 	seq = ntohl(req->request_seq);
 	if (asoc->str_reset_seq_in == seq) {
 		asoc->last_reset_action[1] = asoc->last_reset_action[0];
-		if (!(asoc->local_strreset_support & SCTP_ENABLE_RESET_STREAM_REQ)) {
+		if ((asoc->local_strreset_support & SCTP_ENABLE_RESET_STREAM_REQ) == 0) {
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
 		} else if (trunc) {
 			/* Can't do it, since they exceeded our buffer size  */
@@ -3682,7 +3681,7 @@ sctp_handle_str_reset_request_tsn(struct sctp_tcb *stcb,
 	seq = ntohl(req->request_seq);
 	if (asoc->str_reset_seq_in == seq) {
 		asoc->last_reset_action[1] = stcb->asoc.last_reset_action[0];
-		if (!(asoc->local_strreset_support & SCTP_ENABLE_CHANGE_ASSOC_REQ)) {
+		if ((asoc->local_strreset_support & SCTP_ENABLE_CHANGE_ASSOC_REQ) == 0) {
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
 		} else {
 			fwdtsn.ch.chunk_length = htons(sizeof(struct sctp_forward_tsn_chunk));
@@ -3754,7 +3753,7 @@ sctp_handle_str_reset_request_out(struct sctp_tcb *stcb,
 
 		/* move the reset action back one */
 		asoc->last_reset_action[1] = asoc->last_reset_action[0];
-		if (!(asoc->local_strreset_support & SCTP_ENABLE_RESET_STREAM_REQ)) {
+		if ((asoc->local_strreset_support & SCTP_ENABLE_RESET_STREAM_REQ) == 0) {
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
 		} else if (trunc) {
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
@@ -3825,7 +3824,7 @@ sctp_handle_str_reset_add_strm(struct sctp_tcb *stcb, struct sctp_tmit_chunk *ch
 	if (asoc->str_reset_seq_in == seq) {
 		num_stream += stcb->asoc.streamincnt;
 		stcb->asoc.last_reset_action[1] = stcb->asoc.last_reset_action[0];
-		if (!(asoc->local_strreset_support & SCTP_ENABLE_CHANGE_ASSOC_REQ)) {
+		if ((asoc->local_strreset_support & SCTP_ENABLE_CHANGE_ASSOC_REQ) == 0) {
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
 		} else if ((num_stream > stcb->asoc.max_inbound_streams) ||
 		    (num_stream > 0xffff)) {
@@ -3915,7 +3914,7 @@ sctp_handle_str_reset_add_out_strm(struct sctp_tcb *stcb, struct sctp_tmit_chunk
 	/* Now what would be the new total? */
 	if (asoc->str_reset_seq_in == seq) {
 		stcb->asoc.last_reset_action[1] = stcb->asoc.last_reset_action[0];
-		if (!(asoc->local_strreset_support & SCTP_ENABLE_CHANGE_ASSOC_REQ)) {
+		if ((asoc->local_strreset_support & SCTP_ENABLE_CHANGE_ASSOC_REQ) == 0) {
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
 		} else if (stcb->asoc.stream_reset_outstanding) {
 			/* We must reject it we have something pending */
@@ -4882,7 +4881,7 @@ process_control_chunks:
 			 */
 			if ((stcb == NULL) &&
 			    (!SCTP_IS_LISTENING(inp) ||
-			    (!(inp->sctp_flags & SCTP_PCB_FLAGS_UDPTYPE) &&
+			    (((inp->sctp_flags & SCTP_PCB_FLAGS_UDPTYPE) == 0) &&
 			    inp->sctp_socket->sol_qlen >= inp->sctp_socket->sol_qlimit))) {
 				if ((inp->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE) &&
 				    (SCTP_BASE_SYSCTL(sctp_abort_if_one_2_one_hits_limit))) {

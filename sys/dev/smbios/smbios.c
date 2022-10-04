@@ -67,8 +67,6 @@ struct smbios_softc {
 
 #define	RES2EPS(res)	((struct smbios_eps *)rman_get_virtual(res))
 
-static devclass_t	smbios_devclass;
-
 static void	smbios_identify	(driver_t *, device_t);
 static int	smbios_probe	(device_t);
 static int	smbios_attach	(device_t);
@@ -126,7 +124,7 @@ smbios_identify (driver_t *driver, device_t parent)
 		device_set_driver(child, driver);
 		bus_set_resource(child, SYS_RES_MEMORY, rid, addr, length);
 		device_set_desc(child, "System Management BIOS");
-		pmap_unmapbios((vm_offset_t)eps, 0x1f);
+		pmap_unmapbios(eps, 0x1f);
 	}
 
 	return;
@@ -247,7 +245,7 @@ static driver_t smbios_driver = {
 	sizeof(struct smbios_softc),
 };
 
-DRIVER_MODULE(smbios, nexus, smbios_driver, smbios_devclass, smbios_modevent, 0);
+DRIVER_MODULE(smbios, nexus, smbios_driver, smbios_modevent, NULL);
 #ifdef ARCH_MAY_USE_EFI
 MODULE_DEPEND(smbios, efirt, 1, 1, 1);
 #endif

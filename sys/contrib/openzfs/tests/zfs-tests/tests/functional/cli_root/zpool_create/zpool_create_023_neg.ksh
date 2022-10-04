@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -52,7 +52,7 @@ log_onexit cleanup
 
 set -A args "QuOta=none" "quota=non" "quota=abcd" "quota=0" "quota=" \
     "ResErVaTi0n=none" "reserV=none" "reservation=abcd" "reserv=" \
-    "recorDSize=64k" "recordsize=2M" "recordsize=2048K" \
+    "recorDSize=64k" "recordsize=32M" "recordsize=32768K" \
     "recordsize=256" "recsize=" "recsize=zero" "recordsize=0" \
     "mountPoint=/tmp/tmpfile$$" "mountpoint=non0" "mountpoint=" \
     "mountpoint=LEGACY" "mounpoint=none" \

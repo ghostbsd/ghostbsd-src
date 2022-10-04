@@ -141,11 +141,7 @@ rk_dwc3_attach(device_t dev)
 		    clk_get_name(sc->clk_bus));
 		return (ENXIO);
 	}
-	if (sc->type == RK3399) {
-		if (clk_get_by_ofw_name(dev, 0, "grf_clk", &sc->clk_grf) != 0) {
-			device_printf(dev, "Cannot get grf_clk clock\n");
-			return (ENXIO);
-		}
+	if (clk_get_by_ofw_name(dev, 0, "grf_clk", &sc->clk_grf) == 0) {
 		err = clk_enable(sc->clk_grf);
 		if (err != 0) {
 			device_printf(dev, "Could not enable clock %s\n",
@@ -202,8 +198,6 @@ static device_method_t rk_dwc3_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t rk_dwc3_devclass;
-
 DEFINE_CLASS_1(rk_dwc3, rk_dwc3_driver, rk_dwc3_methods,
     sizeof(struct rk_dwc3_softc), simplebus_driver);
-DRIVER_MODULE(rk_dwc3, simplebus, rk_dwc3_driver, rk_dwc3_devclass, 0, 0);
+DRIVER_MODULE(rk_dwc3, simplebus, rk_dwc3_driver, 0, 0);

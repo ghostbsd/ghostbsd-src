@@ -55,7 +55,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
-#include <sys/sysent.h>
 #include <sys/systm.h>
 #include <sys/sysproto.h>
 #include <sys/syscallsubr.h>
@@ -707,6 +706,7 @@ umtx_abs_timeout_getsbt(struct umtx_abs_timeout *timo, sbintime_t *sbt,
 {
 	struct bintime bt, bbt;
 	struct timespec tts;
+	sbintime_t rem;
 
 	switch (timo->clockid) {
 
@@ -739,14 +739,24 @@ umtx_abs_timeout_getsbt(struct umtx_abs_timeout *timo, sbintime_t *sbt,
 			return (0);
 		}
 		*sbt = bttosbt(bt);
+
+		/*
+		 * Check if the absolute time should be aligned to
+		 * avoid firing multiple timer events in non-periodic
+		 * timer mode.
+		 */
 		switch (timo->clockid) {
 		case CLOCK_REALTIME_FAST:
 		case CLOCK_MONOTONIC_FAST:
 		case CLOCK_UPTIME_FAST:
-			*sbt += tc_tick_sbt;
+			rem = *sbt % tc_tick_sbt;
+			if (__predict_true(rem != 0))
+				*sbt += tc_tick_sbt - rem;
 			break;
 		case CLOCK_SECOND:
-			*sbt += SBT_1S;
+			rem = *sbt % SBT_1S;
+			if (__predict_true(rem != 0))
+				*sbt += SBT_1S - rem;
 			break;
 		}
 		*flags = C_ABSOLUTE;
@@ -2263,6 +2273,17 @@ do_lock_pi(struct thread *td, struct umutex *m, uint32_t flags,
 		}
 
 		/*
+		 * Nobody owns it, but the acquire failed. This can happen
+		 * with ll/sc atomics.
+		 */
+		if (owner == UMUTEX_UNOWNED) {
+			error = thread_check_susp(td, true);
+			if (error != 0)
+				break;
+			continue;
+		}
+
+		/*
 		 * Avoid overwriting a possible error from sleep due
 		 * to the pending signal with suspension check result.
 		 */
@@ -3537,24 +3558,28 @@ again:
 	umtxq_insert(uq);
 	umtxq_unlock(&uq->uq_key);
 	rv = casueword32(&sem->_has_waiters, 0, &count1, 1);
-	if (rv == 0)
+	if (rv != -1)
 		rv1 = fueword32(&sem->_count, &count);
-	if (rv == -1 || (rv == 0 && (rv1 == -1 || count != 0)) ||
-	    (rv == 1 && count1 == 0)) {
+	if (rv == -1 || rv1 == -1 || count != 0 || (rv == 1 && count1 == 0)) {
+		if (rv == 0)
+			suword32(&sem->_has_waiters, 0);
 		umtxq_lock(&uq->uq_key);
 		umtxq_unbusy(&uq->uq_key);
 		umtxq_remove(uq);
 		umtxq_unlock(&uq->uq_key);
-		if (rv == 1) {
-			rv = thread_check_susp(td, true);
-			if (rv == 0)
-				goto again;
-			error = rv;
+		if (rv == -1 || rv1 == -1) {
+			error = EFAULT;
 			goto out;
 		}
+		if (count != 0) {
+			error = 0;
+			goto out;
+		}
+		MPASS(rv == 1 && count1 == 0);
+		rv = thread_check_susp(td, true);
 		if (rv == 0)
-			rv = rv1;
-		error = rv == -1 ? EFAULT : 0;
+			goto again;
+		error = rv;
 		goto out;
 	}
 	umtxq_lock(&uq->uq_key);
@@ -4357,7 +4382,7 @@ umtx_shm_unref_reg(struct umtx_shm_reg *reg, bool force)
 	if (force) {
 		object = reg->ushm_obj->shm_object;
 		VM_OBJECT_WLOCK(object);
-		object->flags |= OBJ_UMTXDEAD;
+		vm_object_set_flag(object, OBJ_UMTXDEAD);
 		VM_OBJECT_WUNLOCK(object);
 	}
 	mtx_lock(&umtx_shm_lock);

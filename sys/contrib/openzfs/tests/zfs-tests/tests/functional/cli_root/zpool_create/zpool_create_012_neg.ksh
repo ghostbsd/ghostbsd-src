@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -51,12 +51,11 @@ function cleanup
 }
 
 if is_freebsd; then
-	typeset swap_disks=$(swapinfo -l | grep "/dev" | awk '{print $1}')
+	typeset swap_disks=$(swapinfo -l | awk '/\/dev/ {print $1}')
 elif is_linux; then
-	typeset swap_disks=`swapon -s | grep "/dev" | awk '{print $1}'`
+	typeset swap_disks=$(swapon -s | awk '/\/dev/ {print $1}')
 else
-	typeset swap_disks=`swap -l | grep "c[0-9].*d[0-9].*s[0-9]" | \
-	    awk '{print $1}'`
+	typeset swap_disks=$(swap -l | awk '/c[0-9].*d[0-9].*s[0-9]/ {print $1}')
 fi
 
 log_assert "'zpool create' should fail with disk slice in swap."

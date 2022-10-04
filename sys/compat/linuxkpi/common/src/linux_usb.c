@@ -122,9 +122,7 @@ static driver_t usb_linux_driver = {
 	.size = sizeof(struct usb_linux_softc),
 };
 
-static devclass_t usb_linux_devclass;
-
-DRIVER_MODULE(usb_linux, uhub, usb_linux_driver, usb_linux_devclass, NULL, 0);
+DRIVER_MODULE(usb_linux, uhub, usb_linux_driver, NULL, NULL);
 MODULE_VERSION(usb_linux, 1);
 
 /*------------------------------------------------------------------------*
@@ -341,11 +339,14 @@ usb_linux_suspend(device_t dev)
 {
 	struct usb_linux_softc *sc = device_get_softc(dev);
 	struct usb_driver *udrv = usb_linux_get_usb_driver(sc);
+	pm_message_t pm_msg;
 	int err;
 
 	err = 0;
-	if (udrv && udrv->suspend)
-		err = (udrv->suspend) (sc->sc_ui, 0);
+	if (udrv && udrv->suspend) {
+		pm_msg.event = 0;				/* XXX */
+		err = (udrv->suspend) (sc->sc_ui, pm_msg);
+	}
 	return (-err);
 }
 

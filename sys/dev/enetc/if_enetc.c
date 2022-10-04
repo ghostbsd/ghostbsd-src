@@ -165,11 +165,9 @@ static driver_t enetc_driver = {
 	"enetc", enetc_methods, sizeof(struct enetc_softc)
 };
 
-static devclass_t enetc_devclass;
-DRIVER_MODULE(miibus, enetc, miibus_fdt_driver, miibus_fdt_devclass, NULL, NULL);
+DRIVER_MODULE(miibus, enetc, miibus_fdt_driver, NULL, NULL);
 /* Make sure miibus gets procesed first. */
-DRIVER_MODULE_ORDERED(enetc, pci, enetc_driver, enetc_devclass, NULL, NULL,
-    SI_ORDER_ANY);
+DRIVER_MODULE_ORDERED(enetc, pci, enetc_driver, NULL, NULL, SI_ORDER_ANY);
 MODULE_VERSION(enetc, 1);
 
 IFLIB_PNP_INFO(pci, enetc, enetc_vendor_info_array);
@@ -870,7 +868,7 @@ enetc_vlan_register(if_ctx_t ctx, uint16_t vid)
 	sc = iflib_get_softc(ctx);
 	hash = enetc_hash_vid(vid);
 
-	/* Check if hash is alredy present in the bitmap. */
+	/* Check if hash is already present in the bitmap. */
 	if (++sc->vlan_bitmap[hash] != 1)
 		return;
 

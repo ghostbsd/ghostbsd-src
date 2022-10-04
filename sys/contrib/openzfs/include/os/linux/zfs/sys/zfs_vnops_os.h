@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -70,7 +70,7 @@ extern int zfs_space(znode_t *zp, int cmd, flock64_t *bfp, int flag,
 extern int zfs_fid(struct inode *ip, fid_t *fidp);
 extern int zfs_getpage(struct inode *ip, struct page *pl[], int nr_pages);
 extern int zfs_putpage(struct inode *ip, struct page *pp,
-    struct writeback_control *wbc);
+    struct writeback_control *wbc, boolean_t for_sync);
 extern int zfs_dirty_inode(struct inode *ip, int flags);
 extern int zfs_map(struct inode *ip, offset_t off, caddr_t *addrp,
     size_t len, unsigned long vm_flags);

@@ -111,6 +111,7 @@ CONFS=	DAEMON \
 	ugidfw \
 	${_utx} \
 	var \
+	var_run \
 	watchdogd
 
 .if ${MK_NIS} != "no"
@@ -326,6 +327,7 @@ ZFS+=		zfsbe
 ZFS+=		zfsd
 ZFS+=		zfskeys
 ZFS+=		zpool
+ZFS+=		zpoolreguid
 ZFS+=		zvol
 ZFSPACKAGE=	rc
 .endif

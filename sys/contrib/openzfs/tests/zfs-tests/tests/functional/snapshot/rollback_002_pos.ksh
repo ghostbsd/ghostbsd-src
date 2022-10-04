@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -51,24 +51,20 @@ verify_runnable "both"
 
 function cleanup
 {
-	snapexists $SNAPFS.1
-	[[ $? -eq 0 ]] && \
+	snapexists $SNAPFS.1 &&
 		log_must zfs destroy $SNAPFS.1
 
-	snapexists $SNAPFS
-	[[ $? -eq 0 ]] && \
+	snapexists $SNAPFS &&
 		log_must zfs destroy $SNAPFS
 
-	[[ -e $TESTDIR ]] && \
-		log_must rm -rf $TESTDIR/* > /dev/null 2>&1
+	[ -e $TESTDIR ] && log_must rm -rf $TESTDIR/*
 }
 
 log_assert "Verify rollback is with respect to latest snapshot."
 
 log_onexit cleanup
 
-[[ -n $TESTDIR ]] && \
-    log_must rm -rf $TESTDIR/* > /dev/null 2>&1
+[ -n $TESTDIR ] && log_must rm -rf $TESTDIR/*
 
 typeset -i COUNT=10
 
@@ -83,7 +79,7 @@ done
 
 log_must zfs snapshot $SNAPFS
 
-FILE_COUNT=`ls -Al $SNAPDIR | grep -v "total" | wc -l`
+FILE_COUNT=$(ls -A $SNAPDIR | wc -l)
 if [[ $FILE_COUNT -ne $COUNT ]]; then
         ls -Al $SNAPDIR
         log_fail "AFTER: $SNAPFS contains $FILE_COUNT files(s)."
@@ -109,22 +105,20 @@ while [[ $i -le $COUNT ]]; do
         (( i = i + 1 ))
 done
 
-[[ -n $TESTDIR ]] && \
-    log_must rm -rf $TESTDIR/original_file* > /dev/null 2>&1
+[ -n $TESTDIR ] && log_must rm -f $TESTDIR/original_file*
 
 #
 # Now rollback to latest snapshot
 #
 log_must zfs rollback $SNAPFS.1
 
-FILE_COUNT=`ls -Al $TESTDIR/aftersecond* 2> /dev/null \
-    | grep -v "total" | wc -l`
+FILE_COUNT=$(ls -A $TESTDIR/aftersecond* 2> /dev/null | wc -l)
 if [[ $FILE_COUNT -ne 0 ]]; then
         ls -Al $TESTDIR
         log_fail "$TESTDIR contains $FILE_COUNT aftersecond* files(s)."
 fi
 
-FILE_COUNT=`ls -Al $TESTDIR/original* $TESTDIR/afterfirst*| grep -v "total" | wc -l`
+FILE_COUNT=$(ls -A $TESTDIR/original* $TESTDIR/afterfirst* | wc -l)
 if [[ $FILE_COUNT -ne 20 ]]; then
         ls -Al $TESTDIR
         log_fail "$TESTDIR contains $FILE_COUNT original* files(s)."

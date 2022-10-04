@@ -1057,6 +1057,9 @@ pf_keth_rule_to_nveth_rule(const struct pf_keth_rule *krule)
 	nvlist_add_bool(nvl, "ifnot", krule->ifnot);
 	nvlist_add_number(nvl, "direction", krule->direction);
 	nvlist_add_number(nvl, "proto", krule->proto);
+	nvlist_add_string(nvl, "match_tagname", krule->match_tagname);
+	nvlist_add_number(nvl, "match_tag", krule->match_tag);
+	nvlist_add_bool(nvl, "match_tag_not", krule->match_tag_not);
 
 	addr = pf_keth_rule_addr_to_nveth_rule_addr(&krule->src);
 	if (addr == NULL) {
@@ -1064,6 +1067,7 @@ pf_keth_rule_to_nveth_rule(const struct pf_keth_rule *krule)
 		return (NULL);
 	}
 	nvlist_add_nvlist(nvl, "src", addr);
+	nvlist_destroy(addr);
 
 	addr = pf_keth_rule_addr_to_nveth_rule_addr(&krule->dst);
 	if (addr == NULL) {
@@ -1071,6 +1075,7 @@ pf_keth_rule_to_nveth_rule(const struct pf_keth_rule *krule)
 		return (NULL);
 	}
 	nvlist_add_nvlist(nvl, "dst", addr);
+	nvlist_destroy(addr);
 
 	addr = pf_rule_addr_to_nvrule_addr(&krule->ipsrc);
 	if (addr == NULL) {
@@ -1163,6 +1168,12 @@ pf_nveth_rule_to_keth_rule(const nvlist_t *nvl,
 		if (krule->ipdst.addr.type != PF_ADDR_ADDRMASK &&
 		    krule->ipdst.addr.type != PF_ADDR_TABLE)
 			return (EINVAL);
+	}
+
+	if (nvlist_exists_string(nvl, "match_tagname")) {
+		PFNV_CHK(pf_nvstring(nvl, "match_tagname", krule->match_tagname,
+		    sizeof(krule->match_tagname)));
+		PFNV_CHK(pf_nvbool(nvl, "match_tag_not", &krule->match_tag_not));
 	}
 
 	PFNV_CHK(pf_nvstring(nvl, "qname", krule->qname, sizeof(krule->qname)));

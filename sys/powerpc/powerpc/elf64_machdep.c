@@ -49,6 +49,8 @@
 
 #include <vm/vm.h>
 #include <vm/vm_param.h>
+#include <vm/pmap.h>
+#include <vm/vm_map.h>
 
 #include <machine/altivec.h>
 #include <machine/cpu.h>
@@ -64,7 +66,6 @@ static void exec_setregs_funcdesc(struct thread *td, struct image_params *imgp,
 struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_size	= SYS_MAXSYSCALL,
 	.sv_table	= sysent,
-	.sv_transtrap	= NULL,
 	.sv_fixup	= __elfN(freebsd_fixup),
 	.sv_sendsig	= sendsig,
 	.sv_sigcode	= sigcode64,
@@ -108,7 +109,6 @@ struct sysentvec elf64_freebsd_sysvec_v1 = {
 struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_size	= SYS_MAXSYSCALL,
 	.sv_table	= sysent,
-	.sv_transtrap	= NULL,
 	.sv_fixup	= __elfN(freebsd_fixup),
 	.sv_sendsig	= sendsig,
 	.sv_sigcode	= sigcode64, /* Fixed up in ppc64_init_sysvecs(). */
@@ -218,10 +218,10 @@ ppc64_init_sysvecs(void *arg)
 	 * exec_sysvec_init_secondary() assumes secondary sysvecs use
 	 * identical signal code, and skips allocating a second copy.
 	 * Since the ELFv2 trampoline is a strict subset of the ELFv1 code,
-	 * we can work around this by adjusting the base address. This also
+	 * we can work around this by adjusting the offset. This also
 	 * avoids two copies of the trampoline code being allocated!
 	 */
-	elf64_freebsd_sysvec_v2.sv_sigcode_base +=
+	elf64_freebsd_sysvec_v2.sv_sigcode_offset +=
 	    (uintptr_t)sigcode64_elfv2 - (uintptr_t)&sigcode64;
 	elf64_freebsd_sysvec_v2.sv_szsigcode = &szsigcode64_elfv2;
 }

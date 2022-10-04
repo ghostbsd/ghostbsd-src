@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -43,16 +43,14 @@ log_note "Testing access to DIRECTORY"
 log_must mkdir $ACLDIR
 log_must setfacl -m g:$ZFS_ACL_STAFF_GROUP:wx $ACLDIR
 log_must setfacl -d -m g:$ZFS_ACL_STAFF_GROUP:wx $ACLDIR
-getfacl $ACLDIR 2> /dev/null | egrep -q "$acl_str1"
-if [ "$?" -eq "0" ]; then
-	getfacl $ACLDIR 2> /dev/null | egrep -q "$acl_str2"
-fi
 
-if [ "$?" -eq "0" ]; then
+if getfacl $ACLDIR 2> /dev/null | grep -q "$acl_str1" &&
+	getfacl $ACLDIR 2> /dev/null | grep -q "$acl_str2"
+then
 	log_must zfs unmount $TESTPOOL/$TESTFS
 	log_must zfs mount $TESTPOOL/$TESTFS
-	log_must eval "getfacl $ACLDIR 2> /dev/null | egrep -q \"$acl_str1\""
-	log_must eval "getfacl $ACLDIR 2> /dev/null | egrep -q \"$acl_str2\""
+	log_must eval "getfacl $ACLDIR 2> /dev/null | grep -q \"$acl_str1\""
+	log_must eval "getfacl $ACLDIR 2> /dev/null | grep -q \"$acl_str2\""
 	log_pass "POSIX ACLs survive remount"
 else
 	log_fail "Group '$ZFS_ACL_STAFF_GROUP' does not have 'rwx'"

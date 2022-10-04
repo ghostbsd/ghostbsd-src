@@ -165,8 +165,7 @@ static driver_t acpi_tz_driver = {
 
 static char *acpi_tz_tmp_name = "_TMP";
 
-static devclass_t acpi_tz_devclass;
-DRIVER_MODULE(acpi_tz, acpi, acpi_tz_driver, acpi_tz_devclass, 0, 0);
+DRIVER_MODULE(acpi_tz, acpi, acpi_tz_driver, 0, 0);
 MODULE_DEPEND(acpi_tz, acpi, 1, 1, 1);
 
 static struct sysctl_ctx_list	acpi_tz_sysctl_ctx;
@@ -177,7 +176,7 @@ static int			acpi_tz_min_runtime;
 static int			acpi_tz_polling_rate = TZ_POLLRATE;
 static int			acpi_tz_override;
 
-/* Timezone polling thread */
+/* Thermal zone polling thread */
 static struct proc		*acpi_tz_proc;
 ACPI_LOCK_DECL(thermal, "ACPI thermal zone");
 
@@ -202,7 +201,7 @@ acpi_tz_attach(device_t dev)
     struct acpi_tz_softc	*sc;
     struct acpi_softc		*acpi_sc;
     int				error;
-    char			oidname[8];
+    char			oidname[16];
 
     ACPI_FUNCTION_TRACE((char *)(uintptr_t)__func__);
 
@@ -258,7 +257,7 @@ acpi_tz_attach(device_t dev)
 		       "allow override of thermal settings");
     }
     sysctl_ctx_init(&sc->tz_sysctl_ctx);
-    sprintf(oidname, "tz%d", device_get_unit(dev));
+    snprintf(oidname, sizeof(oidname), "tz%d", device_get_unit(dev));
     sc->tz_sysctl_tree = SYSCTL_ADD_NODE_WITH_LABEL(&sc->tz_sysctl_ctx,
         SYSCTL_CHILDREN(acpi_tz_sysctl_tree), OID_AUTO, oidname,
 	CTLFLAG_RD | CTLFLAG_MPSAFE, 0, "", "thermal_zone");

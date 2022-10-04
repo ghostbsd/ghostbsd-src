@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -71,7 +71,7 @@ for ver_old in $VERSIONS; do
 	typeset -i ver_new=$(random_int_between $ver_old $MAX_VER)
 
 	create_old_pool $ver_old
-	log_must zpool upgrade -V $ver_new $pool_name > /dev/null
+	log_must eval 'zpool upgrade -V $ver_new $pool_name > /dev/null'
 	check_poolversion $pool_name $ver_new
 	destroy_upgraded_pool $ver_old
 done

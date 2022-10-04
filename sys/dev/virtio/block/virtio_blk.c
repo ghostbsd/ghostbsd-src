@@ -134,7 +134,7 @@ static int	vtblk_open(struct disk *);
 static int	vtblk_close(struct disk *);
 static int	vtblk_ioctl(struct disk *, u_long, void *, int,
 		    struct thread *);
-static int	vtblk_dump(void *, void *, vm_offset_t, off_t, size_t);
+static int	vtblk_dump(void *, void *, off_t, size_t);
 static void	vtblk_strategy(struct bio *);
 
 static int	vtblk_negotiate_features(struct vtblk_softc *);
@@ -268,10 +268,8 @@ static driver_t vtblk_driver = {
 	vtblk_methods,
 	sizeof(struct vtblk_softc)
 };
-static devclass_t vtblk_devclass;
 
-VIRTIO_DRIVER_MODULE(virtio_blk, vtblk_driver, vtblk_devclass,
-    vtblk_modevent, 0);
+VIRTIO_DRIVER_MODULE(virtio_blk, vtblk_driver, vtblk_modevent, NULL);
 MODULE_VERSION(virtio_blk, 1);
 MODULE_DEPEND(virtio_blk, virtio, 1, 1, 1);
 
@@ -533,8 +531,7 @@ vtblk_ioctl(struct disk *dp, u_long cmd, void *addr, int flag,
 }
 
 static int
-vtblk_dump(void *arg, void *virtual, vm_offset_t physical, off_t offset,
-    size_t length)
+vtblk_dump(void *arg, void *virtual, off_t offset, size_t length)
 {
 	struct disk *dp;
 	struct vtblk_softc *sc;

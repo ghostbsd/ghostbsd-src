@@ -26,6 +26,9 @@
 #
 # $FreeBSD$
 
+BSDCFG_SHARE="/usr/share/bsdconfig"
+. $BSDCFG_SHARE/common.subr || exit 1
+
 : ${BSDDIALOG_OK=0}
 
 if [ -f $BSDINSTALL_TMPETC/rc.conf.services ]; then
@@ -39,16 +42,16 @@ fi
 echo -n > $BSDINSTALL_TMPETC/rc.conf.services
 
 exec 3>&1
-DAEMONS=$( bsddialog --backtitle "FreeBSD Installer" \
+DAEMONS=$( bsddialog --backtitle "$OSNAME Installer" \
     --title "System Configuration" --no-cancel --separate-output \
     --checklist "Choose the services you would like to be started at boot:" \
     0 0 0 \
 	local_unbound "Local caching validating resolver" ${local_unbound:-off} \
 	sshd	"Secure shell daemon" ${sshd_enable:-off} \
 	moused	"PS/2 mouse pointer on console" ${moused_enable:-off} \
-	ntpdate	"Synchronize system and network time at bootime" \
-		${ntpdate_enable:-off} \
 	ntpd	"Synchronize system and network time" ${ntpd_enable:-off} \
+	ntpd_sync_on_start	"Sync time on ntpd startup, even if offset is high" \
+		${ntpd_sync_on_start:-off} \
 	powerd	"Adjust CPU frequency dynamically if supported" \
 		${powerd_enable:-off} \
 	dumpdev "Enable kernel crash dumps to /var/crash" ${dumpdev:-on} \
@@ -61,10 +64,16 @@ if [ $retval -ne $BSDDIALOG_OK ]; then
 fi
 
 havedump=
+havemouse=
 for daemon in $DAEMONS; do
 	[ "$daemon" = "dumpdev" ] && havedump=1 continue
+	[ "$daemon" = "moused" ] && havemouse=1
 	echo ${daemon}_enable=\"YES\" >> $BSDINSTALL_TMPETC/rc.conf.services
 done
+
+if [ ! "$havemouse" ]; then
+	echo moused_nondefault_enable=\"NO\" >> $BSDINSTALL_TMPETC/rc.conf.services
+fi
 
 echo '# Set dumpdev to "AUTO" to enable crash dumps, "NO"' \
      'to disable' >> $BSDINSTALL_TMPETC/rc.conf.services

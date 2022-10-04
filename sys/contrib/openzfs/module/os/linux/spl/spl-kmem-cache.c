@@ -679,7 +679,7 @@ spl_magazine_destroy(spl_kmem_cache_t *skc)
  *	KMC_NODEBUG	Disable debugging (unsupported)
  */
 spl_kmem_cache_t *
-spl_kmem_cache_create(char *name, size_t size, size_t align,
+spl_kmem_cache_create(const char *name, size_t size, size_t align,
     spl_kmem_ctor_t ctor, spl_kmem_dtor_t dtor, void *reclaim,
     void *priv, void *vmp, int flags)
 {
@@ -706,7 +706,7 @@ spl_kmem_cache_create(char *name, size_t size, size_t align,
 		kfree(skc);
 		return (NULL);
 	}
-	strncpy(skc->skc_name, name, skc->skc_name_size);
+	strlcpy(skc->skc_name, name, skc->skc_name_size);
 
 	skc->skc_ctor = ctor;
 	skc->skc_dtor = dtor;
@@ -1420,7 +1420,7 @@ EXPORT_SYMBOL(spl_kmem_cache_reap_now);
  * it should do no harm.
  */
 int
-spl_kmem_cache_reap_active()
+spl_kmem_cache_reap_active(void)
 {
 	return (0);
 }
@@ -1451,6 +1451,9 @@ spl_kmem_cache_init(void)
 	    spl_kmem_cache_kmem_threads, maxclsyspri,
 	    spl_kmem_cache_kmem_threads * 8, INT_MAX,
 	    TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
+
+	if (spl_kmem_cache_taskq == NULL)
+		return (-ENOMEM);
 
 	return (0);
 }

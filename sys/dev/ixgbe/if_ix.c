@@ -233,8 +233,7 @@ static driver_t ix_driver = {
 	"ix", ix_methods, sizeof(struct ixgbe_softc),
 };
 
-devclass_t ix_devclass;
-DRIVER_MODULE(ix, pci, ix_driver, ix_devclass, 0, 0);
+DRIVER_MODULE(ix, pci, ix_driver, 0, 0);
 IFLIB_PNP_INFO(pci, ix_driver, ixgbe_vendor_info_array);
 MODULE_DEPEND(ix, pci, 1, 1, 1);
 MODULE_DEPEND(ix, ether, 1, 1, 1);
@@ -1926,8 +1925,27 @@ ixgbe_setup_vlan_hw_support(if_ctx_t ctx)
 	 * the VFTA and other state, so if there
 	 * have been no vlan's registered do nothing.
 	 */
-	if (sc->num_vlans == 0)
+	if (sc->num_vlans == 0 || (ifp->if_capenable & IFCAP_VLAN_HWTAGGING) == 0) {
+		/* Clear the vlan hw flag */
+		for (i = 0; i < sc->num_rx_queues; i++) {
+			rxr = &sc->rx_queues[i].rxr;
+			/* On 82599 the VLAN enable is per/queue in RXDCTL */
+			if (hw->mac.type != ixgbe_mac_82598EB) {
+				ctrl = IXGBE_READ_REG(hw, IXGBE_RXDCTL(rxr->me));
+				ctrl &= ~IXGBE_RXDCTL_VME;
+				IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(rxr->me), ctrl);
+			}
+			rxr->vtag_strip = false;
+		}
+		ctrl = IXGBE_READ_REG(hw, IXGBE_VLNCTRL);
+		/* Enable the Filter Table if enabled */
+		ctrl |= IXGBE_VLNCTRL_CFIEN;
+		ctrl &= ~IXGBE_VLNCTRL_VFE;
+		if (hw->mac.type == ixgbe_mac_82598EB)
+			ctrl &= ~IXGBE_VLNCTRL_VME;
+		IXGBE_WRITE_REG(hw, IXGBE_VLNCTRL, ctrl);
 		return;
+	}
 
 	/* Setup the queues for vlans */
 	if (ifp->if_capenable & IFCAP_VLAN_HWTAGGING) {
@@ -2538,7 +2556,9 @@ ixgbe_msix_link(void *arg)
 		} else
 			if (eicr & IXGBE_EICR_ECC) {
 				device_printf(iflib_get_dev(sc->ctx),
-				   "\nCRITICAL: ECC ERROR!! Please Reboot!!\n");
+				   "Received ECC Err, initiating reset\n");
+				hw->mac.flags |= ~IXGBE_FLAGS_DOUBLE_RESET_REQUIRED;
+				ixgbe_reset_hw(hw);
 				IXGBE_WRITE_REG(hw, IXGBE_EICR, IXGBE_EICR_ECC);
 			}
 

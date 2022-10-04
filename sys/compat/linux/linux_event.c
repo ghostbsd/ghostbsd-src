@@ -458,9 +458,7 @@ linux_epoll_wait_ts(struct thread *td, int epfd, struct epoll_event *events,
 		 * usermode and TDP_OLDMASK is cleared, restoring old
 		 * sigmask.
 		 */
-		thread_lock(td);
-		td->td_flags |= TDF_ASTPENDING;
-		thread_unlock(td);
+		ast_sched(td, TDA_SIGSUSPEND);
 	}
 
 	coargs.leventlist = events;
@@ -526,7 +524,7 @@ linux_epoll_pwait(struct thread *td, struct linux_epoll_pwait_args *args)
 	sigset_t mask, *pmask;
 	int error;
 
-	error = linux_copyin_sigset(args->mask, sizeof(l_sigset_t),
+	error = linux_copyin_sigset(td, args->mask, sizeof(l_sigset_t),
 	    &mask, &pmask);
 	if (error != 0)
 		return (error);
@@ -540,19 +538,16 @@ int
 linux_epoll_pwait2_64(struct thread *td, struct linux_epoll_pwait2_64_args *args)
 {
 	struct timespec ts, *tsa;
-	struct l_timespec64 lts;
 	sigset_t mask, *pmask;
 	int error;
 
-	error = linux_copyin_sigset(args->mask, sizeof(l_sigset_t),
+	error = linux_copyin_sigset(td, args->mask, sizeof(l_sigset_t),
 	    &mask, &pmask);
 	if (error != 0)
 		return (error);
 
 	if (args->timeout) {
-		if ((error = copyin(args->timeout, &lts, sizeof(lts))))
-			return (error);
-		error = linux_to_native_timespec64(&ts, &lts);
+		error = linux_get_timespec64(&ts, args->timeout);
 		if (error != 0)
 			return (error);
 		tsa = &ts;
@@ -567,19 +562,16 @@ int
 linux_epoll_pwait2(struct thread *td, struct linux_epoll_pwait2_args *args)
 {
 	struct timespec ts, *tsa;
-	struct l_timespec lts;
 	sigset_t mask, *pmask;
 	int error;
 
-	error = linux_copyin_sigset(args->mask, sizeof(l_sigset_t),
+	error = linux_copyin_sigset(td, args->mask, sizeof(l_sigset_t),
 	    &mask, &pmask);
 	if (error != 0)
 		return (error);
 
 	if (args->timeout) {
-		if ((error = copyin(args->timeout, &lts, sizeof(lts))))
-			return (error);
-		error = linux_to_native_timespec(&ts, &lts);
+		error = linux_get_timespec(&ts, args->timeout);
 		if (error != 0)
 			return (error);
 		tsa = &ts;
@@ -901,16 +893,14 @@ linux_timerfd_curval(struct timerfd *tfd, struct itimerspec *ots)
 	}
 }
 
-int
-linux_timerfd_gettime(struct thread *td, struct linux_timerfd_gettime_args *args)
+static int
+linux_timerfd_gettime_common(struct thread *td, int fd, struct itimerspec *ots)
 {
-	struct l_itimerspec lots;
-	struct itimerspec ots;
 	struct timerfd *tfd;
 	struct file *fp;
 	int error;
 
-	error = fget(td, args->fd, &cap_read_rights, &fp);
+	error = fget(td, fd, &cap_read_rights, &fp);
 	if (error != 0)
 		return (error);
 	tfd = fp->f_data;
@@ -920,12 +910,8 @@ linux_timerfd_gettime(struct thread *td, struct linux_timerfd_gettime_args *args
 	}
 
 	mtx_lock(&tfd->tfd_lock);
-	linux_timerfd_curval(tfd, &ots);
+	linux_timerfd_curval(tfd, ots);
 	mtx_unlock(&tfd->tfd_lock);
-
-	error = native_to_linux_itimerspec(&lots, &ots);
-	if (error == 0)
-		error = copyout(&lots, args->old_value, sizeof(lots));
 
 out:
 	fdrop(fp, td);
@@ -933,27 +919,53 @@ out:
 }
 
 int
-linux_timerfd_settime(struct thread *td, struct linux_timerfd_settime_args *args)
+linux_timerfd_gettime(struct thread *td, struct linux_timerfd_gettime_args *args)
 {
 	struct l_itimerspec lots;
-	struct itimerspec nts, ots;
+	struct itimerspec ots;
+	int error;
+
+	error = linux_timerfd_gettime_common(td, args->fd, &ots);
+	if (error != 0)
+		return (error);
+	error = native_to_linux_itimerspec(&lots, &ots);
+	if (error == 0)
+		error = copyout(&lots, args->old_value, sizeof(lots));
+	return (error);
+}
+
+#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
+int
+linux_timerfd_gettime64(struct thread *td, struct linux_timerfd_gettime64_args *args)
+{
+	struct l_itimerspec64 lots;
+	struct itimerspec ots;
+	int error;
+
+	error = linux_timerfd_gettime_common(td, args->fd, &ots);
+	if (error != 0)
+		return (error);
+	error = native_to_linux_itimerspec64(&lots, &ots);
+	if (error == 0)
+		error = copyout(&lots, args->old_value, sizeof(lots));
+	return (error);
+}
+#endif
+
+static int
+linux_timerfd_settime_common(struct thread *td, int fd, int flags,
+    struct itimerspec *nts, struct itimerspec *oval)
+{
 	struct timespec cts, ts;
 	struct timerfd *tfd;
 	struct timeval tv;
 	struct file *fp;
 	int error;
 
-	if ((args->flags & ~LINUX_TFD_SETTIME_FLAGS) != 0)
+	if ((flags & ~LINUX_TFD_SETTIME_FLAGS) != 0)
 		return (EINVAL);
 
-	error = copyin(args->new_value, &lots, sizeof(lots));
-	if (error != 0)
-		return (error);
-	error = linux_to_native_itimerspec(&nts, &lots);
-	if (error != 0)
-		return (error);
-
-	error = fget(td, args->fd, &cap_write_rights, &fp);
+	error = fget(td, fd, &cap_write_rights, &fp);
 	if (error != 0)
 		return (error);
 	tfd = fp->f_data;
@@ -963,17 +975,17 @@ linux_timerfd_settime(struct thread *td, struct linux_timerfd_settime_args *args
 	}
 
 	mtx_lock(&tfd->tfd_lock);
-	if (!timespecisset(&nts.it_value))
-		timespecclear(&nts.it_interval);
-	if (args->old_value != NULL)
-		linux_timerfd_curval(tfd, &ots);
+	if (!timespecisset(&nts->it_value))
+		timespecclear(&nts->it_interval);
+	if (oval != NULL)
+		linux_timerfd_curval(tfd, oval);
 
-	tfd->tfd_time = nts;
+	bcopy(nts, &tfd->tfd_time, sizeof(*nts));
 	tfd->tfd_count = 0;
-	if (timespecisset(&nts.it_value)) {
+	if (timespecisset(&nts->it_value)) {
 		linux_timerfd_clocktime(tfd, &cts);
-		ts = nts.it_value;
-		if ((args->flags & LINUX_TFD_TIMER_ABSTIME) == 0) {
+		ts = nts->it_value;
+		if ((flags & LINUX_TFD_TIMER_ABSTIME) == 0) {
 			timespecadd(&tfd->tfd_time.it_value, &cts,
 				&tfd->tfd_time.it_value);
 		} else {
@@ -989,16 +1001,60 @@ linux_timerfd_settime(struct thread *td, struct linux_timerfd_settime_args *args
 	}
 	mtx_unlock(&tfd->tfd_lock);
 
-	if (args->old_value != NULL) {
-		error = native_to_linux_itimerspec(&lots, &ots);
-		if (error == 0)
-			error = copyout(&lots, args->old_value, sizeof(lots));
-	}
-
 out:
 	fdrop(fp, td);
 	return (error);
 }
+
+int
+linux_timerfd_settime(struct thread *td, struct linux_timerfd_settime_args *args)
+{
+	struct l_itimerspec lots;
+	struct itimerspec nts, ots, *pots;
+	int error;
+
+	error = copyin(args->new_value, &lots, sizeof(lots));
+	if (error != 0)
+		return (error);
+	error = linux_to_native_itimerspec(&nts, &lots);
+	if (error != 0)
+		return (error);
+	pots = (args->old_value != NULL ? &ots : NULL);
+	error = linux_timerfd_settime_common(td, args->fd, args->flags,
+	    &nts, pots);
+	if (error == 0 && args->old_value != NULL) {
+		error = native_to_linux_itimerspec(&lots, &ots);
+		if (error == 0)
+			error = copyout(&lots, args->old_value, sizeof(lots));
+	}
+	return (error);
+}
+
+#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
+int
+linux_timerfd_settime64(struct thread *td, struct linux_timerfd_settime64_args *args)
+{
+	struct l_itimerspec64 lots;
+	struct itimerspec nts, ots, *pots;
+	int error;
+
+	error = copyin(args->new_value, &lots, sizeof(lots));
+	if (error != 0)
+		return (error);
+	error = linux_to_native_itimerspec64(&nts, &lots);
+	if (error != 0)
+		return (error);
+	pots = (args->old_value != NULL ? &ots : NULL);
+	error = linux_timerfd_settime_common(td, args->fd, args->flags,
+	    &nts, pots);
+	if (error == 0 && args->old_value != NULL) {
+		error = native_to_linux_itimerspec64(&lots, &ots);
+		if (error == 0)
+			error = copyout(&lots, args->old_value, sizeof(lots));
+	}
+	return (error);
+}
+#endif
 
 static void
 linux_timerfd_expire(void *arg)

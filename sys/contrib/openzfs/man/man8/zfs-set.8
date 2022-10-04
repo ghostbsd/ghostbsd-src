@@ -6,7 +6,7 @@
 .\" You may not use this file except in compliance with the License.
 .\"
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-.\" or http://www.opensolaris.org/os/licensing.
+.\" or https://opensource.org/licenses/CDDL-1.0.
 .\" See the License for the specific language governing permissions
 .\" and limitations under the License.
 .\"
@@ -170,8 +170,9 @@ inherited.
 .It Fl r
 Recursively inherit the given property for all children.
 .It Fl S
-Revert the property to the received value if one exists; otherwise operate as
-if the
+Revert the property to the received value, if one exists;
+otherwise, for non-inheritable properties, to the default;
+otherwise, operate as if the
 .Fl S
 option was not specified.
 .El

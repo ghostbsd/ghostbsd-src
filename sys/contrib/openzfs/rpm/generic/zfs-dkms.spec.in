@@ -31,12 +31,12 @@ Requires(post): gcc, make, perl, diffutils
 %if 0%{?rhel}%{?fedora}%{?mageia}%{?suse_version}
 Requires:       kernel-devel >= @ZFS_META_KVER_MIN@, kernel-devel <= @ZFS_META_KVER_MAX@.999
 Requires(post): kernel-devel >= @ZFS_META_KVER_MIN@, kernel-devel <= @ZFS_META_KVER_MAX@.999
-Obsoletes:      spl-dkms
+Obsoletes:      spl-dkms <= %{version}
 %endif
 Provides:       %{module}-kmod = %{version}
 AutoReqProv:    no
 
-%if 0%{?rhel}%{?fedora}%{?suse_version}
+%if (0%{?fedora}%{?suse_version}) || (0%{?rhel} && 0%{?rhel} < 9)
 # We don't directly use it, but if this isn't installed, rpmbuild as root can
 # crash+corrupt rpmdb
 # See issue #12071

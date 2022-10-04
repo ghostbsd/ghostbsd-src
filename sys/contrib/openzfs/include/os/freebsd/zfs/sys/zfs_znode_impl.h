@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -122,24 +122,23 @@ typedef struct zfs_soft_state {
     vn_rlimit_fsize(ZTOV(zp), GET_UIO_STRUCT(uio), zfs_uio_td(uio))
 
 /* Called on entry to each ZFS vnode and vfs operation  */
-#define	ZFS_ENTER(zfsvfs) \
-	{ \
-		ZFS_TEARDOWN_ENTER_READ((zfsvfs), FTAG); \
-		if (__predict_false((zfsvfs)->z_unmounted)) { \
-			ZFS_TEARDOWN_EXIT_READ(zfsvfs, FTAG); \
-			return (EIO); \
-		} \
+static inline int
+zfs_enter(zfsvfs_t *zfsvfs, const char *tag)
+{
+	ZFS_TEARDOWN_ENTER_READ(zfsvfs, tag);
+	if (__predict_false((zfsvfs)->z_unmounted)) {
+		ZFS_TEARDOWN_EXIT_READ(zfsvfs, tag);
+		return (SET_ERROR(EIO));
 	}
+	return (0);
+}
 
 /* Must be called before exiting the vop */
-#define	ZFS_EXIT(zfsvfs) ZFS_TEARDOWN_EXIT_READ(zfsvfs, FTAG)
-
-/* Verifies the znode is valid */
-#define	ZFS_VERIFY_ZP(zp) \
-	if (__predict_false((zp)->z_sa_hdl == NULL)) { \
-		ZFS_EXIT((zp)->z_zfsvfs); \
-		return (EIO); \
-	} \
+static inline void
+zfs_exit(zfsvfs_t *zfsvfs, const char *tag)
+{
+	ZFS_TEARDOWN_EXIT_READ(zfsvfs, tag);
+}
 
 /*
  * Macros for dealing with dmu_buf_hold

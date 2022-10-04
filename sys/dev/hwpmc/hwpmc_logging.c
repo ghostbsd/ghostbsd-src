@@ -79,9 +79,6 @@ SYSCTL_DECL(_kern_hwpmc);
  */
 
 static int pmclog_buffer_size = PMC_LOG_BUFFER_SIZE;
-#if (__FreeBSD_version < 1100000)
-TUNABLE_INT(PMC_SYSCTL_NAME_PREFIX "logbuffersize", &pmclog_buffer_size);
-#endif
 SYSCTL_INT(_kern_hwpmc, OID_AUTO, logbuffersize, CTLFLAG_RDTUN,
     &pmclog_buffer_size, 0, "size of log buffers in kilobytes");
 
@@ -90,9 +87,6 @@ SYSCTL_INT(_kern_hwpmc, OID_AUTO, logbuffersize, CTLFLAG_RDTUN,
  */
 
 static int pmc_nlogbuffers_pcpu = PMC_NLOGBUFFERS_PCPU;
-#if (__FreeBSD_version < 1100000)
-TUNABLE_INT(PMC_SYSCTL_NAME_PREFIX "nbuffers", &pmc_nlogbuffers_pcpu);
-#endif
 SYSCTL_INT(_kern_hwpmc, OID_AUTO, nbuffers_pcpu, CTLFLAG_RDTUN,
     &pmc_nlogbuffers_pcpu, 0, "number of log buffers per cpu");
 
@@ -764,6 +758,7 @@ pmclog_deconfigure_log(struct pmc_owner *po)
 {
 	int error;
 	struct pmclog_buffer *lb;
+	struct pmc_binding pb;
 
 	PMCDBG1(LOG,CFG,1, "de-config po=%p", po);
 
@@ -787,19 +782,16 @@ pmclog_deconfigure_log(struct pmc_owner *po)
 		PMCLOG_RESET_BUFFER_DESCRIPTOR(lb);
 		pmc_plb_rele(lb);
 	}
+	pmc_save_cpu_binding(&pb);
 	for (int i = 0; i < mp_ncpus; i++) {
-		thread_lock(curthread);
-		sched_bind(curthread, i);
-		thread_unlock(curthread);
+		pmc_select_cpu(i);
 		/* return the 'current' buffer to the global pool */
 		if ((lb = po->po_curbuf[curcpu]) != NULL) {
 			PMCLOG_RESET_BUFFER_DESCRIPTOR(lb);
 			pmc_plb_rele(lb);
 		}
 	}
-	thread_lock(curthread);
-	sched_unbind(curthread);
-	thread_unlock(curthread);
+	pmc_restore_cpu_binding(&pb);
 
 	/* drop a reference to the fd */
 	if (po->po_file != NULL) {
@@ -869,18 +861,17 @@ pmclog_schedule_one_cond(struct pmc_owner *po)
 static void
 pmclog_schedule_all(struct pmc_owner *po)
 {
+	struct pmc_binding pb;
+
 	/*
 	 * Schedule the current buffer if any and not empty.
 	 */
+	pmc_save_cpu_binding(&pb);
 	for (int i = 0; i < mp_ncpus; i++) {
-		thread_lock(curthread);
-		sched_bind(curthread, i);
-		thread_unlock(curthread);
+		pmc_select_cpu(i);
 		pmclog_schedule_one_cond(po);
 	}
-	thread_lock(curthread);
-	sched_unbind(curthread);
-	thread_unlock(curthread);
+	pmc_restore_cpu_binding(&pb);
 }
 
 int
@@ -1228,7 +1219,7 @@ pmclog_process_userlog(struct pmc_owner *po, struct pmc_op_writelog *wl)
  */
 
 void
-pmclog_initialize()
+pmclog_initialize(void)
 {
 	struct pmclog_buffer *plb;
 	int domain, ncpus, total;
@@ -1277,7 +1268,7 @@ pmclog_initialize()
  */
 
 void
-pmclog_shutdown()
+pmclog_shutdown(void)
 {
 	struct pmclog_buffer *plb;
 	int domain;

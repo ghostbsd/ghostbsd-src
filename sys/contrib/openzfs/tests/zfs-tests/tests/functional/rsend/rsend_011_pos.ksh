@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -65,13 +65,13 @@ done
 #
 # Inherit properties in sub-datasets
 #
-for ds in "$POOL/$FS/fs1" "$POOL/$FS/fs1/fs2" "$POOL/$FS/fs1/fclone" ; do
-	for prop in $(fs_inherit_prop) ; do
+for ds in "$POOL/$FS/fs1" "$POOL/$FS/fs1/fs2" "$POOL/$FS/fs1/fclone"; do
+	for prop in $(fs_inherit_prop); do
 		log_must zfs inherit $prop $ds
 	done
 done
-if is_global_zone ; then
-	for prop in $(vol_inherit_prop) ; do
+if is_global_zone; then
+	for prop in $(vol_inherit_prop); do
 		log_must zfs inherit $prop $POOL/$FS/vol
 	done
 fi

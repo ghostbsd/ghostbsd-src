@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -37,11 +37,9 @@ verify_runnable "global"
 
 for i in $SAVESWAPDEVS ; do
 	log_note "Executing: swap_cleanup $i"
-	swap_cleanup $i >/dev/null 2>&1
-	if [[ $? != 0 ]]; then
+	swap_cleanup $i >/dev/null 2>&1 ||
 		log_untested "Unable to delete swap device $i because of" \
 				"insufficient RAM"
-	fi
 done
 
 default_zvol_setup $DISK $VOLSIZE

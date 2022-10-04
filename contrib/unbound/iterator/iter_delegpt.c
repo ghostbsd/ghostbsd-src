@@ -78,6 +78,7 @@ struct delegpt* delegpt_copy(struct delegpt* dp, struct regional* region)
 		if(!delegpt_add_ns(copy, region, ns->name, ns->lame,
 			ns->tls_auth_name, ns->port))
 			return NULL;
+		copy->nslist->cache_lookup_count = ns->cache_lookup_count;
 		copy->nslist->resolved = ns->resolved;
 		copy->nslist->got4 = ns->got4;
 		copy->nslist->got6 = ns->got6;
@@ -121,6 +122,7 @@ delegpt_add_ns(struct delegpt* dp, struct regional* region, uint8_t* name,
 	ns->namelen = len;
 	dp->nslist = ns;
 	ns->name = regional_alloc_init(region, name, ns->namelen);
+	ns->cache_lookup_count = 0;
 	ns->resolved = 0;
 	ns->got4 = 0;
 	ns->got6 = 0;
@@ -185,6 +187,10 @@ delegpt_add_target(struct delegpt* dp, struct regional* region,
 		else	ns->got4 = 1;
 		if(ns->got4 && ns->got6)
 			ns->resolved = 1;
+	} else {
+		if(addr_is_ip6(addr, addrlen))
+			ns->done_pside6 = 1;
+		else	ns->done_pside4 = 1;
 	}
 	log_assert(ns->port>0);
 	return delegpt_add_addr(dp, region, addr, addrlen, bogus, lame,
@@ -338,13 +344,16 @@ delegpt_count_targets(struct delegpt* dp)
 }
 
 size_t 
-delegpt_count_missing_targets(struct delegpt* dp)
+delegpt_count_missing_targets(struct delegpt* dp, int* alllame)
 {
 	struct delegpt_ns* ns;
-	size_t n = 0;
-	for(ns = dp->nslist; ns; ns = ns->next)
-		if(!ns->resolved)
-			n++;
+	size_t n = 0, nlame = 0;
+	for(ns = dp->nslist; ns; ns = ns->next) {
+		if(ns->resolved) continue;
+		n++;
+		if(ns->lame) nlame++;
+	}
+	if(alllame && n == nlame) *alllame = 1;
 	return n;
 }
 
@@ -613,6 +622,7 @@ int delegpt_add_ns_mlc(struct delegpt* dp, uint8_t* name, uint8_t lame,
 	}
 	ns->next = dp->nslist;
 	dp->nslist = ns;
+	ns->cache_lookup_count = 0;
 	ns->resolved = 0;
 	ns->got4 = 0;
 	ns->got6 = 0;
@@ -694,6 +704,10 @@ int delegpt_add_target_mlc(struct delegpt* dp, uint8_t* name, size_t namelen,
 		else	ns->got4 = 1;
 		if(ns->got4 && ns->got6)
 			ns->resolved = 1;
+	} else {
+		if(addr_is_ip6(addr, addrlen))
+			ns->done_pside6 = 1;
+		else	ns->done_pside4 = 1;
 	}
 	log_assert(ns->port>0);
 	return delegpt_add_addr_mlc(dp, addr, addrlen, bogus, lame,

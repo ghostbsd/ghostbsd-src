@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -62,7 +62,7 @@ log_onexit cleanup
 ibackup=$TEST_BASE_DIR/ibackup.$$
 fs=$TESTPOOL/$TESTFS; snap1=$fs@snap1; snap2=$fs@snap2
 
-mntpnt=$(get_prop mountpoint $fs) || log_fail "get_prop mountpoint $fs"
+mntpnt=$(get_prop mountpoint $fs)
 log_must mkfile 10m $mntpnt/file1
 log_must zfs snapshot $snap1
 log_must mkfile 10m $mntpnt/file2

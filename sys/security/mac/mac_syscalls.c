@@ -59,7 +59,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/sysctl.h>
 #include <sys/sysproto.h>
-#include <sys/sysent.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
 #include <sys/file.h>
@@ -431,7 +430,7 @@ sys___mac_set_fd(struct thread *td, struct __mac_set_fd_args *uap)
 			break;
 		}
 		vp = fp->f_vnode;
-		error = vn_start_write(vp, &mp, V_WAIT | PCATCH);
+		error = vn_start_write(vp, &mp, V_WAIT | V_PCATCH);
 		if (error != 0) {
 			mac_vnode_label_free(intlabel);
 			break;
@@ -537,7 +536,7 @@ kern___mac_set_path(struct thread *td, const char *path_p, struct mac *mac_p,
 	NDINIT(&nd, LOOKUP, LOCKLEAF | follow, UIO_USERSPACE, path_p);
 	error = namei(&nd);
 	if (error == 0) {
-		error = vn_start_write(nd.ni_vp, &mp, V_WAIT | PCATCH);
+		error = vn_start_write(nd.ni_vp, &mp, V_WAIT | V_PCATCH);
 		if (error == 0) {
 			error = vn_setlabel(nd.ni_vp, intlabel,
 			    td->td_ucred);

@@ -1231,7 +1231,8 @@ dc_init_client(device_t dev, device_t host1x, struct tegra_drm *drm)
 	sc->tegra_crtc.cursor_vbase = kmem_alloc_contig(256 * 256 * 4,
 	    M_WAITOK | M_ZERO, 0, -1UL, PAGE_SIZE, 0,
 	    VM_MEMATTR_WRITE_COMBINING);
-	sc->tegra_crtc.cursor_pbase = vtophys(sc->tegra_crtc.cursor_vbase);
+	sc->tegra_crtc.cursor_pbase =
+	    vtophys((uintptr_t)sc->tegra_crtc.cursor_vbase);
 	return (0);
 }
 
@@ -1435,7 +1436,6 @@ static device_method_t tegra_dc_methods[] = {
 	DEVMETHOD_END
 };
 
-static devclass_t tegra_dc_devclass;
 DEFINE_CLASS_0(tegra_dc, tegra_dc_driver, tegra_dc_methods,
     sizeof(struct dc_softc));
-DRIVER_MODULE(tegra_dc, host1x, tegra_dc_driver, tegra_dc_devclass, NULL, NULL);
+DRIVER_MODULE(tegra_dc, host1x, tegra_dc_driver, NULL, NULL);

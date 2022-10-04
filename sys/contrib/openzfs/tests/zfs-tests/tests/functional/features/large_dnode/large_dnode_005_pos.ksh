@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -54,11 +54,11 @@ log_assert "zfs send stream with large dnodes accepted by new pool"
 log_must zfs create -o dnodesize=1k $TEST_SEND_FS
 log_must touch /$TEST_SEND_FS/$TEST_FILE
 log_must zfs snap $TEST_SNAP
-log_must zfs send $TEST_SNAP > $TEST_STREAM
+log_must eval "zfs send $TEST_SNAP > $TEST_STREAM"
 log_must rm -f /$TEST_SEND_FS/$TEST_FILE
 log_must touch /$TEST_SEND_FS/$TEST_FILEINCR
 log_must zfs snap $TEST_SNAPINCR
-log_must zfs send -i $TEST_SNAP $TEST_SNAPINCR > $TEST_STREAMINCR
+log_must eval "zfs send -i $TEST_SNAP $TEST_SNAPINCR > $TEST_STREAMINCR"
 
 log_must eval "zfs recv $TEST_RECV_FS < $TEST_STREAM"
 inode=$(ls -li /$TEST_RECV_FS/$TEST_FILE | awk '{print $1}')

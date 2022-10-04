@@ -1099,7 +1099,7 @@ adastrategy(struct bio *bp)
 }
 
 static int
-adadump(void *arg, void *virtual, vm_offset_t physical, off_t offset, size_t length)
+adadump(void *arg, void *virtual, off_t offset, size_t length)
 {
 	struct	    cam_periph *periph;
 	struct	    ada_softc *softc;
@@ -1845,9 +1845,11 @@ adaregister(struct cam_periph *periph, void *arg)
 	TASK_INIT(&softc->sysctl_task, 0, adasysctlinit, periph);
 
 	/*
-	 * Register this media as a disk
+	 * Take a reference on the periph while adastart is called to finish
+	 * the probe.  The reference will be dropped in adaprobedone at the
+	 * end of probe.
 	 */
-	(void)cam_periph_hold(periph, PRIBIO);
+	(void)cam_periph_acquire(periph);
 	cam_periph_unlock(periph);
 	snprintf(announce_buf, ADA_ANNOUNCETMP_SZ,
 	    "kern.cam.ada.%d.quirks", periph->unit_number);
@@ -1905,19 +1907,6 @@ adaregister(struct cam_periph *periph, void *arg)
 	softc->disk->d_name = "ada";
 	softc->disk->d_drv1 = periph;
 	softc->disk->d_unit = periph->unit_number;
-
-	/*
-	 * Acquire a reference to the periph before we register with GEOM.
-	 * We'll release this reference once GEOM calls us back (via
-	 * adadiskgonecb()) telling us that our provider has been freed.
-	 */
-	if (cam_periph_acquire(periph) != 0) {
-		xpt_print(periph->path, "%s: lost periph during "
-			  "registration!\n", __func__);
-		cam_periph_lock(periph);
-		return (CAM_REQ_CMP_ERR);
-	}
-	disk_create(softc->disk, DISK_VERSION);
 	cam_periph_lock(periph);
 
 	dp = &softc->params;
@@ -1960,6 +1949,9 @@ adaregister(struct cam_periph *periph, void *arg)
 	    SBT_1S / ADA_ORDEREDTAG_INTERVAL * ada_default_timeout, 0,
 	    adasendorderedtag, softc, C_PREL(1));
 
+	/* Released after probe when disk_create() call pass it to GEOM. */
+	cam_periph_hold_boot(periph);
+
 	if (ADA_RA >= 0 && softc->flags & ADA_FLAG_CAN_RAHEAD) {
 		softc->state = ADA_STATE_RAHEAD;
 	} else if (ADA_WC >= 0 && softc->flags & ADA_FLAG_CAN_WCACHE) {
@@ -1977,7 +1969,6 @@ adaregister(struct cam_periph *periph, void *arg)
 	}
 
 	xpt_schedule(periph, CAM_PRIORITY_DEV);
-
 	return(CAM_REQ_CMP);
 }
 
@@ -2691,6 +2682,12 @@ adaprobedone(struct cam_periph *periph, union ccb *ccb)
 
 	softc = (struct ada_softc *)periph->softc;
 
+	/*
+	 * Since our peripheral may be invalidated by an error we must release
+	 * our CCB before releasing the reference on the peripheral.  The
+	 * peripheral will only go away once the last reference is removed, and
+	 * we need it around for the CCB release operation.
+	 */
 	if (ccb != NULL)
 		xpt_release_ccb(ccb);
 
@@ -2699,10 +2696,17 @@ adaprobedone(struct cam_periph *periph, union ccb *ccb)
 	adaschedule(periph);
 	if ((softc->flags & ADA_FLAG_ANNOUNCED) == 0) {
 		softc->flags |= ADA_FLAG_ANNOUNCED;
-		cam_periph_unhold(periph);
-	} else {
-		cam_periph_release_locked(periph);
+
+		/*
+		 * We'll release this reference once GEOM calls us back via
+		 * adadiskgonecb(), telling us that our provider has been freed.
+		 */
+		if (cam_periph_acquire(periph) == 0)
+			disk_create(softc->disk, DISK_VERSION);
+
+		cam_periph_release_boot(periph);
 	}
+	cam_periph_release_locked(periph);
 }
 
 static void
@@ -2872,7 +2876,7 @@ adadone(struct cam_periph *periph, union ccb *done_ccb)
 		cam_periph_lock(periph);
 		bp = (struct bio *)done_ccb->ccb_h.ccb_bp;
 		if ((done_ccb->ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP) {
-			error = adaerror(done_ccb, 0, 0);
+			error = adaerror(done_ccb, CAM_RETRY_SELTO, 0);
 			if (error == ERESTART) {
 				/* A retry was scheduled, so just return. */
 				cam_periph_unlock(periph);
@@ -2986,15 +2990,6 @@ adadone(struct cam_periph *periph, union ccb *done_ccb)
 				    /*getcount_only*/0);
 			}
 		}
-
-		/*
-		 * Since our peripheral may be invalidated by an error
-		 * above or an external event, we must release our CCB
-		 * before releasing the reference on the peripheral.
-		 * The peripheral will only go away once the last reference
-		 * is removed, and we need it around for the CCB release
-		 * operation.
-		 */
 
 		xpt_release_ccb(done_ccb);
 		softc->state = ADA_STATE_WCACHE;
@@ -3565,7 +3560,7 @@ adaflush(void)
 			/* If we panicked with the lock held, do not recurse. */
 			if (!cam_periph_owned(periph) &&
 			    (softc->flags & ADA_FLAG_OPEN)) {
-				adadump(softc->disk, NULL, 0, 0, 0);
+				adadump(softc->disk, NULL, 0, 0);
 			}
 			continue;
 		}
