@@ -338,8 +338,6 @@ int	casueword32(volatile uint32_t *base, uint32_t oldval, uint32_t *oldvalp,
 int	casueword(volatile u_long *p, u_long oldval, u_long *oldvalp,
 	    u_long newval);
 
-void	realitexpire(void *);
-
 int	sysbeep(int hertz, sbintime_t duration);
 
 void	hardclock(int cnt, int usermode);
@@ -386,7 +384,7 @@ int	getenv_array(const char *name, void *data, int size, int *psize,
 #define	GETENV_SIGNED	true	/* negative numbers allowed */
 
 typedef uint64_t (cpu_tick_f)(void);
-void set_cputicker(cpu_tick_f *func, uint64_t freq, unsigned var);
+void set_cputicker(cpu_tick_f *func, uint64_t freq, bool isvariable);
 extern cpu_tick_f *cpu_ticks;
 uint64_t cpu_tickrate(void);
 uint64_t cputick2usec(uint64_t tick);
@@ -477,6 +475,7 @@ int root_mounted(void);
  * Unit number allocation API. (kern/subr_unit.c)
  */
 struct unrhdr;
+#define	UNR_NO_MTX	((void *)(uintptr_t)-1)
 struct unrhdr *new_unrhdr(int low, int high, struct mtx *mutex);
 void init_unrhdr(struct unrhdr *uh, int low, int high, struct mtx *mutex);
 void delete_unrhdr(struct unrhdr *uh);

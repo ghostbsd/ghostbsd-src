@@ -507,13 +507,6 @@ END(memcmp)
 	ALIGN_TEXT
 2256:
 	std
-.if \erms == 1
-	leaq	-1(%rdi,%rcx),%rdi
-	leaq	-1(%rsi,%rcx),%rsi
-	rep
-	movsb
-	cld
-.else
 	leaq	-8(%rdi,%rcx),%rdi
 	leaq	-8(%rsi,%rcx),%rsi
 	shrq	$3,%rcx
@@ -523,7 +516,6 @@ END(memcmp)
 	movq	%rdx,%rcx
 	andb	$7,%cl
 	jne	2004b
-.endif
 	\end
 	ret
 .endif
@@ -930,7 +922,8 @@ copy_fault:
 
 /*
  * casueword32.  Compare and set user integer.  Returns -1 on fault,
- *        0 if access was successful.  Old value is written to *oldp.
+ *        0 if access was successful, and 1 when comparision failed.
+ *        Old value is written to *oldp.
  *        dst = %rdi, old = %esi, oldp = %rdx, new = %ecx
  */
 ENTRY(casueword32_nosmap)
@@ -1009,7 +1002,8 @@ END(casueword32_smap)
 
 /*
  * casueword.  Compare and set user long.  Returns -1 on fault,
- *        0 if access was successful.  Old value is written to *oldp.
+ *        0 if access was successful, and 1 when comparision failed.
+ *        Old value is written to *oldp.
  *        dst = %rdi, old = %rsi, oldp = %rdx, new = %rcx
  */
 ENTRY(casueword_nosmap)

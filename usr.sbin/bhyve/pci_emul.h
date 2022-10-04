@@ -42,6 +42,8 @@
 #include <assert.h>
 
 #define	PCI_BARMAX	PCIR_MAX_BAR_0	/* BAR registers in a Type 0 header */
+#define PCI_BARMAX_WITH_ROM (PCI_BARMAX + 1)
+#define PCI_ROM_IDX (PCI_BARMAX + 1)
 
 struct vmctx;
 struct pci_devinst;
@@ -49,7 +51,7 @@ struct memory_region;
 struct vm_snapshot_meta;
 
 struct pci_devemu {
-	char      *pe_emu;		/* Name of device emulation */
+	const char      *pe_emu;	/* Name of device emulation */
 
 	/* instance creation */
 	int       (*pe_init)(struct vmctx *, struct pci_devinst *,
@@ -92,7 +94,8 @@ enum pcibar_type {
 	PCIBAR_IO,
 	PCIBAR_MEM32,
 	PCIBAR_MEM64,
-	PCIBAR_MEMHI64
+	PCIBAR_MEMHI64,
+	PCIBAR_ROM,
 };
 
 struct pcibar {
@@ -165,7 +168,9 @@ struct pci_devinst {
 	void      *pi_arg;		/* devemu-private data */
 
 	u_char	  pi_cfgdata[PCI_REGMAX + 1];
-	struct pcibar pi_bar[PCI_BARMAX + 1];
+	/* ROM is handled like a BAR */
+	struct pcibar pi_bar[PCI_BARMAX_WITH_ROM + 1];
+	uint64_t pi_romoffset;
 };
 
 struct msicap {
@@ -229,6 +234,8 @@ int	init_pci(struct vmctx *ctx);
 void	pci_callback(void);
 int	pci_emul_alloc_bar(struct pci_devinst *pdi, int idx,
 	    enum pcibar_type type, uint64_t size);
+int 	pci_emul_alloc_rom(struct pci_devinst *const pdi, const uint64_t size,
+    	    void **const addr);
 int	pci_emul_add_msicap(struct pci_devinst *pi, int msgnum);
 int	pci_emul_add_pciecap(struct pci_devinst *pi, int pcie_device_type);
 void	pci_emul_capwrite(struct pci_devinst *pi, int offset, int bytes,
@@ -246,7 +253,7 @@ int	pci_msix_pba_bar(struct pci_devinst *pi);
 int	pci_msi_maxmsgnum(struct pci_devinst *pi);
 int	pci_parse_legacy_config(nvlist_t *nvl, const char *opt);
 int	pci_parse_slot(char *opt);
-void    pci_print_supported_devices();
+void    pci_print_supported_devices(void);
 void	pci_populate_msicap(struct msicap *cap, int msgs, int nextptr);
 int	pci_emul_add_msixcap(struct pci_devinst *pi, int msgnum, int barnum);
 int	pci_emul_msix_twrite(struct pci_devinst *pi, uint64_t offset, int size,

@@ -920,7 +920,8 @@ lacp_suppress_distributing(struct lacp_softc *lsc, struct lacp_aggregator *la)
 	/* send a marker frame down each port to verify the queues are empty */
 	LIST_FOREACH(lp, &lsc->lsc_ports, lp_next) {
 		lp->lp_flags |= LACP_PORT_MARK;
-		lacp_xmit_marker(lp);
+		if (lacp_xmit_marker(lp) != 0)
+			lp->lp_flags &= ~LACP_PORT_MARK;
 	}
 
 	/* set a timeout for the marker frames */
@@ -1089,6 +1090,8 @@ lacp_update_portmap(struct lacp_softc *lsc)
 		speed = lacp_aggregator_bandwidth(la);
 	}
 	sc->sc_ifp->if_baudrate = speed;
+	EVENTHANDLER_INVOKE(ifnet_event, sc->sc_ifp,
+	    IFNET_EVENT_UPDATE_BAUDRATE);
 
 	/* switch the active portmap over */
 	atomic_store_rel_int(&lsc->lsc_activemap, newmap);

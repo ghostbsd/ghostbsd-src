@@ -646,7 +646,7 @@ hwmp_send_action(struct ieee80211vap *vap,
 	}
 
 	m->m_pkthdr.len = m->m_len = frm - mtod(m, uint8_t *);
-	M_PREPEND(m, sizeof(struct ieee80211_frame), M_NOWAIT);
+	M_PREPEND(m, sizeof(struct ieee80211_frame), IEEE80211_M_NOWAIT);
 	if (m == NULL) {
 		ieee80211_free_node(ni);
 		vap->iv_stats.is_tx_nobuf++;
@@ -1839,7 +1839,7 @@ hwmp_send_rann(struct ieee80211vap *vap,
 	 *     [6] addr3 = sa
 	 *     [1] action
 	 *     [1] category
-	 *     [tlv] root annoucement
+	 *     [tlv] root announcement
 	 */
 	rann->rann_ie = IEEE80211_ELEMID_MESHRANN;
 	rann->rann_len = IEEE80211_MESHRANN_BASE_SZ;

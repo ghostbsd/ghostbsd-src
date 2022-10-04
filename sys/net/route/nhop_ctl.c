@@ -354,7 +354,7 @@ static int
 get_nhop(struct rib_head *rnh, struct rt_addrinfo *info,
     struct nhop_priv **pnh_priv)
 {
-	const struct sockaddr *dst, *gateway, *netmask;
+	const struct sockaddr *dst, *netmask;
 	struct nhop_priv *nh_priv, *tmp_priv;
 	int error;
 
@@ -363,7 +363,6 @@ get_nhop(struct rib_head *rnh, struct rt_addrinfo *info,
 	/* Give the protocols chance to augment the request data */
 	dst = info->rti_info[RTAX_DST];
 	netmask = info->rti_info[RTAX_NETMASK];
-	gateway = info->rti_info[RTAX_GATEWAY];
 
 	error = rnh->rnh_preadd(rnh->rib_fibnum, dst, netmask, nh_priv->nh);
 	if (error != 0) {
@@ -502,7 +501,7 @@ nhop_create_from_nhop(struct rib_head *rnh, const struct nhop_object *nh_orig,
  * Returns pointer to nhop_priv or NULL.
  */
 static struct nhop_priv *
-alloc_nhop_structure()
+alloc_nhop_structure(void)
 {
 	struct nhop_object *nh;
 	struct nhop_priv *nh_priv;

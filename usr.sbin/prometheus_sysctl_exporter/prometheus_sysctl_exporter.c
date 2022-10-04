@@ -67,13 +67,12 @@ oid_get_root(struct oid *o)
 }
 
 /* Obtains the OID for a sysctl by name. */
-static void
+static bool
 oid_get_by_name(struct oid *o, const char *name)
 {
 
 	o->len = nitems(o->id);
-	if (sysctlnametomib(name, o->id, &o->len) != 0)
-		err(1, "sysctl(%s)", name);
+	return (sysctlnametomib(name, o->id, &o->len) == 0);
 }
 
 /* Returns whether an OID is placed below another OID. */
@@ -498,6 +497,7 @@ oid_print(const struct oid *o, struct oidname *on, bool print_description,
 	struct oidvalue ov;
 	struct oiddescription od;
 	char metric[BUFSIZ];
+	bool has_desc;
 
 	if (!oid_get_format(o, &of) || !oid_get_value(o, &of, &ov))
 		return;
@@ -511,14 +511,20 @@ oid_print(const struct oid *o, struct oidname *on, bool print_description,
 	if (include && regexec(&inc_regex, metric, 0, NULL, 0) != 0)
 		return;
 
+	has_desc = oid_get_description(o, &od);
+	/*
+	 * Skip metrics with "(LEGACY)" in the name.  It's used by several
+	 * redundant ZFS sysctls whose names alias with the non-legacy versions.
+	 */
+	if (has_desc && strnstr(od.description, "(LEGACY)", BUFSIZ) != NULL)
+		return;
 	/*
 	 * Print the line with the description. Prometheus expects a
 	 * single unique description for every metric, which cannot be
 	 * guaranteed by sysctl if labels are present. Omit the
 	 * description if labels are present.
 	 */
-	if (print_description && !oidname_has_labels(on) &&
-	    oid_get_description(o, &od)) {
+	if (print_description && !oidname_has_labels(on) && has_desc) {
 		fprintf(fp, "# HELP ");
 		fprintf(fp, "%s", metric);
 		fputc(' ', fp);
@@ -637,7 +643,15 @@ main(int argc, char *argv[])
 		for (i = 0; i < argc; ++i) {
 			struct oid o, root;
 
-			oid_get_by_name(&root, argv[i]);
+			if (!oid_get_by_name(&root, argv[i])) {
+				/*
+				 * Ignore trees provided as arguments that
+				 * can't be found.  They might belong, for
+				 * example, to kernel modules not currently
+				 * loaded.
+				 */
+				continue;
+			}
 			o = root;
 			do {
 				oid_print(&o, &on, print_descriptions, exclude, include, fp);

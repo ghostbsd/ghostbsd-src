@@ -64,6 +64,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/pcpu.h>
 #include <sys/ptrace.h>
+#include <sys/reg.h>
 #include <sys/rwlock.h>
 #include <sys/signalvar.h>
 #include <sys/syscallsubr.h>
@@ -95,7 +96,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/pcb.h>
 #include <machine/pcb_ext.h>
 #include <machine/proc.h>
-#include <machine/reg.h>
 #include <machine/sigframe.h>
 #include <machine/specialreg.h>
 #include <machine/sysarch.h>
@@ -636,6 +636,7 @@ osigreturn(struct thread *td, struct osigreturn_args *uap)
 	regs->tf_esp = scp->sc_sp;
 	regs->tf_eip = scp->sc_pc;
 	regs->tf_eflags = eflags;
+	regs->tf_trapno = T_RESERVED;
 
 #if defined(COMPAT_43)
 	if (scp->sc_onstack & 1)
@@ -735,6 +736,7 @@ freebsd4_sigreturn(struct thread *td, struct freebsd4_sigreturn_args *uap)
 
 		bcopy(&ucp->uc_mcontext.mc_fs, regs, sizeof(*regs));
 	}
+	regs->tf_trapno = T_RESERVED;
 
 #if defined(COMPAT_43)
 	if (ucp->uc_mcontext.mc_onstack & 1)
@@ -869,6 +871,7 @@ sys_sigreturn(struct thread *td, struct sigreturn_args *uap)
 			return (ret);
 		bcopy(&ucp->uc_mcontext.mc_fs, regs, sizeof(*regs));
 	}
+	regs->tf_trapno = T_RESERVED;
 
 #if defined(COMPAT_43)
 	if (ucp->uc_mcontext.mc_onstack & 1)

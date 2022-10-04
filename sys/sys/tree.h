@@ -56,9 +56,11 @@
  * the same, and defines the rank of that node. The rank of the null node
  * is -1.
  *
- * Different additional conditions define different sorts of balanced
- * trees, including "red-black" and "AVL" trees.  The set of conditions
- * applied here are the "weak-AVL" conditions of Haeupler, Sen and Tarjan:
+ * Different additional conditions define different sorts of balanced trees,
+ * including "red-black" and "AVL" trees.  The set of conditions applied here
+ * are the "weak-AVL" conditions of Haeupler, Sen and Tarjan presented in in
+ * "Rank Balanced Trees", ACM Transactions on Algorithms Volume 11 Issue 4 June
+ * 2015 Article No.: 30pp 1–26 https://doi.org/10.1145/2689412 (the HST paper):
  *	- every rank-difference is 1 or 2.
  *	- the rank of any leaf is 1.
  *
@@ -176,7 +178,7 @@ name##_SPLAY_INSERT(struct name *head, struct type *elm)		\
     if (SPLAY_EMPTY(head)) {						\
 	    SPLAY_LEFT(elm, field) = SPLAY_RIGHT(elm, field) = NULL;	\
     } else {								\
-	    int __comp;							\
+	    __typeof(cmp(NULL, NULL)) __comp;				\
 	    name##_SPLAY(head, elm);					\
 	    __comp = (cmp)(elm, (head)->sph_root);			\
 	    if(__comp < 0) {						\
@@ -219,7 +221,7 @@ void									\
 name##_SPLAY(struct name *head, struct type *elm)			\
 {									\
 	struct type __node, *__left, *__right, *__tmp;			\
-	int __comp;							\
+	__typeof(cmp(NULL, NULL)) __comp;				\
 \
 	SPLAY_LEFT(&__node, field) = SPLAY_RIGHT(&__node, field) = NULL;\
 	__left = __right = &__node;					\
@@ -318,13 +320,8 @@ struct name {								\
 
 #define RB_ENTRY(type)							\
 struct {								\
-	struct type *rbe_left;		/* left element */		\
-	struct type *rbe_right;		/* right element */		\
-	struct type *rbe_parent;	/* parent element */		\
+	struct type *rbe_link[3];					\
 }
-
-#define RB_LEFT(elm, field)		(elm)->field.rbe_left
-#define RB_RIGHT(elm, field)		(elm)->field.rbe_right
 
 /*
  * With the expectation that any object of struct type has an
@@ -333,34 +330,31 @@ struct {								\
  * always zero, this implementation sets those bits to indicate
  * that the left or right child of the tree node is "red".
  */
-#define RB_UP(elm, field)		(elm)->field.rbe_parent
-#define RB_BITS(elm, field)		(*(__uintptr_t *)&RB_UP(elm, field))
-#define RB_RED_L			((__uintptr_t)1)
-#define RB_RED_R			((__uintptr_t)2)
-#define RB_RED_MASK			((__uintptr_t)3)
-#define RB_FLIP_LEFT(elm, field)	(RB_BITS(elm, field) ^= RB_RED_L)
-#define RB_FLIP_RIGHT(elm, field)	(RB_BITS(elm, field) ^= RB_RED_R)
-#define RB_RED_LEFT(elm, field)		((RB_BITS(elm, field) & RB_RED_L) != 0)
-#define RB_RED_RIGHT(elm, field)	((RB_BITS(elm, field) & RB_RED_R) != 0)
-#define RB_PARENT(elm, field)		((__typeof(RB_UP(elm, field)))	\
-					 (RB_BITS(elm, field) & ~RB_RED_MASK))
+#define _RB_LINK(elm, dir, field)	(elm)->field.rbe_link[dir]
+#define _RB_UP(elm, field)		_RB_LINK(elm, 0, field)
+#define _RB_L				((__uintptr_t)1)
+#define _RB_R				((__uintptr_t)2)
+#define _RB_LR				((__uintptr_t)3)
+#define _RB_BITS(elm)			(*(__uintptr_t *)&elm)
+#define _RB_BITSUP(elm, field)		_RB_BITS(_RB_UP(elm, field))
+#define _RB_PTR(elm)			(__typeof(elm))			\
+					((__uintptr_t)elm & ~_RB_LR)
+
+#define RB_PARENT(elm, field)		_RB_PTR(_RB_UP(elm, field))
+#define RB_LEFT(elm, field)		_RB_LINK(elm, _RB_L, field)
+#define RB_RIGHT(elm, field)		_RB_LINK(elm, _RB_R, field)
 #define RB_ROOT(head)			(head)->rbh_root
 #define RB_EMPTY(head)			(RB_ROOT(head) == NULL)
 
 #define RB_SET_PARENT(dst, src, field) do {				\
-	RB_BITS(dst, field) &= RB_RED_MASK;				\
-	RB_BITS(dst, field) |= (__uintptr_t)src;			\
+	_RB_BITSUP(dst, field) = (__uintptr_t)src |			\
+	    (_RB_BITSUP(dst, field) & _RB_LR);				\
 } while (/*CONSTCOND*/ 0)
 
 #define RB_SET(elm, parent, field) do {					\
-	RB_UP(elm, field) = parent;					\
+	_RB_UP(elm, field) = parent;					\
 	RB_LEFT(elm, field) = RB_RIGHT(elm, field) = NULL;		\
 } while (/*CONSTCOND*/ 0)
-
-#define RB_COLOR(elm, field)	(RB_PARENT(elm, field) == NULL ? 0 :	\
-				RB_LEFT(RB_PARENT(elm, field), field) == elm ? \
-				RB_RED_LEFT(RB_PARENT(elm, field), field) : \
-				RB_RED_RIGHT(RB_PARENT(elm, field), field))
 
 /*
  * Something to be invoked in a loop at the root of every modified subtree,
@@ -370,37 +364,38 @@ struct {								\
 #define RB_AUGMENT(x)	break
 #endif
 
-#define RB_SWAP_CHILD(head, out, in, field) do {			\
-	if (RB_PARENT(out, field) == NULL)				\
+#define RB_UPDATE_AUGMENT(elm, field) do {				\
+	__typeof(elm) rb_update_tmp = (elm);				\
+	do {								\
+		RB_AUGMENT(rb_update_tmp);				\
+	} while ((rb_update_tmp = RB_PARENT(rb_update_tmp, field)) != NULL); \
+} while (0)
+
+#define RB_SWAP_CHILD(head, par, out, in, field) do {			\
+	if (par == NULL)						\
 		RB_ROOT(head) = (in);					\
-	else if ((out) == RB_LEFT(RB_PARENT(out, field), field))	\
-		RB_LEFT(RB_PARENT(out, field), field) = (in);		\
+	else if ((out) == RB_LEFT(par, field))				\
+		RB_LEFT(par, field) = (in);				\
 	else								\
-		RB_RIGHT(RB_PARENT(out, field), field) = (in);		\
+		RB_RIGHT(par, field) = (in);				\
 } while (/*CONSTCOND*/ 0)
 
-#define RB_ROTATE_LEFT(head, elm, tmp, field) do {			\
-	(tmp) = RB_RIGHT(elm, field);					\
-	if ((RB_RIGHT(elm, field) = RB_LEFT(tmp, field)) != NULL) {	\
-		RB_SET_PARENT(RB_RIGHT(elm, field), elm, field);	\
-	}								\
-	RB_SET_PARENT(tmp, RB_PARENT(elm, field), field);		\
-	RB_SWAP_CHILD(head, elm, tmp, field);				\
-	RB_LEFT(tmp, field) = (elm);					\
+/*
+ * RB_ROTATE macro partially restructures the tree to improve balance. In the
+ * case when dir is _RB_L, tmp is a right child of elm.  After rotation, elm
+ * is a left child of tmp, and the subtree that represented the items between
+ * them, which formerly hung to the left of tmp now hangs to the right of elm.
+ * The parent-child relationship between elm and its former parent is not
+ * changed; where this macro once updated those fields, that is now left to the
+ * caller of RB_ROTATE to clean up, so that a pair of rotations does not twice
+ * update the same pair of pointer fields with distinct values.
+ */
+#define RB_ROTATE(elm, tmp, dir, field) do {				\
+	if ((_RB_LINK(elm, dir ^ _RB_LR, field) =			\
+	    _RB_LINK(tmp, dir, field)) != NULL)				\
+		RB_SET_PARENT(_RB_LINK(tmp, dir, field), elm, field);	\
+	_RB_LINK(tmp, dir, field) = (elm);				\
 	RB_SET_PARENT(elm, tmp, field);					\
-	RB_AUGMENT(elm);						\
-} while (/*CONSTCOND*/ 0)
-
-#define RB_ROTATE_RIGHT(head, elm, tmp, field) do {			\
-	(tmp) = RB_LEFT(elm, field);					\
-	if ((RB_LEFT(elm, field) = RB_RIGHT(tmp, field)) != NULL) {	\
-		RB_SET_PARENT(RB_LEFT(elm, field), elm, field);		\
-	}								\
-	RB_SET_PARENT(tmp, RB_PARENT(elm, field), field);		\
-	RB_SWAP_CHILD(head, elm, tmp, field);				\
-	RB_RIGHT(tmp, field) = (elm);					\
-	RB_SET_PARENT(elm, tmp, field);					\
-	RB_AUGMENT(elm);						\
 } while (/*CONSTCOND*/ 0)
 
 /* Generates prototypes and inline functions */
@@ -409,6 +404,7 @@ struct {								\
 #define	RB_PROTOTYPE_STATIC(name, type, field, cmp)			\
 	RB_PROTOTYPE_INTERNAL(name, type, field, cmp, __unused static)
 #define RB_PROTOTYPE_INTERNAL(name, type, field, cmp, attr)		\
+	RB_PROTOTYPE_RANK(name, type, attr)				\
 	RB_PROTOTYPE_INSERT_COLOR(name, type, attr);			\
 	RB_PROTOTYPE_REMOVE_COLOR(name, type, attr);			\
 	RB_PROTOTYPE_INSERT(name, type, attr);				\
@@ -419,6 +415,12 @@ struct {								\
 	RB_PROTOTYPE_PREV(name, type, attr);				\
 	RB_PROTOTYPE_MINMAX(name, type, attr);				\
 	RB_PROTOTYPE_REINSERT(name, type, attr);
+#ifdef _RB_DIAGNOSTIC
+#define RB_PROTOTYPE_RANK(name, type, attr)				\
+	attr int name##_RB_RANK(struct type *);
+#else
+#define RB_PROTOTYPE_RANK(name, type, attr)
+#endif
 #define RB_PROTOTYPE_INSERT_COLOR(name, type, attr)			\
 	attr void name##_RB_INSERT_COLOR(struct name *, struct type *)
 #define RB_PROTOTYPE_REMOVE_COLOR(name, type, attr)			\
@@ -449,6 +451,7 @@ struct {								\
 #define	RB_GENERATE_STATIC(name, type, field, cmp)			\
 	RB_GENERATE_INTERNAL(name, type, field, cmp, __unused static)
 #define RB_GENERATE_INTERNAL(name, type, field, cmp, attr)		\
+	RB_GENERATE_RANK(name, type, field, attr)			\
 	RB_GENERATE_INSERT_COLOR(name, type, field, attr)		\
 	RB_GENERATE_REMOVE_COLOR(name, type, field, attr)		\
 	RB_GENERATE_INSERT(name, type, field, cmp, attr)		\
@@ -460,178 +463,294 @@ struct {								\
 	RB_GENERATE_MINMAX(name, type, field, attr)			\
 	RB_GENERATE_REINSERT(name, type, field, cmp, attr)
 
+#ifdef _RB_DIAGNOSTIC
+#define RB_GENERATE_RANK(name, type, field, attr)			\
+attr int								\
+name##_RB_RANK(struct type *elm)					\
+{									\
+	struct type *left, *right, *up;					\
+	int left_rank, right_rank;					\
+									\
+	if (elm == NULL)						\
+		return (0);						\
+	up = _RB_UP(elm, field);					\
+	left = RB_LEFT(elm, field);					\
+	left_rank = ((_RB_BITS(up) & _RB_L) ? 2 : 1) +			\
+	    name##_RB_RANK(left);					\
+	right = RB_RIGHT(elm, field);					\
+	right_rank = ((_RB_BITS(up) & _RB_R) ? 2 : 1) +			\
+	    name##_RB_RANK(right);					\
+	if (left_rank != right_rank ||					\
+	    (left_rank == 2 && left == NULL && right == NULL))		\
+		return (-1);						\
+	return (left_rank);						\
+}
+#else
+#define RB_GENERATE_RANK(name, type, field, attr)
+#endif
+
 #define RB_GENERATE_INSERT_COLOR(name, type, field, attr)		\
 attr void								\
 name##_RB_INSERT_COLOR(struct name *head, struct type *elm)		\
 {									\
-	struct type *child, *parent;					\
-	while ((parent = RB_PARENT(elm, field)) != NULL) {		\
-		if (RB_LEFT(parent, field) == elm) {			\
-			if (RB_RED_LEFT(parent, field)) {		\
-				RB_FLIP_LEFT(parent, field);		\
-				return;					\
-			}						\
-			RB_FLIP_RIGHT(parent, field);			\
-			if (RB_RED_RIGHT(parent, field)) {		\
-				elm = parent;				\
-				continue;				\
-			}						\
-			if (!RB_RED_RIGHT(elm, field)) {		\
-				RB_FLIP_LEFT(elm, field);		\
-				RB_ROTATE_LEFT(head, elm, child, field);\
-				if (RB_RED_LEFT(child, field))		\
-					RB_FLIP_RIGHT(elm, field);	\
-				else if (RB_RED_RIGHT(child, field))	\
-					RB_FLIP_LEFT(parent, field);	\
-				elm = child;				\
-			}						\
-			RB_ROTATE_RIGHT(head, parent, elm, field);	\
-		} else {						\
-			if (RB_RED_RIGHT(parent, field)) {		\
-				RB_FLIP_RIGHT(parent, field);		\
-				return;					\
-			}						\
-			RB_FLIP_LEFT(parent, field);			\
-			if (RB_RED_LEFT(parent, field)) {		\
-				elm = parent;				\
-				continue;				\
-			}						\
-			if (!RB_RED_LEFT(elm, field)) {			\
-				RB_FLIP_RIGHT(elm, field);		\
-				RB_ROTATE_RIGHT(head, elm, child, field);\
-				if (RB_RED_RIGHT(child, field))		\
-					RB_FLIP_LEFT(elm, field);	\
-				else if (RB_RED_LEFT(child, field))	\
-					RB_FLIP_RIGHT(parent, field);	\
-				elm = child;				\
-			}						\
-			RB_ROTATE_LEFT(head, parent, elm, field);	\
+	/*								\
+	 * Initially, elm is a leaf.  Either its parent was previously	\
+	 * a leaf, with two black null children, or an interior node	\
+	 * with a black non-null child and a red null child. The        \
+	 * balance criterion "the rank of any leaf is 1" precludes the  \
+	 * possibility of two red null children for the initial parent. \
+	 * So the first loop iteration cannot lead to accessing an      \
+	 * uninitialized 'child', and a later iteration can only happen \
+	 * when a value has been assigned to 'child' in the previous    \
+	 * one.								\
+	 */							\
+	struct type *child, *child_up, *gpar, *parent;			\
+	__uintptr_t elmdir, sibdir;					\
+									\
+	gpar = _RB_UP(elm, field);					\
+	while ((parent = gpar) != NULL) {				\
+		/* the rank of the tree rooted at elm grew */		\
+		gpar = _RB_UP(parent, field);				\
+		elmdir = RB_RIGHT(parent, field) == elm ? _RB_R : _RB_L; \
+		if (_RB_BITS(gpar) & elmdir) {				\
+			/* shorten the parent-elm edge to rebalance */	\
+			_RB_BITSUP(parent, field) ^= elmdir;		\
+			return;						\
 		}							\
-		RB_BITS(elm, field) &= ~RB_RED_MASK;			\
+		sibdir = elmdir ^ _RB_LR;				\
+		/* the other edge must change length */			\
+		_RB_BITSUP(parent, field) ^= sibdir;			\
+		if ((_RB_BITS(gpar) & _RB_LR) == 0) {			\
+			/* both edges now short, retry from parent */	\
+			child = elm;					\
+			elm = parent;					\
+			continue;					\
+		}							\
+		_RB_UP(parent, field) = gpar = _RB_PTR(gpar);		\
+		if (_RB_BITSUP(elm, field) & elmdir) {			\
+			/*						\
+			 * Exactly one of the edges descending from elm \
+			 * is long. The long one is in the same		\
+			 * direction as the edge from parent to elm,	\
+			 * so change that by rotation.  The edge from 	\
+			 * parent to z was shortened above.  Shorten	\
+			 * the long edge down from elm, and adjust	\
+			 * other edge lengths based on the downward	\
+			 * edges from 'child'.				\
+			 *						\
+			 *	     par		 par		\ 
+			 *	    /	\		/   \		\
+			 *	  elm	 z	       /     z		\
+			 *	 /  \		     child		\
+			 *	/  child	     /	 \		\
+			 *     /   /  \		   elm 	  \		\
+			 *    w	  /    \	  /   \    y		\
+			 *     	 x      y	 w     \     		\
+			 *				x		\
+			 */						\
+			RB_ROTATE(elm, child, elmdir, field);		\
+			child_up = _RB_UP(child, field);		\
+			if (_RB_BITS(child_up) & sibdir)		\
+				_RB_BITSUP(parent, field) ^= elmdir;	\
+			if (_RB_BITS(child_up) & elmdir)		\
+				_RB_BITSUP(elm, field) ^= _RB_LR;	\
+			else						\
+				_RB_BITSUP(elm, field) ^= elmdir;	\
+			/* if child is a leaf, don't augment elm,	\
+			 * since it is restored to be a leaf again. */	\
+			if ((_RB_BITS(child_up) & _RB_LR) == 0)		\
+				elm = child;				\
+		} else							\
+			child = elm;					\
+									\
+		/*							\
+		 * The long edge descending from 'child' points back	\
+		 * in the direction of 'parent'. Rotate to make		\
+		 * 'parent' a child of 'child', then make both edges	\
+		 * of 'child' short to rebalance.			\
+		 *							\
+		 *	     par		 child			\ 
+		 *	    /	\		/     \			\
+		 *	   /	 z	       x       par		\
+		 *	child			      /	  \		\
+		 *	 /  \			     /	   z		\
+		 *	x    \			    y			\
+		 *	      y						\
+		 */							\
+		RB_ROTATE(parent, child, sibdir, field);		\
+		_RB_UP(child, field) = gpar;				\
+		RB_SWAP_CHILD(head, gpar, parent, child, field);	\
+		if (elm != child)					\
+			RB_AUGMENT(elm);				\
+		RB_AUGMENT(parent);					\
 		break;							\
 	}								\
 }
+
+#ifndef RB_STRICT_HST
+/*
+ * In REMOVE_COLOR, the HST paper, in figure 3, in the single-rotate case, has
+ * 'parent' with one higher rank, and then reduces its rank if 'parent' has
+ * become a leaf.  This implementation always has the parent in its new position
+ * with lower rank, to avoid the leaf check.  Define RB_STRICT_HST to 1 to get
+ * the behavior that HST describes.
+ */
+#define RB_STRICT_HST 0
+#endif
 
 #define RB_GENERATE_REMOVE_COLOR(name, type, field, attr)		\
 attr void								\
 name##_RB_REMOVE_COLOR(struct name *head,				\
     struct type *parent, struct type *elm)				\
 {									\
-	struct type *sib;						\
-	if (RB_LEFT(parent, field) == elm &&				\
-	    RB_RIGHT(parent, field) == elm) {				\
-		RB_BITS(parent, field) &= ~RB_RED_MASK;			\
+	struct type *gpar, *sib, *up;					\
+	__uintptr_t elmdir, sibdir;					\
+									\
+	if (RB_RIGHT(parent, field) == elm &&				\
+	    RB_LEFT(parent, field) == elm) {				\
+		/* Deleting a leaf that is an only-child creates a	\
+		 * rank-2 leaf. Demote that leaf. */			\
+		_RB_UP(parent, field) = _RB_PTR(_RB_UP(parent, field));	\
 		elm = parent;						\
-		parent = RB_PARENT(elm, field);				\
-		if (parent == NULL)					\
+		if ((parent = _RB_UP(elm, field)) == NULL)		\
 			return;						\
 	}								\
-	do  {								\
-		if (RB_LEFT(parent, field) == elm) {			\
-			if (!RB_RED_LEFT(parent, field)) {		\
-				RB_FLIP_LEFT(parent, field);		\
-				return;					\
-			}						\
-			if (RB_RED_RIGHT(parent, field)) {		\
-				RB_FLIP_RIGHT(parent, field);		\
-				elm = parent;				\
-				continue;				\
-			}						\
-			sib = RB_RIGHT(parent, field);			\
-			if ((~RB_BITS(sib, field) & RB_RED_MASK) == 0) {\
-				RB_BITS(sib, field) &= ~RB_RED_MASK;	\
-				elm = parent;				\
-				continue;				\
-			}						\
-			RB_FLIP_RIGHT(sib, field);			\
-			if (RB_RED_LEFT(sib, field))			\
-				RB_FLIP_LEFT(parent, field);		\
-			else if (!RB_RED_RIGHT(sib, field)) {		\
-				RB_FLIP_LEFT(parent, field);		\
-				RB_ROTATE_RIGHT(head, sib, elm, field);	\
-				if (RB_RED_RIGHT(elm, field))		\
-					RB_FLIP_LEFT(sib, field);	\
-				if (RB_RED_LEFT(elm, field))		\
-					RB_FLIP_RIGHT(parent, field);	\
-				RB_BITS(elm, field) |= RB_RED_MASK;	\
-				sib = elm;				\
-			}						\
-			RB_ROTATE_LEFT(head, parent, sib, field);	\
-		} else {						\
-			if (!RB_RED_RIGHT(parent, field)) {		\
-				RB_FLIP_RIGHT(parent, field);		\
-				return;					\
-			}						\
-			if (RB_RED_LEFT(parent, field)) {		\
-				RB_FLIP_LEFT(parent, field);		\
-				elm = parent;				\
-				continue;				\
-			}						\
-			sib = RB_LEFT(parent, field);			\
-			if ((~RB_BITS(sib, field) & RB_RED_MASK) == 0) {\
-				RB_BITS(sib, field) &= ~RB_RED_MASK;	\
-				elm = parent;				\
-				continue;				\
-			}						\
-			RB_FLIP_LEFT(sib, field);			\
-			if (RB_RED_RIGHT(sib, field))			\
-				RB_FLIP_RIGHT(parent, field);		\
-			else if (!RB_RED_LEFT(sib, field)) {		\
-				RB_FLIP_RIGHT(parent, field);		\
-				RB_ROTATE_LEFT(head, sib, elm, field);	\
-				if (RB_RED_LEFT(elm, field))		\
-					RB_FLIP_RIGHT(sib, field);	\
-				if (RB_RED_RIGHT(elm, field))		\
-					RB_FLIP_LEFT(parent, field);	\
-				RB_BITS(elm, field) |= RB_RED_MASK;	\
-				sib = elm;				\
-			}						\
-			RB_ROTATE_RIGHT(head, parent, sib, field);	\
+	do {								\
+		/* the rank of the tree rooted at elm shrank */		\
+		gpar = _RB_UP(parent, field);				\
+		elmdir = RB_RIGHT(parent, field) == elm ? _RB_R : _RB_L; \
+		_RB_BITS(gpar) ^= elmdir;				\
+		if (_RB_BITS(gpar) & elmdir) {				\
+			/* lengthen the parent-elm edge to rebalance */	\
+			_RB_UP(parent, field) = gpar;			\
+			return;						\
 		}							\
+		if (_RB_BITS(gpar) & _RB_LR) {				\
+			/* shorten other edge, retry from parent */	\
+			_RB_BITS(gpar) ^= _RB_LR;			\
+			_RB_UP(parent, field) = gpar;			\
+			gpar = _RB_PTR(gpar);				\
+			continue;					\
+		}							\
+		sibdir = elmdir ^ _RB_LR;				\
+		sib = _RB_LINK(parent, sibdir, field);			\
+		up = _RB_UP(sib, field);				\
+		_RB_BITS(up) ^= _RB_LR;					\
+		if ((_RB_BITS(up) & _RB_LR) == 0) {			\
+			/* shorten edges descending from sib, retry */	\
+			_RB_UP(sib, field) = up;			\
+			continue;					\
+		}							\
+		if ((_RB_BITS(up) & sibdir) == 0) {			\
+			/*						\
+			 * The edge descending from 'sib' away from	\
+			 * 'parent' is long.  The short edge descending	\
+			 * from 'sib' toward 'parent' points to 'elm*'	\
+			 * Rotate to make 'sib' a child of 'elm*'	\
+			 * then adjust the lengths of the edges		\
+			 * descending from 'sib' and 'elm*'.		\
+			 *						\
+			 *	     par		 par		\
+			 *	    /	\		/   \		\
+			 *	   /	sib	      elm    \  	\
+			 *	  /	/ \	            elm*	\
+			 *	elm   elm* \	            /  \ 	\
+			 *	      /	\   \	       	   /    \	\
+			 *	     /   \   z	    	  /      \	\
+			 *	    x	  y    		 x      sib 	\
+			 *				        /  \	\
+			 *				       /    z	\
+			 *				      y 	\
+			 */						\
+			elm = _RB_LINK(sib, elmdir, field);		\
+			/* elm is a 1-child.  First rotate at elm. */	\
+			RB_ROTATE(sib, elm, sibdir, field);		\
+			up = _RB_UP(elm, field);			\
+			_RB_BITSUP(parent, field) ^=			\
+			    (_RB_BITS(up) & elmdir) ? _RB_LR : elmdir;	\
+			_RB_BITSUP(sib, field) ^=			\
+			    (_RB_BITS(up) & sibdir) ? _RB_LR : sibdir;	\
+			_RB_BITSUP(elm, field) |= _RB_LR;		\
+		} else {						\
+			if ((_RB_BITS(up) & elmdir) == 0 &&		\
+			    RB_STRICT_HST && elm != NULL) {		\
+				/* if parent does not become a leaf,	\
+				   do not demote parent yet. */		\
+				_RB_BITSUP(parent, field) ^= sibdir;	\
+				_RB_BITSUP(sib, field) ^= _RB_LR;	\
+			} else if ((_RB_BITS(up) & elmdir) == 0) {	\
+				/* demote parent. */			\
+				_RB_BITSUP(parent, field) ^= elmdir;	\
+				_RB_BITSUP(sib, field) ^= sibdir;	\
+			} else						\
+				_RB_BITSUP(sib, field) ^= sibdir;	\
+			elm = sib;					\
+		}							\
+									\
+		/*							\
+		 * The edge descending from 'elm' away from 'parent'	\
+		 * is short.  Rotate to make 'parent' a child of 'elm', \
+		 * then lengthen the short edges descending from	\
+		 * 'parent' and 'elm' to rebalance.			\
+		 *							\
+		 *	     par		 elm			\
+		 *	    /	\		/   \			\
+		 *	   e	 \	       /     \			\
+		 *		 elm	      /	      \			\
+		 *		/  \	    par	       s		\
+		 *	       /    \	   /   \			\
+		 *	      /	     \	  e	\			\
+		 *	     x	      s		 x			\
+		 */							\
+		RB_ROTATE(parent, elm, elmdir, field);			\
+		RB_SET_PARENT(elm, gpar, field);			\
+		RB_SWAP_CHILD(head, gpar, parent, elm, field);		\
+		if (sib != elm)						\
+			RB_AUGMENT(sib);				\
 		break;							\
-	} while ((parent = RB_PARENT(elm, field)) != NULL);		\
+	} while (elm = parent, (parent = gpar) != NULL);		\
 }
 
 #define RB_GENERATE_REMOVE(name, type, field, attr)			\
 attr struct type *							\
-name##_RB_REMOVE(struct name *head, struct type *elm)			\
+name##_RB_REMOVE(struct name *head, struct type *out)			\
 {									\
-	struct type *child, *old, *parent, *right;			\
+	struct type *child, *in, *opar, *parent;			\
 									\
-	old = elm;							\
-	parent = RB_PARENT(elm, field);					\
-	right = RB_RIGHT(elm, field);					\
-	if (RB_LEFT(elm, field) == NULL)				\
-		elm = child = right;					\
-	else if (right == NULL)						\
-		elm = child = RB_LEFT(elm, field);			\
-	else {								\
-		if ((child = RB_LEFT(right, field)) == NULL) {		\
-			child = RB_RIGHT(right, field);			\
-			RB_RIGHT(old, field) = child;			\
-			parent = elm = right;				\
-		} else {						\
-			do						\
-				elm = child;				\
-			while ((child = RB_LEFT(elm, field)) != NULL);	\
-			child = RB_RIGHT(elm, field);			\
-			parent = RB_PARENT(elm, field);			\
+	child = RB_LEFT(out, field);					\
+	in = RB_RIGHT(out, field);					\
+	opar = _RB_UP(out, field);					\
+	if (in == NULL || child == NULL) {				\
+		in = child = in == NULL ? child : in;			\
+		parent = opar = _RB_PTR(opar);				\
+	} else {							\
+		parent = in;						\
+		while (RB_LEFT(in, field))				\
+			in = RB_LEFT(in, field);			\
+		RB_SET_PARENT(child, in, field);			\
+		RB_LEFT(in, field) = child;				\
+		child = RB_RIGHT(in, field);				\
+		if (parent != in) {					\
+			RB_SET_PARENT(parent, in, field);		\
+			RB_RIGHT(in, field) = parent;			\
+			parent = RB_PARENT(in, field);			\
 			RB_LEFT(parent, field) = child;			\
-			RB_SET_PARENT(RB_RIGHT(old, field), elm, field);\
 		}							\
-		RB_SET_PARENT(RB_LEFT(old, field), elm, field);		\
-		elm->field = old->field;				\
+		_RB_UP(in, field) = opar;				\
+		opar = _RB_PTR(opar);					\
 	}								\
-	RB_SWAP_CHILD(head, old, elm, field);				\
+	RB_SWAP_CHILD(head, opar, out, in, field);			\
 	if (child != NULL)						\
-		RB_SET_PARENT(child, parent, field);			\
-	if (parent != NULL)						\
+		_RB_UP(child, field) = parent;				\
+	if (parent != NULL) {						\
 		name##_RB_REMOVE_COLOR(head, parent, child);		\
-	while (parent != NULL) {					\
-		RB_AUGMENT(parent);					\
-		parent = RB_PARENT(parent, field);			\
+		/* if rotation has made 'parent' the root of the same	\
+		 * subtree as before, don't re-augment it. */		\
+		if (parent == in && RB_LEFT(parent, field) == NULL)	\
+			parent = RB_PARENT(parent, field);		\
+		RB_UPDATE_AUGMENT(parent, field);			\
 	}								\
-	return (old);							\
+	return (out);							\
 }
 
 #define RB_GENERATE_INSERT(name, type, field, cmp, attr)		\
@@ -640,31 +759,23 @@ attr struct type *							\
 name##_RB_INSERT(struct name *head, struct type *elm)			\
 {									\
 	struct type *tmp;						\
+	struct type **tmpp = &RB_ROOT(head);				\
 	struct type *parent = NULL;					\
-	int comp = 0;							\
-	tmp = RB_ROOT(head);						\
-	while (tmp) {							\
+									\
+	while ((tmp = *tmpp) != NULL) {					\
 		parent = tmp;						\
-		comp = (cmp)(elm, parent);				\
+		__typeof(cmp(NULL, NULL)) comp = (cmp)(elm, parent);	\
 		if (comp < 0)						\
-			tmp = RB_LEFT(tmp, field);			\
+			tmpp = &RB_LEFT(parent, field);			\
 		else if (comp > 0)					\
-			tmp = RB_RIGHT(tmp, field);			\
+			tmpp = &RB_RIGHT(parent, field);		\
 		else							\
-			return (tmp);					\
+			return (parent);				\
 	}								\
 	RB_SET(elm, parent, field);					\
-	if (parent == NULL)						\
-		RB_ROOT(head) = elm;					\
-	else if (comp < 0)						\
-		RB_LEFT(parent, field) = elm;				\
-	else								\
-		RB_RIGHT(parent, field) = elm;				\
+	*tmpp = elm;							\
 	name##_RB_INSERT_COLOR(head, elm);				\
-	while (elm != NULL) {						\
-		RB_AUGMENT(elm);					\
-		elm = RB_PARENT(elm, field);				\
-	}								\
+	RB_UPDATE_AUGMENT(elm, field);					\
 	return (NULL);							\
 }
 
@@ -674,7 +785,7 @@ attr struct type *							\
 name##_RB_FIND(struct name *head, struct type *elm)			\
 {									\
 	struct type *tmp = RB_ROOT(head);				\
-	int comp;							\
+	__typeof(cmp(NULL, NULL)) comp;					\
 	while (tmp) {							\
 		comp = cmp(elm, tmp);					\
 		if (comp < 0)						\
@@ -694,7 +805,7 @@ name##_RB_NFIND(struct name *head, struct type *elm)			\
 {									\
 	struct type *tmp = RB_ROOT(head);				\
 	struct type *res = NULL;					\
-	int comp;							\
+	__typeof(cmp(NULL, NULL)) comp;					\
 	while (tmp) {							\
 		comp = cmp(elm, tmp);					\
 		if (comp < 0) {						\
@@ -719,15 +830,10 @@ name##_RB_NEXT(struct type *elm)					\
 		while (RB_LEFT(elm, field))				\
 			elm = RB_LEFT(elm, field);			\
 	} else {							\
-		if (RB_PARENT(elm, field) &&				\
-		    (elm == RB_LEFT(RB_PARENT(elm, field), field)))	\
+		while (RB_PARENT(elm, field) &&				\
+		    (elm == RB_RIGHT(RB_PARENT(elm, field), field)))	\
 			elm = RB_PARENT(elm, field);			\
-		else {							\
-			while (RB_PARENT(elm, field) &&			\
-			    (elm == RB_RIGHT(RB_PARENT(elm, field), field)))\
-				elm = RB_PARENT(elm, field);		\
-			elm = RB_PARENT(elm, field);			\
-		}							\
+		elm = RB_PARENT(elm, field);				\
 	}								\
 	return (elm);							\
 }
@@ -742,15 +848,10 @@ name##_RB_PREV(struct type *elm)					\
 		while (RB_RIGHT(elm, field))				\
 			elm = RB_RIGHT(elm, field);			\
 	} else {							\
-		if (RB_PARENT(elm, field) &&				\
-		    (elm == RB_RIGHT(RB_PARENT(elm, field), field)))	\
+		while (RB_PARENT(elm, field) &&				\
+		    (elm == RB_LEFT(RB_PARENT(elm, field), field)))	\
 			elm = RB_PARENT(elm, field);			\
-		else {							\
-			while (RB_PARENT(elm, field) &&			\
-			    (elm == RB_LEFT(RB_PARENT(elm, field), field)))\
-				elm = RB_PARENT(elm, field);		\
-			elm = RB_PARENT(elm, field);			\
-		}							\
+		elm = RB_PARENT(elm, field);				\
 	}								\
 	return (elm);							\
 }

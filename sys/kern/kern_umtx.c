@@ -55,7 +55,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
-#include <sys/sysent.h>
 #include <sys/systm.h>
 #include <sys/sysproto.h>
 #include <sys/syscallsubr.h>
@@ -63,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/time.h>
 #include <sys/eventhandler.h>
 #include <sys/umtx.h>
+#include <sys/umtxvar.h>
 
 #include <security/mac/mac_framework.h>
 
@@ -88,105 +88,18 @@ __FBSDID("$FreeBSD$");
 	(((w) > (sw)) || ((w) == (sw) && (f) > (sf)))
 #endif
 
-/* Priority inheritance mutex info. */
-struct umtx_pi {
-	/* Owner thread */
-	struct thread		*pi_owner;
-
-	/* Reference count */
-	int			pi_refcount;
-
-	/* List entry to link umtx holding by thread */
-	TAILQ_ENTRY(umtx_pi)	pi_link;
-
-	/* List entry in hash */
-	TAILQ_ENTRY(umtx_pi)	pi_hashlink;
-
-	/* List for waiters */
-	TAILQ_HEAD(,umtx_q)	pi_blocked;
-
-	/* Identify a userland lock object */
-	struct umtx_key		pi_key;
-};
-
-/* A userland synchronous object user. */
-struct umtx_q {
-	/* Linked list for the hash. */
-	TAILQ_ENTRY(umtx_q)	uq_link;
-
-	/* Umtx key. */
-	struct umtx_key		uq_key;
-
-	/* Umtx flags. */
-	int			uq_flags;
-#define UQF_UMTXQ	0x0001
-
-	/* The thread waits on. */
-	struct thread		*uq_thread;
-
-	/*
-	 * Blocked on PI mutex. read can use chain lock
-	 * or umtx_lock, write must have both chain lock and
-	 * umtx_lock being hold.
-	 */
-	struct umtx_pi		*uq_pi_blocked;
-
-	/* On blocked list */
-	TAILQ_ENTRY(umtx_q)	uq_lockq;
-
-	/* Thread contending with us */
-	TAILQ_HEAD(,umtx_pi)	uq_pi_contested;
-
-	/* Inherited priority from PP mutex */
-	u_char			uq_inherited_pri;
-
-	/* Spare queue ready to be reused */
-	struct umtxq_queue	*uq_spare_queue;
-
-	/* The queue we on */
-	struct umtxq_queue	*uq_cur_queue;
-};
-
-TAILQ_HEAD(umtxq_head, umtx_q);
-
-/* Per-key wait-queue */
-struct umtxq_queue {
-	struct umtxq_head	head;
-	struct umtx_key		key;
-	LIST_ENTRY(umtxq_queue)	link;
-	int			length;
-};
-
-LIST_HEAD(umtxq_list, umtxq_queue);
-
-/* Userland lock object's wait-queue chain */
-struct umtxq_chain {
-	/* Lock for this chain. */
-	struct mtx		uc_lock;
-
-	/* List of sleep queues. */
-	struct umtxq_list	uc_queue[2];
-#define UMTX_SHARED_QUEUE	0
-#define UMTX_EXCLUSIVE_QUEUE	1
-
-	LIST_HEAD(, umtxq_queue) uc_spare_queue;
-
-	/* Busy flag */
-	char			uc_busy;
-
-	/* Chain lock waiters */
-	int			uc_waiters;
-
-	/* All PI in the list */
-	TAILQ_HEAD(,umtx_pi)	uc_pi_list;
-
-#ifdef UMTX_PROFILING
-	u_int			length;
-	u_int			max_length;
-#endif
-};
-
 #define	UMTXQ_LOCKED_ASSERT(uc)		mtx_assert(&(uc)->uc_lock, MA_OWNED)
+#ifdef INVARIANTS
+#define	UMTXQ_ASSERT_LOCKED_BUSY(key) do {				\
+	struct umtxq_chain *uc;						\
+									\
+	uc = umtxq_getchain(key);					\
+	mtx_assert(&uc->uc_lock, MA_OWNED);				\
+	KASSERT(uc->uc_busy != 0, ("umtx chain is not busy"));		\
+} while (0)
+#else
+#define	UMTXQ_ASSERT_LOCKED_BUSY(key) do {} while (0)
+#endif
 
 /*
  * Don't propagate time-sharing priority, there is a security reason,
@@ -211,13 +124,6 @@ struct umtxq_chain {
     (((flags) & USYNC_PROCESS_SHARED) == 0 ? THREAD_SHARE : PROCESS_SHARE)
 
 #define BUSY_SPINS		200
-
-struct abs_timeout {
-	int clockid;
-	bool is_abs_real;	/* TIMER_ABSTIME && CLOCK_REALTIME* */
-	struct timespec cur;
-	struct timespec end;
-};
 
 struct umtx_copyops {
 	int	(*copyin_timeout)(const void *uaddr, struct timespec *tsp);
@@ -266,29 +172,20 @@ static SYSCTL_NODE(_debug_umtx, OID_AUTO, chains, CTLFLAG_RD | CTLFLAG_MPSAFE, 0
     "umtx chain stats");
 #endif
 
-static void abs_timeout_update(struct abs_timeout *timo);
+static inline void umtx_abs_timeout_init2(struct umtx_abs_timeout *timo,
+    const struct _umtx_time *umtxtime);
+static int umtx_abs_timeout_gethz(struct umtx_abs_timeout *timo);
+static inline void umtx_abs_timeout_update(struct umtx_abs_timeout *timo);
 
 static void umtx_shm_init(void);
 static void umtxq_sysinit(void *);
 static void umtxq_hash(struct umtx_key *key);
-static struct umtxq_chain *umtxq_getchain(struct umtx_key *key);
-static void umtxq_unlock(struct umtx_key *key);
-static void umtxq_busy(struct umtx_key *key);
-static void umtxq_unbusy(struct umtx_key *key);
-static void umtxq_insert_queue(struct umtx_q *uq, int q);
-static void umtxq_remove_queue(struct umtx_q *uq, int q);
-static int umtxq_sleep(struct umtx_q *uq, const char *wmesg, struct abs_timeout *);
-static int umtxq_count(struct umtx_key *key);
-static struct umtx_pi *umtx_pi_alloc(int);
-static void umtx_pi_free(struct umtx_pi *pi);
 static int do_unlock_pp(struct thread *td, struct umutex *m, uint32_t flags,
     bool rb);
 static void umtx_thread_cleanup(struct thread *td);
 SYSINIT(umtx, SI_SUB_EVENTHANDLER+1, SI_ORDER_MIDDLE, umtxq_sysinit, NULL);
 
 #define umtxq_signal(key, nwake)	umtxq_signal_queue((key), (nwake), UMTX_SHARED_QUEUE)
-#define umtxq_insert(uq)	umtxq_insert_queue((uq), UMTX_SHARED_QUEUE)
-#define umtxq_remove(uq)	umtxq_remove_queue((uq), UMTX_SHARED_QUEUE)
 
 static struct mtx umtx_lock;
 
@@ -489,7 +386,7 @@ umtxq_hash(struct umtx_key *key)
 	key->hash = ((n * GOLDEN_RATIO_PRIME) >> UMTX_SHIFTS) % UMTX_CHAINS;
 }
 
-static inline struct umtxq_chain *
+struct umtxq_chain *
 umtxq_getchain(struct umtx_key *key)
 {
 
@@ -499,35 +396,10 @@ umtxq_getchain(struct umtx_key *key)
 }
 
 /*
- * Lock a chain.
- *
- * The code is a macro so that file/line information is taken from the caller.
- */
-#define umtxq_lock(key) do {		\
-	struct umtx_key *_key = (key);	\
-	struct umtxq_chain *_uc;	\
-					\
-	_uc = umtxq_getchain(_key);	\
-	mtx_lock(&_uc->uc_lock);	\
-} while (0)
-
-/*
- * Unlock a chain.
- */
-static inline void
-umtxq_unlock(struct umtx_key *key)
-{
-	struct umtxq_chain *uc;
-
-	uc = umtxq_getchain(key);
-	mtx_unlock(&uc->uc_lock);
-}
-
-/*
  * Set chain to busy state when following operation
  * may be blocked (kernel mutex can not be used).
  */
-static inline void
+void
 umtxq_busy(struct umtx_key *key)
 {
 	struct umtxq_chain *uc;
@@ -558,7 +430,7 @@ umtxq_busy(struct umtx_key *key)
 /*
  * Unbusy a chain.
  */
-static inline void
+void
 umtxq_unbusy(struct umtx_key *key)
 {
 	struct umtxq_chain *uc;
@@ -571,7 +443,7 @@ umtxq_unbusy(struct umtx_key *key)
 		wakeup_one(uc);
 }
 
-static inline void
+void
 umtxq_unbusy_unlocked(struct umtx_key *key)
 {
 
@@ -596,7 +468,7 @@ umtxq_queue_lookup(struct umtx_key *key, int q)
 	return (NULL);
 }
 
-static inline void
+void
 umtxq_insert_queue(struct umtx_q *uq, int q)
 {
 	struct umtxq_queue *uh;
@@ -630,7 +502,7 @@ umtxq_insert_queue(struct umtx_q *uq, int q)
 	return;
 }
 
-static inline void
+void
 umtxq_remove_queue(struct umtx_q *uq, int q)
 {
 	struct umtxq_chain *uc;
@@ -663,7 +535,7 @@ umtxq_remove_queue(struct umtx_q *uq, int q)
 /*
  * Check if there are multiple waiters
  */
-static int
+int
 umtxq_count(struct umtx_key *key)
 {
 	struct umtxq_queue *uh;
@@ -692,6 +564,32 @@ umtxq_count_pi(struct umtx_key *key, struct umtx_q **first)
 		return (uh->length);
 	}
 	return (0);
+}
+
+/*
+ * Wake up threads waiting on an userland object by a bit mask.
+ */
+int
+umtxq_signal_mask(struct umtx_key *key, int n_wake, u_int bitset)
+{
+	struct umtxq_queue *uh;
+	struct umtx_q *uq, *uq_temp;
+	int ret;
+
+	ret = 0;
+	UMTXQ_LOCKED_ASSERT(umtxq_getchain(key));
+	uh = umtxq_queue_lookup(key, UMTX_SHARED_QUEUE);
+	if (uh == NULL)
+		return (0);
+	TAILQ_FOREACH_SAFE(uq, &uh->head, uq_link, uq_temp) {
+		if ((uq->uq_bitset & bitset) == 0)
+			continue;
+		umtxq_remove_queue(uq, UMTX_SHARED_QUEUE);
+		wakeup_one(uq);
+		if (++ret >= n_wake)
+			break;
+	}
+	return (ret);
 }
 
 /*
@@ -731,6 +629,43 @@ umtxq_signal_thread(struct umtx_q *uq)
 	wakeup(uq);
 }
 
+/*
+ * Wake up a maximum of n_wake threads that are waiting on an userland
+ * object identified by key. The remaining threads are removed from queue
+ * identified by key and added to the queue identified by key2 (requeued).
+ * The n_requeue specifies an upper limit on the number of threads that
+ * are requeued to the second queue.
+ */
+int
+umtxq_requeue(struct umtx_key *key, int n_wake, struct umtx_key *key2,
+    int n_requeue)
+{
+	struct umtxq_queue *uh, *uh2;
+	struct umtx_q *uq, *uq_temp;
+	int ret;
+
+	ret = 0;
+	UMTXQ_LOCKED_ASSERT(umtxq_getchain(key));
+	UMTXQ_LOCKED_ASSERT(umtxq_getchain(key2));
+	uh = umtxq_queue_lookup(key, UMTX_SHARED_QUEUE);
+	uh2 = umtxq_queue_lookup(key2, UMTX_SHARED_QUEUE);
+	if (uh == NULL)
+		return (0);
+	TAILQ_FOREACH_SAFE(uq, &uh->head, uq_link, uq_temp) {
+		if (++ret <= n_wake) {
+			umtxq_remove(uq);
+			wakeup_one(uq);
+		} else {
+			umtxq_remove(uq);
+			uq->uq_key = *key2;
+			umtxq_insert(uq);
+			if (ret - n_wake == n_requeue)
+				break;
+		}
+	}
+	return (ret);
+}
+
 static inline int
 tstohz(const struct timespec *tsp)
 {
@@ -740,15 +675,15 @@ tstohz(const struct timespec *tsp)
 	return tvtohz(&tv);
 }
 
-static void
-abs_timeout_init(struct abs_timeout *timo, int clockid, int absolute,
-	const struct timespec *timeout)
+void
+umtx_abs_timeout_init(struct umtx_abs_timeout *timo, int clockid,
+    int absolute, const struct timespec *timeout)
 {
 
 	timo->clockid = clockid;
 	if (!absolute) {
 		timo->is_abs_real = false;
-		abs_timeout_update(timo);
+		umtx_abs_timeout_update(timo);
 		timespecadd(&timo->cur, timeout, &timo->end);
 	} else {
 		timo->end = *timeout;
@@ -760,28 +695,29 @@ abs_timeout_init(struct abs_timeout *timo, int clockid, int absolute,
 		 * after setting td_rtcgen; otherwise, read it here.
 		 */
 		if (!timo->is_abs_real) {
-			abs_timeout_update(timo);
+			umtx_abs_timeout_update(timo);
 		}
 	}
 }
 
 static void
-abs_timeout_init2(struct abs_timeout *timo, const struct _umtx_time *umtxtime)
+umtx_abs_timeout_init2(struct umtx_abs_timeout *timo,
+    const struct _umtx_time *umtxtime)
 {
 
-	abs_timeout_init(timo, umtxtime->_clockid,
+	umtx_abs_timeout_init(timo, umtxtime->_clockid,
 	    (umtxtime->_flags & UMTX_ABSTIME) != 0, &umtxtime->_timeout);
 }
 
-static inline void
-abs_timeout_update(struct abs_timeout *timo)
+static void
+umtx_abs_timeout_update(struct umtx_abs_timeout *timo)
 {
 
 	kern_clock_gettime(curthread, timo->clockid, &timo->cur);
 }
 
 static int
-abs_timeout_gethz(struct abs_timeout *timo)
+umtx_abs_timeout_gethz(struct umtx_abs_timeout *timo)
 {
 	struct timespec tts;
 
@@ -808,15 +744,16 @@ umtx_unlock_val(uint32_t flags, bool rb)
  * Put thread into sleep state, before sleeping, check if
  * thread was removed from umtx queue.
  */
-static inline int
-umtxq_sleep(struct umtx_q *uq, const char *wmesg, struct abs_timeout *abstime)
+int
+umtxq_sleep(struct umtx_q *uq, const char *wmesg,
+    struct umtx_abs_timeout *abstime)
 {
 	struct umtxq_chain *uc;
 	int error, timo;
 
 	if (abstime != NULL && abstime->is_abs_real) {
 		curthread->td_rtcgen = atomic_load_acq_int(&rtc_generation);
-		abs_timeout_update(abstime);
+		umtx_abs_timeout_update(abstime);
 	}
 
 	uc = umtxq_getchain(&uq->uq_key);
@@ -827,7 +764,7 @@ umtxq_sleep(struct umtx_q *uq, const char *wmesg, struct abs_timeout *abstime)
 			break;
 		}
 		if (abstime != NULL) {
-			timo = abs_timeout_gethz(abstime);
+			timo = umtx_abs_timeout_gethz(abstime);
 			if (timo < 0) {
 				error = ETIMEDOUT;
 				break;
@@ -843,7 +780,7 @@ umtxq_sleep(struct umtx_q *uq, const char *wmesg, struct abs_timeout *abstime)
 			if (abstime->is_abs_real)
 				curthread->td_rtcgen =
 				    atomic_load_acq_int(&rtc_generation);
-			abs_timeout_update(abstime);
+			umtx_abs_timeout_update(abstime);
 		}
 		umtxq_lock(&uq->uq_key);
 	}
@@ -916,7 +853,7 @@ static int
 do_lock_umtx(struct thread *td, struct umtx *umtx, u_long id,
     const struct timespec *timeout)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	u_long owner;
 	u_long old;
@@ -924,7 +861,7 @@ do_lock_umtx(struct thread *td, struct umtx *umtx, u_long id,
 
 	uq = td->td_umtxq;
 	if (timeout != NULL)
-		abs_timeout_init(&timo, CLOCK_REALTIME, 0, timeout);
+		umtx_abs_timeout_init(&timo, CLOCK_REALTIME, 0, timeout);
 
 	/*
 	 * Care must be exercised when dealing with umtx structure. It
@@ -1097,7 +1034,7 @@ static int
 do_lock_umtx32(struct thread *td, uint32_t *m, uint32_t id,
 	const struct timespec *timeout)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	uint32_t owner;
 	uint32_t old;
@@ -1106,7 +1043,7 @@ do_lock_umtx32(struct thread *td, uint32_t *m, uint32_t id,
 	uq = td->td_umtxq;
 
 	if (timeout != NULL)
-		abs_timeout_init(&timo, CLOCK_REALTIME, 0, timeout);
+		umtx_abs_timeout_init(&timo, CLOCK_REALTIME, 0, timeout);
 
 	/*
 	 * Care must be exercised when dealing with umtx structure. It
@@ -1278,7 +1215,7 @@ static int
 do_wait(struct thread *td, void *addr, u_long id,
     struct _umtx_time *timeout, int compat32, int is_private)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	u_long tmp;
 	uint32_t tmp32;
@@ -1290,7 +1227,7 @@ do_wait(struct thread *td, void *addr, u_long id,
 		return (error);
 
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 	umtxq_lock(&uq->uq_key);
 	umtxq_insert(uq);
@@ -1351,7 +1288,7 @@ static int
 do_lock_normal(struct thread *td, struct umutex *m, uint32_t flags,
     struct _umtx_time *timeout, int mode)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	uint32_t owner, old, id;
 	int error, rv;
@@ -1360,7 +1297,7 @@ do_lock_normal(struct thread *td, struct umutex *m, uint32_t flags,
 	uq = td->td_umtxq;
 	error = 0;
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 	/*
 	 * Care must be exercised when dealing with umtx structure. It
@@ -1739,7 +1676,7 @@ do_wake2_umutex(struct thread *td, struct umutex *m, uint32_t flags)
 	return (error);
 }
 
-static inline struct umtx_pi *
+struct umtx_pi *
 umtx_pi_alloc(int flags)
 {
 	struct umtx_pi *pi;
@@ -1750,7 +1687,7 @@ umtx_pi_alloc(int flags)
 	return (pi);
 }
 
-static inline void
+void
 umtx_pi_free(struct umtx_pi *pi)
 {
 	uma_zfree(umtx_pi_zone, pi);
@@ -1959,7 +1896,7 @@ umtx_pi_disown(struct umtx_pi *pi)
 /*
  * Claim ownership of a PI mutex.
  */
-static int
+int
 umtx_pi_claim(struct umtx_pi *pi, struct thread *owner)
 {
 	struct umtx_q *uq;
@@ -2017,9 +1954,9 @@ umtx_pi_adjust(struct thread *td, u_char oldpri)
 /*
  * Sleep on a PI mutex.
  */
-static int
+int
 umtxq_sleep_pi(struct umtx_q *uq, struct umtx_pi *pi, uint32_t owner,
-    const char *wmesg, struct abs_timeout *timo, bool shared)
+    const char *wmesg, struct umtx_abs_timeout *timo, bool shared)
 {
 	struct thread *td, *td1;
 	struct umtx_q *uq1;
@@ -2085,7 +2022,7 @@ umtxq_sleep_pi(struct umtx_q *uq, struct umtx_pi *pi, uint32_t owner,
 /*
  * Add reference count for a PI mutex.
  */
-static void
+void
 umtx_pi_ref(struct umtx_pi *pi)
 {
 
@@ -2097,7 +2034,7 @@ umtx_pi_ref(struct umtx_pi *pi)
  * Decrease reference count for a PI mutex, if the counter
  * is decreased to zero, its memory space is freed.
  */
-static void
+void
 umtx_pi_unref(struct umtx_pi *pi)
 {
 	struct umtxq_chain *uc;
@@ -2120,7 +2057,7 @@ umtx_pi_unref(struct umtx_pi *pi)
 /*
  * Find a PI mutex in hash table.
  */
-static struct umtx_pi *
+struct umtx_pi *
 umtx_pi_lookup(struct umtx_key *key)
 {
 	struct umtxq_chain *uc;
@@ -2140,7 +2077,7 @@ umtx_pi_lookup(struct umtx_key *key)
 /*
  * Insert a PI mutex into hash table.
  */
-static inline void
+void
 umtx_pi_insert(struct umtx_pi *pi)
 {
 	struct umtxq_chain *uc;
@@ -2151,13 +2088,80 @@ umtx_pi_insert(struct umtx_pi *pi)
 }
 
 /*
+ * Drop a PI mutex and wakeup a top waiter.
+ */
+int
+umtx_pi_drop(struct thread *td, struct umtx_key *key, bool rb, int *count)
+{
+	struct umtx_q *uq_first, *uq_first2, *uq_me;
+	struct umtx_pi *pi, *pi2;
+	int pri;
+
+	UMTXQ_ASSERT_LOCKED_BUSY(key);
+	*count = umtxq_count_pi(key, &uq_first);
+	if (uq_first != NULL) {
+		mtx_lock(&umtx_lock);
+		pi = uq_first->uq_pi_blocked;
+		KASSERT(pi != NULL, ("pi == NULL?"));
+		if (pi->pi_owner != td && !(rb && pi->pi_owner == NULL)) {
+			mtx_unlock(&umtx_lock);
+			/* userland messed the mutex */
+			return (EPERM);
+		}
+		uq_me = td->td_umtxq;
+		if (pi->pi_owner == td)
+			umtx_pi_disown(pi);
+		/* get highest priority thread which is still sleeping. */
+		uq_first = TAILQ_FIRST(&pi->pi_blocked);
+		while (uq_first != NULL &&
+		    (uq_first->uq_flags & UQF_UMTXQ) == 0) {
+			uq_first = TAILQ_NEXT(uq_first, uq_lockq);
+		}
+		pri = PRI_MAX;
+		TAILQ_FOREACH(pi2, &uq_me->uq_pi_contested, pi_link) {
+			uq_first2 = TAILQ_FIRST(&pi2->pi_blocked);
+			if (uq_first2 != NULL) {
+				if (pri > UPRI(uq_first2->uq_thread))
+					pri = UPRI(uq_first2->uq_thread);
+			}
+		}
+		thread_lock(td);
+		sched_lend_user_prio(td, pri);
+		thread_unlock(td);
+		mtx_unlock(&umtx_lock);
+		if (uq_first)
+			umtxq_signal_thread(uq_first);
+	} else {
+		pi = umtx_pi_lookup(key);
+		/*
+		 * A umtx_pi can exist if a signal or timeout removed the
+		 * last waiter from the umtxq, but there is still
+		 * a thread in do_lock_pi() holding the umtx_pi.
+		 */
+		if (pi != NULL) {
+			/*
+			 * The umtx_pi can be unowned, such as when a thread
+			 * has just entered do_lock_pi(), allocated the
+			 * umtx_pi, and unlocked the umtxq.
+			 * If the current thread owns it, it must disown it.
+			 */
+			mtx_lock(&umtx_lock);
+			if (pi->pi_owner == td)
+				umtx_pi_disown(pi);
+			mtx_unlock(&umtx_lock);
+		}
+	}
+	return (0);
+}
+
+/*
  * Lock a PI mutex.
  */
 static int
 do_lock_pi(struct thread *td, struct umutex *m, uint32_t flags,
     struct _umtx_time *timeout, int try)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	struct umtx_pi *pi, *new_pi;
 	uint32_t id, old_owner, owner, old;
@@ -2172,7 +2176,7 @@ do_lock_pi(struct thread *td, struct umutex *m, uint32_t flags,
 		return (error);
 
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 	umtxq_lock(&uq->uq_key);
 	pi = umtx_pi_lookup(&uq->uq_key);
@@ -2221,6 +2225,17 @@ do_lock_pi(struct thread *td, struct umutex *m, uint32_t flags,
 		if (owner == UMUTEX_RB_NOTRECOV) {
 			error = ENOTRECOVERABLE;
 			break;
+		}
+
+		/*
+		 * Nobody owns it, but the acquire failed. This can happen
+		 * with ll/sc atomics.
+		 */
+		if (owner == UMUTEX_UNOWNED) {
+			error = thread_check_susp(td, true);
+			if (error != 0)
+				break;
+			continue;
 		}
 
 		/*
@@ -2360,10 +2375,8 @@ static int
 do_unlock_pi(struct thread *td, struct umutex *m, uint32_t flags, bool rb)
 {
 	struct umtx_key key;
-	struct umtx_q *uq_first, *uq_first2, *uq_me;
-	struct umtx_pi *pi, *pi2;
 	uint32_t id, new_owner, old, owner;
-	int count, error, pri;
+	int count, error;
 
 	id = td->td_tid;
 
@@ -2404,61 +2417,13 @@ usrloop:
 
 	umtxq_lock(&key);
 	umtxq_busy(&key);
-	count = umtxq_count_pi(&key, &uq_first);
-	if (uq_first != NULL) {
-		mtx_lock(&umtx_lock);
-		pi = uq_first->uq_pi_blocked;
-		KASSERT(pi != NULL, ("pi == NULL?"));
-		if (pi->pi_owner != td && !(rb && pi->pi_owner == NULL)) {
-			mtx_unlock(&umtx_lock);
-			umtxq_unbusy(&key);
-			umtxq_unlock(&key);
-			umtx_key_release(&key);
-			/* userland messed the mutex */
-			return (EPERM);
-		}
-		uq_me = td->td_umtxq;
-		if (pi->pi_owner == td)
-			umtx_pi_disown(pi);
-		/* get highest priority thread which is still sleeping. */
-		uq_first = TAILQ_FIRST(&pi->pi_blocked);
-		while (uq_first != NULL &&
-		    (uq_first->uq_flags & UQF_UMTXQ) == 0) {
-			uq_first = TAILQ_NEXT(uq_first, uq_lockq);
-		}
-		pri = PRI_MAX;
-		TAILQ_FOREACH(pi2, &uq_me->uq_pi_contested, pi_link) {
-			uq_first2 = TAILQ_FIRST(&pi2->pi_blocked);
-			if (uq_first2 != NULL) {
-				if (pri > UPRI(uq_first2->uq_thread))
-					pri = UPRI(uq_first2->uq_thread);
-			}
-		}
-		thread_lock(td);
-		sched_lend_user_prio(td, pri);
-		thread_unlock(td);
-		mtx_unlock(&umtx_lock);
-		if (uq_first)
-			umtxq_signal_thread(uq_first);
-	} else {
-		pi = umtx_pi_lookup(&key);
-		/*
-		 * A umtx_pi can exist if a signal or timeout removed the
-		 * last waiter from the umtxq, but there is still
-		 * a thread in do_lock_pi() holding the umtx_pi.
-		 */
-		if (pi != NULL) {
-			/*
-			 * The umtx_pi can be unowned, such as when a thread
-			 * has just entered do_lock_pi(), allocated the
-			 * umtx_pi, and unlocked the umtxq.
-			 * If the current thread owns it, it must disown it.
-			 */
-			mtx_lock(&umtx_lock);
-			if (pi->pi_owner == td)
-				umtx_pi_disown(pi);
-			mtx_unlock(&umtx_lock);
-		}
+	error = umtx_pi_drop(td, &key, rb, &count);
+	if (error != 0) {
+		umtxq_unbusy(&key);
+		umtxq_unlock(&key);
+		umtx_key_release(&key);
+		/* userland messed the mutex */
+		return (error);
 	}
 	umtxq_unlock(&key);
 
@@ -2493,7 +2458,7 @@ static int
 do_lock_pp(struct thread *td, struct umutex *m, uint32_t flags,
     struct _umtx_time *timeout, int try)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq, *uq2;
 	struct umtx_pi *pi;
 	uint32_t ceiling;
@@ -2508,7 +2473,7 @@ do_lock_pp(struct thread *td, struct umutex *m, uint32_t flags,
 		return (error);
 
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 	su = (priv_check(td, PRIV_SCHED_RTPRIO) == 0);
 	for (;;) {
@@ -2898,7 +2863,7 @@ static int
 do_cv_wait(struct thread *td, struct ucond *cv, struct umutex *m,
     struct timespec *timeout, u_long wflags)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	uint32_t flags, clockid, hasw;
 	int error;
@@ -2945,8 +2910,8 @@ do_cv_wait(struct thread *td, struct ucond *cv, struct umutex *m,
 	error = do_unlock_umutex(td, m, false);
 
 	if (timeout != NULL)
-		abs_timeout_init(&timo, clockid, (wflags & CVWAIT_ABSTIME) != 0,
-		    timeout);
+		umtx_abs_timeout_init(&timo, clockid,
+		    (wflags & CVWAIT_ABSTIME) != 0, timeout);
 
 	umtxq_lock(&uq->uq_key);
 	if (error == 0) {
@@ -3046,7 +3011,7 @@ static int
 do_rw_rdlock(struct thread *td, struct urwlock *rwlock, long fflag,
     struct _umtx_time *timeout)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	uint32_t flags, wrflags;
 	int32_t state, oldstate;
@@ -3062,7 +3027,7 @@ do_rw_rdlock(struct thread *td, struct urwlock *rwlock, long fflag,
 		return (error);
 
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 	wrflags = URWLOCK_WRITE_OWNER;
 	if (!(fflag & URWLOCK_PREFER_READER) && !(flags & URWLOCK_PREFER_READER))
@@ -3231,7 +3196,7 @@ sleep:
 static int
 do_rw_wrlock(struct thread *td, struct urwlock *rwlock, struct _umtx_time *timeout)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	uint32_t flags;
 	int32_t state, oldstate;
@@ -3248,7 +3213,7 @@ do_rw_wrlock(struct thread *td, struct urwlock *rwlock, struct _umtx_time *timeo
 		return (error);
 
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 	blocked_readers = 0;
 	for (;;) {
@@ -3526,7 +3491,7 @@ out:
 static int
 do_sem_wait(struct thread *td, struct _usem *sem, struct _umtx_time *timeout)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	uint32_t flags, count, count1;
 	int error, rv, rv1;
@@ -3540,7 +3505,7 @@ do_sem_wait(struct thread *td, struct _usem *sem, struct _umtx_time *timeout)
 		return (error);
 
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 again:
 	umtxq_lock(&uq->uq_key);
@@ -3548,24 +3513,28 @@ again:
 	umtxq_insert(uq);
 	umtxq_unlock(&uq->uq_key);
 	rv = casueword32(&sem->_has_waiters, 0, &count1, 1);
-	if (rv == 0)
+	if (rv != -1)
 		rv1 = fueword32(&sem->_count, &count);
-	if (rv == -1 || (rv == 0 && (rv1 == -1 || count != 0)) ||
-	    (rv == 1 && count1 == 0)) {
+	if (rv == -1 || rv1 == -1 || count != 0 || (rv == 1 && count1 == 0)) {
+		if (rv == 0)
+			suword32(&sem->_has_waiters, 0);
 		umtxq_lock(&uq->uq_key);
 		umtxq_unbusy(&uq->uq_key);
 		umtxq_remove(uq);
 		umtxq_unlock(&uq->uq_key);
-		if (rv == 1) {
-			rv = thread_check_susp(td, true);
-			if (rv == 0)
-				goto again;
-			error = rv;
+		if (rv == -1 || rv1 == -1) {
+			error = EFAULT;
 			goto out;
 		}
+		if (count != 0) {
+			error = 0;
+			goto out;
+		}
+		MPASS(rv == 1 && count1 == 0);
+		rv = thread_check_susp(td, true);
 		if (rv == 0)
-			rv = rv1;
-		error = rv == -1 ? EFAULT : 0;
+			goto again;
+		error = rv;
 		goto out;
 	}
 	umtxq_lock(&uq->uq_key);
@@ -3631,7 +3600,7 @@ do_sem_wake(struct thread *td, struct _usem *sem)
 static int
 do_sem2_wait(struct thread *td, struct _usem2 *sem, struct _umtx_time *timeout)
 {
-	struct abs_timeout timo;
+	struct umtx_abs_timeout timo;
 	struct umtx_q *uq;
 	uint32_t count, flags;
 	int error, rv;
@@ -3639,7 +3608,7 @@ do_sem2_wait(struct thread *td, struct _usem2 *sem, struct _umtx_time *timeout)
 	uq = td->td_umtxq;
 	flags = fuword32(&sem->_flags);
 	if (timeout != NULL)
-		abs_timeout_init2(&timo, timeout);
+		umtx_abs_timeout_init2(&timo, timeout);
 
 again:
 	error = umtx_key_get(sem, TYPE_SEM, GET_SHARE(flags), &uq->uq_key);
@@ -3698,7 +3667,7 @@ again:
 			if (error == ERESTART)
 				error = EINTR;
 			if (error == EINTR) {
-				abs_timeout_update(&timo);
+				umtx_abs_timeout_update(&timo);
 				timespecsub(&timo.end, &timo.cur,
 				    &timeout->_timeout);
 			}
@@ -3782,9 +3751,7 @@ umtx_copyin_timeout(const void *uaddr, struct timespec *tsp)
 
 	error = copyin(uaddr, tsp, sizeof(*tsp));
 	if (error == 0) {
-		if (tsp->tv_sec < 0 ||
-		    tsp->tv_nsec >= 1000000000 ||
-		    tsp->tv_nsec < 0)
+		if (!timespecvalid_interval(tsp))
 			error = EINVAL;
 	}
 	return (error);
@@ -3803,8 +3770,7 @@ umtx_copyin_umtx_time(const void *uaddr, size_t size, struct _umtx_time *tp)
 		error = copyin(uaddr, tp, sizeof(*tp));
 	if (error != 0)
 		return (error);
-	if (tp->_timeout.tv_sec < 0 ||
-	    tp->_timeout.tv_nsec >= 1000000000 || tp->_timeout.tv_nsec < 0)
+	if (!timespecvalid_interval(&tp->_timeout))
 		return (EINVAL);
 	return (0);
 }
@@ -4370,7 +4336,7 @@ umtx_shm_unref_reg(struct umtx_shm_reg *reg, bool force)
 	if (force) {
 		object = reg->ushm_obj->shm_object;
 		VM_OBJECT_WLOCK(object);
-		object->flags |= OBJ_UMTXDEAD;
+		vm_object_set_flag(object, OBJ_UMTXDEAD);
 		VM_OBJECT_WUNLOCK(object);
 	}
 	mtx_lock(&umtx_shm_lock);
@@ -4650,9 +4616,7 @@ umtx_copyin_timeouti386(const void *uaddr, struct timespec *tsp)
 
 	error = copyin(uaddr, &ts32, sizeof(ts32));
 	if (error == 0) {
-		if (ts32.tv_sec < 0 ||
-		    ts32.tv_nsec >= 1000000000 ||
-		    ts32.tv_nsec < 0)
+		if (!timespecvalid_interval(&ts32))
 			error = EINVAL;
 		else {
 			CP(ts32, *tsp, tv_sec);
@@ -4676,8 +4640,7 @@ umtx_copyin_umtx_timei386(const void *uaddr, size_t size, struct _umtx_time *tp)
 		error = copyin(uaddr, &t32, sizeof(t32));
 	if (error != 0)
 		return (error);
-	if (t32._timeout.tv_sec < 0 ||
-	    t32._timeout.tv_nsec >= 1000000000 || t32._timeout.tv_nsec < 0)
+	if (!timespecvalid_interval(&t32._timeout))
 		return (EINVAL);
 	TS_CP(t32, *tp, _timeout);
 	CP(t32, *tp, _flags);
@@ -4714,9 +4677,7 @@ umtx_copyin_timeoutx32(const void *uaddr, struct timespec *tsp)
 
 	error = copyin(uaddr, &ts32, sizeof(ts32));
 	if (error == 0) {
-		if (ts32.tv_sec < 0 ||
-		    ts32.tv_nsec >= 1000000000 ||
-		    ts32.tv_nsec < 0)
+		if (!timespecvalid_interval(&ts32))
 			error = EINVAL;
 		else {
 			CP(ts32, *tsp, tv_sec);
@@ -4740,8 +4701,7 @@ umtx_copyin_umtx_timex32(const void *uaddr, size_t size, struct _umtx_time *tp)
 		error = copyin(uaddr, &t32, sizeof(t32));
 	if (error != 0)
 		return (error);
-	if (t32._timeout.tv_sec < 0 ||
-	    t32._timeout.tv_nsec >= 1000000000 || t32._timeout.tv_nsec < 0)
+	if (!timespecvalid_interval(&t32._timeout))
 		return (EINVAL);
 	TS_CP(t32, *tp, _timeout);
 	CP(t32, *tp, _flags);

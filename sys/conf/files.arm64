@@ -10,10 +10,6 @@ kern/subr_devmap.c				standard
 kern/subr_intr.c				optional intrng
 kern/subr_physmem.c				standard
 libkern/bcmp.c					standard
-libkern/memcmp.c				standard	\
-	compile-with "${NORMAL_C:N-fsanitize*}"
-libkern/memset.c				standard	\
-	compile-with "${NORMAL_C:N-fsanitize*}"
 libkern/strlen.c		standard
 libkern/arm64/crc32c_armv8.S			standard
 
@@ -60,8 +56,9 @@ arm64/arm64/locore.S				standard no-obj
 arm64/arm64/machdep.c				standard
 arm64/arm64/machdep_boot.c			standard
 arm64/arm64/mem.c				standard
+arm64/arm64/memcmp.S				standard
 arm64/arm64/memcpy.S				standard
-arm64/arm64/memmove.S				standard
+arm64/arm64/memset.S				standard
 arm64/arm64/minidump_machdep.c			standard
 arm64/arm64/mp_machdep.c			optional smp
 arm64/arm64/nexus.c				standard
@@ -70,6 +67,7 @@ arm64/arm64/pmap.c				standard
 arm64/arm64/ptrace_machdep.c			standard
 arm64/arm64/sigtramp.S				standard
 arm64/arm64/stack_machdep.c			optional ddb | stack
+arm64/arm64/support_ifunc.c			standard
 arm64/arm64/support.S				standard
 arm64/arm64/swtch.S				standard
 arm64/arm64/sys_machdep.c			standard
@@ -116,12 +114,12 @@ armv8_crypto_wrap.o				optional armv8crypto	\
 	clean		"armv8_crypto_wrap.o"
 aesv8-armx.o					optional armv8crypto	\
 	dependency	"$S/crypto/openssl/aarch64/aesv8-armx.S"	\
-	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ -I$S/crypto/openssl/crypto ${WERROR} ${NO_WCAST_QUAL} ${PROF} -march=armv8-a+crypto ${.IMPSRC}" \
+	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ ${WERROR} ${NO_WCAST_QUAL} ${PROF} -march=armv8-a+crypto ${.IMPSRC}" \
 	no-implicit-rule						\
 	clean		"aesv8-armx.o"
 ghashv8-armx.o					optional armv8crypto	\
 	dependency	"$S/crypto/openssl/aarch64/ghashv8-armx.S"	\
-	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ -I$S/crypto/openssl/crypto ${WERROR} ${NO_WCAST_QUAL} ${PROF} -march=armv8-a+crypto ${.IMPSRC}" \
+	compile-with	"${CC} -c ${CFLAGS:C/^-O2$/-O3/:N-nostdinc:N-mgeneral-regs-only} -I$S/crypto/armv8/ ${WERROR} ${NO_WCAST_QUAL} ${PROF} -march=armv8-a+crypto ${.IMPSRC}" \
 	no-implicit-rule						\
 	clean		"ghashv8-armx.o"
 
@@ -272,7 +270,7 @@ dev/uart/uart_dev_mu.c				optional uart uart_mu
 dev/uart/uart_dev_pl011.c			optional uart pl011
 
 dev/usb/controller/dwc_otg_hisi.c		optional dwcotg fdt soc_hisi_hi6220
-dev/usb/controller/dwc3.c			optional fdt dwc3
+dev/usb/controller/dwc3.c			optional xhci acpi dwc3 | xhci fdt dwc3
 dev/usb/controller/ehci_mv.c			optional ehci_mv fdt
 dev/usb/controller/generic_ehci.c		optional ehci
 dev/usb/controller/generic_ehci_acpi.c		optional ehci acpi
@@ -280,7 +278,7 @@ dev/usb/controller/generic_ehci_fdt.c		optional ehci fdt
 dev/usb/controller/generic_ohci.c		optional ohci fdt
 dev/usb/controller/generic_usb_if.m		optional ohci fdt
 dev/usb/controller/musb_otg_allwinner.c		optional musb fdt soc_allwinner_a64
-dev/usb/controller/usb_nop_xceiv.c		optional fdt ext_resources
+dev/usb/controller/usb_nop_xceiv.c		optional fdt
 dev/usb/controller/generic_xhci.c		optional xhci
 dev/usb/controller/generic_xhci_acpi.c		optional xhci acpi
 dev/usb/controller/generic_xhci_fdt.c		optional xhci fdt
@@ -316,13 +314,13 @@ arm/allwinner/aw_rsb.c				optional aw_rsb fdt
 arm/allwinner/aw_rtc.c				optional aw_rtc fdt
 arm/allwinner/aw_sid.c				optional aw_sid nvmem fdt
 arm/allwinner/aw_spi.c				optional aw_spi fdt
-arm/allwinner/aw_syscon.c			optional aw_syscon ext_resources syscon fdt
+arm/allwinner/aw_syscon.c			optional aw_syscon syscon fdt
 arm/allwinner/aw_thermal.c			optional aw_thermal nvmem fdt
 arm/allwinner/aw_usbphy.c			optional ehci aw_usbphy fdt
 arm/allwinner/aw_usb3phy.c			optional xhci aw_usbphy fdt
 arm/allwinner/aw_wdog.c				optional aw_wdog fdt
 arm/allwinner/axp81x.c				optional axp81x fdt
-arm/allwinner/if_awg.c				optional awg ext_resources syscon aw_sid nvmem fdt
+arm/allwinner/if_awg.c				optional awg syscon aw_sid nvmem fdt
 
 # Allwinner clock driver
 arm/allwinner/clkng/aw_ccung.c			optional aw_ccu fdt
@@ -506,6 +504,7 @@ arm64/qoriq/qoriq_dw_pci.c			optional pci fdt SOC_NXP_LS
 arm64/qoriq/qoriq_therm.c			optional pci fdt SOC_NXP_LS
 arm64/qoriq/qoriq_therm_if.m			optional pci fdt SOC_NXP_LS
 arm64/qoriq/clk/ls1046a_clkgen.c		optional clk SOC_NXP_LS
+arm64/qoriq/clk/ls1088a_clkgen.c		optional clk SOC_NXP_LS
 arm64/qoriq/clk/lx2160a_clkgen.c		optional clk SOC_NXP_LS
 arm64/qoriq/clk/qoriq_clk_pll.c			optional clk SOC_NXP_LS
 arm64/qoriq/clk/qoriq_clkgen.c			optional clk SOC_NXP_LS

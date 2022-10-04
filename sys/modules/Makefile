@@ -222,19 +222,19 @@ SUBDIR=	\
 	linuxkpi_wlan \
 	${_lio} \
 	lpt \
-	mac_biba \
-	mac_bsdextended \
-	mac_ifoff \
-	mac_lomac \
-	mac_mls \
-	mac_none \
-	mac_ntpd \
-	mac_partition \
-	mac_portacl \
-	mac_priority \
-	mac_seeotheruids \
-	mac_stub \
-	mac_test \
+	${_mac_biba} \
+	${_mac_bsdextended} \
+	${_mac_ifoff} \
+	${_mac_lomac} \
+	${_mac_mls} \
+	${_mac_none} \
+	${_mac_ntpd} \
+	${_mac_partition} \
+	${_mac_portacl} \
+	${_mac_priority} \
+	${_mac_seeotheruids} \
+	${_mac_stub} \
+	${_mac_test} \
 	${_malo} \
 	md \
 	mdio \
@@ -328,6 +328,8 @@ SUBDIR=	\
 	rl \
 	${_rockchip} \
 	rtsx \
+	${_rtw88} \
+	${_rtw88fw} \
 	rtwn \
 	rtwn_pci \
 	rtwn_usb \
@@ -542,7 +544,29 @@ _mlx4ib=	mlx4ib
 _mlx5ib=	mlx5ib
 .endif
 _ossl=		ossl
+_rtw88=		rtw88
+.if ${MK_SOURCELESS_UCODE} != "no"
+_rtw88fw=	rtw88fw
+.endif
 _vmware=	vmware
+.endif
+
+# MAC framework
+.if ${KERN_OPTS:MMAC} || defined(ALL_MODULES)
+_mac_biba=	mac_biba
+_mac_bsdextended= mac_bsdextended
+_mac_ifoff=	mac_ifoff
+_mac_lomac=	mac_lomac
+_mac_mls=	mac_mls
+_mac_none=	mac_none
+_mac_ntpd=	mac_ntpd
+_mac_partition=	mac_partition
+_mac_pimd=	mac_pimd
+_mac_portacl=	mac_portacl
+_mac_priority=	mac_priority
+_mac_seeotheruids= mac_seeotheruids
+_mac_stub=	mac_stub
+_mac_test=	mac_test
 .endif
 
 .if ${MK_NETGRAPH} != "no" || defined(ALL_MODULES)

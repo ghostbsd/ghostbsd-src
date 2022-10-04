@@ -62,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <ddb/ddb.h>
 
 #include <vm/vm.h>
+#include <vm/vm_extern.h>
 #include <vm/vm_param.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_object.h>
@@ -712,6 +713,18 @@ vm_phys_enq_range(vm_page_t m, u_int npages, struct vm_freelist *fl, int tail)
 }
 
 /*
+ * Set the pool for a contiguous, power of two-sized set of physical pages. 
+ */
+static void
+vm_phys_set_pool(int pool, vm_page_t m, int order)
+{
+	vm_page_t m_tmp;
+
+	for (m_tmp = m; m_tmp < &m[1 << order]; m_tmp++)
+		m_tmp->pool = pool;
+}
+
+/*
  * Tries to allocate the specified number of pages from the specified pool
  * within the specified domain.  Returns the actual number of allocated pages
  * and a pointer to each page through the array ma[].
@@ -1274,18 +1287,6 @@ vm_phys_scan_contig(int domain, u_long npages, vm_paddr_t low, vm_paddr_t high,
 }
 
 /*
- * Set the pool for a contiguous, power of two-sized set of physical pages. 
- */
-void
-vm_phys_set_pool(int pool, vm_page_t m, int order)
-{
-	vm_page_t m_tmp;
-
-	for (m_tmp = m; m_tmp < &m[1 << order]; m_tmp++)
-		m_tmp->pool = pool;
-}
-
-/*
  * Search for the given physical page "m" in the free lists.  If the search
  * succeeds, remove "m" from the free lists and return TRUE.  Otherwise, return
  * FALSE, indicating that "m" is not in the free lists.
@@ -1466,8 +1467,7 @@ vm_phys_alloc_seg_contig(struct vm_phys_seg *seg, u_long npages,
 				pa = VM_PAGE_TO_PHYS(m_ret);
 				pa_end = pa + size;
 				if (pa >= low && pa_end <= high &&
-				    (pa & (alignment - 1)) == 0 &&
-				    rounddown2(pa ^ (pa_end - 1), boundary) == 0)
+				    vm_addr_ok(pa, size, alignment, boundary))
 					goto done;
 			}
 		}

@@ -183,19 +183,19 @@ struct xctrl_softc {
 
 /*------------------------------ Event Handlers ------------------------------*/
 static void
-xctrl_poweroff()
+xctrl_poweroff(void)
 {
 	shutdown_nice(RB_POWEROFF|RB_HALT);
 }
 
 static void
-xctrl_reboot()
+xctrl_reboot(void)
 {
 	shutdown_nice(0);
 }
 
 static void
-xctrl_suspend()
+xctrl_suspend(void)
 {
 #ifdef SMP
 	cpuset_t cpu_suspend_map;
@@ -223,12 +223,11 @@ xctrl_suspend()
 	KASSERT((PCPU_GET(cpuid) == 0), ("Not running on CPU#0"));
 
 	/*
-	 * Be sure to hold Giant across DEVICE_SUSPEND/RESUME since non-MPSAFE
-	 * drivers need this.
+	 * Be sure to hold Giant across DEVICE_SUSPEND/RESUME.
 	 */
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	if (DEVICE_SUSPEND(root_bus) != 0) {
-		mtx_unlock(&Giant);
+		bus_topo_unlock();
 		printf("%s: device_suspend failed\n", __func__);
 		return;
 	}
@@ -299,7 +298,7 @@ xctrl_suspend()
 	 * similar.
 	 */
 	DEVICE_RESUME(root_bus);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 
 	/*
 	 * Warm up timecounter again and reset system clock.
@@ -330,7 +329,7 @@ xctrl_suspend()
 }
 
 static void
-xctrl_crash()
+xctrl_crash(void)
 {
 	panic("Xen directed crash");
 }

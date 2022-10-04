@@ -81,6 +81,8 @@ __FBSDID("$FreeBSD$");
 
 #include "pic_if.h"
 
+#define	MP_BOOTSTACK_SIZE	(kstack_pages * PAGE_SIZE)
+
 #define	MP_QUIRK_CPULIST	0x01	/* The list of cpus may be wrong, */
 					/* don't panic if one fails to start */
 static uint32_t mp_quirks;
@@ -152,7 +154,7 @@ static bool
 is_boot_cpu(uint64_t target_cpu)
 {
 
-	return (cpuid_to_pcpu[0]->pc_mpidr == (target_cpu & CPU_AFF_MASK));
+	return (PCPU_GET_MPIDR(cpuid_to_pcpu[0]) == (target_cpu & CPU_AFF_MASK));
 }
 
 static void
@@ -182,7 +184,7 @@ release_aps(void *dummy __unused)
 
 	started = 0;
 	for (i = 0; i < 2000; i++) {
-		if (smp_started) {
+		if (atomic_load_acq_int(&smp_started) != 0) {
 			printf("done\n");
 			return;
 		}
@@ -206,7 +208,7 @@ init_secondary(uint64_t cpu)
 {
 	struct pcpu *pcpup;
 	pmap_t pmap0;
-	u_int mpidr;
+	uint64_t mpidr;
 
 	/*
 	 * Verify that the value passed in 'cpu' argument (aka context_id) is
@@ -215,10 +217,10 @@ init_secondary(uint64_t cpu)
 	 */
 	mpidr = READ_SPECIALREG(mpidr_el1) & CPU_AFF_MASK;
 	if (cpu >= MAXCPU || cpuid_to_pcpu[cpu] == NULL ||
-	    cpuid_to_pcpu[cpu]->pc_mpidr != mpidr) {
+	    PCPU_GET_MPIDR(cpuid_to_pcpu[cpu]) != mpidr) {
 		for (cpu = 0; cpu < mp_maxid; cpu++)
 			if (cpuid_to_pcpu[cpu] != NULL &&
-			    cpuid_to_pcpu[cpu]->pc_mpidr == mpidr)
+			    PCPU_GET_MPIDR(cpuid_to_pcpu[cpu]) == mpidr)
 				break;
 		if ( cpu >= MAXCPU)
 			panic("MPIDR for this CPU is not in pcpu table");
@@ -287,11 +289,6 @@ init_secondary(uint64_t cpu)
 
 	kcsan_cpu_init(cpu);
 
-	/*
-	 * Assert that smp_after_idle_runnable condition is reasonable.
-	 */
-	MPASS(PCPU_GET(curpcb) == NULL);
-
 	/* Enter the scheduler */
 	sched_throw(NULL);
 
@@ -302,16 +299,25 @@ init_secondary(uint64_t cpu)
 static void
 smp_after_idle_runnable(void *arg __unused)
 {
-	struct pcpu *pc;
 	int cpu;
 
+	if (mp_ncpus == 1)
+		return;
+
+	KASSERT(smp_started != 0, ("%s: SMP not started yet", __func__));
+
+	/*
+	 * Wait for all APs to handle an interrupt.  After that, we know that
+	 * the APs have entered the scheduler at least once, so the boot stacks
+	 * are safe to free.
+	 */
+	smp_rendezvous(smp_no_rendezvous_barrier, NULL,
+	    smp_no_rendezvous_barrier, NULL);
+
 	for (cpu = 1; cpu < mp_ncpus; cpu++) {
-		if (bootstacks[cpu] != NULL) {
-			pc = pcpu_find(cpu);
-			while (atomic_load_ptr(&pc->pc_curpcb) == NULL)
-				cpu_spinwait();
-			kmem_free((vm_offset_t)bootstacks[cpu], PAGE_SIZE);
-		}
+		if (bootstacks[cpu] != NULL)
+			kmem_free((vm_offset_t)bootstacks[cpu],
+			    MP_BOOTSTACK_SIZE);
 	}
 }
 SYSINIT(smp_after_idle_runnable, SI_SUB_SMP, SI_ORDER_ANY,
@@ -489,6 +495,8 @@ static bool
 start_cpu(u_int cpuid, uint64_t target_cpu, int domain)
 {
 	struct pcpu *pcpup;
+	vm_offset_t pcpu_mem;
+	vm_size_t size;
 	vm_paddr_t pa;
 	int err, naps;
 
@@ -502,20 +510,24 @@ start_cpu(u_int cpuid, uint64_t target_cpu, int domain)
 
 	KASSERT(cpuid < MAXCPU, ("Too many CPUs"));
 
-	pcpup = (void *)kmem_malloc_domainset(DOMAINSET_PREF(domain),
-	    sizeof(*pcpup), M_WAITOK | M_ZERO);
-	pcpu_init(pcpup, cpuid, sizeof(struct pcpu));
-	pcpup->pc_mpidr = target_cpu & CPU_AFF_MASK;
+	size = round_page(sizeof(*pcpup) + DPCPU_SIZE);
+	pcpu_mem = kmem_malloc_domainset(DOMAINSET_PREF(domain), size,
+	    M_WAITOK | M_ZERO);
+	pmap_disable_promotion(pcpu_mem, size);
 
-	dpcpu[cpuid - 1] = (void *)kmem_malloc_domainset(
-	    DOMAINSET_PREF(domain), DPCPU_SIZE, M_WAITOK | M_ZERO);
+	pcpup = (struct pcpu *)pcpu_mem;
+	pcpu_init(pcpup, cpuid, sizeof(struct pcpu));
+	pcpup->pc_mpidr_low = target_cpu & CPU_AFF_MASK;
+	pcpup->pc_mpidr_high = (target_cpu & CPU_AFF_MASK) >> 32;
+
+	dpcpu[cpuid - 1] = (void *)(pcpup + 1);
 	dpcpu_init(dpcpu[cpuid - 1], cpuid);
 
 	bootstacks[cpuid] = (void *)kmem_malloc_domainset(
-	    DOMAINSET_PREF(domain), PAGE_SIZE, M_WAITOK | M_ZERO);
+	    DOMAINSET_PREF(domain), MP_BOOTSTACK_SIZE, M_WAITOK | M_ZERO);
 
 	naps = atomic_load_int(&aps_started);
-	bootstack = (char *)bootstacks[cpuid] + PAGE_SIZE;
+	bootstack = (char *)bootstacks[cpuid] + MP_BOOTSTACK_SIZE;
 
 	printf("Starting CPU %u (%lx)\n", cpuid, target_cpu);
 	pa = pmap_extract(kernel_pmap, (vm_offset_t)mpentry);
@@ -532,9 +544,9 @@ start_cpu(u_int cpuid, uint64_t target_cpu, int domain)
 		    cpuid, target_cpu, err));
 
 		pcpu_destroy(pcpup);
-		kmem_free((vm_offset_t)dpcpu[cpuid - 1], DPCPU_SIZE);
 		dpcpu[cpuid - 1] = NULL;
-		kmem_free((vm_offset_t)bootstacks[cpuid], PAGE_SIZE);
+		kmem_free((vm_offset_t)bootstacks[cpuid], MP_BOOTSTACK_SIZE);
+		kmem_free(pcpu_mem, size);
 		bootstacks[cpuid] = NULL;
 		mp_ncpus--;
 		return (false);
@@ -677,11 +689,15 @@ cpu_init_fdt(void)
 void
 cpu_mp_start(void)
 {
+	uint64_t mpidr;
+
 	mtx_init(&ap_boot_mtx, "ap boot", NULL, MTX_SPIN);
 
 	/* CPU 0 is always boot CPU. */
 	CPU_SET(0, &all_cpus);
-	cpuid_to_pcpu[0]->pc_mpidr = READ_SPECIALREG(mpidr_el1) & CPU_AFF_MASK;
+	mpidr = READ_SPECIALREG(mpidr_el1) & CPU_AFF_MASK;
+	cpuid_to_pcpu[0]->pc_mpidr_low = mpidr;
+	cpuid_to_pcpu[0]->pc_mpidr_high = mpidr >> 32;
 
 	switch(arm64_bus_method) {
 #ifdef DEV_ACPI

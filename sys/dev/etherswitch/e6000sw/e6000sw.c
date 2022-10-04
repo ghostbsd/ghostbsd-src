@@ -915,7 +915,7 @@ e6000sw_init_vlan(struct e6000sw_softc *sc)
 		ret &= ~(PORT_CONTROL_EGRESS | PORT_CONTROL_FRAME);
 		e6000sw_writereg(sc, REG_PORT(sc, port), PORT_CONTROL, ret);
 
-		/* Set the the 802.1q mode. */
+		/* Set the 802.1q mode. */
 		ret = e6000sw_readreg(sc, REG_PORT(sc, port), PORT_CONTROL2);
 		ret &= ~PORT_CONTROL2_DOT1Q;
 		if (sc->vlan_mode == ETHERSWITCH_VLAN_DOT1Q)
@@ -1031,7 +1031,7 @@ e6000sw_writereg_wrapper(device_t dev, int addr_reg, int val)
 		device_printf(dev, "Wrong register address.\n");
 		return (EINVAL);
 	}
-	e6000sw_writereg(device_get_softc(dev), addr_reg / 5,
+	e6000sw_writereg(device_get_softc(dev), addr_reg / 32,
 	    addr_reg % 32, val);
 
 	return (0);
@@ -1535,9 +1535,8 @@ e6000sw_setup(device_t dev, e6000sw_softc_t *sc)
 static void
 e6000sw_set_atustat(device_t dev, e6000sw_softc_t *sc, int bin, int flag)
 {
-	uint16_t ret;
 
-	ret = e6000sw_readreg(sc, REG_GLOBAL2, ATU_STATS);
+	e6000sw_readreg(sc, REG_GLOBAL2, ATU_STATS);
 	e6000sw_writereg(sc, REG_GLOBAL2, ATU_STATS, (bin << ATU_STATS_BIN ) |
 	    (flag << ATU_STATS_FLAG));
 }

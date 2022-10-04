@@ -35,7 +35,7 @@
     ..
     lib
         clang
-            13.0.0
+            14.0.5
                 include
                     cuda_wrappers
                     ..
@@ -55,6 +55,8 @@
                 lib
                     freebsd
                     ..
+                ..
+                share
                 ..
             ..
         ..
@@ -1274,8 +1276,6 @@
             Mexico
             ..
             Pacific
-            ..
-            SystemV
             ..
             US
             ..

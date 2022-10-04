@@ -146,9 +146,9 @@ typedef struct spa_config_lock {
 	kmutex_t	scl_lock;
 	kthread_t	*scl_writer;
 	int		scl_write_wanted;
+	int		scl_count;
 	kcondvar_t	scl_cv;
-	zfs_refcount_t	scl_count;
-} spa_config_lock_t;
+} ____cacheline_aligned spa_config_lock_t;
 
 typedef struct spa_config_dirent {
 	list_node_t	scd_link;
@@ -370,6 +370,7 @@ struct spa {
 	boolean_t	spa_is_root;		/* pool is root */
 	int		spa_minref;		/* num refs when first opened */
 	spa_mode_t	spa_mode;		/* SPA_MODE_{READ|WRITE} */
+	boolean_t	spa_read_spacemaps;	/* spacemaps available if ro */
 	spa_log_state_t spa_log_state;		/* log state */
 	uint64_t	spa_autoexpand;		/* lun expansion on/off */
 	ddt_t		*spa_ddt[ZIO_CHECKSUM_FUNCTIONS]; /* in-core DDTs */

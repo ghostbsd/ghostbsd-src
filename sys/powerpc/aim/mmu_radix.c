@@ -25,6 +25,8 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "opt_platform.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -84,6 +86,9 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/mmuvar.h>
 
+/* For pseries bit. */
+#include <powerpc/pseries/phyp-hvcall.h>
+
 #ifdef INVARIANTS
 #include <vm/uma_dbg.h>
 #endif
@@ -93,6 +98,7 @@ __FBSDID("$FreeBSD$");
 #define PPC_BITLSHIFT_VAL(val, bit) ((val) << PPC_BITLSHIFT(bit))
 
 #include "opt_ddb.h"
+
 #ifdef DDB
 static void pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va);
 #endif
@@ -650,10 +656,10 @@ extern void bs_remap_earlyboot(void);
 #define PARTTAB_HR		(1UL << 63) /* host uses radix */
 #define PARTTAB_GR		(1UL << 63) /* guest uses radix must match host */
 
-/* TLB flush actions. Used as argument to tlbiel_all() */
+/* TLB flush actions. Used as argument to tlbiel_flush() */
 enum {
-	TLB_INVAL_SCOPE_LPID = 0,	/* invalidate TLBs for current LPID */
-	TLB_INVAL_SCOPE_GLOBAL = 1,	/* invalidate all TLBs */
+	TLB_INVAL_SCOPE_LPID = 2,	/* invalidate TLBs for current LPID */
+	TLB_INVAL_SCOPE_GLOBAL = 3,	/* invalidate all TLBs */
 };
 
 #define	NPV_LIST_LOCKS	MAXCPU
@@ -751,9 +757,11 @@ tlbiel_flush_isa3(uint32_t num_sets, uint32_t is)
 	 * and partition table entries. Then flush the remaining sets of the
 	 * TLB.
 	 */
-	tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 0);
-	for (set = 1; set < num_sets; set++)
-		tlbiel_radix_set_isa300(set, is, 0, RIC_FLUSH_TLB, 0);
+	if (is == TLB_INVAL_SCOPE_GLOBAL) {
+		tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 0);
+		for (set = 1; set < num_sets; set++)
+			tlbiel_radix_set_isa300(set, is, 0, RIC_FLUSH_TLB, 0);
+	}
 
 	/* Do the same for process scoped entries. */
 	tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 1);
@@ -766,21 +774,20 @@ tlbiel_flush_isa3(uint32_t num_sets, uint32_t is)
 static void
 mmu_radix_tlbiel_flush(int scope)
 {
-	int is;
-
 	MPASS(scope == TLB_INVAL_SCOPE_LPID ||
 		  scope == TLB_INVAL_SCOPE_GLOBAL);
-	is = scope + 2;
 
-	tlbiel_flush_isa3(POWER9_TLB_SETS_RADIX, is);
+	tlbiel_flush_isa3(POWER9_TLB_SETS_RADIX, scope);
 	__asm __volatile(PPC_INVALIDATE_ERAT "; isync" : : :"memory");
 }
 
 static void
-mmu_radix_tlbie_all()
+mmu_radix_tlbie_all(void)
 {
-	/* TODO: LPID invalidate */
-	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	if (powernv_enabled)
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	else
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_LPID);
 }
 
 static void
@@ -2021,11 +2028,14 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	 */
 	if (isa3_pid_bits == 0)
 		isa3_pid_bits = 20;
-	parttab_phys = moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
-	validate_addr(parttab_phys, PARTTAB_SIZE);
-	for (int i = 0; i < PARTTAB_SIZE/PAGE_SIZE; i++)
-		pagezero(PHYS_TO_DMAP(parttab_phys + i * PAGE_SIZE));
+	if (powernv_enabled) {
+		parttab_phys =
+		    moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
+		validate_addr(parttab_phys, PARTTAB_SIZE);
+		for (int i = 0; i < PARTTAB_SIZE/PAGE_SIZE; i++)
+			pagezero(PHYS_TO_DMAP(parttab_phys + i * PAGE_SIZE));
 
+	}
 	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
 	validate_addr(proctab0pa, proctab_size);
@@ -2172,12 +2182,26 @@ mmu_radix_proctab_init(void)
 	    htobe64(RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) |
 		RADIX_PGD_INDEX_SHIFT);
 
-	mmu_radix_proctab_register(proctab0pa, PROCTAB_SIZE_SHIFT - 12);
+	if (powernv_enabled) {
+		mmu_radix_proctab_register(proctab0pa, PROCTAB_SIZE_SHIFT - 12);
+		__asm __volatile("ptesync" : : : "memory");
+		__asm __volatile(PPC_TLBIE_5(%0,%1,2,1,1) : :
+			     "r" (TLBIEL_INVAL_SET_LPID), "r" (0));
+		__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
+#ifdef PSERIES
+	} else {
+		int64_t rc;
 
-	__asm __volatile("ptesync" : : : "memory");
-	__asm __volatile(PPC_TLBIE_5(%0,%1,2,1,1) : :
-		     "r" (TLBIEL_INVAL_SET_LPID), "r" (0));
-	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
+		rc = phyp_hcall(H_REGISTER_PROC_TBL,
+		    PROC_TABLE_NEW | PROC_TABLE_RADIX | PROC_TABLE_GTSE,
+		    proctab0pa, 0, PROCTAB_SIZE_SHIFT - 12);
+		if (rc != H_SUCCESS)
+			panic("mmu_radix_proctab_init: "
+				"failed to register process table: rc=%jd",
+				(intmax_t)rc);
+#endif
+	}
+
 	if (bootverbose)
 		printf("process table %p and kernel radix PDE: %p\n",
 			   isa3_proctab, kernel_pmap->pm_pml1);
@@ -2309,6 +2333,7 @@ mmu_radix_bootstrap(vm_offset_t start, vm_offset_t end)
 	if (bootverbose)
 		printf("%s\n", __func__);
 	hw_direct_map = 1;
+	powernv_enabled = (mfmsr() & PSL_HV) ? 1 : 0;
 	mmu_radix_early_bootstrap(start, end);
 	if (bootverbose)
 		printf("early bootstrap complete\n");
@@ -2323,8 +2348,10 @@ mmu_radix_bootstrap(vm_offset_t start, vm_offset_t end)
 	mmu_radix_init_iamr();
 	mmu_radix_proctab_init();
 	mmu_radix_pid_set(kernel_pmap);
-	/* XXX assume CPU_FTR_HVMODE */
-	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	if (powernv_enabled)
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	else
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_LPID);
 
 	mmu_radix_late_bootstrap(start, end);
 	numa_mem_regions(&numa_pregions, &numa_pregions_sz);
@@ -2351,7 +2378,10 @@ mmu_radix_cpu_bootstrap(int ap)
 	}
 	mmu_radix_init_iamr();
 	mmu_radix_pid_set(kernel_pmap);
-	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	if (powernv_enabled)
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	else
+		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_LPID);
 }
 
 static SYSCTL_NODE(_vm_pmap, OID_AUTO, l3e, CTLFLAG_RD, 0,
@@ -2805,8 +2835,7 @@ mmu_radix_enter(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %#x, %d)", pmap, va,
 	    m, prot, flags, psind);
 	KASSERT(va <= VM_MAX_KERNEL_ADDRESS, ("pmap_enter: toobig"));
-	KASSERT((m->oflags & VPO_UNMANAGED) != 0 || va < kmi.clean_sva ||
-	    va >= kmi.clean_eva,
+	KASSERT((m->oflags & VPO_UNMANAGED) != 0 || !VA_IS_CLEANMAP(va),
 	    ("pmap_enter: managed mapping within the clean submap"));
 	if ((m->oflags & VPO_UNMANAGED) == 0)
 		VM_PAGE_OBJECT_BUSY_ASSERT(m);
@@ -3292,7 +3321,7 @@ mmu_radix_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	pt_entry_t *pte;
 	vm_paddr_t pa;
 
-	KASSERT(va < kmi.clean_sva || va >= kmi.clean_eva ||
+	KASSERT(!VA_IS_CLEANMAP(va) ||
 	    (m->oflags & VPO_UNMANAGED) != 0,
 	    ("mmu_radix_enter_quick_locked: managed mapping within the clean submap"));
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
@@ -3576,7 +3605,7 @@ radix_pgd_release(void *arg __unused, void **store, int count)
 }
 
 static void
-mmu_radix_init()
+mmu_radix_init(void)
 {
 	vm_page_t mpte;
 	vm_size_t s;
@@ -5370,7 +5399,10 @@ mmu_radix_remove_pages(pmap_t pmap)
 	struct rwlock *lock;
 	int64_t bit;
 	uint64_t inuse, bitmask;
-	int allfree, field, freed, idx;
+	int allfree, field, idx;
+#ifdef PV_STATS
+	int freed;
+#endif
 	boolean_t superpage;
 	vm_paddr_t pa;
 
@@ -5389,7 +5421,9 @@ mmu_radix_remove_pages(pmap_t pmap)
 	PMAP_LOCK(pmap);
 	TAILQ_FOREACH_SAFE(pc, &pmap->pm_pvchunk, pc_list, npc) {
 		allfree = 1;
+#ifdef PV_STATS
 		freed = 0;
+#endif
 		for (field = 0; field < _NPCM; field++) {
 			inuse = ~pc->pc_map[field] & pc_freemask[field];
 			while (inuse != 0) {
@@ -5506,7 +5540,9 @@ mmu_radix_remove_pages(pmap_t pmap)
 					}
 				}
 				pmap_unuse_pt(pmap, pv->pv_va, ptel3e, &free);
+#ifdef PV_STATS
 				freed++;
+#endif
 			}
 		}
 		PV_STAT(atomic_add_long(&pv_entry_frees, freed));
@@ -6042,7 +6078,7 @@ mmu_radix_dev_direct_mapped(vm_paddr_t pa, vm_size_t size)
 }
 
 static void
-mmu_radix_scan_init()
+mmu_radix_scan_init(void)
 {
 
 	CTR1(KTR_PMAP, "%s()", __func__);

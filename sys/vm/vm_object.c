@@ -204,6 +204,9 @@ vm_object_zdtor(void *mem, int size, void *arg)
 	KASSERT(object->type == OBJT_DEAD,
 	    ("object %p has non-dead type %d",
 	    object, object->type));
+	KASSERT(object->charge == 0 && object->cred == NULL,
+	    ("object %p has non-zero charge %ju (%p)",
+	    object, (uintmax_t)object->charge, object->cred));
 }
 #endif
 
@@ -744,7 +747,7 @@ vm_object_backing_remove_locked(vm_object_t object)
 	vm_object_sub_shadow(backing_object);
 	if ((object->flags & OBJ_SHADOWLIST) != 0) {
 		LIST_REMOVE(object, shadow_list);
-		object->flags &= ~OBJ_SHADOWLIST;
+		vm_object_clear_flag(object, OBJ_SHADOWLIST);
 	}
 	object->backing_object = NULL;
 }
@@ -778,7 +781,7 @@ vm_object_backing_insert_locked(vm_object_t object, vm_object_t backing_object)
 		VM_OBJECT_ASSERT_WLOCKED(backing_object);
 		LIST_INSERT_HEAD(&backing_object->shadow_head, object,
 		    shadow_list);
-		object->flags |= OBJ_SHADOWLIST;
+		vm_object_set_flag(object, OBJ_SHADOWLIST);
 	}
 	object->backing_object = backing_object;
 }
@@ -1498,7 +1501,8 @@ vm_object_shadow(vm_object_t *object, vm_ooffset_t *offset, vm_size_t length,
 			vm_object_backing_insert(result, source);
 			result->domain = source->domain;
 #if VM_NRESERVLEVEL > 0
-			result->flags |= source->flags & OBJ_COLORED;
+			vm_object_set_flag(result,
+			    (source->flags & OBJ_COLORED));
 			result->pg_color = (source->pg_color +
 			    OFF_TO_IDX(*offset)) & ((1 << (VM_NFREEORDER -
 			    1)) - 1);

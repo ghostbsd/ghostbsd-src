@@ -700,20 +700,18 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	inp->inp_vflag &= ~INP_IPV4;
 	inp->inp_vflag |= INP_IPV6;
 	inp->inp_inc.inc_flags |= INC_ISIPV6;
+	NET_EPOCH_ENTER(et);
 	if ((error = tcp6_connect(tp, nam, td)) != 0)
-		goto out;
+		goto out_in_epoch;
 #ifdef TCP_OFFLOAD
 	if (registered_toedevs > 0 &&
 	    (so->so_options & SO_NO_OFFLOAD) == 0 &&
 	    (error = tcp_offload_connect(so, nam)) == 0)
-		goto out;
+		goto out_in_epoch;
 #endif
 	tcp_timer_activate(tp, TT_KEEP, TP_KEEPINIT(tp));
-	NET_EPOCH_ENTER(et);
 	error = tp->t_fb->tfb_tcp_output(tp);
-#ifdef INET
 out_in_epoch:
-#endif
 	NET_EPOCH_EXIT(et);
 out:
 	/*
@@ -1968,13 +1966,13 @@ tcp_default_ctloutput(struct socket *so, struct sockopt *sopt, struct inpcb *inp
 		switch (sopt->sopt_name) {
 #if defined(IPSEC_SUPPORT) || defined(TCP_SIGNATURE)
 		case TCP_MD5SIG:
-			if (!TCPMD5_ENABLED()) {
-				INP_WUNLOCK(inp);
+			INP_WUNLOCK(inp);
+			if (!TCPMD5_ENABLED())
 				return (ENOPROTOOPT);
-			}
 			error = TCPMD5_PCBCTL(inp, sopt);
 			if (error)
 				return (error);
+			INP_WLOCK_RECHECK(inp);
 			goto unlock_and_done;
 #endif /* IPSEC */
 
@@ -2381,10 +2379,9 @@ unlock_and_done:
 		switch (sopt->sopt_name) {
 #if defined(IPSEC_SUPPORT) || defined(TCP_SIGNATURE)
 		case TCP_MD5SIG:
-			if (!TCPMD5_ENABLED()) {
-				INP_WUNLOCK(inp);
+			INP_WUNLOCK(inp);
+			if (!TCPMD5_ENABLED())
 				return (ENOPROTOOPT);
-			}
 			error = TCPMD5_PCBCTL(inp, sopt);
 			break;
 #endif

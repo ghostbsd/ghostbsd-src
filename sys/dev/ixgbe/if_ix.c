@@ -2075,7 +2075,6 @@ ixgbe_if_msix_intr_assign(if_ctx_t ctx, int msix)
 	struct ix_rx_queue *rx_que = sc->rx_queues;
 	struct ix_tx_queue *tx_que;
 	int                error, rid, vector = 0;
-	int                cpu_id = 0;
 	char               buf[16];
 
 	/* Admin Que is vector 0*/
@@ -2095,25 +2094,6 @@ ixgbe_if_msix_intr_assign(if_ctx_t ctx, int msix)
 		}
 
 		rx_que->msix = vector;
-		if (sc->feat_en & IXGBE_FEATURE_RSS) {
-			/*
-			 * The queue ID is used as the RSS layer bucket ID.
-			 * We look up the queue ID -> RSS CPU ID and select
-			 * that.
-			 */
-			cpu_id = rss_getcpu(i % rss_getnumbuckets());
-		} else {
-			/*
-			 * Bind the MSI-X vector, and thus the
-			 * rings to the corresponding cpu.
-			 *
-			 * This just happens to match the default RSS
-			 * round-robin bucket -> queue -> CPU allocation.
-			 */
-			if (sc->num_rx_queues > 1)
-				cpu_id = i;
-		}
-
 	}
 	for (int i = 0; i < sc->num_tx_queues; i++) {
 		snprintf(buf, sizeof(buf), "txq%d", i);
@@ -2558,7 +2538,9 @@ ixgbe_msix_link(void *arg)
 		} else
 			if (eicr & IXGBE_EICR_ECC) {
 				device_printf(iflib_get_dev(sc->ctx),
-				   "\nCRITICAL: ECC ERROR!! Please Reboot!!\n");
+				   "Received ECC Err, initiating reset\n");
+				hw->mac.flags |= ~IXGBE_FLAGS_DOUBLE_RESET_REQUIRED;
+				ixgbe_reset_hw(hw);
 				IXGBE_WRITE_REG(hw, IXGBE_EICR, IXGBE_EICR_ECC);
 			}
 

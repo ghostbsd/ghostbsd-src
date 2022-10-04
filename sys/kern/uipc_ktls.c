@@ -1317,6 +1317,7 @@ ktls_set_tx_mode(struct socket *so, int mode)
 		return (EBUSY);
 	}
 
+	INP_WLOCK(inp);
 	SOCKBUF_LOCK(&so->so_snd);
 	so->so_snd.sb_tls_info = tls_new;
 	if (tls_new->mode != TCP_TLS_MODE_SW)
@@ -1338,7 +1339,6 @@ ktls_set_tx_mode(struct socket *so, int mode)
 	else
 		counter_u64_add(ktls_switch_to_sw, 1);
 
-	INP_WLOCK(inp);
 	return (0);
 }
 
@@ -1480,10 +1480,11 @@ ktls_modify_txrtlmt(struct ktls_session *tls, uint64_t max_pacing_rate)
 		return (0);
 	}
 
-	MPASS(tls->snd_tag != NULL);
-	MPASS(tls->snd_tag->type == IF_SND_TAG_TYPE_TLS_RATE_LIMIT);
-
 	mst = tls->snd_tag;
+
+	MPASS(mst != NULL);
+	MPASS(mst->type == IF_SND_TAG_TYPE_TLS_RATE_LIMIT);
+
 	ifp = mst->ifp;
 	return (ifp->if_snd_tag_modify(mst, &params));
 }
@@ -1985,6 +1986,7 @@ ktls_decrypt(struct socket *so)
 		}
 
 		/* Allocate the control mbuf. */
+		memset(&tgr, 0, sizeof(tgr));
 		tgr.tls_type = record_type;
 		tgr.tls_vmajor = hdr->tls_vmajor;
 		tgr.tls_vminor = hdr->tls_vminor;

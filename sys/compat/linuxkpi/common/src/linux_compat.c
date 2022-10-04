@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/rwlock.h>
 #include <sys/mman.h>
 #include <sys/stack.h>
+#include <sys/sysent.h>
 #include <sys/time.h>
 #include <sys/user.h>
 
@@ -96,6 +97,7 @@ __FBSDID("$FreeBSD$");
 
 #if defined(__i386__) || defined(__amd64__)
 #include <asm/smp.h>
+#include <asm/processor.h>
 #endif
 
 SYSCTL_NODE(_compat, OID_AUTO, linuxkpi, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
@@ -116,7 +118,7 @@ static int lkpi_net_maxpps = 99;
 SYSCTL_INT(_compat_linuxkpi, OID_AUTO, net_ratelimit, CTLFLAG_RWTUN,
     &lkpi_net_maxpps, 0, "Limit number of LinuxKPI net messages per second.");
 
-MALLOC_DEFINE(M_KMALLOC, "linux", "Linux kmalloc compat");
+MALLOC_DEFINE(M_KMALLOC, "lkpikmalloc", "Linux kmalloc compat");
 
 #include <linux/rbtree.h>
 /* Undo Linux compat changes. */
@@ -1095,8 +1097,8 @@ linux_file_ioctl_sub(struct file *fp, struct linux_file *filp,
 		/* fetch user-space pointer */
 		data = *(void **)data;
 	}
-#if defined(__amd64__)
-	if (td->td_proc->p_elf_machine == EM_386) {
+#ifdef COMPAT_FREEBSD32
+	if (SV_PROC_FLAG(td->td_proc, SV_ILP32)) {
 		/* try the compat IOCTL handler first */
 		if (fop->compat_ioctl != NULL) {
 			error = -OPW(fp, td, fop->compat_ioctl(filp,
@@ -2731,6 +2733,7 @@ io_mapping_create_wc(resource_size_t base, unsigned long size)
 
 #if defined(__i386__) || defined(__amd64__)
 bool linux_cpu_has_clflush;
+struct cpuinfo_x86 boot_cpu_data;
 #endif
 
 static void
@@ -2741,6 +2744,8 @@ linux_compat_init(void *arg)
 
 #if defined(__i386__) || defined(__amd64__)
 	linux_cpu_has_clflush = (cpu_feature & CPUID_CLFSH);
+	boot_cpu_data.x86_clflush_size = cpu_clflush_line_size;
+	boot_cpu_data.x86 = ((cpu_id & 0xf0000) >> 12) | ((cpu_id & 0xf0) >> 4);
 #endif
 	rw_init(&linux_vma_lock, "lkpi-vma-lock");
 

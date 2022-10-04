@@ -1174,6 +1174,8 @@ static inline const char
 		return ("4-bit");
 	case bus_width_8:
 		return ("8-bit");
+	default:
+		__assert_unreachable();
 	}
 }
 
@@ -2003,8 +2005,7 @@ sddaerror(union ccb *ccb, u_int32_t cam_flags, u_int32_t sense_flags)
 }
 
 static int
-sddadump(void *arg, void *virtual, vm_offset_t physical, off_t offset,
-    size_t length)
+sddadump(void *arg, void *virtual, off_t offset, size_t length)
 {
 	struct ccb_mmcio mmcio;
 	struct disk *dp;

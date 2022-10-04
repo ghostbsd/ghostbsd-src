@@ -276,6 +276,27 @@ TEST_F(Lookup, dotdot_no_parent_nid)
 	EXPECT_EQ(ESTALE, errno);
 }
 
+/*
+ * A daemon that returns an illegal error value should be handled gracefully.
+ * Regression test for https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=263220
+ */
+TEST_F(Lookup, ejustreturn)
+{
+	const char FULLPATH[] = "mountpoint/does_not_exist";
+	const char RELPATH[] = "does_not_exist";
+
+	EXPECT_LOOKUP(FUSE_ROOT_ID, RELPATH)
+	.WillOnce(Invoke(ReturnImmediate([=](auto in __unused, auto& out) {
+		out.header.len = sizeof(out.header);
+		out.header.error = 2;
+		m_mock->m_expected_write_errno = EINVAL;
+	})));
+
+	EXPECT_NE(0, access(FULLPATH, F_OK));
+
+	EXPECT_EQ(EIO, errno);
+}
+
 TEST_F(Lookup, enoent)
 {
 	const char FULLPATH[] = "mountpoint/does_not_exist";
@@ -407,6 +428,37 @@ TEST_F(Lookup, ok)
 	 * up a successful VOP_LOOKUP with another VOP.
 	 */
 	ASSERT_EQ(0, access(FULLPATH, F_OK)) << strerror(errno);
+}
+
+/*
+ * Lookup in a subdirectory of the fuse mount.  The naughty server returns the
+ * same inode for the child as for the parent.
+ */
+TEST_F(Lookup, parent_inode)
+{
+	const char FULLPATH[] = "mountpoint/some_dir/some_file.txt";
+	const char DIRPATH[] = "some_dir";
+	const char RELPATH[] = "some_file.txt";
+	uint64_t dir_ino = 2;
+
+	EXPECT_LOOKUP(FUSE_ROOT_ID, DIRPATH)
+	.WillOnce(Invoke(ReturnImmediate([=](auto in __unused, auto& out) {
+		SET_OUT_HEADER_LEN(out, entry);
+		out.body.entry.attr.mode = S_IFDIR | 0755;
+		out.body.entry.nodeid = dir_ino;
+	})));
+	EXPECT_LOOKUP(dir_ino, RELPATH)
+	.WillOnce(Invoke(ReturnImmediate([=](auto in __unused, auto& out) {
+		SET_OUT_HEADER_LEN(out, entry);
+		out.body.entry.attr.mode = S_IFREG | 0644;
+		out.body.entry.nodeid = dir_ino;
+	})));
+	/*
+	 * access(2) is one of the few syscalls that will not (always) follow
+	 * up a successful VOP_LOOKUP with another VOP.
+	 */
+	ASSERT_EQ(-1, access(FULLPATH, F_OK));
+	ASSERT_EQ(EIO, errno);
 }
 
 // Lookup in a subdirectory of the fuse mount

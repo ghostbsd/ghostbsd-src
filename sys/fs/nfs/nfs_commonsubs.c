@@ -150,7 +150,7 @@ struct nfsv4_opflag nfsv4_opflag[NFSV42_NOPS] = {
 	{ 0, 2, 1, 1, LK_EXCLUSIVE, 1, 0 },		/* Setattr */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* SetClientID */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* SetClientIDConfirm */
-	{ 0, 1, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Verify */
+	{ 0, 2, 0, 0, LK_EXCLUSIVE, 1, 0 },		/* Verify (AppWrite) */
 	{ 0, 2, 1, 1, LK_EXCLUSIVE, 1, 0 },		/* Write */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 0 },		/* ReleaseLockOwner */
 	{ 0, 0, 0, 0, LK_EXCLUSIVE, 1, 1 },		/* Backchannel Ctrl */
@@ -215,7 +215,7 @@ static struct nfsrv_lughash	*nfsgroupnamehash;
 static int nfs_bigreply[NFSV42_NPROCS] = { 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 0, 0, 1, 0, 0, 0, 0 };
+    1, 0, 0, 1, 0, 0, 0, 0, 0 };
 
 /* local functions */
 static int nfsrv_skipace(struct nfsrv_descript *nd, int *acesizep);
@@ -303,6 +303,7 @@ static struct {
 	{ NFSV4OP_LOOKUP, 5, "LookupOpen", 10, },
 	{ NFSV4OP_DEALLOCATE, 2, "Deallocate", 10, },
 	{ NFSV4OP_LAYOUTERROR, 1, "LayoutError", 11, },
+	{ NFSV4OP_VERIFY, 3, "AppendWrite", 11, },
 };
 
 /*
@@ -312,7 +313,7 @@ static int nfs_bigrequest[NFSV42_NPROCS] = {
 	0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-	0
+	0, 1
 };
 
 /*
@@ -322,7 +323,7 @@ static int nfs_bigrequest[NFSV42_NPROCS] = {
 void
 nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
     u_int8_t *nfhp, int fhlen, u_int32_t **opcntpp, struct nfsclsession *sep,
-    int vers, int minorvers)
+    int vers, int minorvers, struct ucred *cred)
 {
 	struct mbuf *mb;
 	u_int32_t *tl;
@@ -415,11 +416,17 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 			*tl = txdr_unsigned(NFSV4OP_SEQUENCE);
 			if (sep == NULL) {
 				sep = nfsmnt_mdssession(nmp);
+				/*
+				 * For MDS mount sessions, check for bad
+				 * slots.  If the caller does not want this
+				 * check to be done, the "cred" argument can
+				 * be passed in as NULL.
+				 */
 				nfsv4_setsequence(nmp, nd, sep,
-				    nfs_bigreply[procnum]);
+				    nfs_bigreply[procnum], cred);
 			} else
 				nfsv4_setsequence(nmp, nd, sep,
-				    nfs_bigreply[procnum]);
+				    nfs_bigreply[procnum], NULL);
 		}
 		if (nfsv4_opflag[nfsv4_opmap[procnum].op].needscfh > 0) {
 			NFSM_BUILD(tl, u_int32_t *, NFSX_UNSIGNED);
@@ -439,6 +446,10 @@ nfscl_reqstart(struct nfsrv_descript *nd, int procnum, struct nfsmount *nmp,
 					NFSGETATTR_ATTRBIT(&attrbits);
 				else {
 					NFSWCCATTR_ATTRBIT(&attrbits);
+					/* For AppendWrite, get the size. */
+					if (procnum == NFSPROC_APPENDWRITE)
+						NFSSETBIT_ATTRBIT(&attrbits,
+						    NFSATTRBIT_SIZE);
 					nd->nd_flag |= ND_V4WCCATTR;
 				}
 				(void) nfsrv_putattrbit(nd, &attrbits);
@@ -1838,7 +1849,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 		case NFSATTRBIT_OWNER:
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 			j = fxdr_unsigned(int, *tl);
-			if (j < 0) {
+			if (j < 0 || j > NFSV4_MAXOWNERGROUPLEN) {
 				error = NFSERR_BADXDR;
 				goto nfsmout;
 			}
@@ -1871,7 +1882,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 		case NFSATTRBIT_OWNERGROUP:
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 			j = fxdr_unsigned(int, *tl);
-			if (j < 0) {
+			if (j < 0 || j > NFSV4_MAXOWNERGROUPLEN) {
 				error =  NFSERR_BADXDR;
 				goto nfsmout;
 			}
@@ -4768,14 +4779,22 @@ nfsv4_seqsess_cacherep(uint32_t slotid, struct nfsslot *slots, int repstat,
  */
 void
 nfsv4_setsequence(struct nfsmount *nmp, struct nfsrv_descript *nd,
-    struct nfsclsession *sep, int dont_replycache)
+    struct nfsclsession *sep, int dont_replycache, struct ucred *cred)
 {
 	uint32_t *tl, slotseq = 0;
 	int error, maxslot, slotpos;
 	uint8_t sessionid[NFSX_V4SESSIONID];
 
-	error = nfsv4_sequencelookup(nmp, sep, &slotpos, &maxslot, &slotseq,
-	    sessionid);
+	if (cred != NULL) {
+		error = nfsv4_sequencelookup(nmp, sep, &slotpos, &maxslot,
+		    &slotseq, sessionid, false);
+		if (error == NFSERR_SEQMISORDERED) {
+			/* If all slots are bad, Destroy the session. */
+			nfsrpc_destroysession(nmp, sep, cred, curthread);
+		}
+	} else
+		error = nfsv4_sequencelookup(nmp, sep, &slotpos, &maxslot,
+		    &slotseq, sessionid, true);
 	nd->nd_maxreq = sep->nfsess_maxreq;
 	nd->nd_maxresp = sep->nfsess_maxresp;
 
@@ -4812,12 +4831,18 @@ nfsv4_setsequence(struct nfsmount *nmp, struct nfsrv_descript *nd,
 	nd->nd_flag |= ND_HASSEQUENCE;
 }
 
+/*
+ * If fnd_init is true, ignore the badslots.
+ * If fnd_init is false, return NFSERR_SEQMISORDERED if all slots are bad.
+ */
 int
 nfsv4_sequencelookup(struct nfsmount *nmp, struct nfsclsession *sep,
-    int *slotposp, int *maxslotp, uint32_t *slotseqp, uint8_t *sessionid)
+    int *slotposp, int *maxslotp, uint32_t *slotseqp, uint8_t *sessionid,
+    bool fnd_init)
 {
 	int i, maxslot, slotpos;
 	uint64_t bitval;
+	bool fnd_ok;
 
 	/* Find an unused slot. */
 	slotpos = -1;
@@ -4831,14 +4856,18 @@ nfsv4_sequencelookup(struct nfsmount *nmp, struct nfsclsession *sep,
 			mtx_unlock(&sep->nfsess_mtx);
 			return (NFSERR_BADSESSION);
 		}
+		fnd_ok = fnd_init;
 		bitval = 1;
 		for (i = 0; i < sep->nfsess_foreslots; i++) {
-			if ((bitval & sep->nfsess_slots) == 0) {
-				slotpos = i;
-				sep->nfsess_slots |= bitval;
-				sep->nfsess_slotseq[i]++;
-				*slotseqp = sep->nfsess_slotseq[i];
-				break;
+			if ((bitval & sep->nfsess_badslots) == 0 || fnd_init) {
+				fnd_ok = true;
+				if ((bitval & sep->nfsess_slots) == 0) {
+					slotpos = i;
+					sep->nfsess_slots |= bitval;
+					sep->nfsess_slotseq[i]++;
+					*slotseqp = sep->nfsess_slotseq[i];
+					break;
+				}
 			}
 			bitval <<= 1;
 		}
@@ -4853,10 +4882,19 @@ nfsv4_sequencelookup(struct nfsmount *nmp, struct nfsclsession *sep,
 				return (ESTALE);
 			}
 			/* Wake up once/sec, to check for a forced dismount. */
-			(void)mtx_sleep(&sep->nfsess_slots, &sep->nfsess_mtx,
-			    PZERO, "nfsclseq", hz);
+			if (fnd_ok)
+				mtx_sleep(&sep->nfsess_slots, &sep->nfsess_mtx,
+				    PZERO, "nfsclseq", hz);
 		}
-	} while (slotpos == -1);
+	} while (slotpos == -1 && fnd_ok);
+	/*
+	 * If all slots are bad, just return slot 0 and NFSERR_SEQMISORDERED.
+	 * The caller will do a DestroySession, so that the session's use
+	 * will get a NFSERR_BADSESSION reply from the server.
+	 */
+	if (!fnd_ok)
+		slotpos = 0;
+
 	/* Now, find the highest slot in use. (nfsc_slots is 64bits) */
 	bitval = 1;
 	for (i = 0; i < 64; i++) {
@@ -4868,6 +4906,9 @@ nfsv4_sequencelookup(struct nfsmount *nmp, struct nfsclsession *sep,
 	mtx_unlock(&sep->nfsess_mtx);
 	*slotposp = slotpos;
 	*maxslotp = maxslot;
+
+	if (!fnd_ok)
+		return (NFSERR_SEQMISORDERED);
 	return (0);
 }
 
@@ -4983,4 +5024,32 @@ nfsm_add_ext_pgs(struct mbuf *m, int maxextsiz, int *bextpg)
 		mp = m;
 	}
 	return (mp);
+}
+
+/*
+ * Do the NFSv4.1 Destroy Session.
+ */
+int
+nfsrpc_destroysession(struct nfsmount *nmp, struct nfsclsession *tsep,
+    struct ucred *cred, NFSPROC_T *p)
+{
+	uint32_t *tl;
+	struct nfsrv_descript nfsd;
+	struct nfsrv_descript *nd = &nfsd;
+	int error;
+
+	nfscl_reqstart(nd, NFSPROC_DESTROYSESSION, nmp, NULL, 0, NULL, NULL, 0,
+	    0, NULL);
+	NFSM_BUILD(tl, uint32_t *, NFSX_V4SESSIONID);
+	if (tsep == NULL)
+		tsep = nfsmnt_mdssession(nmp);
+	bcopy(tsep->nfsess_sessionid, tl, NFSX_V4SESSIONID);
+	nd->nd_flag |= ND_USEGSSNAME;
+	error = newnfs_request(nd, nmp, NULL, &nmp->nm_sockreq, NULL, p, cred,
+	    NFS_PROG, NFS_VER4, NULL, 1, NULL, NULL);
+	if (error != 0)
+		return (error);
+	error = nd->nd_repstat;
+	m_freem(nd->nd_mrep);
+	return (error);
 }

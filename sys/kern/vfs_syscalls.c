@@ -48,7 +48,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/buf.h>
 #include <sys/capsicum.h>
 #include <sys/disk.h>
-#include <sys/sysent.h>
 #include <sys/malloc.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
@@ -1509,7 +1508,7 @@ sys_link(struct thread *td, struct link_args *uap)
 {
 
 	return (kern_linkat(td, AT_FDCWD, AT_FDCWD, uap->path, uap->link,
-	    UIO_USERSPACE, FOLLOW));
+	    UIO_USERSPACE, AT_SYMLINK_FOLLOW));
 }
 
 #ifndef _SYS_SYSPROTO_H_
@@ -1524,16 +1523,9 @@ struct linkat_args {
 int
 sys_linkat(struct thread *td, struct linkat_args *uap)
 {
-	int flag;
-
-	flag = uap->flag;
-	if ((flag & ~(AT_SYMLINK_FOLLOW | AT_RESOLVE_BENEATH |
-	    AT_EMPTY_PATH)) != 0)
-		return (EINVAL);
 
 	return (kern_linkat(td, uap->fd1, uap->fd2, uap->path1, uap->path2,
-	    UIO_USERSPACE, at2cnpflags(flag, AT_SYMLINK_FOLLOW |
-	    AT_RESOLVE_BENEATH | AT_EMPTY_PATH)));
+	    UIO_USERSPACE, uap->flag));
 }
 
 int hardlink_check_uid = 0;
@@ -1577,16 +1569,21 @@ can_hardlink(struct vnode *vp, struct ucred *cred)
 
 int
 kern_linkat(struct thread *td, int fd1, int fd2, const char *path1,
-    const char *path2, enum uio_seg segflag, int follow)
+    const char *path2, enum uio_seg segflag, int flag)
 {
 	struct nameidata nd;
 	int error;
 
+	if ((flag & ~(AT_SYMLINK_FOLLOW | AT_RESOLVE_BENEATH |
+	    AT_EMPTY_PATH)) != 0)
+		return (EINVAL);
+
 	NDPREINIT(&nd);
 	do {
 		bwillwrite();
-		NDINIT_ATRIGHTS(&nd, LOOKUP, follow | AUDITVNODE1, segflag,
-		    path1, fd1, &cap_linkat_source_rights, td);
+		NDINIT_ATRIGHTS(&nd, LOOKUP, AUDITVNODE1 | at2cnpflags(flag,
+		    AT_SYMLINK_FOLLOW | AT_RESOLVE_BENEATH | AT_EMPTY_PATH),
+		    segflag, path1, fd1, &cap_linkat_source_rights, td);
 		if ((error = namei(&nd)) != 0)
 			return (error);
 		NDFREE(&nd, NDF_ONLY_PNBUF);
@@ -2758,10 +2755,6 @@ int
 sys_chflagsat(struct thread *td, struct chflagsat_args *uap)
 {
 
-	if ((uap->atflag & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH |
-	    AT_EMPTY_PATH)) != 0)
-		return (EINVAL);
-
 	return (kern_chflagsat(td, uap->fd, uap->path, UIO_USERSPACE,
 	    uap->flags, uap->atflag));
 }
@@ -2789,6 +2782,10 @@ kern_chflagsat(struct thread *td, int fd, const char *path,
 {
 	struct nameidata nd;
 	int error;
+
+	if ((atflag & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH |
+	    AT_EMPTY_PATH)) != 0)
+		return (EINVAL);
 
 	AUDIT_ARG_FFLAGS(flags);
 	NDINIT_ATRIGHTS(&nd, LOOKUP, at2cnpflags(atflag, AT_SYMLINK_NOFOLLOW |
@@ -2889,10 +2886,6 @@ int
 sys_fchmodat(struct thread *td, struct fchmodat_args *uap)
 {
 
-	if ((uap->flag & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH |
-	    AT_EMPTY_PATH)) != 0)
-		return (EINVAL);
-
 	return (kern_fchmodat(td, uap->fd, uap->path, UIO_USERSPACE,
 	    uap->mode, uap->flag));
 }
@@ -2920,6 +2913,10 @@ kern_fchmodat(struct thread *td, int fd, const char *path,
 {
 	struct nameidata nd;
 	int error;
+
+	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH |
+	    AT_EMPTY_PATH)) != 0)
+		return (EINVAL);
 
 	AUDIT_ARG_MODE(mode);
 	NDINIT_ATRIGHTS(&nd, LOOKUP, at2cnpflags(flag, AT_SYMLINK_NOFOLLOW |
@@ -3018,10 +3015,6 @@ int
 sys_fchownat(struct thread *td, struct fchownat_args *uap)
 {
 
-	if ((uap->flag & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH |
-	    AT_EMPTY_PATH)) != 0)
-		return (EINVAL);
-
 	return (kern_fchownat(td, uap->fd, uap->path, UIO_USERSPACE, uap->uid,
 	    uap->gid, uap->flag));
 }
@@ -3032,6 +3025,10 @@ kern_fchownat(struct thread *td, int fd, const char *path,
 {
 	struct nameidata nd;
 	int error;
+
+	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH |
+	    AT_EMPTY_PATH)) != 0)
+		return (EINVAL);
 
 	AUDIT_ARG_OWNER(uid, gid);
 	NDINIT_ATRIGHTS(&nd, LOOKUP, at2cnpflags(flag, AT_SYMLINK_NOFOLLOW |
@@ -4176,6 +4173,10 @@ unionread:
 		error = EINVAL;
 		goto fail;
 	}
+	if (__predict_false((vp->v_vflag & VV_UNLINKED) != 0)) {
+		error = ENOENT;
+		goto fail;
+	}
 	aiov.iov_base = buf;
 	aiov.iov_len = count;
 	auio.uio_iov = &aiov;
@@ -4401,8 +4402,6 @@ int
 sys_getfhat(struct thread *td, struct getfhat_args *uap)
 {
 
-	if ((uap->flags & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH)) != 0)
-		return (EINVAL);
 	return (kern_getfhat(td, uap->flags, uap->fd, uap->path, UIO_USERSPACE,
 	    uap->fhp, UIO_USERSPACE));
 }
@@ -4416,6 +4415,8 @@ kern_getfhat(struct thread *td, int flags, int fd, const char *path,
 	struct vnode *vp;
 	int error;
 
+	if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH)) != 0)
+		return (EINVAL);
 	error = priv_check(td, PRIV_VFS_GETFH);
 	if (error != 0)
 		return (error);

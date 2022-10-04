@@ -65,8 +65,9 @@ static int		doconfigtimer(void);
 static void		configtimer(int start);
 static int		round_freq(struct eventtimer *et, int freq);
 
-static sbintime_t	getnextcpuevent(int idle);
-static sbintime_t	getnextevent(void);
+struct pcpu_state;
+static sbintime_t	getnextcpuevent(struct pcpu_state *state, int idle);
+static sbintime_t	getnextevent(struct pcpu_state *state);
 static int		handleevents(sbintime_t now, int fake);
 
 static struct mtx	et_hw_mtx;
@@ -213,8 +214,8 @@ handleevents(sbintime_t now, int fake)
 		callout_process(now);
 	}
 
-	t = getnextcpuevent(0);
 	ET_HW_LOCK(state);
+	t = getnextcpuevent(state, 0);
 	if (!busy) {
 		state->idle = 0;
 		state->nextevent = t;
@@ -229,13 +230,11 @@ handleevents(sbintime_t now, int fake)
  * Schedule binuptime of the next event on current CPU.
  */
 static sbintime_t
-getnextcpuevent(int idle)
+getnextcpuevent(struct pcpu_state *state, int idle)
 {
 	sbintime_t event;
-	struct pcpu_state *state;
 	u_int hardfreq;
 
-	state = DPCPU_PTR(timerstate);
 	/* Handle hardclock() events, skipping some if CPU is idle. */
 	event = state->nexthard;
 	if (idle) {
@@ -266,9 +265,8 @@ getnextcpuevent(int idle)
  * Schedule binuptime of the next event on all CPUs.
  */
 static sbintime_t
-getnextevent(void)
+getnextevent(struct pcpu_state *state)
 {
-	struct pcpu_state *state;
 	sbintime_t event;
 #ifdef SMP
 	int	cpu;
@@ -278,7 +276,6 @@ getnextevent(void)
 
 	c = -1;
 #endif
-	state = DPCPU_PTR(timerstate);
 	event = state->nextevent;
 #ifdef SMP
 	if ((timer->et_flags & ET_FLAGS_PERCPU) == 0) {
@@ -385,10 +382,10 @@ loadtimer(sbintime_t now, int start)
 	uint64_t tmp;
 	int eq;
 
-	if (timer->et_flags & ET_FLAGS_PERCPU) {
-		state = DPCPU_PTR(timerstate);
+	state = DPCPU_PTR(timerstate);
+	if (timer->et_flags & ET_FLAGS_PERCPU)
 		next = &state->nexttick;
-	} else
+	else
 		next = &nexttick;
 	if (periodic) {
 		if (start) {
@@ -407,7 +404,7 @@ loadtimer(sbintime_t now, int start)
 			et_start(timer, new, timerperiod);
 		}
 	} else {
-		new = getnextevent();
+		new = getnextevent(state);
 		eq = (new == *next);
 		CTR4(KTR_SPARE2, "load at %d:    next %d.%08x eq %d",
 		    curcpu, (int)(new >> 32), (u_int)(new & 0xffffffff), eq);
@@ -681,14 +678,12 @@ cpu_initclocks_bsp(void)
 void
 cpu_initclocks_ap(void)
 {
-	sbintime_t now;
 	struct pcpu_state *state;
 	struct thread *td;
 
 	state = DPCPU_PTR(timerstate);
-	now = sbinuptime();
 	ET_HW_LOCK(state);
-	state->now = now;
+	state->now = sbinuptime();
 	hardclock_sync(curcpu);
 	spinlock_enter();
 	ET_HW_UNLOCK(state);
@@ -772,14 +767,14 @@ cpu_idleclock(void)
 	    )
 		return (-1);
 	state = DPCPU_PTR(timerstate);
+	ET_HW_LOCK(state);
 	if (periodic)
 		now = state->now;
 	else
 		now = sbinuptime();
 	CTR3(KTR_SPARE2, "idle at %d:    now  %d.%08x",
 	    curcpu, (int)(now >> 32), (u_int)(now & 0xffffffff));
-	t = getnextcpuevent(1);
-	ET_HW_LOCK(state);
+	t = getnextcpuevent(state, 1);
 	state->idle = 1;
 	state->nextevent = t;
 	if (!periodic)
@@ -799,15 +794,15 @@ cpu_activeclock(void)
 	struct thread *td;
 
 	state = DPCPU_PTR(timerstate);
-	if (state->idle == 0 || busy)
+	if (atomic_load_int(&state->idle) == 0 || busy)
 		return;
+	spinlock_enter();
 	if (periodic)
 		now = state->now;
 	else
 		now = sbinuptime();
 	CTR3(KTR_SPARE2, "active at %d:  now  %d.%08x",
 	    curcpu, (int)(now >> 32), (u_int)(now & 0xffffffff));
-	spinlock_enter();
 	td = curthread;
 	td->td_intr_nesting_level++;
 	handleevents(now, 1);

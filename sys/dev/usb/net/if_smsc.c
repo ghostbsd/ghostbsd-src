@@ -1604,7 +1604,7 @@ smsc_attach_post(struct usb_ether *ue)
  *	@ue: the USB ethernet device
  *
  *	Most of this is boilerplate code and copied from the base USB ethernet
- *	driver.  It has been overriden so that we can indicate to the system that
+ *	driver.  It has been overridden so that we can indicate to the system that
  *	the chip supports H/W checksumming.
  *
  *	RETURNS:
@@ -1641,11 +1641,11 @@ smsc_attach_post_sub(struct usb_ether *ue)
 
 	ifp->if_capenable = ifp->if_capabilities;
 
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	error = mii_attach(ue->ue_dev, &ue->ue_miibus, ifp,
 	    uether_ifmedia_upd, ue->ue_methods->ue_mii_sts,
 	    BMSR_DEFCAPMASK, sc->sc_phyno, MII_OFFSET_ANY, 0);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 
 	return (error);
 }

@@ -71,6 +71,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_cpu.h>
 #endif
 
+#define	MP_BOOTSTACK_SIZE	(kstack_pages * PAGE_SIZE)
+
 boolean_t ofw_cpu_reg(phandle_t node, u_int, cell_t *);
 
 uint32_t __riscv_boot_ap[MAXCPU];
@@ -211,7 +213,7 @@ release_aps(void *dummy __unused)
 	sbi_send_ipi(mask.__bits);
 
 	for (i = 0; i < 2000; i++) {
-		if (smp_started)
+		if (atomic_load_acq_int(&smp_started))
 			return;
 		DELAY(1000);
 	}
@@ -285,11 +287,6 @@ init_secondary(uint64_t hart)
 
 	mtx_unlock_spin(&ap_boot_mtx);
 
-	/*
-	 * Assert that smp_after_idle_runnable condition is reasonable.
-	 */
-	MPASS(PCPU_GET(curpcb) == NULL);
-
 	/* Enter the scheduler */
 	sched_throw(NULL);
 
@@ -300,16 +297,25 @@ init_secondary(uint64_t hart)
 static void
 smp_after_idle_runnable(void *arg __unused)
 {
-	struct pcpu *pc;
 	int cpu;
 
+	if (mp_ncpus == 1)
+		return;
+
+	KASSERT(smp_started != 0, ("%s: SMP not started yet", __func__));
+
+	/*
+	 * Wait for all APs to handle an interrupt.  After that, we know that
+	 * the APs have entered the scheduler at least once, so the boot stacks
+	 * are safe to free.
+	 */
+	smp_rendezvous(smp_no_rendezvous_barrier, NULL,
+	    smp_no_rendezvous_barrier, NULL);
+
 	for (cpu = 1; cpu <= mp_maxid; cpu++) {
-		if (bootstacks[cpu] != NULL) {
-			pc = pcpu_find(cpu);
-			while (atomic_load_ptr(&pc->pc_curpcb) == NULL)
-				cpu_spinwait();
-			kmem_free((vm_offset_t)bootstacks[cpu], PAGE_SIZE);
-		}
+		if (bootstacks[cpu] != NULL)
+			kmem_free((vm_offset_t)bootstacks[cpu],
+			    MP_BOOTSTACK_SIZE);
 	}
 }
 SYSINIT(smp_after_idle_runnable, SI_SUB_SMP, SI_ORDER_ANY,
@@ -473,10 +479,11 @@ cpu_init_fdt(u_int id, phandle_t node, u_int addr_size, pcell_t *reg)
 	dpcpu[cpuid - 1] = (void *)kmem_malloc(DPCPU_SIZE, M_WAITOK | M_ZERO);
 	dpcpu_init(dpcpu[cpuid - 1], cpuid);
 
-	bootstacks[cpuid] = (void *)kmem_malloc(PAGE_SIZE, M_WAITOK | M_ZERO);
+	bootstacks[cpuid] = (void *)kmem_malloc(MP_BOOTSTACK_SIZE,
+	    M_WAITOK | M_ZERO);
 
 	naps = atomic_load_int(&aps_started);
-	bootstack = (char *)bootstacks[cpuid] + PAGE_SIZE;
+	bootstack = (char *)bootstacks[cpuid] + MP_BOOTSTACK_SIZE;
 
 	printf("Starting CPU %u (hart %lx)\n", cpuid, hart);
 	atomic_store_32(&__riscv_boot_ap[hart], 1);

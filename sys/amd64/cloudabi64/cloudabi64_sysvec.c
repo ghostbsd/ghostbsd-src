@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 
 #include <machine/frame.h>
+#include <machine/md_var.h>
 #include <machine/pcb.h>
 #include <machine/vmparam.h>
 
@@ -197,6 +198,9 @@ static struct sysentvec cloudabi64_elf_sysvec = {
 	.sv_fixup		= cloudabi64_fixup_tcb,
 	.sv_name		= "CloudABI ELF64",
 	.sv_coredump		= elf64_coredump,
+	.sv_elf_core_osabi	= ELFOSABI_FREEBSD,
+	.sv_elf_core_abi_vendor	= FREEBSD_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = elf64_prepare_notes,
 	.sv_minuser		= VM_MIN_ADDRESS,
 	/* Keep top page reserved to work around AMD Ryzen stability issues. */
 	.sv_maxuser		= VM_MAXUSER_ADDRESS - PAGE_SIZE,
@@ -208,6 +212,7 @@ static struct sysentvec cloudabi64_elf_sysvec = {
 	.sv_fetch_syscall_args	= cloudabi64_fetch_syscall_args,
 	.sv_syscallnames	= cloudabi64_syscallnames,
 	.sv_schedtail		= cloudabi64_schedtail,
+	.sv_set_fork_retval	= x86_set_fork_retval,
 };
 
 INIT_SYSENTVEC(elf_sysvec, &cloudabi64_elf_sysvec);

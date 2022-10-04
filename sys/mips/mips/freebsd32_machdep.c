@@ -48,6 +48,7 @@
 #include <sys/fcntl.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
+#include <sys/reg.h>
 #include <sys/syscall.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysproto.h>
@@ -60,7 +61,6 @@
 
 #include <machine/cpuinfo.h>
 #include <machine/md_var.h>
-#include <machine/reg.h>
 #include <machine/sigframe.h>
 #include <machine/sysarch.h>
 #include <machine/tls.h>
@@ -78,13 +78,15 @@ extern const char *freebsd32_syscallnames[];
 struct sysentvec elf32_freebsd_sysvec = {
 	.sv_size	= SYS_MAXSYSCALL,
 	.sv_table	= freebsd32_sysent,
-	.sv_transtrap	= NULL,
 	.sv_fixup	= __elfN(freebsd_fixup),
 	.sv_sendsig	= freebsd32_sendsig,
 	.sv_sigcode	= sigcode32,
 	.sv_szsigcode	= &szsigcode32,
 	.sv_name	= "FreeBSD ELF32",
 	.sv_coredump	= __elfN(coredump),
+	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
+	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
@@ -104,6 +106,10 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
+	.sv_onexec_old	= exec_onexec_old,
+	.sv_onexit	= exit_onexit,
+	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
+	.sv_regset_end  = SET_LIMIT(__elfN(regset)),
 };
 INIT_SYSENTVEC(elf32_sysvec, &elf32_freebsd_sysvec);
 

@@ -794,7 +794,7 @@ unsigned int iwl_mvm_max_amsdu_size(struct iwl_mvm *mvm,
 	int lmac = iwl_mvm_get_lmac_id(mvm->fw, band);
 
 	/* For HE redirect to trigger based fifos */
-	if (sta->he_cap.has_he && !WARN_ON(!iwl_mvm_has_new_tx_api(mvm)))
+	if (sta->deflink.he_cap.has_he && !WARN_ON(!iwl_mvm_has_new_tx_api(mvm)))
 		ac += 4;
 
 	txf = iwl_mvm_mac_ac_to_tx_fifo(mvm, ac);
@@ -935,7 +935,7 @@ static int iwl_mvm_tx_tso(struct iwl_mvm *mvm, struct sk_buff *skb,
 	 * section 8.7.3 NOTE 3).
 	 */
 	if (info->flags & IEEE80211_TX_CTL_AMPDU &&
-	    !sta->vht_cap.vht_supported)
+	    !sta->deflink.vht_cap.vht_supported)
 		max_amsdu_len = min_t(unsigned int, max_amsdu_len, 4095);
 
 	/* Sub frame header + SNAP + IP header + TCP header + MSS */
@@ -1083,7 +1083,7 @@ static int iwl_mvm_tx_mpdu(struct iwl_mvm *mvm, struct sk_buff *skb,
 	if (WARN_ON_ONCE(mvmsta->sta_id == IWL_MVM_INVALID_STA))
 		return -1;
 
-	if (unlikely(ieee80211_is_any_nullfunc(fc)) && sta->he_cap.has_he)
+	if (unlikely(ieee80211_is_any_nullfunc(fc)) && sta->deflink.he_cap.has_he)
 		return -1;
 
 	if (unlikely(ieee80211_is_probe_resp(fc)))
@@ -1139,6 +1139,11 @@ static int iwl_mvm_tx_mpdu(struct iwl_mvm *mvm, struct sk_buff *skb,
 	WARN_ON_ONCE(info->flags & IEEE80211_TX_CTL_SEND_AFTER_DTIM);
 
 	if (WARN_ONCE(txq_id == IWL_MVM_INVALID_QUEUE, "Invalid TXQ id")) {
+#if defined(__FreeBSD__)
+		IWL_DEBUG_TX(mvm, "fc %#06x sta_id %u tid %u txq_id %u mvm %p "
+		    "skb %p { len %u } info %p sta %p\n", fc, mvmsta->sta_id,
+		    tid, txq_id, mvm, skb, skb->len, info, sta);
+#endif
 		iwl_trans_free_tx_cmd(mvm->trans, dev_cmd);
 		spin_unlock(&mvmsta->lock);
 		return -1;
@@ -1427,7 +1432,7 @@ static void iwl_mvm_hwrate_to_tx_status(const struct iwl_fw *fw,
 	struct ieee80211_tx_rate *r = &info->status.rates[0];
 
 	if (iwl_fw_lookup_notif_ver(fw, LONG_GROUP,
-				    TX_CMD, 0) > 6)
+				    TX_CMD, 0) <= 6)
 		rate_n_flags = iwl_new_rate_from_v1(rate_n_flags);
 
 	info->status.antenna =

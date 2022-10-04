@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2015 Dmitry Chagin
- * All rights reserved.
+ * Copyright (c) 2015 Dmitry Chagin <dchagin@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,6 +29,28 @@
 #define _LINUX_MI_H_
 
 #include <sys/queue.h>
+
+/*
+ * Private Brandinfo flags
+ */
+#define	LINUX_BI_FUTEX_REQUEUE	0x01000000
+
+/*
+ * poll()
+ */
+#define	LINUX_POLLIN		0x0001
+#define	LINUX_POLLPRI		0x0002
+#define	LINUX_POLLOUT		0x0004
+#define	LINUX_POLLERR		0x0008
+#define	LINUX_POLLHUP		0x0010
+#define	LINUX_POLLNVAL		0x0020
+#define	LINUX_POLLRDNORM	0x0040
+#define	LINUX_POLLRDBAND	0x0080
+#define	LINUX_POLLWRNORM	0x0100
+#define	LINUX_POLLWRBAND	0x0200
+#define	LINUX_POLLMSG		0x0400
+#define	LINUX_POLLREMOVE	0x1000
+#define	LINUX_POLLRDHUP		0x2000
 
 #define	LINUX_IFHWADDRLEN	6
 #define	LINUX_IFNAMSIZ		16
@@ -97,8 +118,8 @@ typedef struct {
 
 /* primitives to manipulate sigset_t */
 #define	LINUX_SIGEMPTYSET(set)		(set).__mask = 0
-#define	LINUX_SIGISMEMBER(set, sig)	(1UL & ((set).__mask >> _SIG_IDX(sig)))
-#define	LINUX_SIGADDSET(set, sig)	(set).__mask |= 1UL << _SIG_IDX(sig)
+#define	LINUX_SIGISMEMBER(set, sig)	(1ULL & ((set).__mask >> _SIG_IDX(sig)))
+#define	LINUX_SIGADDSET(set, sig)	(set).__mask |= 1ULL << _SIG_IDX(sig)
 
 void linux_to_bsd_sigset(l_sigset_t *, sigset_t *);
 void bsd_to_linux_sigset(sigset_t *, l_sigset_t *);
@@ -146,8 +167,10 @@ void bsd_to_linux_sigset(sigset_t *, l_sigset_t *);
 int linux_to_bsd_signal(int sig);
 int bsd_to_linux_signal(int sig);
 
-extern LIST_HEAD(futex_list, futex) futex_list;
-extern struct mtx futex_mtx;
+/* sigprocmask actions */
+#define	LINUX_SIG_BLOCK		0
+#define	LINUX_SIG_UNBLOCK	1
+#define	LINUX_SIG_SETMASK	2
 
 void linux_dev_shm_create(void);
 void linux_dev_shm_destroy(void);
@@ -240,5 +263,12 @@ struct l_statx {
 	uint64_t stx_mnt_id;
 	uint64_t __spare2[13];
 };
+
+#define	lower_32_bits(n)	((uint32_t)((n) & 0xffffffff))
+
+#ifdef KTRACE
+#define	linux_ktrsigset(s, l)	\
+	ktrstruct("l_sigset_t", (s), l)
+#endif
 
 #endif /* _LINUX_MI_H_ */

@@ -23,7 +23,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd September 17, 2021
+.Dd August 19, 2022
 .Dt BHYVE_CONFIG 5
 .Os
 .Sh NAME
@@ -150,6 +150,52 @@ then
 .Xr bhyve 8
 will write all of its configuration variables to stdout and exit.
 No VM will be started.
+.It Va bios.vendor Ta string Ta BHYVE Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va bios.version Ta string Ta 14.0 Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va bios.release_date Ta string Ta 10/17/2021 Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va system.family_name Ta string Ta Virtual Machine Ta
+Family the computer belongs to.
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va system.manufacturer Ta string Ta FreeBSD Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va system.product_name Ta string Ta BHYVE Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va system.serial_number Ta string Ta None Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va system.sku Ta string Ta None Ta
+Stock keeping unit of the computer.
+It's also called product ID or purchase order number.
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va system.version Ta string Ta 1.0 Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va board.manufacturer Ta string Ta FreeBSD Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va board.product_name Ta string Ta BHYVE Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va board.version Ta string Ta 1.0 Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va board.serial_number Ta string Ta None Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va board.asset_tag Ta string Ta None Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va board.location Ta string Ta None Ta
+Describes the board's location within the chassis.
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va chassis.manufacturer Ta string Ta FreeBSD Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va chassis.version Ta string Ta 1.0 Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va chassis.serial_number Ta string Ta None Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va chassis.asset_tag Ta string Ta None Ta
+This value is used for the guest's System Management BIOS System Information structure.
+.It Va chassis.sku Ta string Ta None Ta
+Stock keeping unit of the chassis.
+It's also called product ID or purchase order number.
+This value is used for the guest's System Management BIOS System Information structure.
 .El
 .Ss x86-Specific Settings
 .Bl -column "x86.vmexit_on_pause" "integer" "Default"
@@ -492,6 +538,12 @@ If set, allocate a memory disk as the backing store.
 The value of this variable is the size of the memory disk in megabytes.
 .El
 .Ss PCI Passthrough Settings
+The
+.Xr ppt 4
+device driver must be attached to the
+PCI device being passed through.
+The device to pass through can be identified either by name or its
+host PCI bus location.
 .Bl -column "Name" "integer" "Default"
 .It Sy Name Ta Sy Format Ta Sy Default Ta Sy Description
 .It Va bus Ta integer Ta Ta
@@ -500,6 +552,12 @@ Host PCI bus address of device to pass through.
 Host PCI slot address of device to pass through.
 .It Va func Ta integer Ta Ta
 Host PCI function address of device to pass through.
+.It Va pptdev Ta string Ta Ta
+Name of a
+.Xr ppt 4
+device to pass through.
+.It Va rom Ta path Ta Ta
+ROM file of the device which will be executed by OVMF to init the device.
 .El
 .Ss VirtIO 9p Settings
 Each VirtIO 9p device exposes a single filesystem from a host path.

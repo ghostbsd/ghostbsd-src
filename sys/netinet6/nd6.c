@@ -245,7 +245,7 @@ nd6_init(void)
 
 #ifdef VIMAGE
 void
-nd6_destroy()
+nd6_destroy(void)
 {
 
 	callout_drain(&V_nd6_slowtimo_ch);
@@ -1522,7 +1522,7 @@ nd6_free(struct llentry **lnp, int gc)
 
 		if (dr) {
 			/*
-			 * Unreachablity of a router might affect the default
+			 * Unreachability of a router might affect the default
 			 * router selection and on-link detection of advertised
 			 * prefixes.
 			 */

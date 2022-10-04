@@ -2352,7 +2352,7 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		if (nv->len > pf_ioctl_maxcount)
 			ERROUT(ENOMEM);
 
-		nvlpacked = malloc(nv->len, M_TEMP, M_WAITOK);
+		nvlpacked = malloc(nv->len, M_NVLIST, M_WAITOK);
 		error = copyin(nv->data, nvlpacked, nv->len);
 		if (error)
 			ERROUT(error);
@@ -2391,13 +2391,13 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		    anchor_call, td);
 
 		nvlist_destroy(nvl);
-		free(nvlpacked, M_TEMP);
+		free(nvlpacked, M_NVLIST);
 		break;
 #undef ERROUT
 DIOCADDRULENV_error:
 		pf_krule_free(rule);
 		nvlist_destroy(nvl);
-		free(nvlpacked, M_TEMP);
+		free(nvlpacked, M_NVLIST);
 
 		break;
 	}
@@ -4729,6 +4729,8 @@ DIOCCHANGEADDR_error:
 			break;
 		}
 
+		io->pfiio_name[sizeof(io->pfiio_name) - 1] = '\0';
+
 		bufsiz = io->pfiio_size * sizeof(struct pfi_kif);
 		ifstore = mallocarray(io->pfiio_size, sizeof(struct pfi_kif),
 		    M_TEMP, M_WAITOK | M_ZERO);
@@ -4744,6 +4746,8 @@ DIOCCHANGEADDR_error:
 	case DIOCSETIFFLAG: {
 		struct pfioc_iface *io = (struct pfioc_iface *)addr;
 
+		io->pfiio_name[sizeof(io->pfiio_name) - 1] = '\0';
+
 		PF_RULES_WLOCK();
 		error = pfi_set_flags(io->pfiio_name, io->pfiio_flags);
 		PF_RULES_WUNLOCK();
@@ -4752,6 +4756,8 @@ DIOCCHANGEADDR_error:
 
 	case DIOCCLRIFFLAG: {
 		struct pfioc_iface *io = (struct pfioc_iface *)addr;
+
+		io->pfiio_name[sizeof(io->pfiio_name) - 1] = '\0';
 
 		PF_RULES_WLOCK();
 		error = pfi_clear_flags(io->pfiio_name, io->pfiio_flags);
@@ -5172,7 +5178,7 @@ pf_keepcounters(struct pfioc_nv *nv)
 	if (nv->len > pf_ioctl_maxcount)
 		ERROUT(ENOMEM);
 
-	nvlpacked = malloc(nv->len, M_TEMP, M_WAITOK);
+	nvlpacked = malloc(nv->len, M_NVLIST, M_WAITOK);
 	if (nvlpacked == NULL)
 		ERROUT(ENOMEM);
 
@@ -5191,7 +5197,7 @@ pf_keepcounters(struct pfioc_nv *nv)
 
 on_error:
 	nvlist_destroy(nvl);
-	free(nvlpacked, M_TEMP);
+	free(nvlpacked, M_NVLIST);
 	return (error);
 }
 

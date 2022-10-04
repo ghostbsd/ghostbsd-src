@@ -54,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/reboot.h>
+#include <sys/reg.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/signalvar.h>
@@ -82,7 +83,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/metadata.h>
 #include <machine/md_var.h>
 #include <machine/pcb.h>
-#include <machine/reg.h>
 #include <machine/undefined.h>
 #include <machine/vmparam.h>
 
@@ -300,7 +300,8 @@ cpu_pcpu_init(struct pcpu *pcpu, int cpuid, size_t size)
 {
 
 	pcpu->pc_acpi_id = 0xffffffff;
-	pcpu->pc_mpidr = 0xffffffff;
+	pcpu->pc_mpidr_low = 0xffffffff;
+	pcpu->pc_mpidr_high = 0xffffffff;
 }
 
 void
@@ -485,6 +486,11 @@ add_efi_map_entry(struct efi_md *p)
 {
 
 	switch (p->md_type) {
+	case EFI_MD_TYPE_RECLAIM:
+		/*
+		 * The recomended location for ACPI tables. Map into the
+		 * DMAP so we can access them from userspace via /dev/mem.
+		 */
 	case EFI_MD_TYPE_RT_CODE:
 		/*
 		 * Some UEFI implementations put the system table in the

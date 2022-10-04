@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd March 9, 2022
+.Dd July 7, 2022
 .Dt RC.CONF 5
 .Os
 .Sh NAME
@@ -87,14 +87,14 @@ which will be included by the
 function.
 For jail configurations you could use the file
 .Pa /etc/rc.conf.d/jail
-to store jail specific configuration options.
+to store jail-specific configuration options.
 If
 .Va local_startup
 contains
 .Pa /usr/local/etc/rc.d
 and
 .Pa /opt/conf ,
-.Pa /usr/local/rc.conf.d/jail
+.Pa /usr/local/etc/rc.conf.d/jail
 and
 .Pa /opt/conf/rc.conf.d/jail
 will be loaded.
@@ -192,24 +192,56 @@ services are enabled that utilize the force_depend check.
 .Pq Vt str
 .Xr chroot 8
 to this directory before running the service.
-.It Ao Ar name Ac Ns Va _user
-.Pq Vt str
-Run the service under this user account.
-.It Ao Ar name Ac Ns Va _group
-.Pq Vt str
-Run the chrooted service under this system group.
-Unlike the _user
-setting, this setting has no effect if the service is not chrooted.
 .It Ao Ar name Ac Ns Va _fib
 .Pq Vt int
 The
 .Xr setfib 1
 value to run the service under.
+.It Ao Ar name Ac Ns Va _group
+.Pq Vt str
+Run the chrooted service under this system group.
+Unlike the
+.Ao Ar name Ac Ns Va _user
+setting, this setting has no effect if the service is not chrooted.
+.It Ao Ar name Ac Ns Va _limits
+.Pq Vt str
+Resource limits to apply to the service using
+.Xr limits 1 .
+By default, resource limits are based on the login class defined in
+.Ao Ar name Ac Ns Va _login_class .
+.It Ao Ar name Ac Ns Va _login_class
+.Pq Vt str
+Login class to be used with
+.Ao Ar name Ac Ns Va _limits .
+Defaults to
+.Dq Li daemon .
 .It Ao Ar name Ac Ns Va _nice
 .Pq Vt int
 The
 .Xr nice 1
 value to run the service under.
+.It Ao Ar name Ac Ns Va _oomprotect
+.Pq Vt str
+Use
+.Xr protect 1
+to prevent the service from being killed when swap space
+is exhausted.
+Use
+.Dq Li YES
+to protect only the service itself, and
+.Dq Li ALL
+to protect the service and all its child processes.
+.Pp
+Please note that rc scripts which redefine
+.Dl ${argument}_cmd
+.Pq see Xr rc.subr 8
+such as PostgreSQL will not inherit the OOM killer protection.
+.Pp
+This variable has no effect on services running within a
+.Xr jail 8 .
+.It Ao Ar name Ac Ns Va _user
+.Pq Vt str
+Run the service under this user account.
 .It Va apm_enable
 .Pq Vt bool
 If set to
@@ -420,6 +452,34 @@ is mounted on normal systems.
 Clean the
 .Pa /var
 directory.
+.It Va var_run_enable
+.Pq Vt bool
+Set to "YES" to enable saving of the
+.Pa /var/run
+directory strcucture into an mtree file at shutdown and the reload of the
+.Pa /var/run
+directory structure at boot.
+.It Va var_run_autosave
+.Pq Vt bool
+In some cases it may be undesirable to save
+.Pa /var/run
+at shutdown.
+When set to "NO"
+.Pa /var/run
+is loaded at reboot but not saved at shutdown. Typically in this scenario
+a
+.Pa service
+.Pa var_run
+.Pa save
+would be performed to save a copy of the
+.Pa /var/run
+directory structure once, to be reload during all subsequent reboots.
+.It Va var_run_mtree
+.Pq Vt str
+Where to save the
+.Pa /var/run
+mtree. The default location is
+.Pa /var/db/mtree/BSD.var-run.mtree .
 .It Va local_startup
 .Pq Vt str
 List of directories to search for startup script files.
@@ -1431,7 +1491,7 @@ ifconfig_em0_aliases="\\
 It also supports CIDR notation.
 .Pp
 If the
-.Pa /etc/start_if. Ns Aq Ar interface
+.Pa /etc/start_if . Ns Aq Ar interface
 file is present, it is read and executed by the
 .Xr sh 1
 interpreter
@@ -1557,7 +1617,7 @@ will use the settings from
 Finally, you can add
 .Xr ifconfig 8
 options in this variable, in addition to the
-.Pa /etc/start_if. Ns Aq Ar interface
+.Pa /etc/start_if . Ns Aq Ar interface
 file.
 For instance, to configure an
 .Xr ath 4
@@ -1927,16 +1987,16 @@ The value of this variable is used to configure the link layer of the
 tunnel using the
 .Cm tunnel
 option to
-.Xr ifconfig .
+.Xr ifconfig 8 .
 Additionally, this option ensures that each listed interface is created
 via the
 .Cm create
 option to
-.Xr ifconfig
+.Xr ifconfig 8
 before attempting to configure it.
 .Pp
 For example, configure two
-.Xr gif
+.Xr gif 4
 interfaces with:
 .Bd -literal
 gif_interfaces="gif0 gif1"
@@ -2051,6 +2111,12 @@ If set to
 .Pa /etc/rc.d/zfs
 will attempt to automatically mount ZFS file systems and initialize ZFS volumes
 (ZVOLs).
+.It Va zpool_reguid
+.Pq Vt str
+A space-separated list of ZFS pool names for which new pool GUIDs should be
+assigned upon first boot.
+This is useful when using a ZFS pool copied from a template, such as a virtual
+machine image.
 .It Va gptboot_enable
 .Pq Vt bool
 If set to
@@ -3955,7 +4021,7 @@ For backward compatibility,
 when per-jail configuration variables are defined,
 .Xr jail 8
 configuration files are created as
-.Pa /var/run/jail. Ns Ao Ar jname Ac Ns Pa .conf
+.Pa /var/run/jail . Ns Ao Ar jname Ac Ns Pa .conf
 and used.
 .Pp
 The following per-jail parameters are handled by
@@ -3985,7 +4051,7 @@ set from
 set from
 .Va jail_ Ns Ao Ar jname Ac Ns Va _consolelog .
 The default value is
-.Pa /var/log/jail_ Ao Ar jname Ac Pa _console.log .
+.Pa /var/log/jail_ Ns Ao Ar jname Ac Ns Pa _console.log .
 .It Li interface
 set from
 .Va jail_ Ns Ao Ar jname Ac Ns Va _interface .
@@ -4676,7 +4742,8 @@ The default is 10.
 .Xr gdb 1 ,
 .Xr info 1 ,
 .Xr kbdcontrol 1 ,
-.Xr makewhatis 1 ,
+.Xr limits 1 ,
+.Xr protect 1 ,
 .Xr sh 1 ,
 .Xr vi 1 ,
 .Xr vidcontrol 1 ,
@@ -4698,6 +4765,7 @@ The default is 10.
 .Xr ipnat 5 ,
 .Xr jail.conf 5 ,
 .Xr loader.conf 5 ,
+.Xr login.conf 5 ,
 .Xr motd 5 ,
 .Xr newsyslog.conf 5 ,
 .Xr pf.conf 5 ,
@@ -4724,6 +4792,7 @@ The default is 10.
 .Xr kldxref 8 ,
 .Xr loader 8 ,
 .Xr lpd 8 ,
+.Xr makewhatis 8 ,
 .Xr mdconfig 8 ,
 .Xr mdmfs 8 ,
 .Xr mixer 8 ,
@@ -4742,6 +4811,7 @@ The default is 10.
 .Xr quotaon 8 ,
 .Xr rc 8 ,
 .Xr rc.sendmail 8 ,
+.Xr rc.subr 8 ,
 .Xr rfcomm_pppd 8 ,
 .Xr route 8 ,
 .Xr routed 8 ,

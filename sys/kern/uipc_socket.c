@@ -2065,8 +2065,8 @@ dontblock:
 		struct tls_get_record tgr;
 
 		/*
-		 * For MSG_TLSAPPDATA, check for a non-application data
-		 * record.  If found, return ENXIO without removing
+		 * For MSG_TLSAPPDATA, check for an alert record.
+		 * If found, return ENXIO without removing
 		 * it from the receive queue.  This allows a subsequent
 		 * call without MSG_TLSAPPDATA to receive it.
 		 * Note that, for TLS, there should only be a single
@@ -2077,8 +2077,8 @@ dontblock:
 			if (cmsg->cmsg_type == TLS_GET_RECORD &&
 			    cmsg->cmsg_len == CMSG_LEN(sizeof(tgr))) {
 				memcpy(&tgr, CMSG_DATA(cmsg), sizeof(tgr));
-				/* This will need to change for TLS 1.3. */
-				if (tgr.tls_type != TLS_RLTYPE_APP) {
+				if (__predict_false(tgr.tls_type ==
+				    TLS_RLTYPE_ALERT)) {
 					SOCKBUF_UNLOCK(&so->so_rcv);
 					error = ENXIO;
 					goto release;
@@ -2996,7 +2996,7 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 	int	error, optval;
 	struct	linger l;
 	struct	timeval tv;
-	sbintime_t val;
+	sbintime_t val, *valp;
 	uint32_t val32;
 #ifdef MAC
 	struct mac extmac;
@@ -3135,14 +3135,14 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 				val = SBT_MAX;
 			else
 				val = tvtosbt(tv);
-			switch (sopt->sopt_name) {
-			case SO_SNDTIMEO:
-				so->so_snd.sb_timeo = val;
-				break;
-			case SO_RCVTIMEO:
-				so->so_rcv.sb_timeo = val;
-				break;
-			}
+			SOCK_LOCK(so);
+			valp = sopt->sopt_name == SO_SNDTIMEO ?
+			    (SOLISTENING(so) ? &so->sol_sbsnd_timeo :
+			    &so->so_snd.sb_timeo) :
+			    (SOLISTENING(so) ? &so->sol_sbrcv_timeo :
+			    &so->so_rcv.sb_timeo);
+			*valp = val;
+			SOCK_UNLOCK(so);
 			break;
 
 		case SO_LABEL:
@@ -3324,8 +3324,13 @@ integer:
 
 		case SO_SNDTIMEO:
 		case SO_RCVTIMEO:
+			SOCK_LOCK(so);
 			tv = sbttotv(sopt->sopt_name == SO_SNDTIMEO ?
-			    so->so_snd.sb_timeo : so->so_rcv.sb_timeo);
+			    (SOLISTENING(so) ? so->sol_sbsnd_timeo :
+			    so->so_snd.sb_timeo) :
+			    (SOLISTENING(so) ? so->sol_sbrcv_timeo :
+			    so->so_rcv.sb_timeo));
+			SOCK_UNLOCK(so);
 #ifdef COMPAT_FREEBSD32
 			if (SV_CURPROC_FLAG(SV_ILP32)) {
 				struct timeval32 tv32;
@@ -3581,9 +3586,11 @@ sopoll_generic(struct socket *so, int events, struct ucred *active_cred,
 					revents |= POLLHUP;
 			}
 		}
+		if (so->so_rcv.sb_state & SBS_CANTRCVMORE)
+			revents |= events & POLLRDHUP;
 		if (revents == 0) {
 			if (events &
-			    (POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND)) {
+			    (POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND | POLLRDHUP)) {
 				selrecord(td, &so->so_rdsel);
 				so->so_rcv.sb_flags |= SB_SEL;
 			}

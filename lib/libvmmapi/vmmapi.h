@@ -31,6 +31,7 @@
 #ifndef _VMMAPI_H_
 #define	_VMMAPI_H_
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/cpuset.h>
 #include <machine/vmm_dev.h>
@@ -73,8 +74,10 @@ enum {
 	VM_SYSMEM,
 	VM_BOOTROM,
 	VM_FRAMEBUFFER,
+	VM_PCIROM,
 };
 
+__BEGIN_DECLS
 /*
  * Get the length and name of the memory segment identified by 'segid'.
  * Note that system memory segments are identified with a nul name.
@@ -274,5 +277,6 @@ struct checkpoint_op {
 
 int	vm_snapshot_req(struct vm_snapshot_meta *meta);
 int	vm_restore_time(struct vmctx *ctx);
+__END_DECLS
 
 #endif	/* _VMMAPI_H_ */

@@ -147,7 +147,7 @@ MODULE_VERSION(nvd, 1);
 MODULE_DEPEND(nvd, nvme, 1, 1, 1);
 
 static int
-nvd_load()
+nvd_load(void)
 {
 	if (!nvme_use_nvd)
 		return 0;
@@ -163,7 +163,7 @@ nvd_load()
 }
 
 static void
-nvd_unload()
+nvd_unload(void)
 {
 	struct nvd_controller	*ctrlr;
 	struct nvd_disk		*ndisk;
@@ -291,7 +291,7 @@ nvd_ioctl(struct disk *dp, u_long cmd, void *data, int fflag,
 }
 
 static int
-nvd_dump(void *arg, void *virt, vm_offset_t phys, off_t offset, size_t len)
+nvd_dump(void *arg, void *virt, off_t offset, size_t len)
 {
 	struct disk *dp = arg;
 	struct nvd_disk *ndisk = dp->d_drv1;

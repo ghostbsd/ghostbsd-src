@@ -53,6 +53,7 @@
 #include <cityhash.h>
 #include <sys/spa_impl.h>
 #include <sys/wmsum.h>
+#include <sys/vdev_impl.h>
 
 kstat_t *dbuf_ksp;
 
@@ -592,6 +593,68 @@ dbuf_is_metadata(dmu_buf_impl_t *db)
 
 		return (is_metadata);
 	}
+}
+
+/*
+ * We want to exclude buffers that are on a special allocation class from
+ * L2ARC.
+ */
+boolean_t
+dbuf_is_l2cacheable(dmu_buf_impl_t *db)
+{
+	vdev_t *vd = NULL;
+	zfs_cache_type_t cache = db->db_objset->os_secondary_cache;
+	blkptr_t *bp = db->db_blkptr;
+
+	if (bp != NULL && !BP_IS_HOLE(bp)) {
+		uint64_t vdev = DVA_GET_VDEV(bp->blk_dva);
+		vdev_t *rvd = db->db_objset->os_spa->spa_root_vdev;
+
+		if (vdev < rvd->vdev_children)
+			vd = rvd->vdev_child[vdev];
+
+		if (cache == ZFS_CACHE_ALL ||
+		    (dbuf_is_metadata(db) && cache == ZFS_CACHE_METADATA)) {
+			if (vd == NULL)
+				return (B_TRUE);
+
+			if ((vd->vdev_alloc_bias != VDEV_BIAS_SPECIAL &&
+			    vd->vdev_alloc_bias != VDEV_BIAS_DEDUP) ||
+			    l2arc_exclude_special == 0)
+				return (B_TRUE);
+		}
+	}
+
+	return (B_FALSE);
+}
+
+static inline boolean_t
+dnode_level_is_l2cacheable(blkptr_t *bp, dnode_t *dn, int64_t level)
+{
+	vdev_t *vd = NULL;
+	zfs_cache_type_t cache = dn->dn_objset->os_secondary_cache;
+
+	if (bp != NULL && !BP_IS_HOLE(bp)) {
+		uint64_t vdev = DVA_GET_VDEV(bp->blk_dva);
+		vdev_t *rvd = dn->dn_objset->os_spa->spa_root_vdev;
+
+		if (vdev < rvd->vdev_children)
+			vd = rvd->vdev_child[vdev];
+
+		if (cache == ZFS_CACHE_ALL || ((level > 0 ||
+		    DMU_OT_IS_METADATA(dn->dn_handle->dnh_dnode->dn_type)) &&
+		    cache == ZFS_CACHE_METADATA)) {
+			if (vd == NULL)
+				return (B_TRUE);
+
+			if ((vd->vdev_alloc_bias != VDEV_BIAS_SPECIAL &&
+			    vd->vdev_alloc_bias != VDEV_BIAS_DEDUP) ||
+			    l2arc_exclude_special == 0)
+				return (B_TRUE);
+		}
+	}
+
+	return (B_FALSE);
 }
 
 
@@ -1465,10 +1528,8 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 	zbookmark_phys_t zb;
 	uint32_t aflags = ARC_FLAG_NOWAIT;
 	int err, zio_flags;
-	boolean_t bonus_read;
 
 	err = zio_flags = 0;
-	bonus_read = B_FALSE;
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
 	ASSERT(!zfs_refcount_is_zero(&db->db_holds));
@@ -1525,7 +1586,7 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 	DTRACE_SET_STATE(db, "read issued");
 	mutex_exit(&db->db_mtx);
 
-	if (DBUF_IS_L2CACHEABLE(db))
+	if (dbuf_is_l2cacheable(db))
 		aflags |= ARC_FLAG_L2CACHE;
 
 	dbuf_add_ref(db, NULL);
@@ -2880,9 +2941,6 @@ dbuf_destroy(dmu_buf_impl_t *db)
 	ASSERT3U(db->db_caching_status, ==, DB_NO_CACHE);
 	ASSERT(!multilist_link_active(&db->db_cache_link));
 
-	kmem_cache_free(dbuf_kmem_cache, db);
-	arc_space_return(sizeof (dmu_buf_impl_t), ARC_SPACE_DBUF);
-
 	/*
 	 * If this dbuf is referenced from an indirect dbuf,
 	 * decrement the ref count on the indirect dbuf.
@@ -2891,6 +2949,9 @@ dbuf_destroy(dmu_buf_impl_t *db)
 		mutex_enter(&parent->db_mtx);
 		dbuf_rele_and_unlock(parent, db, B_TRUE);
 	}
+
+	kmem_cache_free(dbuf_kmem_cache, db);
+	arc_space_return(sizeof (dmu_buf_impl_t), ARC_SPACE_DBUF);
 }
 
 /*
@@ -3124,8 +3185,10 @@ typedef struct dbuf_prefetch_arg {
 static void
 dbuf_prefetch_fini(dbuf_prefetch_arg_t *dpa, boolean_t io_done)
 {
-	if (dpa->dpa_cb != NULL)
-		dpa->dpa_cb(dpa->dpa_arg, io_done);
+	if (dpa->dpa_cb != NULL) {
+		dpa->dpa_cb(dpa->dpa_arg, dpa->dpa_zb.zb_level,
+		    dpa->dpa_zb.zb_blkid, io_done);
+	}
 	kmem_free(dpa, sizeof (*dpa));
 }
 
@@ -3136,9 +3199,10 @@ dbuf_issue_final_prefetch_done(zio_t *zio, const zbookmark_phys_t *zb,
 	(void) zio, (void) zb, (void) iobp;
 	dbuf_prefetch_arg_t *dpa = private;
 
-	dbuf_prefetch_fini(dpa, B_TRUE);
 	if (abuf != NULL)
 		arc_buf_destroy(abuf, private);
+
+	dbuf_prefetch_fini(dpa, B_TRUE);
 }
 
 /*
@@ -3259,7 +3323,8 @@ dbuf_prefetch_indirect_done(zio_t *zio, const zbookmark_phys_t *zb,
 		    dpa->dpa_zb.zb_object, dpa->dpa_curlevel, nextblkid);
 
 		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
-		    bp, dbuf_prefetch_indirect_done, dpa, dpa->dpa_prio,
+		    bp, dbuf_prefetch_indirect_done, dpa,
+		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
 		    &iter_aflags, &zb);
 	}
@@ -3370,7 +3435,7 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 	dpa->dpa_arg = arg;
 
 	/* flag if L2ARC eligible, l2arc_noprefetch then decides */
-	if (DNODE_LEVEL_IS_L2CACHEABLE(dn, level))
+	if (dnode_level_is_l2cacheable(&bp, dn, level))
 		dpa->dpa_aflags |= ARC_FLAG_L2CACHE;
 
 	/*
@@ -3388,13 +3453,14 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 		zbookmark_phys_t zb;
 
 		/* flag if L2ARC eligible, l2arc_noprefetch then decides */
-		if (DNODE_LEVEL_IS_L2CACHEABLE(dn, level))
+		if (dnode_level_is_l2cacheable(&bp, dn, level))
 			iter_aflags |= ARC_FLAG_L2CACHE;
 
 		SET_BOOKMARK(&zb, ds != NULL ? ds->ds_object : DMU_META_OBJSET,
 		    dn->dn_object, curlevel, curblkid);
 		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
-		    &bp, dbuf_prefetch_indirect_done, dpa, prio,
+		    &bp, dbuf_prefetch_indirect_done, dpa,
+		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
 		    &iter_aflags, &zb);
 	}
@@ -3406,7 +3472,7 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 	return (1);
 no_issue:
 	if (cb != NULL)
-		cb(arg, B_FALSE);
+		cb(arg, level, blkid, B_FALSE);
 	return (0);
 }
 
@@ -3886,7 +3952,7 @@ dmu_buf_get_user(dmu_buf_t *db_fake)
 }
 
 void
-dmu_buf_user_evict_wait()
+dmu_buf_user_evict_wait(void)
 {
 	taskq_wait(dbu_evict_taskq);
 }
@@ -4986,7 +5052,7 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 			children_ready_cb = dbuf_write_children_ready;
 
 		dr->dr_zio = arc_write(pio, os->os_spa, txg,
-		    &dr->dr_bp_copy, data, DBUF_IS_L2CACHEABLE(db),
+		    &dr->dr_bp_copy, data, dbuf_is_l2cacheable(db),
 		    &zp, dbuf_write_ready,
 		    children_ready_cb, dbuf_write_physdone,
 		    dbuf_write_done, db, ZIO_PRIORITY_ASYNC_WRITE,

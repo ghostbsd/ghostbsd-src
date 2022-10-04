@@ -35,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/imgact.h>
 #include <sys/linker.h>
 #include <sys/proc.h>
+#include <sys/reg.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
 #include <sys/syscall.h>
@@ -58,7 +59,6 @@ extern char _binary_elf_vdso_so_1_size;
 struct sysentvec elf64_freebsd_sysvec_la48 = {
 	.sv_size	= SYS_MAXSYSCALL,
 	.sv_table	= sysent,
-	.sv_transtrap	= NULL,
 	.sv_fixup	= __elfN(freebsd_fixup),
 	.sv_sendsig	= sendsig,
 	.sv_sigcode	= _binary_elf_vdso_so_1_start,
@@ -66,6 +66,9 @@ struct sysentvec elf64_freebsd_sysvec_la48 = {
 	.sv_sigcodeoff	= VDSO_SIGCODE_OFFSET,
 	.sv_name	= "FreeBSD ELF64",
 	.sv_coredump	= __elfN(coredump),
+	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
+	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
@@ -91,12 +94,14 @@ struct sysentvec elf64_freebsd_sysvec_la48 = {
 	.sv_trap	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
+	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
+	.sv_regset_end  = SET_LIMIT(__elfN(regset)),
+	.sv_set_fork_retval = x86_set_fork_retval,
 };
 
 struct sysentvec elf64_freebsd_sysvec_la57 = {
 	.sv_size	= SYS_MAXSYSCALL,
 	.sv_table	= sysent,
-	.sv_transtrap	= NULL,
 	.sv_fixup	= __elfN(freebsd_fixup),
 	.sv_sendsig	= sendsig,
 	.sv_sigcode	= _binary_elf_vdso_so_1_start,
@@ -104,6 +109,9 @@ struct sysentvec elf64_freebsd_sysvec_la57 = {
 	.sv_sigcodeoff	= VDSO_SIGCODE_OFFSET,
 	.sv_name	= "FreeBSD ELF64",
 	.sv_coredump	= __elfN(coredump),
+	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
+	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
@@ -129,6 +137,9 @@ struct sysentvec elf64_freebsd_sysvec_la57 = {
 	.sv_trap	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
+	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
+	.sv_regset_end  = SET_LIMIT(__elfN(regset)),
+	.sv_set_fork_retval=  x86_set_fork_retval,
 };
 
 static void

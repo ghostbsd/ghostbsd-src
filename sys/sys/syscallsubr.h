@@ -39,6 +39,7 @@
 #include <sys/_uio.h>
 
 struct __wrusage;
+struct cpuset_copy_cb;
 struct file;
 struct filecaps;
 enum idtype;
@@ -57,6 +58,7 @@ struct ogetdirentries_args;
 struct rlimit;
 struct rusage;
 struct sched_param;
+struct sembuf;
 union semun;
 struct sockaddr;
 struct stat;
@@ -114,17 +116,22 @@ int	kern_connectat(struct thread *td, int dirfd, int fd,
 	    struct sockaddr *sa);
 int	kern_copy_file_range(struct thread *td, int infd, off_t *inoffp,
 	    int outfd, off_t *outoffp, size_t len, unsigned int flags);
+int	user_cpuset_getaffinity(struct thread *td, cpulevel_t level,
+	    cpuwhich_t which, id_t id, size_t cpusetsize, cpuset_t *maskp,
+	    const struct cpuset_copy_cb *cb);
 int	kern_cpuset_getaffinity(struct thread *td, cpulevel_t level,
-	    cpuwhich_t which, id_t id, size_t cpusetsize, cpuset_t *maskp);
+	    cpuwhich_t which, id_t id, size_t cpusetsize, cpuset_t *mask);
 int	kern_cpuset_setaffinity(struct thread *td, cpulevel_t level,
+	    cpuwhich_t which, id_t id, cpuset_t *maskp);
+int	user_cpuset_setaffinity(struct thread *td, cpulevel_t level,
 	    cpuwhich_t which, id_t id, size_t cpusetsize,
-	    const cpuset_t *maskp);
+	    const cpuset_t *maskp, const struct cpuset_copy_cb *cb);
 int	kern_cpuset_getdomain(struct thread *td, cpulevel_t level,
 	    cpuwhich_t which, id_t id, size_t domainsetsize,
-	    domainset_t *maskp, int *policyp);
+	    domainset_t *maskp, int *policyp, const struct cpuset_copy_cb *cb);
 int	kern_cpuset_setdomain(struct thread *td, cpulevel_t level,
 	    cpuwhich_t which, id_t id, size_t domainsetsize,
-	    const domainset_t *maskp, int policy);
+	    const domainset_t *maskp, int policy, const struct cpuset_copy_cb *cb);
 int	kern_cpuset_getid(struct thread *td, cpulevel_t level,
 	    cpuwhich_t which, id_t id, cpusetid_t *setid);
 int	kern_cpuset_setid(struct thread *td, cpuwhich_t which,
@@ -184,7 +191,7 @@ int	kern_kldload(struct thread *td, const char *file, int *fileid);
 int	kern_kldstat(struct thread *td, int fileid, struct kld_file_stat *stat);
 int	kern_kldunload(struct thread *td, int fileid, int flags);
 int	kern_linkat(struct thread *td, int fd1, int fd2, const char *path1,
-	    const char *path2, enum uio_seg segflg, int follow);
+	    const char *path2, enum uio_seg segflg, int flag);
 int	kern_listen(struct thread *td, int s, int backlog);
 int	kern_lseek(struct thread *td, int fd, off_t offset, int whence);
 int	kern_lutimes(struct thread *td, const char *path, enum uio_seg pathseg,
@@ -227,6 +234,9 @@ int	kern_pipe(struct thread *td, int fildes[2], int flags,
 	    struct filecaps *fcaps1, struct filecaps *fcaps2);
 int	kern_poll(struct thread *td, struct pollfd *fds, u_int nfds,
 	    struct timespec *tsp, sigset_t *uset);
+int	kern_poll_kfds(struct thread *td, struct pollfd *fds, u_int nfds,
+	    struct timespec *tsp, sigset_t *uset);
+bool	kern_poll_maxfds(u_int nfds);
 int	kern_posix_error(struct thread *td, int error);
 int	kern_posix_fadvise(struct thread *td, int fd, off_t offset, off_t len,
 	    int advice);
@@ -318,6 +328,8 @@ int	kern_ktimer_settime(struct thread *td, int timer_id, int flags,
 int	kern_ktimer_gettime(struct thread *td, int timer_id,
 	    struct itimerspec *val);
 int	kern_ktimer_getoverrun(struct thread *td, int timer_id);
+int	kern_semop(struct thread *td, int usemid, struct sembuf *usops,
+	    size_t nsops, struct timespec *timeout);
 int	kern_thr_alloc(struct proc *, int pages, struct thread **);
 int	kern_thr_exit(struct thread *td);
 int	kern_thr_new(struct thread *td, struct thr_param *param);

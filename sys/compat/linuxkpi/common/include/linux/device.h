@@ -193,6 +193,14 @@ show_class_attr_string(struct class *class,
 #define	dev_printk(lvl, dev, fmt, ...)					\
 	    device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
 
+#define dev_info_once(dev, ...) do {		\
+	static bool __dev_info_once;		\
+	if (!__dev_info_once) {			\
+	__dev_info_once = true;			\
+	dev_info(dev, __VA_ARGS__);		\
+	}					\
+} while (0)
+
 #define	dev_err_once(dev, ...) do {		\
 	static bool __dev_err_once;		\
 	if (!__dev_err_once) {			\
@@ -451,9 +459,9 @@ device_unregister(struct device *dev)
 	dev->bsddev = NULL;
 
 	if (bsddev != NULL && dev->bsddev_attached_here) {
-		mtx_lock(&Giant);
+		bus_topo_lock();
 		device_delete_child(device_get_parent(bsddev), bsddev);
-		mtx_unlock(&Giant);
+		bus_topo_unlock();
 	}
 	put_device(dev);
 }
@@ -467,9 +475,9 @@ device_del(struct device *dev)
 	dev->bsddev = NULL;
 
 	if (bsddev != NULL && dev->bsddev_attached_here) {
-		mtx_lock(&Giant);
+		bus_topo_lock();
 		device_delete_child(device_get_parent(bsddev), bsddev);
-		mtx_unlock(&Giant);
+		bus_topo_unlock();
 	}
 }
 

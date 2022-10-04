@@ -64,8 +64,6 @@ int bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp);
 
 extern EFI_SYSTEM_TABLE	*ST;
 
-int boot_services_gone;
-
 static int
 bi_getboothowto(char *kargs)
 {
@@ -350,6 +348,7 @@ bi_load_efi_data(struct preloaded_file *kfp)
 	 */
 
 	sz = 0;
+	mm = NULL;
 
 	/*
 	 * Matthew Garrett has observed at least one system changing the
@@ -394,11 +393,9 @@ bi_load_efi_data(struct preloaded_file *kfp)
 			sz = (EFI_PAGE_SIZE * pages) - efisz;
 		}
 
-		status = BS->ExitBootServices(IH, efi_mapkey);
-		if (!EFI_ERROR(status)) {
-			boot_services_gone = 1;
+		status = efi_exit_boot_services(efi_mapkey);
+		if (!EFI_ERROR(status))
 			break;
-		}
 	}
 
 	if (retry == 0) {

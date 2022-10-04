@@ -822,7 +822,7 @@ gicv3_its_attach(device_t dev)
 	struct gicv3_its_softc *sc;
 	int domain, err, i, rid;
 	uint64_t phys;
-	uint32_t iidr;
+	uint32_t ctlr, iidr;
 
 	sc = device_get_softc(dev);
 
@@ -853,6 +853,18 @@ gicv3_its_attach(device_t dev)
 			its_quirks[i].func(dev);
 			break;
 		}
+	}
+
+	/*
+	 * GIT_CTLR_EN is mandated to reset to 0 on a Warm reset, but we may be
+	 * coming in via, for instance, a kexec/kboot style setup where a
+	 * previous kernel has configured then relinquished control.  Clear it
+	 * so that we can reconfigure GITS_BASER*.
+	 */
+	ctlr = gic_its_read_4(sc, GITS_CTLR);
+	if ((ctlr & GITS_CTLR_EN) != 0) {
+		ctlr &= ~GITS_CTLR_EN;
+		gic_its_write_4(sc, GITS_CTLR, ctlr);
 	}
 
 	/* Allocate the private tables */
@@ -887,8 +899,7 @@ gicv3_its_attach(device_t dev)
 			sc->sc_its_cols[cpu] = NULL;
 
 	/* Enable the ITS */
-	gic_its_write_4(sc, GITS_CTLR,
-	    gic_its_read_4(sc, GITS_CTLR) | GITS_CTLR_EN);
+	gic_its_write_4(sc, GITS_CTLR, ctlr | GITS_CTLR_EN);
 
 	/* Create the LPI configuration table */
 	gicv3_its_conftable_init(sc);
@@ -1455,7 +1466,10 @@ gicv3_iommu_init(device_t dev, device_t child, struct iommu_domain **domain)
 
 	sc = device_get_softc(dev);
 	ctx = iommu_get_dev_ctx(child);
-	error = iommu_map_msi(ctx, PAGE_SIZE, GITS_TRANSLATER,
+	if (ctx == NULL)
+		return (ENXIO);
+	/* Map the page containing the GITS_TRANSLATER register. */
+	error = iommu_map_msi(ctx, PAGE_SIZE, 0,
 	    IOMMU_MAP_ENTRY_WRITE, IOMMU_MF_CANWAIT, &sc->ma);
 	*domain = iommu_get_ctx_domain(ctx);
 
@@ -1468,6 +1482,9 @@ gicv3_iommu_deinit(device_t dev, device_t child)
 	struct iommu_ctx *ctx;
 
 	ctx = iommu_get_dev_ctx(child);
+	if (ctx == NULL)
+		return;
+
 	iommu_unmap_msi(ctx);
 }
 #endif

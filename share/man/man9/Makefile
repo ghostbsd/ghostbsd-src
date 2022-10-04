@@ -702,6 +702,14 @@ MLINKS+=bus_space.9 bus_space_alloc.9 \
 	bus_space.9 bus_space_copy_region_stream_8.9 \
 	bus_space.9 bus_space_free.9 \
 	bus_space.9 bus_space_map.9 \
+	bus_space.9 bus_space_peek_1.9 \
+	bus_space.9 bus_space_peek_2.9 \
+	bus_space.9 bus_space_peek_4.9 \
+	bus_space.9 bus_space_peek_8.9 \
+	bus_space.9 bus_space_poke_1.9 \
+	bus_space.9 bus_space_poke_2.9 \
+	bus_space.9 bus_space_poke_4.9 \
+	bus_space.9 bus_space_poke_8.9 \
 	bus_space.9 bus_space_read_1.9 \
 	bus_space.9 bus_space_read_2.9 \
 	bus_space.9 bus_space_read_4.9 \
@@ -968,8 +976,15 @@ MLINKS+=crypto_session.9 crypto_auth_hash.9 \
 	crypto_session.9 crypto_get_params.9 \
 	crypto_session.9 crypto_newsession.9 \
 	crypto_session.9 crypto_freesession.9
-MLINKS+=DB_COMMAND.9 DB_SHOW_ALL_COMMAND.9 \
-	DB_COMMAND.9 DB_SHOW_COMMAND.9
+MLINKS+=DB_COMMAND.9 DB_ALIAS.9 \
+	DB_COMMAND.9 DB_ALIAS_FLAGS.9 \
+	DB_COMMAND.9 DB_COMMAND_FLAGS.9 \
+	DB_COMMAND.9 DB_SHOW_ALIAS.9 \
+	DB_COMMAND.9 DB_SHOW_ALIAS_FLAGS.9 \
+	DB_COMMAND.9 DB_SHOW_ALL_ALIAS.9 \
+	DB_COMMAND.9 DB_SHOW_ALL_COMMAND.9 \
+	DB_COMMAND.9 DB_SHOW_COMMAND.9 \
+	DB_COMMAND.9 DB_SHOW_COMMAND_FLAGS.9
 MLINKS+=DECLARE_MODULE.9 DECLARE_MODULE_TIED.9
 MLINKS+=dev_clone.9 drain_dev_clone_events.9
 MLINKS+=dev_refthread.9 devvn_refthread.9 \

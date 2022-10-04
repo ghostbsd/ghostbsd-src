@@ -56,7 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/sx.h>
 #include <sys/turnstile.h>
-#include <sys/umtx.h>
+#include <sys/umtxvar.h>
 #include <machine/pcb.h>
 #include <machine/smp.h>
 
@@ -1248,9 +1248,10 @@ kick_other_cpu(int pri, int cpuid)
 	}
 #endif /* defined(IPI_PREEMPTION) && defined(PREEMPTION) */
 
-	pcpu->pc_curthread->td_flags |= TDF_NEEDRESCHED;
-	ipi_cpu(cpuid, IPI_AST);
-	return;
+	if (pcpu->pc_curthread->td_lock == &sched_lock) {
+		pcpu->pc_curthread->td_flags |= TDF_NEEDRESCHED;
+		ipi_cpu(cpuid, IPI_AST);
+	}
 }
 #endif /* SMP */
 

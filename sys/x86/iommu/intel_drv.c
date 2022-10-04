@@ -922,7 +922,7 @@ dmar_rmrr_iter(ACPI_DMAR_HEADER *dmarh, void *arg)
 			/* The RMRR entry end address is inclusive. */
 			entry->end = resmem->EndAddress;
 			TAILQ_INSERT_TAIL(ria->rmrr_entries, entry,
-			    unroll_link);
+			    dmamap_link);
 		}
 	}
 
@@ -1158,7 +1158,7 @@ dmar_print_domain(struct dmar_domain *domain, bool show_mappings)
 	}
 }
 
-DB_FUNC(dmar_domain, db_dmar_print_domain, db_show_table, CS_OWN, NULL)
+DB_SHOW_COMMAND_FLAGS(dmar_domain, db_dmar_print_domain, CS_OWN)
 {
 	struct dmar_unit *unit;
 	struct dmar_domain *domain;

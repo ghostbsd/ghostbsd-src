@@ -651,11 +651,11 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 	/* linux_clone */
 	case 120: {
 		struct linux_clone_args *p = params;
-		iarg[0] = p->flags; /* l_int */
-		uarg[1] = (intptr_t)p->stack; /* void * */
-		uarg[2] = (intptr_t)p->parent_tidptr; /* void * */
-		uarg[3] = (intptr_t)p->tls; /* void * */
-		uarg[4] = (intptr_t)p->child_tidptr; /* void * */
+		iarg[0] = p->flags; /* l_ulong */
+		iarg[1] = p->stack; /* l_ulong */
+		uarg[2] = (intptr_t)p->parent_tidptr; /* l_int * */
+		iarg[3] = p->tls; /* l_ulong */
+		uarg[4] = (intptr_t)p->child_tidptr; /* l_int * */
 		*n_args = 5;
 		break;
 	}
@@ -972,9 +972,9 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 3;
 		break;
 	}
-	/* poll */
+	/* linux_poll */
 	case 168: {
-		struct poll_args *p = params;
+		struct linux_poll_args *p = params;
 		uarg[0] = (intptr_t)p->fds; /* struct pollfd* */
 		uarg[1] = p->nfds; /* unsigned int */
 		iarg[2] = p->timeout; /* long */
@@ -1050,7 +1050,7 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		struct linux_rt_sigtimedwait_args *p = params;
 		uarg[0] = (intptr_t)p->mask; /* l_sigset_t * */
 		uarg[1] = (intptr_t)p->ptr; /* l_siginfo_t * */
-		uarg[2] = (intptr_t)p->timeout; /* struct l_timeval * */
+		uarg[2] = (intptr_t)p->timeout; /* struct l_timespec * */
 		iarg[3] = p->sigsetsize; /* l_size_t */
 		*n_args = 4;
 		break;
@@ -1477,8 +1477,8 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 	/* linux_sys_futex */
 	case 240: {
 		struct linux_sys_futex_args *p = params;
-		uarg[0] = (intptr_t)p->uaddr; /* void * */
-		iarg[1] = p->op; /* int */
+		uarg[0] = (intptr_t)p->uaddr; /* uint32_t * */
+		iarg[1] = p->op; /* l_int */
 		uarg[2] = p->val; /* uint32_t */
 		uarg[3] = (intptr_t)p->timeout; /* struct l_timespec * */
 		uarg[4] = (intptr_t)p->uaddr2; /* uint32_t * */
@@ -3477,19 +3477,19 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 	case 120:
 		switch (ndx) {
 		case 0:
-			p = "l_int";
+			p = "l_ulong";
 			break;
 		case 1:
-			p = "userland void *";
+			p = "l_ulong";
 			break;
 		case 2:
-			p = "userland void *";
+			p = "userland l_int *";
 			break;
 		case 3:
-			p = "userland void *";
+			p = "l_ulong";
 			break;
 		case 4:
-			p = "userland void *";
+			p = "userland l_int *";
 			break;
 		default:
 			break;
@@ -3976,7 +3976,7 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
-	/* poll */
+	/* linux_poll */
 	case 168:
 		switch (ndx) {
 		case 0:
@@ -4117,7 +4117,7 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			p = "userland l_siginfo_t *";
 			break;
 		case 2:
-			p = "userland struct l_timeval *";
+			p = "userland struct l_timespec *";
 			break;
 		case 3:
 			p = "l_size_t";
@@ -4741,10 +4741,10 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 	case 240:
 		switch (ndx) {
 		case 0:
-			p = "userland void *";
+			p = "userland uint32_t *";
 			break;
 		case 1:
-			p = "int";
+			p = "l_int";
 			break;
 		case 2:
 			p = "uint32_t";
@@ -6936,7 +6936,7 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;
-	/* poll */
+	/* linux_poll */
 	case 168:
 		if (ndx == 0 || ndx == 1)
 			p = "int";

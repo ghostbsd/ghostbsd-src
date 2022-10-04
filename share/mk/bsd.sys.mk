@@ -199,6 +199,17 @@ CWARNFLAGS+=	-Wno-error=aggressive-loop-optimizations	\
 		-Wno-error=stringop-truncation
 .endif
 
+# GCC 9.2.0
+.if ${COMPILER_VERSION} >= 90200
+.if ${MACHINE_ARCH} == "i386"
+CWARNFLAGS+=	-Wno-error=overflow
+.endif
+.endif
+
+# GCC produces false positives for functions that switch on an
+# enum (GCC bug 87950)
+CWARNFLAGS+=	-Wno-return-type
+
 # GCC's own arm_neon.h triggers various warnings
 .if ${MACHINE_CPUARCH} == "aarch64"
 CWARNFLAGS+=	-Wno-system-headers
@@ -316,7 +327,7 @@ LDFLAGS+=	--ld-path=${LD:[1]:S/^ld.//1W}
 .else
 LDFLAGS+=	-fuse-ld=${LD:[1]:S/^ld.//1W}
 .endif
-.else
+.elif ${COMPILER_TYPE} == "gcc"
 # GCC does not support an absolute path for -fuse-ld so we just print this
 # warning instead and let the user add the required symlinks.
 # However, we can avoid this warning if -B is set appropriately (e.g. for

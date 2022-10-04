@@ -801,14 +801,12 @@ epair_mod_init()
 	epair_tasks.tasks = 0;
 
 #ifdef RSS
-	struct pcpu *pcpu;
 	int cpu;
 
 	CPU_FOREACH(cpu) {
 		cpuset_t cpu_mask;
 
 		/* Pin to this CPU so we get appropriate NUMA allocations. */
-		pcpu = pcpu_find(cpu);
 		thread_lock(curthread);
 		sched_bind(curthread, cpu);
 		thread_unlock(curthread);
@@ -824,6 +822,9 @@ epair_mod_init()
 
 		epair_tasks.tasks++;
 	}
+	thread_lock(curthread);
+	sched_unbind(curthread);
+	thread_unlock(curthread);
 #else
 	snprintf(name, sizeof(name), "epair_task");
 

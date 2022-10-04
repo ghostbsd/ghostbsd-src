@@ -12,7 +12,7 @@
 #define	LINUX_SYS_linux_newstat	4
 #define	LINUX_SYS_linux_newfstat	5
 #define	LINUX_SYS_linux_newlstat	6
-#define	LINUX_SYS_poll	7
+#define	LINUX_SYS_linux_poll	7
 #define	LINUX_SYS_linux_lseek	8
 #define	LINUX_SYS_linux_mmap2	9
 #define	LINUX_SYS_linux_mprotect	10
@@ -70,7 +70,7 @@
 #define	LINUX_SYS_linux_kill	62
 #define	LINUX_SYS_linux_newuname	63
 #define	LINUX_SYS_linux_semget	64
-#define	LINUX_SYS_linux_semop	65
+#define	LINUX_SYS_semop	65
 #define	LINUX_SYS_linux_semctl	66
 #define	LINUX_SYS_linux_shmdt	67
 #define	LINUX_SYS_linux_msgget	68

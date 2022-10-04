@@ -315,7 +315,8 @@ void nfsrc_trimcache(uint64_t, uint32_t, int);
 
 /* nfs_commonsubs.c */
 void nfscl_reqstart(struct nfsrv_descript *, int, struct nfsmount *,
-    u_int8_t *, int, u_int32_t **, struct nfsclsession *, int, int);
+    u_int8_t *, int, u_int32_t **, struct nfsclsession *, int, int,
+    struct ucred *);
 void nfsm_stateidtom(struct nfsrv_descript *, nfsv4stateid_t *, int);
 void nfscl_fillsattr(struct nfsrv_descript *, struct vattr *,
       vnode_t, int, u_int32_t);
@@ -355,14 +356,16 @@ int nfsv4_seqsession(uint32_t, uint32_t, uint32_t, struct nfsslot *,
     struct mbuf **, uint16_t);
 void nfsv4_seqsess_cacherep(uint32_t, struct nfsslot *, int, struct mbuf **);
 void nfsv4_setsequence(struct nfsmount *, struct nfsrv_descript *,
-    struct nfsclsession *, int);
+    struct nfsclsession *, int, struct ucred *);
 int nfsv4_sequencelookup(struct nfsmount *, struct nfsclsession *, int *,
-    int *, uint32_t *, uint8_t *);
+    int *, uint32_t *, uint8_t *, bool);
 void nfsv4_freeslot(struct nfsclsession *, int, bool);
 struct ucred *nfsrv_getgrpscred(struct ucred *);
 struct nfsdevice *nfsv4_findmirror(struct nfsmount *);
 void nfsm_set(struct nfsrv_descript *, u_int);
 struct mbuf *nfsm_add_ext_pgs(struct mbuf *, int, int *);
+int nfsrpc_destroysession(struct nfsmount *, struct nfsclsession *,
+    struct ucred *, NFSPROC_T *);
 
 /* nfs_clcomsubs.c */
 void nfsm_uiombuf(struct nfsrv_descript *, struct uio *, int);
@@ -374,7 +377,7 @@ int nfscl_mtofh(struct nfsrv_descript *, struct nfsfh **,
 int nfscl_postop_attr(struct nfsrv_descript *, struct nfsvattr *, int *,
     void *);
 int nfscl_wcc_data(struct nfsrv_descript *, vnode_t,
-    struct nfsvattr *, int *, int *, void *);
+    struct nfsvattr *, int *, int *, uint64_t *);
 int nfsm_loadattr(struct nfsrv_descript *, struct nfsvattr *);
 int nfscl_request(struct nfsrv_descript *, vnode_t,
          NFSPROC_T *, struct ucred *, void *);
@@ -470,7 +473,7 @@ int nfsrpc_readlink(vnode_t, struct uio *, struct ucred *,
 int nfsrpc_read(vnode_t, struct uio *, struct ucred *, NFSPROC_T *,
     struct nfsvattr *, int *, void *);
 int nfsrpc_write(vnode_t, struct uio *, int *, int *,
-    struct ucred *, NFSPROC_T *, struct nfsvattr *, int *, void *, int);
+    struct ucred *, NFSPROC_T *, struct nfsvattr *, int *, int, int);
 int nfsrpc_mknod(vnode_t, char *, int, struct vattr *, u_int32_t,
     enum vtype, struct ucred *, NFSPROC_T *, struct nfsvattr *,
     struct nfsvattr *, struct nfsfh **, int *, int *, void *);
@@ -529,8 +532,6 @@ int nfsrpc_exchangeid(struct nfsmount *, struct nfsclclient *,
 int nfsrpc_createsession(struct nfsmount *, struct nfsclsession *,
     struct nfssockreq *, struct nfsclds *, uint32_t, int, struct ucred *,
     NFSPROC_T *);
-int nfsrpc_destroysession(struct nfsmount *, struct nfsclclient *,
-    struct ucred *, NFSPROC_T *);
 int nfsrpc_destroyclient(struct nfsmount *, struct nfsclclient *,
     struct ucred *, NFSPROC_T *);
 int nfsrpc_getdeviceinfo(struct nfsmount *, uint8_t *, int, uint32_t *,

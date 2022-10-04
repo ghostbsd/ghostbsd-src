@@ -427,11 +427,16 @@ FreeBSD 5.2           |      |                 |                       |
  |            |       |      |    |               |                    |
  *--FreeBSD   |       |      |    |               |                    |
  |   13.0     |       |      |  NetBSD 9.2    OpenBSD 6.9      DragonFly 6.0.0
- |            |       |      |                    |                    |
- |            |       |      |                    |                    |
- |         FreeBSD  macOS    |                OpenBSD 7.0      DragonFly 6.2.1
- |           12.3    12      |                    |                    |
- |                    |      |                    |                    |
+ |     |      |       |      |    |               |                    |
+ |     |      |       |      |    |               |                    |
+ |     |   FreeBSD  macOS    |    |           OpenBSD 7.0      DragonFly 6.2.1
+ |     |     12.3    12      |    |               |                    |
+ |     |              |      |    |               |                    |
+ |     |              |      |    |           OpenBSD 7.1              |
+ |  FreeBSD           |      |    |               |                    |
+ |   13.1             |      |    |               |                    |
+ |                    |      |    |               |            DragonFly 6.2.2
+ |                    |      |  NetBSD 9.3        |                    |
  |                    |      |                    |                    |
 FreeBSD 14 -current   |  NetBSD -current   OpenBSD -current    DragonFly -current
  |                    |      |                    |                    |
@@ -462,7 +467,7 @@ was the announcement in Usenet or if it was available as tape.
 [OBD] OpenBSD Project, The.
 [QCU] Salus, Peter H. A quarter century of UNIX.
 [SMS] Steven M. Schultz. 2.11BSD, UNIX for the PDP-11.
-[TUHS] The Unix Historical Society.  http://minnie.tuhs.org/Unix_History/.
+[TUHS] The Unix Historical Society.  https://minnie.tuhs.org/Unix_History/.
 [USE] Usenet announcement.
 [WRS] Wind River Systems, Inc.
 [dmr] Dennis Ritchie, via E-Mail
@@ -847,6 +852,10 @@ OpenBSD 7.0		2021-10-14 [OBD]
 macOS 12		2021-10-25 [APL]
 FreeBSD 12.3		2021-12-01 [FBD]
 DragonFly 6.2.1		2022-01-09 [DFB]
+OpenBSD 7.1		2022-04-21 [OBD]
+FreeBSD 13.1		2022-05-17 [FBD]
+DragonFly 6.2.2		2022-06-09 [DFB]
+NetBSD 9.3		2022-08-04 [NBD]
 
 Bibliography
 ------------------------
@@ -877,7 +886,7 @@ Presented to the Tasmanian Unix Special Interest Group of the
 Australian Computer Society, Hobart, August 1993.
 
 Peter H. Salus. Unix at 25. Byte Magazine, October 1994.
-URL: http://www.byte.com/art/9410/sec8/art3.htm
+URL: https://web.archive.org/web/20081230094857/http://www.byte.com/art/9410/sec8/art3.htm
 
 Andreas Klemm, Lars Köller. If you're going to San Francisco ...
 Die freien BSD-Varianten von Unix. c't April 1997, page 368ff.
@@ -889,13 +898,13 @@ BSD Hypertext Man Pages
 URL: https://www.FreeBSD.org/cgi/man.cgi
 
 UNIX history graphing project
-URL: http://minnie.tuhs.org/Unix_History/index.html
+URL: https://minnie.tuhs.org/Unix_History/index.html
 
 UNIX history
-URL: http://www.levenez.com/unix/
+URL: https://www.levenez.com/unix/
 
 James Howard: The BSD Family Tree
-URL: http://ezine.daemonnews.org/200104/bsd_family.html
+URL: https://web.archive.org/web/20090427195917/http://ezine.daemonnews.org/200104/bsd_family.html
 ("what are the differences between FreeBSD, NetBSD, and OpenBSD?")
 
 
@@ -909,6 +918,6 @@ Steven M. Schultz for providing 2.8BSD, 2.10BSD, 2.11BSD manual pages.
 
 --
 Copyright (c) 1997-2012 Wolfram Schneider <wosch@FreeBSD.ORG>
-URL: https://svnweb.freebsd.org/base/head/share/misc/bsd-family-tree
+URL: https://cgit.freebsd.org/src/tree/share/misc/bsd-family-tree
 
 $FreeBSD$

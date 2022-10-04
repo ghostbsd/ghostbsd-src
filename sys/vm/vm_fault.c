@@ -1952,10 +1952,10 @@ error:
  *	Routine:
  *		vm_fault_copy_entry
  *	Function:
- *		Create new shadow object backing dst_entry with private copy of
- *		all underlying pages. When src_entry is equal to dst_entry,
- *		function implements COW for wired-down map entry. Otherwise,
- *		it forks wired entry into dst_map.
+ *		Create new object backing dst_entry with private copy of all
+ *		underlying pages. When src_entry is equal to dst_entry, function
+ *		implements COW for wired-down map entry. Otherwise, it forks
+ *		wired entry into dst_map.
  *
  *	In/out conditions:
  *		The source and destination maps must be locked for write.
@@ -1963,7 +1963,7 @@ error:
  *		entry corresponding to a main map entry that is wired down).
  */
 void
-vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map,
+vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map __unused,
     vm_map_entry_t dst_entry, vm_map_entry_t src_entry,
     vm_ooffset_t *fork_charge)
 {
@@ -1973,14 +1973,25 @@ vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map,
 	vm_offset_t vaddr;
 	vm_page_t dst_m;
 	vm_page_t src_m;
-	boolean_t upgrade;
-
-#ifdef	lint
-	src_map++;
-#endif	/* lint */
+	bool upgrade;
 
 	upgrade = src_entry == dst_entry;
+	KASSERT(upgrade || dst_entry->object.vm_object == NULL,
+	    ("vm_fault_copy_entry: vm_object not NULL"));
+
+	/*
+	 * If not an upgrade, then enter the mappings in the pmap as
+	 * read and/or execute accesses.  Otherwise, enter them as
+	 * write accesses.
+	 *
+	 * A writeable large page mapping is only created if all of
+	 * the constituent small page mappings are modified. Marking
+	 * PTEs as modified on inception allows promotion to happen
+	 * without taking potentially large number of soft faults.
+	 */
 	access = prot = dst_entry->protection;
+	if (!upgrade)
+		access &= ~VM_PROT_WRITE;
 
 	src_object = src_entry->object.vm_object;
 	src_pindex = OFF_TO_IDX(src_entry->offset);
@@ -2002,16 +2013,13 @@ vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map,
 #endif
 		dst_object->domain = src_object->domain;
 		dst_object->charge = dst_entry->end - dst_entry->start;
-	}
 
-	VM_OBJECT_WLOCK(dst_object);
-	KASSERT(upgrade || dst_entry->object.vm_object == NULL,
-	    ("vm_fault_copy_entry: vm_object not NULL"));
-	if (src_object != dst_object) {
 		dst_entry->object.vm_object = dst_object;
 		dst_entry->offset = 0;
 		dst_entry->eflags &= ~MAP_ENTRY_VN_EXEC;
 	}
+
+	VM_OBJECT_WLOCK(dst_object);
 	if (fork_charge != NULL) {
 		KASSERT(dst_entry->cred == NULL,
 		    ("vm_fault_copy_entry: leaked swp charge"));
@@ -2026,19 +2034,6 @@ vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map,
 		dst_object->cred = dst_entry->cred;
 		dst_entry->cred = NULL;
 	}
-
-	/*
-	 * If not an upgrade, then enter the mappings in the pmap as
-	 * read and/or execute accesses.  Otherwise, enter them as
-	 * write accesses.
-	 *
-	 * A writeable large page mapping is only created if all of
-	 * the constituent small page mappings are modified. Marking
-	 * PTEs as modified on inception allows promotion to happen
-	 * without taking potentially large number of soft faults.
-	 */
-	if (!upgrade)
-		access &= ~VM_PROT_WRITE;
 
 	/*
 	 * Loop through all of the virtual pages within the entry's
@@ -2099,9 +2094,23 @@ again:
 				VM_OBJECT_WLOCK(dst_object);
 				goto again;
 			}
+
+			/*
+			 * See the comment in vm_fault_cow().
+			 */
+			if (src_object == dst_object &&
+			    (object->flags & OBJ_ONEMAPPING) == 0)
+				pmap_remove_all(src_m);
 			pmap_copy_page(src_m, dst_m);
-			VM_OBJECT_RUNLOCK(object);
+
+			/*
+			 * The object lock does not guarantee that "src_m" will
+			 * transition from invalid to valid, but it does ensure
+			 * that "src_m" will not transition from valid to
+			 * invalid.
+			 */
 			dst_m->dirty = dst_m->valid = src_m->valid;
+			VM_OBJECT_RUNLOCK(object);
 		} else {
 			dst_m = src_m;
 			if (vm_page_busy_acquire(dst_m, VM_ALLOC_WAITFAIL) == 0)
@@ -2116,7 +2125,6 @@ again:
 				break;
 			}
 		}
-		VM_OBJECT_WUNLOCK(dst_object);
 
 		/*
 		 * Enter it in the pmap. If a wired, copy-on-write
@@ -2131,15 +2139,15 @@ again:
 		 * backing pages.
 		 */
 		if (vm_page_all_valid(dst_m)) {
+			VM_OBJECT_WUNLOCK(dst_object);
 			pmap_enter(dst_map->pmap, vaddr, dst_m, prot,
 			    access | (upgrade ? PMAP_ENTER_WIRED : 0), 0);
+			VM_OBJECT_WLOCK(dst_object);
 		}
 
 		/*
 		 * Mark it no longer busy, and put it on the active list.
 		 */
-		VM_OBJECT_WLOCK(dst_object);
-		
 		if (upgrade) {
 			if (src_m != dst_m) {
 				vm_page_unwire(src_m, PQ_INACTIVE);

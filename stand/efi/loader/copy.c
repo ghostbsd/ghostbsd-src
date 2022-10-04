@@ -42,8 +42,6 @@ __FBSDID("$FreeBSD$");
 #define	M(x)	((x) * 1024 * 1024)
 #define	G(x)	(1UL * (x) * 1024 * 1024 * 1024)
 
-extern int boot_services_gone;
-
 #if defined(__i386__) || defined(__amd64__)
 #include <machine/cpufunc.h>
 #include <machine/specialreg.h>
@@ -289,7 +287,7 @@ COMMAND_SET(staging_slop, "staging_slop", "set staging slop",
 
 #if defined(__i386__) || defined(__amd64__)
 /*
- * The staging area must reside in the the first 1GB or 4GB physical
+ * The staging area must reside in the first 1GB or 4GB physical
  * memory: see elf64_exec() in
  * boot/efi/loader/arch/amd64/elf64_freebsd.c.
  */
@@ -370,7 +368,7 @@ efi_check_space(vm_offset_t end)
 	if (end + staging_slop <= staging_end)
 		return (true);
 
-	if (boot_services_gone) {
+	if (!boot_services_active) {
 		if (end <= staging_end)
 			return (true);
 		panic("efi_check_space: cannot expand staging area "

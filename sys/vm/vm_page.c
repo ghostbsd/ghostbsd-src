@@ -2187,12 +2187,42 @@ vm_page_alloc_contig(vm_object_t object, vm_pindex_t pindex, int req,
 	return (m);
 }
 
+static vm_page_t
+vm_page_find_contig_domain(int domain, int req, u_long npages, vm_paddr_t low,
+    vm_paddr_t high, u_long alignment, vm_paddr_t boundary)
+{
+	struct vm_domain *vmd;
+	vm_page_t m_ret;
+
+	vmd = VM_DOMAIN(domain);
+	if (!vm_domain_allocate(vmd, req, npages))
+		return (NULL);
+	/*
+	 * Try to allocate the pages from the free page queues.
+	 */
+	vm_domain_free_lock(vmd);
+	m_ret = vm_phys_alloc_contig(domain, npages, low, high,
+	    alignment, boundary);
+	vm_domain_free_unlock(vmd);
+	if (m_ret != NULL)
+		return (m_ret);
+#if VM_NRESERVLEVEL > 0
+	/*
+	 * Try to break a reservation to allocate the pages.
+	 */
+	if ((m_ret = vm_reserv_reclaim_contig(domain, npages, low,
+	    high, alignment, boundary)) != NULL)
+		return (m_ret);
+#endif
+	vm_domain_freecnt_inc(vmd, npages);
+	return (NULL);
+}
+
 vm_page_t
 vm_page_alloc_contig_domain(vm_object_t object, vm_pindex_t pindex, int domain,
     int req, u_long npages, vm_paddr_t low, vm_paddr_t high, u_long alignment,
     vm_paddr_t boundary, vm_memattr_t memattr)
 {
-	struct vm_domain *vmd;
 	vm_page_t m, m_ret, mpred;
 	u_int busy_lock, flags, oflags;
 
@@ -2223,44 +2253,23 @@ vm_page_alloc_contig_domain(vm_object_t object, vm_pindex_t pindex, int domain,
 	 * Can we allocate the pages without the number of free pages falling
 	 * below the lower bound for the allocation class?
 	 */
-	m_ret = NULL;
-again:
+	for (;;) {
 #if VM_NRESERVLEVEL > 0
-	/*
-	 * Can we allocate the pages from a reservation?
-	 */
-	if (vm_object_reserv(object) &&
-	    (m_ret = vm_reserv_alloc_contig(object, pindex, domain, req,
-	    mpred, npages, low, high, alignment, boundary)) != NULL) {
-		goto found;
-	}
-#endif
-	vmd = VM_DOMAIN(domain);
-	if (vm_domain_allocate(vmd, req, npages)) {
 		/*
-		 * allocate them from the free page queues.
+		 * Can we allocate the pages from a reservation?
 		 */
-		vm_domain_free_lock(vmd);
-		m_ret = vm_phys_alloc_contig(domain, npages, low, high,
-		    alignment, boundary);
-		vm_domain_free_unlock(vmd);
-		if (m_ret == NULL) {
-			vm_domain_freecnt_inc(vmd, npages);
-#if VM_NRESERVLEVEL > 0
-			if (vm_reserv_reclaim_contig(domain, npages, low,
-			    high, alignment, boundary))
-				goto again;
-#endif
+		if (vm_object_reserv(object) &&
+		    (m_ret = vm_reserv_alloc_contig(object, pindex, domain, req,
+		    mpred, npages, low, high, alignment, boundary)) != NULL) {
+			break;
 		}
-	}
-	if (m_ret == NULL) {
-		if (vm_domain_alloc_fail(vmd, object, req))
-			goto again;
-		return (NULL);
-	}
-#if VM_NRESERVLEVEL > 0
-found:
 #endif
+		if ((m_ret = vm_page_find_contig_domain(domain, req, npages,
+		    low, high, alignment, boundary)) != NULL)
+			break;
+		if (!vm_domain_alloc_fail(VM_DOMAIN(domain), object, req))
+			return (NULL);
+	}
 	for (m = m_ret; m < &m_ret[npages]; m++) {
 		vm_page_dequeue(m);
 		vm_page_alloc_check(m);
@@ -2621,12 +2630,11 @@ vm_page_scan_contig(u_long npages, vm_page_t m_start, vm_page_t m_end,
 			if (m + npages > m_end)
 				break;
 			pa = VM_PAGE_TO_PHYS(m);
-			if ((pa & (alignment - 1)) != 0) {
+			if (!vm_addr_align_ok(pa, alignment)) {
 				m_inc = atop(roundup2(pa, alignment) - pa);
 				continue;
 			}
-			if (rounddown2(pa ^ (pa + ptoa(npages) - 1),
-			    boundary) != 0) {
+			if (!vm_addr_bound_ok(pa, ptoa(npages), boundary)) {
 				m_inc = atop(roundup2(pa, boundary) - pa);
 				continue;
 			}
@@ -5333,7 +5341,7 @@ vm_page_zero_invalid(vm_page_t m, boolean_t setvalid)
 
 	/*
 	 * setvalid is TRUE when we can safely set the zero'd areas
-	 * as being valid.  We can do this if there are no cache consistancy
+	 * as being valid.  We can do this if there are no cache consistency
 	 * issues.  e.g. it is ok to do with UFS, but not ok to do with NFS.
 	 */
 	if (setvalid)

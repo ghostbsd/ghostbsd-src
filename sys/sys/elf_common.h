@@ -823,8 +823,10 @@ typedef struct {
 #define	NT_PTLWPINFO		17	/* Thread ptrace miscellaneous info. */
 #define	NT_PPC_VMX	0x100	/* PowerPC Altivec/VMX registers */
 #define	NT_PPC_VSX	0x102	/* PowerPC VSX registers */
+#define	NT_X86_SEGBASES	0x200	/* x86 FS/GS base addresses. */
 #define	NT_X86_XSTATE	0x202	/* x86 XSAVE extended state. */
 #define	NT_ARM_VFP	0x400	/* ARM VFP registers */
+#define	NT_ARM_TLS	0x401	/* ARM TLS register */
 
 /* GNU note types. */
 #define	NT_GNU_ABI_TAG		1
@@ -941,6 +943,7 @@ typedef struct {
 
 /* Values for ch_type (compressed section headers). */
 #define	ELFCOMPRESS_ZLIB	1	/* ZLIB/DEFLATE */
+#define	ELFCOMPRESS_ZSTD	2	/* Zstandard */
 #define	ELFCOMPRESS_LOOS	0x60000000	/* OS-specific */
 #define	ELFCOMPRESS_HIOS	0x6fffffff
 #define	ELFCOMPRESS_LOPROC	0x70000000	/* Processor-specific */
@@ -982,8 +985,10 @@ typedef struct {
 #define	AT_PS_STRINGS	32	/* struct ps_strings */
 #define	AT_FXRNG	33	/* Pointer to root RNG seed version. */
 #define	AT_KPRELOAD	34	/* Base of vdso, preloaded by rtld */
+#define	AT_USRSTACKBASE	35	/* Top of user stack */
+#define	AT_USRSTACKLIM	36	/* Grow limit of user stack */
 
-#define	AT_COUNT	35	/* Count of defined aux entry types. */
+#define	AT_COUNT	37	/* Count of defined aux entry types. */
 
 /*
  * Relocation types.
@@ -1501,5 +1506,6 @@ typedef struct {
 #define	R_X86_64_REX_GOTPCRELX	42
 
 #define	ELF_BSDF_SIGFASTBLK	0x0001	/* Kernel supports fast sigblock */
+#define	ELF_BSDF_VMNOOVERCOMMIT	0x0002
 
 #endif /* !_SYS_ELF_COMMON_H_ */

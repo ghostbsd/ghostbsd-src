@@ -85,16 +85,18 @@ __FBSDID("$FreeBSD$");
 		printf(("%s: " f), __func__, ## __VA_ARGS__);		\
 } while (0)
 
+static void	 netdump_cleanup(void);
 static int	 netdump_configure(struct diocskerneldump_arg *,
 		    struct thread *);
 static int	 netdump_dumper(void *priv __unused, void *virtual,
-		    vm_offset_t physical __unused, off_t offset, size_t length);
+		    off_t offset, size_t length);
 static bool	 netdump_enabled(void);
 static int	 netdump_enabled_sysctl(SYSCTL_HANDLER_ARGS);
 static int	 netdump_ioctl(struct cdev *dev __unused, u_long cmd,
 		    caddr_t addr, int flags __unused, struct thread *td);
 static int	 netdump_modevent(module_t mod, int type, void *priv);
-static int	 netdump_start(struct dumperinfo *di);
+static int	 netdump_start(struct dumperinfo *di, void *key,
+		    uint32_t keysize);
 static void	 netdump_unconfigure(void);
 
 /* Must be at least as big as the chunks dumpsys() gives us. */
@@ -225,7 +227,6 @@ netdump_flush_buf(void)
  * Parameters:
  *	priv	 Unused. Optional private pointer.
  *	virtual  Virtual address (where to read the data from)
- *	physical Unused. Physical memory address.
  *	offset	 Offset from start of core file
  *	length	 Data length
  *
@@ -234,8 +235,7 @@ netdump_flush_buf(void)
  *	errno on error
  */
 static int
-netdump_dumper(void *priv __unused, void *virtual,
-    vm_offset_t physical __unused, off_t offset, size_t length)
+netdump_dumper(void *priv __unused, void *virtual, off_t offset, size_t length)
 {
 	int error;
 
@@ -254,12 +254,13 @@ netdump_dumper(void *priv __unused, void *virtual,
 			printf("failed to close the transaction\n");
 		else
 			printf("\nnetdump finished.\n");
-		debugnet_free(nd_conf.nd_pcb);
-		nd_conf.nd_pcb = NULL;
+		netdump_cleanup();
 		return (0);
 	}
-	if (length > sizeof(nd_buf))
+	if (length > sizeof(nd_buf)) {
+		netdump_cleanup();
 		return (ENOSPC);
+	}
 
 	if (nd_conf.nd_buf_len + length > sizeof(nd_buf) ||
 	    (nd_conf.nd_buf_len != 0 && nd_conf.nd_tx_off +
@@ -267,6 +268,7 @@ netdump_dumper(void *priv __unused, void *virtual,
 		error = netdump_flush_buf();
 		if (error != 0) {
 			dump_failed = 1;
+			netdump_cleanup();
 			return (error);
 		}
 		nd_conf.nd_tx_off = offset;
@@ -282,7 +284,7 @@ netdump_dumper(void *priv __unused, void *virtual,
  * Perform any initialization needed prior to transmitting the kernel core.
  */
 static int
-netdump_start(struct dumperinfo *di)
+netdump_start(struct dumperinfo *di, void *key, uint32_t keysize)
 {
 	struct debugnet_conn_params dcp;
 	struct debugnet_pcb *pcb;
@@ -333,29 +335,59 @@ netdump_start(struct dumperinfo *di)
 	printf("netdumping to %s (%6D)\n", inet_ntoa_r(nd_server, buf),
 	    debugnet_get_gw_mac(pcb), ":");
 	nd_conf.nd_pcb = pcb;
-	return (0);
+
+	/* Send the key before the dump so a partial dump is still usable. */
+	if (keysize > 0) {
+		if (keysize > sizeof(nd_buf)) {
+			printf("crypto key is too large (%u)\n", keysize);
+			error = EINVAL;
+			goto out;
+		}
+		memcpy(nd_buf, key, keysize);
+		error = debugnet_send(pcb, NETDUMP_EKCD_KEY, nd_buf, keysize,
+		    NULL);
+		if (error != 0) {
+			printf("error %d sending crypto key\n", error);
+			goto out;
+		}
+	}
+
+out:
+	if (error != 0) {
+		/* As above, squash errors. */
+		error = EINVAL;
+		netdump_cleanup();
+	}
+	return (error);
 }
 
 static int
-netdump_write_headers(struct dumperinfo *di, struct kerneldumpheader *kdh,
-    void *key, uint32_t keysize)
+netdump_write_headers(struct dumperinfo *di, struct kerneldumpheader *kdh)
 {
 	int error;
 
 	error = netdump_flush_buf();
 	if (error != 0)
-		return (error);
+		goto out;
 	memcpy(nd_buf, kdh, sizeof(*kdh));
 	error = debugnet_send(nd_conf.nd_pcb, NETDUMP_KDH, nd_buf,
 	    sizeof(*kdh), NULL);
-	if (error == 0 && keysize > 0) {
-		if (keysize > sizeof(nd_buf))
-			return (EINVAL);
-		memcpy(nd_buf, key, keysize);
-		error = debugnet_send(nd_conf.nd_pcb, NETDUMP_EKCD_KEY, nd_buf,
-		    keysize, NULL);
-	}
+out:
+	if (error != 0)
+		netdump_cleanup();
 	return (error);
+}
+
+/*
+ * Cleanup routine for a possibly failed netdump.
+ */
+static void
+netdump_cleanup(void)
+{
+	if (nd_conf.nd_pcb != NULL) {
+		debugnet_free(nd_conf.nd_pcb);
+		nd_conf.nd_pcb = NULL;
+	}
 }
 
 /*-
@@ -420,6 +452,10 @@ netdump_configure(struct diocskerneldump_arg *conf, struct thread *td)
 		CURVNET_SET(vnet0);
 		ifp = ifunit_ref(conf->kda_iface);
 		CURVNET_RESTORE();
+		if (!DEBUGNET_SUPPORTED_NIC(ifp)) {
+			if_rele(ifp);
+			return (ENODEV);
+		}
 	} else
 		ifp = NULL;
 
@@ -653,7 +689,7 @@ netdump_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t addr,
  *	priv, Unused.
  *
  * Returns:
- *	int, An errno value if an error occured, 0 otherwise.
+ *	int, An errno value if an error occurred, 0 otherwise.
  */
 static int
 netdump_modevent(module_t mod __unused, int what, void *priv __unused)
@@ -733,7 +769,7 @@ DECLARE_MODULE(netdump, netdump_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
  * Currently, this command does not support configuring encryption or
  * compression.
  */
-DB_FUNC(netdump, db_netdump_cmd, db_cmd_table, CS_OWN, NULL)
+DB_COMMAND_FLAGS(netdump, db_netdump_cmd, CS_OWN)
 {
 	static struct diocskerneldump_arg conf;
 	static char blockbuf[NETDUMP_DATASIZE];

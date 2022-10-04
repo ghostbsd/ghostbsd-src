@@ -130,12 +130,10 @@ typedef void d_purge_t(struct cdev *dev);
 typedef int dumper_t(
 	void *_priv,		/* Private to the driver. */
 	void *_virtual,		/* Virtual (mapped) address. */
-	vm_offset_t _physical,	/* Physical address of virtual. */
 	off_t _offset,		/* Byte-offset to write at. */
 	size_t _length);	/* Number of bytes to dump. */
-typedef int dumper_start_t(struct dumperinfo *di);
-typedef int dumper_hdr_t(struct dumperinfo *di, struct kerneldumpheader *kdh,
-    void *key, uint32_t keylen);
+typedef int dumper_start_t(struct dumperinfo *di, void *key, uint32_t keysize);
+typedef int dumper_hdr_t(struct dumperinfo *di, struct kerneldumpheader *kdh);
 
 #endif /* _KERNEL */
 
@@ -210,17 +208,17 @@ struct cdevsw {
 	d_poll_t		*d_poll;
 	d_mmap_t		*d_mmap;
 	d_strategy_t		*d_strategy;
-	dumper_t		*d_dump;
+	void			*d_spare0;
 	d_kqfilter_t		*d_kqfilter;
 	d_purge_t		*d_purge;
 	d_mmap_single_t		*d_mmap_single;
 
-	int32_t			d_spare0[3];
-	void			*d_spare1[3];
+	int32_t			d_spare1[3];
+	void			*d_spare2[3];
 
 	/* These fields should not be messed with by drivers */
 	LIST_HEAD(, cdev)	d_devs;
-	int			d_spare2;
+	int			d_spare3;
 	union {
 		struct cdevsw		*gianttrick;
 		SLIST_ENTRY(cdevsw)	postfree_list;
@@ -363,8 +361,12 @@ struct dumperinfo {
 
 extern int dumping;		/* system is dumping */
 
+void dump_savectx(void);
 int doadump(boolean_t);
 struct diocskerneldump_arg;
+int dumper_create(const struct dumperinfo *di_template, const char *devname,
+    const struct diocskerneldump_arg *kda, struct dumperinfo **dip);
+void dumper_destroy(struct dumperinfo *di);
 int dumper_insert(const struct dumperinfo *di_template, const char *devname,
     const struct diocskerneldump_arg *kda);
 int dumper_remove(const char *devname, const struct diocskerneldump_arg *kda);
@@ -374,8 +376,8 @@ void dumper_ddb_insert(struct dumperinfo *);
 void dumper_ddb_remove(struct dumperinfo *);
 
 int dump_start(struct dumperinfo *di, struct kerneldumpheader *kdh);
-int dump_append(struct dumperinfo *, void *, vm_offset_t, size_t);
-int dump_write(struct dumperinfo *, void *, vm_offset_t, off_t, size_t);
+int dump_append(struct dumperinfo *, void *, size_t);
+int dump_write(struct dumperinfo *, void *, off_t, size_t);
 int dump_finish(struct dumperinfo *di, struct kerneldumpheader *kdh);
 void dump_init_header(const struct dumperinfo *di, struct kerneldumpheader *kdh,
     const char *magic, uint32_t archver, uint64_t dumplen);

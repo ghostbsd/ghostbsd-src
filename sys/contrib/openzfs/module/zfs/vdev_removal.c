@@ -1207,7 +1207,6 @@ vdev_remove_complete(spa_t *spa)
 		vdev_metaslab_fini(vd);
 		metaslab_group_destroy(vd->vdev_mg);
 		vd->vdev_mg = NULL;
-		spa_log_sm_set_blocklimit(spa);
 	}
 	if (vd->vdev_log_mg != NULL) {
 		ASSERT0(vd->vdev_ms_count);
@@ -1517,10 +1516,6 @@ spa_vdev_remove_thread(void *arg)
 			 * specified by zfs_removal_suspend_progress. We do this
 			 * solely from the test suite or during debugging.
 			 */
-			uint64_t bytes_copied =
-			    spa->spa_removing_phys.sr_copied;
-			for (int i = 0; i < TXG_SIZE; i++)
-				bytes_copied += svr->svr_bytes_done[i];
 			while (zfs_removal_suspend_progress &&
 			    !svr->svr_thread_exit)
 				delay(hz);
@@ -1939,7 +1934,6 @@ spa_vdev_remove_log(vdev_t *vd, uint64_t *txg)
 	 * metaslab_class_histogram_verify()
 	 */
 	vdev_metaslab_fini(vd);
-	spa_log_sm_set_blocklimit(spa);
 
 	spa_vdev_config_exit(spa, NULL, *txg, 0, FTAG);
 	*txg = spa_vdev_config_enter(spa);

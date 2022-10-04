@@ -49,7 +49,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/sleepqueue.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
-#include <sys/sysent.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/posix4.h>
@@ -108,6 +107,8 @@ static int	realtimer_delete(struct itimer *);
 static void	realtimer_clocktime(clockid_t, struct timespec *);
 static void	realtimer_expire(void *);
 static void	realtimer_expire_l(struct itimer *it, bool proc_locked);
+
+static void	realitexpire(void *arg);
 
 static int	register_posix_clock(int, const struct kclock *);
 static void	itimer_fire(struct itimer *it);
@@ -410,7 +411,7 @@ kern_clock_settime(struct thread *td, clockid_t clock_id, struct timespec *ats)
 		return (error);
 	if (clock_id != CLOCK_REALTIME)
 		return (EINVAL);
-	if (ats->tv_nsec < 0 || ats->tv_nsec >= NS_PER_SEC || ats->tv_sec < 0)
+	if (!timespecvalid_interval(ats))
 		return (EINVAL);
 	if (!allow_insane_settime &&
 	    (ats->tv_sec > 8000ULL * 365 * 24 * 60 * 60 ||
@@ -941,7 +942,7 @@ itimer_proc_continue(struct proc *p)
  * that here since we want to appear to be in sync with the clock
  * interrupt even when we're delayed.
  */
-void
+static void
 realitexpire(void *arg)
 {
 	struct proc *p;
@@ -1646,7 +1647,7 @@ static int
 itimespecfix(struct timespec *ts)
 {
 
-	if (ts->tv_sec < 0 || ts->tv_nsec < 0 || ts->tv_nsec >= NS_PER_SEC)
+	if (!timespecvalid_interval(ts))
 		return (EINVAL);
 	if ((UINT64_MAX - ts->tv_nsec) / NS_PER_SEC < ts->tv_sec)
 		return (EINVAL);

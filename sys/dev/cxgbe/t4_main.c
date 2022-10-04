@@ -859,6 +859,7 @@ static int hold_clip_addr(struct adapter *, struct t4_clip_addr *);
 static int release_clip_addr(struct adapter *, struct t4_clip_addr *);
 #ifdef TCP_OFFLOAD
 static int toe_capability(struct vi_info *, bool);
+static int t4_deactivate_all_uld(struct adapter *);
 static void t4_async_event(struct adapter *);
 #endif
 #ifdef KERN_TLS
@@ -1691,6 +1692,15 @@ t4_detach_common(device_t dev)
 	int i, rc;
 
 	sc = device_get_softc(dev);
+
+#ifdef TCP_OFFLOAD
+	rc = t4_deactivate_all_uld(sc);
+	if (rc) {
+		device_printf(dev,
+		    "failed to detach upper layer drivers: %d\n", rc);
+		return (rc);
+	}
+#endif
 
 	if (sc->cdev) {
 		destroy_dev(sc->cdev);
@@ -12624,6 +12634,34 @@ t4_deactivate_uld(struct adapter *sc, int id)
 	return (rc);
 }
 
+static int
+t4_deactivate_all_uld(struct adapter *sc)
+{
+	int rc;
+	struct uld_info *ui;
+
+	rc = begin_synchronized_op(sc, NULL, SLEEP_OK, "t4detuld");
+	if (rc != 0)
+		return (ENXIO);
+
+	sx_slock(&t4_uld_list_lock);
+
+	SLIST_FOREACH(ui, &t4_uld_list, link) {
+		if (isset(&sc->active_ulds, ui->uld_id)) {
+			rc = ui->deactivate(sc);
+			if (rc != 0)
+				break;
+			clrbit(&sc->active_ulds, ui->uld_id);
+			ui->refcount--;
+		}
+	}
+
+	sx_sunlock(&t4_uld_list_lock);
+	end_synchronized_op(sc, 0);
+
+	return (rc);
+}
+
 static void
 t4_async_event(struct adapter *sc)
 {
@@ -12927,7 +12965,7 @@ t4_dump_devlog(struct adapter *sc)
 	} while (i != first && !db_pager_quit);
 }
 
-static struct command_table db_t4_table = LIST_HEAD_INITIALIZER(db_t4_table);
+static struct db_command_table db_t4_table = LIST_HEAD_INITIALIZER(db_t4_table);
 _DB_SET(_show, t4, NULL, db_show_table, 0, &db_t4_table);
 
 DB_FUNC(devlog, db_show_devlog, db_t4_table, CS_OWN, NULL)

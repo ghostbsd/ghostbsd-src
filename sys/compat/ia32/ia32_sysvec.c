@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #define __ELF_WORD_SIZE 32
 
 #include <sys/param.h>
+#include <sys/elf.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
 #include <sys/imgact.h>
@@ -44,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
+#include <sys/reg.h>
 #include <sys/resourcevar.h>
 #include <sys/systm.h>
 #include <sys/signalvar.h>
@@ -104,7 +106,6 @@ SYSCTL_ULONG(_compat_ia32, OID_AUTO, maxvmem, CTLFLAG_RWTUN, &ia32_maxvmem, 0, "
 struct sysentvec ia32_freebsd_sysvec = {
 	.sv_size	= FREEBSD32_SYS_MAXSYSCALL,
 	.sv_table	= freebsd32_sysent,
-	.sv_transtrap	= NULL,
 	.sv_fixup	= elf32_freebsd_fixup,
 	.sv_sendsig	= ia32_sendsig,
 	.sv_sigcode	= _binary_elf_vdso32_so_1_start,
@@ -112,6 +113,9 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_sigcodeoff	= VDSO_IA32_SIGCODE_OFFSET,
 	.sv_name	= "FreeBSD ELF32",
 	.sv_coredump	= elf32_coredump,
+	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
+	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
+	.sv_elf_core_prepare_notes = elf32_prepare_notes,
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= FREEBSD32_MINUSER,
@@ -137,6 +141,9 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_trap	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
+	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
+	.sv_regset_end  = SET_LIMIT(__elfN(regset)),
+	.sv_set_fork_retval = x86_set_fork_retval,
 };
 INIT_SYSENTVEC(elf_ia32_sysvec, &ia32_freebsd_sysvec);
 

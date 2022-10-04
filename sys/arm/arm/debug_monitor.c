@@ -35,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/types.h>
 #include <sys/kdb.h>
 #include <sys/pcpu.h>
+#include <sys/reg.h>
 #include <sys/smp.h>
 #include <sys/systm.h>
 
@@ -44,7 +45,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/debug_monitor.h>
 #include <machine/kdb.h>
 #include <machine/pcb.h>
-#include <machine/reg.h>
 
 #include <ddb/ddb.h>
 #include <ddb/db_access.h>
@@ -345,7 +345,7 @@ kdb_cpu_set_watchpoint(vm_offset_t addr, size_t size, int access)
 		return (EINVAL);
 	}
 
-	return (dbg_setup_watchpoint(addr, size, (enum dbg_access_t)access));
+	return (dbg_setup_watchpoint(addr, size, dbg_access));
 }
 
 int

@@ -144,7 +144,7 @@ struct vm_reserv;
 typedef struct vm_reserv *vm_reserv_t;
 
 /*
- * Information passed from the machine-independant VM initialization code
+ * Information passed from the machine-independent VM initialization code
  * for use by machine-dependant code (mainly for MMU support)
  */
 struct kva_md_info {
@@ -154,21 +154,29 @@ struct kva_md_info {
 	vm_offset_t	clean_eva;
 };
 
-extern struct kva_md_info	kmi;
-extern void vm_ksubmap_init(struct kva_md_info *);
-
-extern int old_mlock;
-
-extern int vm_ndomains;
+/* bits from overcommit */
+#define	SWAP_RESERVE_FORCE_ON		(1 << 0)
+#define	SWAP_RESERVE_RLIMIT_ON		(1 << 1)
+#define	SWAP_RESERVE_ALLOW_NONWIRED	(1 << 2)
 
 #ifdef _KERNEL
 struct ucred;
+
+void vm_ksubmap_init(struct kva_md_info *);
 bool swap_reserve(vm_ooffset_t incr);
 bool swap_reserve_by_cred(vm_ooffset_t incr, struct ucred *cred);
 void swap_reserve_force(vm_ooffset_t incr);
 void swap_release(vm_ooffset_t decr);
 void swap_release_by_cred(vm_ooffset_t decr, struct ucred *cred);
 void swapper(void);
-#endif
+
+extern struct kva_md_info	kmi;
+#define VA_IS_CLEANMAP(va)					\
+	((va) >= kmi.clean_sva && (va) < kmi.clean_eva)
+
+extern int old_mlock;
+extern int vm_ndomains;
+extern int vm_overcommit;
+#endif				/* _KERNEL */
 
 #endif				/* VM_H */

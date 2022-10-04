@@ -606,7 +606,7 @@ sem_find_prison(struct ucred *cred)
 	prison_lock(pr);
 	rpr = osd_jail_get(pr, sem_prison_slot);
 	prison_unlock(pr);
-	return rpr;
+	return (rpr);
 }
 
 static int
@@ -669,7 +669,7 @@ sys___semctl(struct thread *td, struct __semctl_args *uap)
 		break;
 	case SETVAL:
 		semun.val = arg.val;
-		break;		
+		break;
 	}
 
 	error = kern_semctl(td, uap->semid, uap->semnum, uap->cmd, &semun,
@@ -710,7 +710,7 @@ kern_semctl(struct thread *td, int semid, int semnum, int cmd,
 	AUDIT_ARG_SVIPC_ID(semid);
 
 	rpr = sem_find_prison(td->td_ucred);
-	if (sem == NULL)
+	if (rpr == NULL)
 		return (ENOSYS);
 
 	array = NULL;
@@ -851,7 +851,7 @@ kern_semctl(struct thread *td, int semid, int semnum, int cmd,
 		 * won't work for SETALL since we can't copyin() more
 		 * data than the user specified as we may return a
 		 * spurious EFAULT.
-		 * 
+		 *
 		 * Note that the number of semaphores in a set is
 		 * fixed for the life of that set.  The only way that
 		 * the 'count' could change while are blocked in
@@ -864,7 +864,7 @@ kern_semctl(struct thread *td, int semid, int semnum, int cmd,
 		 *
 		 */
 		count = semakptr->u.sem_nsems;
-		mtx_unlock(sema_mtxp);		    
+		mtx_unlock(sema_mtxp);
 		array = malloc(sizeof(*array) * count, M_TEMP, M_WAITOK);
 		mtx_lock(sema_mtxp);
 		if ((error = semvalid(semid, rpr, semakptr)) != 0)
@@ -917,7 +917,7 @@ kern_semctl(struct thread *td, int semid, int semnum, int cmd,
 		 * and why we require a userland buffer.
 		 */
 		count = semakptr->u.sem_nsems;
-		mtx_unlock(sema_mtxp);		    
+		mtx_unlock(sema_mtxp);
 		array = malloc(sizeof(*array) * count, M_TEMP, M_WAITOK);
 		error = copyin(arg->array, array, count * sizeof(*array));
 		mtx_lock(sema_mtxp);
@@ -1098,10 +1098,17 @@ struct semop_args {
 int
 sys_semop(struct thread *td, struct semop_args *uap)
 {
+
+	return (kern_semop(td, uap->semid, uap->sops, uap->nsops, NULL));
+}
+
+int
+kern_semop(struct thread *td, int usemid, struct sembuf *usops,
+    size_t nsops, struct timespec *timeout)
+{
 #define SMALL_SOPS	8
 	struct sembuf small_sops[SMALL_SOPS];
-	int semid = uap->semid;
-	size_t nsops = uap->nsops;
+	int semid;
 	struct prison *rpr;
 	struct sembuf *sops;
 	struct semid_kernel *semakptr;
@@ -1109,6 +1116,7 @@ sys_semop(struct thread *td, struct semop_args *uap)
 	struct sem *semptr = NULL;
 	struct sem_undo *suptr;
 	struct mtx *sema_mtxp;
+	sbintime_t sbt, precision;
 	size_t i, j, k;
 	int error;
 	int do_wakeup, do_undos;
@@ -1117,18 +1125,35 @@ sys_semop(struct thread *td, struct semop_args *uap)
 #ifdef SEM_DEBUG
 	sops = NULL;
 #endif
-	DPRINTF(("call to semop(%d, %p, %u)\n", semid, sops, nsops));
+	DPRINTF(("call to semop(%d, %p, %u)\n", usemid, usops, nsops));
 
-	AUDIT_ARG_SVIPC_ID(semid);
+	AUDIT_ARG_SVIPC_ID(usemid);
 
 	rpr = sem_find_prison(td->td_ucred);
-	if (sem == NULL)
+	if (rpr == NULL)
 		return (ENOSYS);
 
-	semid = IPCID_TO_IX(semid);	/* Convert back to zero origin */
+	semid = IPCID_TO_IX(usemid);	/* Convert back to zero origin */
 
 	if (semid < 0 || semid >= seminfo.semmni)
 		return (EINVAL);
+	if (timeout != NULL) {
+		if (!timespecvalid_interval(timeout))
+			return (EINVAL);
+		precision = 0;
+		if (timespecisset(timeout)) {
+			if (timeout->tv_sec < INT32_MAX / 2) {
+				precision = tstosbt(*timeout);
+				if (TIMESEL(&sbt, precision))
+					sbt += tc_tick_sbt;
+				sbt += precision;
+				precision >>= tc_precexp;
+			} else
+				sbt = 0;
+		} else
+			sbt = -1;
+	} else
+		precision = sbt = 0;
 
 	/* Allocate memory for sem_ops */
 	if (nsops <= SMALL_SOPS)
@@ -1152,9 +1177,9 @@ sys_semop(struct thread *td, struct semop_args *uap)
 
 		sops = malloc(nsops * sizeof(*sops), M_TEMP, M_WAITOK);
 	}
-	if ((error = copyin(uap->sops, sops, nsops * sizeof(sops[0]))) != 0) {
+	if ((error = copyin(usops, sops, nsops * sizeof(sops[0]))) != 0) {
 		DPRINTF(("error = %d from copyin(%p, %p, %d)\n", error,
-		    uap->sops, sops, nsops * sizeof(sops[0])));
+		    usops, sops, nsops * sizeof(sops[0])));
 		if (sops != small_sops)
 			free(sops, M_TEMP);
 		return (error);
@@ -1168,7 +1193,7 @@ sys_semop(struct thread *td, struct semop_args *uap)
 		goto done2;
 	}
 	seq = semakptr->u.sem_perm.seq;
-	if (seq != IPCID_TO_SEQ(uap->semid)) {
+	if (seq != IPCID_TO_SEQ(usemid)) {
 		error = EINVAL;
 		goto done2;
 	}
@@ -1286,8 +1311,8 @@ sys_semop(struct thread *td, struct semop_args *uap)
 			semptr->semncnt++;
 
 		DPRINTF(("semop:  good night!\n"));
-		error = msleep(semakptr, sema_mtxp, (PZERO - 4) | PCATCH,
-		    "semwait", 0);
+		error = msleep_sbt(semakptr, sema_mtxp, (PZERO - 4) | PCATCH,
+		    "semwait", sbt, precision, C_ABSOLUTE);
 		DPRINTF(("semop:  good morning (error=%d)!\n", error));
 		/* return code is checked below, after sem[nz]cnt-- */
 
@@ -1296,7 +1321,7 @@ sys_semop(struct thread *td, struct semop_args *uap)
 		 */
 		seq = semakptr->u.sem_perm.seq;
 		if ((semakptr->u.sem_perm.mode & SEM_ALLOC) == 0 ||
-		    seq != IPCID_TO_SEQ(uap->semid)) {
+		    seq != IPCID_TO_SEQ(usemid)) {
 			error = EIDRM;
 			goto done2;
 		}
@@ -1323,7 +1348,8 @@ sys_semop(struct thread *td, struct semop_args *uap)
 		 * need to decrement sem[nz]cnt either way.)
 		 */
 		if (error != 0) {
-			error = EINTR;
+			if (error == ERESTART)
+				error = EINTR;
 			goto done2;
 		}
 		DPRINTF(("semop:  good morning!\n"));
@@ -1812,7 +1838,7 @@ freebsd7___semctl(struct thread *td, struct freebsd7___semctl_args *uap)
 		break;
 	case SETVAL:
 		semun.val = arg.val;
-		break;		
+		break;
 	}
 
 	error = kern_semctl(td, uap->semid, uap->semnum, uap->cmd, &semun,
@@ -1883,7 +1909,7 @@ freebsd7_freebsd32_semctl(struct thread *td,
 	case SETALL:
 		error = copyin(uap->arg, &arg, sizeof(arg));
 		if (error)
-			return (error);		
+			return (error);
 		break;
 	}
 
@@ -1955,7 +1981,7 @@ freebsd32_semctl(struct thread *td, struct freebsd32_semctl_args *uap)
 	case SETALL:
 		error = copyin(uap->arg, &arg, sizeof(arg));
 		if (error)
-			return (error);		
+			return (error);
 		break;
 	}
 
@@ -1981,7 +2007,7 @@ freebsd32_semctl(struct thread *td, struct freebsd32_semctl_args *uap)
 		break;
 	case SETVAL:
 		semun.val = arg.val;
-		break;		
+		break;
 	}
 
 	error = kern_semctl(td, uap->semid, uap->semnum, uap->cmd, &semun,

@@ -138,6 +138,7 @@ MODULE_VERSION(tca6416, 1);
 
 static struct ofw_compat_data compat_data[] = {
 	{"ti,tca6416",	1},
+	{"ti,tca9539",	1},
 	{0,0}
 };
 
@@ -273,11 +274,8 @@ tca6416_pin_getcaps(device_t dev, uint32_t pin, uint32_t *caps)
 static int
 tca6416_pin_getflags(device_t dev, uint32_t pin, uint32_t *pflags)
 {
-	struct tca6416_softc *sc;
 	int error;
 	uint8_t reg_addr, reg_bit, val;
-
-	sc = device_get_softc(dev);
 
 	if (pin >= NUM_PINS || pflags == NULL)
 		return (EINVAL);
@@ -365,11 +363,8 @@ tca6416_pin_getname(device_t dev, uint32_t pin, char *name)
 static int
 tca6416_pin_get(device_t dev, uint32_t pin, unsigned int *pval)
 {
-	struct tca6416_softc *sc;
 	uint8_t reg_bit, reg_addr, reg_pvalue;
 	int error;
-
-	sc = device_get_softc(dev);
 
 	if (pin >= NUM_PINS || pval == NULL)
 		return (EINVAL);

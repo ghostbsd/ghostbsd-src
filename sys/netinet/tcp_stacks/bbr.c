@@ -1098,7 +1098,7 @@ int32_t bbr_clear_lost = 0;
  * If cts is smaller than earlier, we could have
  * had a sequence wrap (our counter wraps every
  * 70 min or so) or it could be just clock skew
- * getting us two differnt time values. Clock skew
+ * getting us two different time values. Clock skew
  * will show up within 10ms or so. So in such
  * a case (where cts is behind earlier time by
  * less than 10ms) we return 0. Otherwise we
@@ -11957,7 +11957,6 @@ bbr_output_wtime(struct tcpcb *tp, const struct timeval *tv)
 	int32_t prefetch_rsm = 0;
  	uint32_t what_we_can = 0;
 	uint32_t tot_len = 0;
-	uint32_t rtr_cnt = 0;
 	uint32_t maxseg, pace_max_segs, p_maxseg;
 	int32_t csum_flags = 0;
  	int32_t hw_tls;
@@ -12270,7 +12269,6 @@ recheck_resend:
 			goto recheck_resend;
 #endif
 		}
-		rtr_cnt++;
 		if (rsm->r_flags & BBR_HAS_SYN) {
 			/* Only retransmit a SYN by itself */
 			len = 0;
@@ -12319,7 +12317,6 @@ recheck_resend:
 		bbr->r_ctl.rc_tlp_send = NULL;
 		sack_rxmit = 1;
 		len = rsm->r_end - rsm->r_start;
-		rtr_cnt++;
 		if ((bbr->rc_resends_use_tso == 0) && (len > maxseg))
 			len = maxseg;
 

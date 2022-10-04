@@ -18,10 +18,14 @@ ATF_TESTS_C+=	kill_zombie
 .if ${MK_OPENSSL} != "no"
 ATF_TESTS_C+=	ktls_test
 .endif
+ATF_TESTS_C+=	module_test
 ATF_TESTS_C+=	ptrace_test
 TEST_METADATA.ptrace_test+=		timeout="15"
 ATF_TESTS_C+=	reaper
+ATF_TESTS_C+=	sched_affinity
 ATF_TESTS_C+=	sigaltstack
+ATF_TESTS_C+=	sigwait
+TEST_METADATA.sigwait+=	is_exclusive="true"
 .if ${MACHINE_ARCH} != "i386" && ${MACHINE_ARCH:Mpowerpc*} == "" && \
     ${MACHINE_CPUARCH} != "mips"
 ATF_TESTS_C+=	subr_physmem_test
@@ -60,6 +64,7 @@ LIBADD.kcov+=				pthread
 LIBADD.ktls_test+=			crypto
 LIBADD.sendfile_helper+=		pthread
 LIBADD.fdgrowtable_test+=		util pthread kvm procstat
+LIBADD.sigwait+=			rt
 
 NETBSD_ATF_TESTS_C+=	lockf_test
 NETBSD_ATF_TESTS_C+=	mqueue_test

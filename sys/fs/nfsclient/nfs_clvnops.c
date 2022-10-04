@@ -1597,7 +1597,7 @@ ncl_readrpc(struct vnode *vp, struct uio *uiop, struct ucred *cred)
  */
 int
 ncl_writerpc(struct vnode *vp, struct uio *uiop, struct ucred *cred,
-    int *iomode, int *must_commit, int called_from_strategy)
+    int *iomode, int *must_commit, int called_from_strategy, int ioflag)
 {
 	struct nfsvattr nfsva;
 	int error, attrflag, ret;
@@ -1612,8 +1612,8 @@ ncl_writerpc(struct vnode *vp, struct uio *uiop, struct ucred *cred,
 	NFSCL_DEBUG(4, "writerpc: aft doiods=%d\n", error);
 	if (error != 0)
 		error = nfsrpc_write(vp, uiop, iomode, must_commit, cred,
-		    uiop->uio_td, &nfsva, &attrflag, NULL,
-		    called_from_strategy);
+		    uiop->uio_td, &nfsva, &attrflag, called_from_strategy,
+		    ioflag);
 	if (attrflag) {
 		if (VTONFS(vp)->n_flag & ND_NFSV4)
 			ret = nfscl_loadattrcache(&vp, &nfsva, NULL, NULL, 1,
@@ -3283,7 +3283,32 @@ nfs_advlock(struct vop_advlock_args *ap)
 	error = NFSVOPLOCK(vp, LK_SHARED);
 	if (error != 0)
 		return (EBADF);
-	if (NFS_ISV4(vp) && (ap->a_flags & (F_POSIX | F_FLOCK)) != 0) {
+	nmp = VFSTONFS(vp->v_mount);
+	if (!NFS_ISV4(vp) || (nmp->nm_flag & NFSMNT_NOLOCKD) != 0) {
+		if ((nmp->nm_flag & NFSMNT_NOLOCKD) != 0) {
+			size = np->n_size;
+			NFSVOPUNLOCK(vp);
+			error = lf_advlock(ap, &(vp->v_lockf), size);
+		} else {
+			if (nfs_advlock_p != NULL)
+				error = nfs_advlock_p(ap);
+			else {
+				NFSVOPUNLOCK(vp);
+				error = ENOLCK;
+			}
+		}
+		if (error == 0 && ap->a_op == F_SETLK) {
+			error = NFSVOPLOCK(vp, LK_SHARED);
+			if (error == 0) {
+				/* Mark that a file lock has been acquired. */
+				NFSLOCKNODE(np);
+				np->n_flag |= NHASBEENLOCKED;
+				NFSUNLOCKNODE(np);
+				NFSVOPUNLOCK(vp);
+			}
+		}
+		return (error);
+	} else if ((ap->a_flags & (F_POSIX | F_FLOCK)) != 0) {
 		if (vp->v_type != VREG) {
 			error = EINVAL;
 			goto out;
@@ -3317,7 +3342,6 @@ nfs_advlock(struct vop_advlock_args *ap)
 		 * state structure cannot exist for the file.
 		 * Only done for "oneopenown" NFSv4.1/4.2 mounts.
 		 */
-		nmp = VFSTONFS(vp->v_mount);
 		if (NFSHASNFSV4N(nmp) && NFSHASONEOPENOWN(nmp)) {
 			NFSLOCKNODE(np);
 			np->n_flag |= NMIGHTBELOCKED;
@@ -3384,30 +3408,6 @@ nfs_advlock(struct vop_advlock_args *ap)
 			np->n_flag |= NHASBEENLOCKED;
 			NFSUNLOCKNODE(np);
 		}
-	} else if (!NFS_ISV4(vp)) {
-		if ((VFSTONFS(vp->v_mount)->nm_flag & NFSMNT_NOLOCKD) != 0) {
-			size = VTONFS(vp)->n_size;
-			NFSVOPUNLOCK(vp);
-			error = lf_advlock(ap, &(vp->v_lockf), size);
-		} else {
-			if (nfs_advlock_p != NULL)
-				error = nfs_advlock_p(ap);
-			else {
-				NFSVOPUNLOCK(vp);
-				error = ENOLCK;
-			}
-		}
-		if (error == 0 && ap->a_op == F_SETLK) {
-			error = NFSVOPLOCK(vp, LK_SHARED);
-			if (error == 0) {
-				/* Mark that a file lock has been acquired. */
-				NFSLOCKNODE(np);
-				np->n_flag |= NHASBEENLOCKED;
-				NFSUNLOCKNODE(np);
-				NFSVOPUNLOCK(vp);
-			}
-		}
-		return (error);
 	} else
 		error = EOPNOTSUPP;
 out:
@@ -3805,19 +3805,13 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	off_t inoff, outoff;
 	bool consecutive, must_commit, tryoutcred;
 
-	ret = ret2 = 0;
-	nmp = VFSTONFS(invp->v_mount);
-	mtx_lock(&nmp->nm_mtx);
 	/* NFSv4.2 Copy is not permitted for infile == outfile. */
-	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
-	    (nmp->nm_privflag & NFSMNTP_NOCOPY) != 0 || invp == outvp) {
-		mtx_unlock(&nmp->nm_mtx);
-		error = vn_generic_copy_file_range(ap->a_invp, ap->a_inoffp,
-		    ap->a_outvp, ap->a_outoffp, ap->a_lenp, ap->a_flags,
-		    ap->a_incred, ap->a_outcred, ap->a_fsizetd);
-		return (error);
+	if (invp == outvp) {
+generic_copy:
+		return (vn_generic_copy_file_range(invp, ap->a_inoffp,
+		    outvp, ap->a_outoffp, ap->a_lenp, ap->a_flags,
+		    ap->a_incred, ap->a_outcred, ap->a_fsizetd));
 	}
-	mtx_unlock(&nmp->nm_mtx);
 
 	/* Lock both vnodes, avoiding risk of deadlock. */
 	do {
@@ -3845,6 +3839,23 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 		return (error);
 
 	/*
+	 * More reasons to avoid nfs copy: not NFSv4.2, or explicitly
+	 * disabled.
+	 */
+	nmp = VFSTONFS(invp->v_mount);
+	mtx_lock(&nmp->nm_mtx);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION ||
+	    (nmp->nm_privflag & NFSMNTP_NOCOPY) != 0) {
+		mtx_unlock(&nmp->nm_mtx);
+		VOP_UNLOCK(invp);
+		VOP_UNLOCK(outvp);
+		if (mp != NULL)
+			vn_finished_write(mp);
+		goto generic_copy;
+	}
+	mtx_unlock(&nmp->nm_mtx);
+
+	/*
 	 * Do the vn_rlimit_fsize() check.  Should this be above the VOP layer?
 	 */
 	io.uio_offset = *ap->a_outoffp;
@@ -3865,6 +3876,7 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 		error = ncl_flush(outvp, MNT_WAIT, curthread, 1, 0);
 
 	/* Do the actual NFSv4.2 RPC. */
+	ret = ret2 = 0;
 	len = *ap->a_lenp;
 	mtx_lock(&nmp->nm_mtx);
 	if ((nmp->nm_privflag & NFSMNTP_NOCONSECUTIVE) == 0)

@@ -31,6 +31,9 @@ NO_WMISLEADING_INDENTATION=	-Wno-misleading-indentation
 .if ${COMPILER_VERSION} >= 140000
 NO_WBITWISE_INSTEAD_OF_LOGICAL=	-Wno-bitwise-instead-of-logical
 .endif
+.if ${COMPILER_VERSION} >= 150000
+NO_WSTRICT_PROTOTYPES=		-Wno-strict-prototypes
+.endif
 # Several other warnings which might be useful in some cases, but not severe
 # enough to error out the whole kernel build.  Display them anyway, so there is
 # some incentive to fix them eventually.
@@ -72,8 +75,13 @@ CWARNEXTRA+=	-Wno-error=memset-elt-size
 CWARNEXTRA+=	-Wno-error=packed-not-aligned
 .endif
 .if ${COMPILER_VERSION} >= 90100
-CWARNEXTRA+=	-Wno-address-of-packed-member
+CWARNEXTRA+=	-Wno-address-of-packed-member			\
+		-Wno-error=alloca-larger-than=
 .endif
+
+# GCC produces false positives for functions that switch on an
+# enum (GCC bug 87950)
+CWARNFLAGS+=	-Wno-return-type
 .endif	# gcc
 
 # This warning is utter nonsense

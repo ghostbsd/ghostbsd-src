@@ -72,6 +72,7 @@ MLINKS=		arb.3 ARB8_ENTRY.3 \
 		arb.3 ARB_RIGHT.3 \
 		arb.3 ARB_RIGHTIDX.3 \
 		arb.3 ARB_ROOT.3
+MLINKS+=	assert.3 static_assert.3
 MLINKS+=	ATOMIC_VAR_INIT.3 atomic_compare_exchange_strong.3 \
 		ATOMIC_VAR_INIT.3 atomic_compare_exchange_strong_explicit.3 \
 		ATOMIC_VAR_INIT.3 atomic_compare_exchange_weak.3 \
@@ -318,7 +319,8 @@ MLINKS+=	timeradd.3 timerclear.3 \
 		timeradd.3 timespecclear.3 \
 		timeradd.3 timespecisset.3 \
 		timeradd.3 timespeccmp.3
-MLINKS+=	tree.3 RB_EMPTY.3 \
+MLINKS+=	tree.3 RB_AUGMENT.3 \
+		tree.3 RB_EMPTY.3 \
 		tree.3 RB_ENTRY.3 \
 		tree.3 RB_FIND.3 \
 		tree.3 RB_FOREACH.3 \

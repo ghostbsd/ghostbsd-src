@@ -788,7 +788,7 @@ handle_rtm_get(struct rt_addrinfo *info, u_int fibnum,
 	 * TODO: move this logic to userland.
 	 */
 	if (rtm->rtm_flags & RTF_ANNOUNCE) {
-		struct sockaddr laddr;
+		struct sockaddr_storage laddr;
 
 		if (nh->nh_ifp != NULL &&
 		    nh->nh_ifp->if_type == IFT_PROPVIRTUAL) {
@@ -798,17 +798,17 @@ handle_rtm_get(struct rt_addrinfo *info, u_int fibnum,
 					RT_ALL_FIBS);
 			if (ifa != NULL)
 				rt_maskedcopy(ifa->ifa_addr,
-					      &laddr,
+					      (struct sockaddr *)&laddr,
 					      ifa->ifa_netmask);
 		} else
 			rt_maskedcopy(nh->nh_ifa->ifa_addr,
-				      &laddr,
+				      (struct sockaddr *)&laddr,
 				      nh->nh_ifa->ifa_netmask);
 		/* 
 		 * refactor rt and no lock operation necessary
 		 */
-		rc->rc_rt = (struct rtentry *)rnh->rnh_matchaddr(&laddr,
-		    &rnh->head);
+		rc->rc_rt = (struct rtentry *)rnh->rnh_matchaddr(
+		    (struct sockaddr *)&laddr, &rnh->head);
 		if (rc->rc_rt == NULL) {
 			RIB_RUNLOCK(rnh);
 			return (ESRCH);
@@ -2205,7 +2205,6 @@ sysctl_dumpentry(struct rtentry *rt, void *vw)
 {
 	struct walkarg *w = vw;
 	struct nhop_object *nh;
-	int error = 0;
 
 	NET_EPOCH_ASSERT();
 
@@ -2217,6 +2216,7 @@ sysctl_dumpentry(struct rtentry *rt, void *vw)
 	if (NH_IS_NHGRP(nh)) {
 		struct weightened_nhop *wn;
 		uint32_t num_nhops;
+		int error;
 		wn = nhgrp_get_nhops((struct nhgrp_object *)nh, &num_nhops);
 		for (int i = 0; i < num_nhops; i++) {
 			error = sysctl_dumpnhop(rt, wn[i].nh, wn[i].weight, w);
@@ -2225,7 +2225,7 @@ sysctl_dumpentry(struct rtentry *rt, void *vw)
 		}
 	} else
 #endif
-		error = sysctl_dumpnhop(rt, nh, rt->rt_weight, w);
+		sysctl_dumpnhop(rt, nh, rt->rt_weight, w);
 
 	return (0);
 }

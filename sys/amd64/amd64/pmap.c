@@ -6880,8 +6880,7 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	KASSERT(va < UPT_MIN_ADDRESS || va >= UPT_MAX_ADDRESS,
 	    ("pmap_enter: invalid to pmap_enter page table pages (va: 0x%lx)",
 	    va));
-	KASSERT((m->oflags & VPO_UNMANAGED) != 0 || va < kmi.clean_sva ||
-	    va >= kmi.clean_eva,
+	KASSERT((m->oflags & VPO_UNMANAGED) != 0 || !VA_IS_CLEANMAP(va),
 	    ("pmap_enter: managed mapping within the clean submap"));
 	if ((m->oflags & VPO_UNMANAGED) == 0)
 		VM_PAGE_OBJECT_BUSY_ASSERT(m);
@@ -7394,7 +7393,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 {
 	pt_entry_t newpte, *pte, PG_V;
 
-	KASSERT(va < kmi.clean_sva || va >= kmi.clean_eva ||
+	KASSERT(!VA_IS_CLEANMAP(va) ||
 	    (m->oflags & VPO_UNMANAGED) != 0,
 	    ("pmap_enter_quick_locked: managed mapping within the clean submap"));
 	PG_V = pmap_valid_bit(pmap);
@@ -7405,8 +7404,9 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	 * resident, we are creating it here.
 	 */
 	if (va < VM_MAXUSER_ADDRESS) {
+		pdp_entry_t *pdpe;
+		pd_entry_t *pde;
 		vm_pindex_t ptepindex;
-		pd_entry_t *ptepa;
 
 		/*
 		 * Calculate pagetable page index
@@ -7416,30 +7416,34 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 			mpte->ref_count++;
 		} else {
 			/*
-			 * Get the page directory entry
-			 */
-			ptepa = pmap_pde(pmap, va);
-
-			/*
 			 * If the page table page is mapped, we just increment
 			 * the hold count, and activate it.  Otherwise, we
-			 * attempt to allocate a page table page.  If this
-			 * attempt fails, we don't retry.  Instead, we give up.
+			 * attempt to allocate a page table page, passing NULL
+			 * instead of the PV list lock pointer because we don't
+			 * intend to sleep.  If this attempt fails, we don't
+			 * retry.  Instead, we give up.
 			 */
-			if (ptepa && (*ptepa & PG_V) != 0) {
-				if (*ptepa & PG_PS)
+			pdpe = pmap_pdpe(pmap, va);
+			if (pdpe != NULL && (*pdpe & PG_V) != 0) {
+				if ((*pdpe & PG_PS) != 0)
 					return (NULL);
-				mpte = PHYS_TO_VM_PAGE(*ptepa & PG_FRAME);
-				mpte->ref_count++;
+				pde = pmap_pdpe_to_pde(pdpe, va);
+				if ((*pde & PG_V) != 0) {
+					if ((*pde & PG_PS) != 0)
+						return (NULL);
+					mpte = PHYS_TO_VM_PAGE(*pde & PG_FRAME);
+					mpte->ref_count++;
+				} else {
+					mpte = pmap_allocpte_alloc(pmap,
+					    ptepindex, NULL, va);
+					if (mpte == NULL)
+						return (NULL);
+				}
 			} else {
-				/*
-				 * Pass NULL instead of the PV list lock
-				 * pointer, because we don't intend to sleep.
-				 */
 				mpte = pmap_allocpte_alloc(pmap, ptepindex,
 				    NULL, va);
 				if (mpte == NULL)
-					return (mpte);
+					return (NULL);
 			}
 		}
 		pte = (pt_entry_t *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(mpte));
@@ -8153,7 +8157,10 @@ pmap_remove_pages(pmap_t pmap)
 	struct rwlock *lock;
 	int64_t bit;
 	uint64_t inuse, bitmask;
-	int allfree, field, freed, i, idx;
+	int allfree, field, i, idx;
+#ifdef PV_STATS
+	int freed;
+#endif
 	boolean_t superpage;
 	vm_paddr_t pa;
 
@@ -8187,7 +8194,9 @@ pmap_remove_pages(pmap_t pmap)
 	PMAP_LOCK(pmap);
 	TAILQ_FOREACH_SAFE(pc, &pmap->pm_pvchunk, pc_list, npc) {
 		allfree = 1;
+#ifdef PV_STATS
 		freed = 0;
+#endif
 		for (field = 0; field < _NPCM; field++) {
 			inuse = ~pc->pc_map[field] & pc_freemask[field];
 			while (inuse != 0) {
@@ -8308,7 +8317,9 @@ pmap_remove_pages(pmap_t pmap)
 					}
 				}
 				pmap_unuse_pt(pmap, pv->pv_va, ptepde, &free);
+#ifdef PV_STATS
 				freed++;
+#endif
 			}
 		}
 		PV_STAT(counter_u64_add(pv_entry_frees, freed));
@@ -8856,13 +8867,8 @@ pmap_advise(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, int advice)
 		pdpe = pmap_pml4e_to_pdpe(pml4e, sva);
 		if ((*pdpe & PG_V) == 0)
 			continue;
-		if ((*pdpe & PG_PS) != 0) {
-			KASSERT(va_next <= eva,
-			    ("partial update of non-transparent 1G mapping "
-			    "pdpe %#lx sva %#lx eva %#lx va_next %#lx",
-			    *pdpe, sva, eva, va_next));
+		if ((*pdpe & PG_PS) != 0)
 			continue;
-		}
 
 		va_next = (sva + NBPDR) & ~PDRMASK;
 		if (va_next < sva)
@@ -10744,18 +10750,16 @@ pmap_pti_alloc_page(void)
 	vm_page_t m;
 
 	VM_OBJECT_ASSERT_WLOCKED(pti_obj);
-	m = vm_page_grab(pti_obj, pti_pg_idx++, VM_ALLOC_NOBUSY |
-	    VM_ALLOC_WIRED | VM_ALLOC_ZERO);
+	m = vm_page_grab(pti_obj, pti_pg_idx++, VM_ALLOC_WIRED | VM_ALLOC_ZERO);
 	return (m);
 }
 
 static bool
 pmap_pti_free_page(vm_page_t m)
 {
-
-	KASSERT(m->ref_count > 0, ("page %p not referenced", m));
 	if (!vm_page_unwire_noq(m))
 		return (false);
+	vm_page_xbusy_claim(m);
 	vm_page_free_zero(m);
 	return (true);
 }
@@ -10861,7 +10865,6 @@ pmap_pti_unwire_pde(void *pde, bool only_ref)
 
 	VM_OBJECT_ASSERT_WLOCKED(pti_obj);
 	m = PHYS_TO_VM_PAGE(DMAP_TO_PHYS((uintptr_t)pde));
-	MPASS(m->ref_count > 0);
 	MPASS(only_ref || m->ref_count > 1);
 	pmap_pti_free_page(m);
 }
@@ -10874,7 +10877,6 @@ pmap_pti_unwire_pte(void *pte, vm_offset_t va)
 
 	VM_OBJECT_ASSERT_WLOCKED(pti_obj);
 	m = PHYS_TO_VM_PAGE(DMAP_TO_PHYS((uintptr_t)pte));
-	MPASS(m->ref_count > 0);
 	if (pmap_pti_free_page(m)) {
 		pde = pmap_pti_pde(va);
 		MPASS((*pde & (X86_PG_PS | X86_PG_V)) == X86_PG_V);

@@ -594,14 +594,12 @@ xbd_dump_complete(struct xbd_command *cm)
 }
 
 static int
-xbd_dump(void *arg, void *virtual, vm_offset_t physical, off_t offset,
-    size_t length)
+xbd_dump(void *arg, void *virtual, off_t offset, size_t length)
 {
 	struct disk *dp = arg;
 	struct xbd_softc *sc = dp->d_drv1;
 	struct xbd_command *cm;
 	size_t chunk;
-	int sbp;
 	int rc = 0;
 
 	if (length == 0)
@@ -616,7 +614,7 @@ xbd_dump(void *arg, void *virtual, vm_offset_t physical, off_t offset,
 	mtx_lock(&sc->xbd_io_lock);
 
 	/* Split the 64KB block as needed */
-	for (sbp=0; length > 0; sbp++) {
+	while (length > 0) {
 		cm = xbd_dequeue_cm(sc, XBD_Q_FREE);
 		if (cm == NULL) {
 			mtx_unlock(&sc->xbd_io_lock);

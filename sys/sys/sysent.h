@@ -98,12 +98,11 @@ struct proc;
 struct __sigset;
 struct trapframe;
 struct vnode;
+struct note_info_list;
 
 struct sysentvec {
 	int		sv_size;	/* number of entries */
 	struct sysent	*sv_table;	/* pointer to sysent */
-	int		(*sv_transtrap)(int, int);
-					/* translate trap-to-signal mapping */
 	int		(*sv_fixup)(uintptr_t *, struct image_params *);
 					/* stack fixup function */
 	void		(*sv_sendsig)(void (*)(int), struct ksiginfo *, struct __sigset *);
@@ -114,6 +113,10 @@ struct sysentvec {
 	char		*sv_name;	/* name of binary type */
 	int		(*sv_coredump)(struct thread *, struct vnode *, off_t, int);
 					/* function to dump core, or NULL */
+	int		sv_elf_core_osabi;
+	const char	*sv_elf_core_abi_vendor;
+	void		(*sv_elf_core_prepare_notes)(struct thread *,
+			    struct note_info_list *, size_t *);
 	int		(*sv_imgact_try)(struct image_params *);
 	int		(*sv_copyout_auxargs)(struct image_params *,
 			    uintptr_t);
@@ -148,11 +151,15 @@ struct sysentvec {
 	const char	*(*sv_machine_arch)(struct proc *);
 	vm_offset_t	sv_fxrng_gen_base;
 	void		(*sv_onexec_old)(struct thread *td);
-	void		(*sv_onexec)(struct proc *, struct image_params *);
+	int		(*sv_onexec)(struct proc *, struct image_params *);
 	void		(*sv_onexit)(struct proc *);
 	void		(*sv_ontdexit)(struct thread *td);
 	int		(*sv_setid_allowed)(struct thread *td,
 			    struct image_params *imgp);
+	struct regset	**sv_regset_begin;
+	struct regset	**sv_regset_end;
+	void		(*sv_set_fork_retval)(struct thread *);
+					/* Only used on x86 */
 };
 
 #define	SV_ILP32	0x000100	/* 32-bit executable. */

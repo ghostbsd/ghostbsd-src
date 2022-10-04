@@ -178,7 +178,7 @@ tags = ['functional', 'cli_root', 'zfs_destroy']
 
 [tests/functional/cli_root/zfs_diff]
 tests = ['zfs_diff_changes', 'zfs_diff_cliargs', 'zfs_diff_timestamp',
-    'zfs_diff_types', 'zfs_diff_encrypted']
+    'zfs_diff_types', 'zfs_diff_encrypted', 'zfs_diff_mangle']
 tags = ['functional', 'cli_root', 'zfs_diff']
 
 [tests/functional/cli_root/zfs_get]
@@ -747,7 +747,8 @@ tags = ['functional', 'raidz']
 
 [tests/functional/redundancy]
 tests = ['redundancy_draid', 'redundancy_draid1', 'redundancy_draid2',
-    'redundancy_draid3', 'redundancy_draid_damaged', 'redundancy_draid_spare1',
+    'redundancy_draid3', 'redundancy_draid_damaged1',
+    'redundancy_draid_damaged2', 'redundancy_draid_spare1',
     'redundancy_draid_spare2', 'redundancy_draid_spare3', 'redundancy_mirror',
     'redundancy_raidz', 'redundancy_raidz1', 'redundancy_raidz2',
     'redundancy_raidz3', 'redundancy_stripe']

@@ -2031,10 +2031,8 @@ vm_map_alignspace(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 		 */
 		if (alignment == 0)
 			pmap_align_superpage(object, offset, addr, length);
-		else if ((*addr & (alignment - 1)) != 0) {
-			*addr &= ~(alignment - 1);
-			*addr += alignment;
-		}
+		else
+			*addr = roundup2(*addr, alignment);
 		aligned_addr = *addr;
 		if (aligned_addr == free_addr) {
 			/*
@@ -2826,9 +2824,6 @@ again:
 			continue;
 		}
 
-		if (obj->type != OBJT_DEFAULT &&
-		    (obj->flags & OBJ_SWAP) == 0)
-			continue;
 		VM_OBJECT_WLOCK(obj);
 		if (obj->type != OBJT_DEFAULT &&
 		    (obj->flags & OBJ_SWAP) == 0) {
@@ -4141,7 +4136,13 @@ vm_map_copy_entry(
 		 */
 		size = src_entry->end - src_entry->start;
 		if ((src_object = src_entry->object.vm_object) != NULL) {
+			/*
+			 * Swap-backed objects need special handling.  Note that
+			 * this is an unlocked check, so it is possible to race
+			 * with an OBJT_DEFAULT -> OBJT_SWAP conversion.
+			 */
 			if (src_object->type == OBJT_DEFAULT ||
+			    src_object->type == OBJT_SWAP ||
 			    (src_object->flags & OBJ_SWAP) != 0) {
 				vm_map_copy_swap_object(src_entry, dst_entry,
 				    size, fork_charge);
@@ -5061,7 +5062,7 @@ RetryLookupLocked:
 		if (vm_map_lock_upgrade(map))
 			goto RetryLookup;
 		entry->object.vm_object = vm_object_allocate_anon(atop(size),
-		    NULL, entry->cred, entry->cred != NULL ? size : 0);
+		    NULL, entry->cred, size);
 		entry->offset = 0;
 		entry->cred = NULL;
 		vm_map_lock_downgrade(map);

@@ -409,6 +409,29 @@ print_registers(struct trapframe *frame)
 	printf("spsr:         %8x\n", frame->tf_spsr);
 }
 
+#ifdef VFP
+static void
+fpe_trap(struct thread *td, void *addr, uint32_t exception)
+{
+	int code;
+
+	code = FPE_FLTIDO;
+	if ((exception & ISS_FP_TFV) != 0) {
+		if ((exception & ISS_FP_IOF) != 0)
+			code = FPE_FLTINV;
+		else if ((exception & ISS_FP_DZF) != 0)
+			code = FPE_FLTDIV;
+		else if ((exception & ISS_FP_OFF) != 0)
+			code = FPE_FLTOVF;
+		else if ((exception & ISS_FP_UFF) != 0)
+			code = FPE_FLTUND;
+		else if ((exception & ISS_FP_IXF) != 0)
+			code = FPE_FLTRES;
+	}
+	call_trapsignal(td, SIGFPE, code, addr, exception);
+}
+#endif
+
 void
 do_el1h_sync(struct thread *td, struct trapframe *frame)
 {
@@ -548,12 +571,24 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 
 	switch (exception) {
 	case EXCP_FP_SIMD:
-	case EXCP_TRAP_FP:
 #ifdef VFP
 		vfp_restore_state();
 #else
 		panic("VFP exception in userland");
 #endif
+		break;
+	case EXCP_TRAP_FP:
+#ifdef VFP
+		fpe_trap(td, (void *)frame->tf_elr, esr);
+		userret(td, frame);
+#else
+		panic("VFP exception in userland");
+#endif
+		break;
+	case EXCP_SVE:
+		call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)frame->tf_elr,
+		    exception);
+		userret(td, frame);
 		break;
 	case EXCP_SVC32:
 	case EXCP_SVC64:
@@ -593,6 +628,9 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		break;
 	case EXCP_BRKPT_EL0:
 	case EXCP_BRK:
+#ifdef COMPAT_FREEBSD32
+	case EXCP_BRKPT_32:
+#endif /* COMPAT_FREEBSD32 */
 		call_trapsignal(td, SIGTRAP, TRAP_BRKPT, (void *)frame->tf_elr,
 		    exception);
 		userret(td, frame);

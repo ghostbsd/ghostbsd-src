@@ -341,11 +341,14 @@ usb_linux_suspend(device_t dev)
 {
 	struct usb_linux_softc *sc = device_get_softc(dev);
 	struct usb_driver *udrv = usb_linux_get_usb_driver(sc);
+	pm_message_t pm_msg;
 	int err;
 
 	err = 0;
-	if (udrv && udrv->suspend)
-		err = (udrv->suspend) (sc->sc_ui, 0);
+	if (udrv && udrv->suspend) {
+		pm_msg.event = 0;				/* XXX */
+		err = (udrv->suspend) (sc->sc_ui, pm_msg);
+	}
 	return (-err);
 }
 
@@ -1166,7 +1169,9 @@ repeat:
 	LIST_FOREACH(sc, &usb_linux_attached_list, sc_attached_list) {
 		if (sc->sc_udrv == drv) {
 			mtx_unlock(&Giant);
+			bus_topo_lock();
 			device_detach(sc->sc_fbsd_dev);
+			bus_topo_unlock();
 			goto repeat;
 		}
 	}

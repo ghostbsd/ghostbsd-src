@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
+#include <sys/reg.h>
 #include <sys/smr.h>
 #include <sys/sysctl.h>
 
@@ -47,7 +48,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpufunc.h>
 #include <machine/psl.h>
 #include <machine/md_var.h>
-#include <machine/reg.h>
 #include <machine/specialreg.h>
 #include <machine/smp.h>
 #include <machine/vmm.h>
@@ -506,6 +506,10 @@ vmcb_init(struct svm_softc *sc, int vcpu, uint64_t iopm_base_pa,
 	svm_enable_intercept(sc, vcpu, VMCB_CTRL2_INTCPT, VMCB_INTCPT_CLGI);
 	svm_enable_intercept(sc, vcpu, VMCB_CTRL2_INTCPT, VMCB_INTCPT_SKINIT);
 	svm_enable_intercept(sc, vcpu, VMCB_CTRL2_INTCPT, VMCB_INTCPT_ICEBP);
+	if (vcpu_trap_wbinvd(sc->vm, vcpu)) {
+		svm_enable_intercept(sc, vcpu, VMCB_CTRL2_INTCPT,
+		    VMCB_INTCPT_WBINVD);
+	}
 
 	/*
 	 * From section "Canonicalization and Consistency Checks" in APMv2
@@ -1550,6 +1554,10 @@ svm_vmexit(struct svm_softc *svm_sc, int vcpu, struct vm_exit *vmexit)
 	case VMCB_EXIT_INVD:
 	case VMCB_EXIT_INVLPGA:
 		vm_inject_ud(svm_sc->vm, vcpu);
+		handled = 1;
+		break;
+	case VMCB_EXIT_WBINVD:
+		/* ignore WBINVD */
 		handled = 1;
 		break;
 	default:

@@ -56,7 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#if defined(EXT_RESOURCES) && defined(__aarch64__)
+#if defined(__aarch64__)
 #define	IMX_ENABLE_CLOCKS
 #endif
 
@@ -528,7 +528,7 @@ imx51_gpio_pin_configure(struct imx51_gpio_softc *sc, struct gpio_pin *pin,
 	 * since we have no connection to the pad config registers from here).
 	 *
 	 * When setting a pin to output, honor the PRESET_[LOW,HIGH] flags if
-	 * present.  Otherwise, for glitchless transistions on pins with pulls,
+	 * present.  Otherwise, for glitchless transitions on pins with pulls,
 	 * read the current state of the pad and preset the DR register to drive
 	 * the current value onto the pin before enabling the pin for output.
 	 *

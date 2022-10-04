@@ -55,9 +55,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/smp.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
-#include <sys/sysent.h>
 #include <sys/sysproto.h>
-#include <sys/umtx.h>
+#include <sys/umtxvar.h>
 #include <machine/smp.h>
 
 #ifdef RCTL

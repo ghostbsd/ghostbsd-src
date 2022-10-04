@@ -96,6 +96,7 @@ _LIBRARIES=	\
 		archive \
 		asn1 \
 		avl \
+		BlocksRuntime \
 		be \
 		begemot \
 		bluetooth \
@@ -330,7 +331,7 @@ _DP_proc=	supcplusplus
 .if ${MK_CDDL} != "no"
 _DP_proc+=	ctf
 .endif
-_DP_proc+=	elf procstat rtld_db util
+_DP_proc+=	elf procstat rtld_db util z
 _DP_mp=	crypto
 _DP_memstat=	kvm
 _DP_magic=	z
@@ -378,8 +379,8 @@ _DP_heimbase=	pthread
 _DP_heimipcc=	heimbase roken pthread
 _DP_heimipcs=	heimbase roken pthread
 _DP_kafs5=	asn1 krb5 roken
-_DP_krb5+=	asn1 com_err crypt crypto hx509 roken wind heimbase heimipcc
-_DP_gssapi_krb5+=	gssapi krb5 crypto roken asn1 com_err
+_DP_krb5=	asn1 com_err crypt crypto hx509 roken wind heimbase heimipcc
+_DP_gssapi_krb5=	gssapi krb5 crypto roken asn1 com_err
 _DP_lzma=	md pthread
 _DP_ucl=	m
 _DP_vmmapi=	util

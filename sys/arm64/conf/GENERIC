@@ -32,6 +32,7 @@ options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
 options 	IPSEC_SUPPORT		# Allow kldload of ipsec and tcpmd5
 options		ROUTE_MPATH		# Multipath routing support
+options		FIB_ALGO		# Modular fib lookups
 options 	TCP_OFFLOAD		# TCP offload
 options 	TCP_HHOOK		# hhook(9) framework for TCP
 options		TCP_RFC7413		# TCP Fast Open
@@ -189,7 +190,7 @@ device		iicmux
 device		iic
 device		icee		# Generic IIC eeprom
 device		twsi		# Allwinner I2C controller
-device		pca9547		# NPX I2C bus multiplexer
+device		pca954x		# NPX I2C bus multiplexer
 device		pcf8563		# NXP Real-time clock/calendar
 device		rk_i2c		# RockChip I2C controller
 device		syr827		# Silergy SYR827 PMIC

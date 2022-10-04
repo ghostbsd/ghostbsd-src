@@ -865,6 +865,27 @@ static kobj_method_t null_methods[] = {
 
 DEFINE_CLASS(null, null_methods, 0);
 
+struct mtx *
+bus_topo_mtx(void)
+{
+
+	return (&Giant);
+}
+
+void
+bus_topo_lock(void)
+{
+
+	mtx_lock(bus_topo_mtx());
+}
+
+void
+bus_topo_unlock(void)
+{
+
+	mtx_unlock(bus_topo_mtx());
+}
+
 /*
  * Bus pass implementation
  */
@@ -1110,6 +1131,7 @@ int
 devclass_add_driver(devclass_t dc, driver_t *driver, int pass, devclass_t *dcp)
 {
 	driverlink_t dl;
+	devclass_t child_dc;
 	const char *parentname;
 
 	PDEBUG(("%s", DRIVERNAME(driver)));
@@ -1141,7 +1163,9 @@ devclass_add_driver(devclass_t dc, driver_t *driver, int pass, devclass_t *dcp)
 		parentname = driver->baseclasses[0]->name;
 	else
 		parentname = NULL;
-	*dcp = devclass_find_internal(driver->name, parentname, TRUE);
+	child_dc = devclass_find_internal(driver->name, parentname, TRUE);
+	if (dcp != NULL)
+		*dcp = child_dc;
 
 	dl->driver = driver;
 	TAILQ_INSERT_TAIL(&dc->drivers, dl, link);
@@ -4589,7 +4613,7 @@ bus_generic_get_domain(device_t dev, device_t child, int *domain)
 int
 bus_null_rescan(device_t dev)
 {
-	return (ENXIO);
+	return (ENODEV);
 }
 
 /*
@@ -5722,7 +5746,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	int error, old;
 
 	/* Locate the device to control. */
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	req = (struct devreq *)data;
 	switch (cmd) {
 	case DEV_ATTACH:
@@ -5749,7 +5773,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		break;
 	}
 	if (error) {
-		mtx_unlock(&Giant);
+		bus_topo_unlock();
 		return (error);
 	}
 
@@ -5970,7 +5994,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		    req->dr_flags);
 		break;
 	}
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 	return (error);
 }
 

@@ -103,7 +103,7 @@ endif
 endif
 
 PHONY += codecheck
-codecheck: cstyle shellcheck checkbashisms flake8 mancheck testscheck vcscheck
+codecheck: cstyle shellcheck checkbashisms flake8 mancheck testscheck vcscheck zstdcheck
 
 PHONY += checkstyle
 checkstyle: codecheck commitcheck
@@ -114,14 +114,20 @@ commitcheck:
 		${top_srcdir}/scripts/commitcheck.sh; \
 	fi
 
+if HAVE_PARALLEL
+cstyle_line = -print0 | parallel -X0 ${top_srcdir}/scripts/cstyle.pl -cpP {}
+else
+cstyle_line = -exec ${top_srcdir}/scripts/cstyle.pl -cpP {} +
+endif
 PHONY += cstyle
 cstyle:
 	@find ${top_srcdir} -name build -prune \
 		-o -type f -name '*.[hc]' \
 		! -name 'zfs_config.*' ! -name '*.mod.c' \
 		! -name 'opt_global.h' ! -name '*_if*.h' \
+		! -name 'zstd_compat_wrapper.h' \
 		! -path './module/zstd/lib/*' \
-		-exec ${top_srcdir}/scripts/cstyle.pl -cpP {} \+
+		$(cstyle_line)
 
 filter_executable = -exec test -x '{}' \; -print
 
@@ -172,6 +178,10 @@ vcscheck:
 		git ls-files . --exclude-standard --others | \
 		awk '{c++; print} END {if(c>0) exit 1}' ; \
 	fi
+
+PHONY += zstdcheck
+zstdcheck:
+	@$(MAKE) -C module/zstd checksymbols
 
 PHONY += lint
 lint: cppcheck paxcheck

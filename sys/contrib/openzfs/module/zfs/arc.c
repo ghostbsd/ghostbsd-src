@@ -878,6 +878,14 @@ static void l2arc_hdr_arcstats_update(arc_buf_hdr_t *hdr, boolean_t incr,
 	l2arc_hdr_arcstats_update((hdr), B_FALSE, B_TRUE)
 
 /*
+ * l2arc_exclude_special : A zfs module parameter that controls whether buffers
+ * 		present on special vdevs are eligibile for caching in L2ARC. If
+ * 		set to 1, exclude dbufs on special vdevs from being cached to
+ * 		L2ARC.
+ */
+int l2arc_exclude_special = 0;
+
+/*
  * l2arc_mfuonly : A ZFS module parameter that controls whether only MFU
  * 		metadata and data are cached from ARC into L2ARC.
  */
@@ -3430,7 +3438,6 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 	arc_buf_hdr_t *nhdr;
 	arc_buf_t *buf;
 	kmem_cache_t *ncache, *ocache;
-	unsigned nsize, osize;
 
 	/*
 	 * This function requires that hdr is in the arc_anon state.
@@ -3447,14 +3454,10 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 
 	if (need_crypt) {
 		ncache = hdr_full_crypt_cache;
-		nsize = sizeof (hdr->b_crypt_hdr);
 		ocache = hdr_full_cache;
-		osize = HDR_FULL_SIZE;
 	} else {
 		ncache = hdr_full_cache;
-		nsize = HDR_FULL_SIZE;
 		ocache = hdr_full_crypt_cache;
-		osize = sizeof (hdr->b_crypt_hdr);
 	}
 
 	nhdr = kmem_cache_alloc(ncache, KM_PUSHPAGE);
@@ -5041,10 +5044,11 @@ arc_reap_cb(void *arg, zthr_t *zthr)
 	 */
 	free_memory = arc_available_memory();
 
-	int64_t to_free =
-	    (arc_c >> arc_shrink_shift) - free_memory;
-	if (to_free > 0) {
-		arc_reduce_target_size(to_free);
+	int64_t can_free = arc_c - arc_c_min;
+	if (can_free > 0) {
+		int64_t to_free = (can_free >> arc_shrink_shift) - free_memory;
+		if (to_free > 0)
+			arc_reduce_target_size(to_free);
 	}
 	spl_fstrans_unmark(cookie);
 }
@@ -6922,7 +6926,8 @@ arc_write_ready(zio_t *zio)
 		arc_hdr_alloc_abd(hdr, ARC_HDR_DO_ADAPT | ARC_HDR_ALLOC_RDATA |
 		    ARC_HDR_USE_RESERVE);
 		abd_copy(hdr->b_crypt_hdr.b_rabd, zio->io_abd, psize);
-	} else if (zfs_abd_scatter_enabled || !arc_can_share(hdr, buf)) {
+	} else if (!abd_size_alloc_linear(arc_buf_size(buf)) ||
+	    !arc_can_share(hdr, buf)) {
 		/*
 		 * Ideally, we would always copy the io_abd into b_pabd, but the
 		 * user may have disabled compressed ARC, thus we must check the
@@ -8056,6 +8061,18 @@ arc_init(void)
 		    zfs_dirty_data_max_percent / 100;
 		zfs_dirty_data_max = MIN(zfs_dirty_data_max,
 		    zfs_dirty_data_max_max);
+	}
+
+	if (zfs_wrlog_data_max == 0) {
+
+		/*
+		 * dp_wrlog_total is reduced for each txg at the end of
+		 * spa_sync(). However, dp_dirty_total is reduced every time
+		 * a block is written out. Thus under normal operation,
+		 * dp_wrlog_total could grow 2 times as big as
+		 * zfs_dirty_data_max.
+		 */
+		zfs_wrlog_data_max = zfs_dirty_data_max * 2;
 	}
 }
 
@@ -9312,26 +9329,37 @@ l2arc_apply_transforms(spa_t *spa, arc_buf_hdr_t *hdr, uint64_t asize,
 	}
 
 	if (compress != ZIO_COMPRESS_OFF && !HDR_COMPRESSION_ENABLED(hdr)) {
-		cabd = abd_alloc_for_io(asize, ismd);
-		tmp = abd_borrow_buf(cabd, asize);
+		/*
+		 * In some cases, we can wind up with size > asize, so
+		 * we need to opt for the larger allocation option here.
+		 *
+		 * (We also need abd_return_buf_copy in all cases because
+		 * it's an ASSERT() to modify the buffer before returning it
+		 * with arc_return_buf(), and all the compressors
+		 * write things before deciding to fail compression in nearly
+		 * every case.)
+		 */
+		cabd = abd_alloc_for_io(size, ismd);
+		tmp = abd_borrow_buf(cabd, size);
 
 		psize = zio_compress_data(compress, to_write, tmp, size,
 		    hdr->b_complevel);
 
-		if (psize >= size) {
-			abd_return_buf(cabd, tmp, asize);
+		if (psize >= asize) {
+			psize = HDR_GET_PSIZE(hdr);
+			abd_return_buf_copy(cabd, tmp, size);
 			HDR_SET_COMPRESS(hdr, ZIO_COMPRESS_OFF);
 			to_write = cabd;
-			abd_copy(to_write, hdr->b_l1hdr.b_pabd, size);
-			if (size != asize)
-				abd_zero_off(to_write, size, asize - size);
+			abd_copy(to_write, hdr->b_l1hdr.b_pabd, psize);
+			if (psize != asize)
+				abd_zero_off(to_write, psize, asize - psize);
 			goto encrypt;
 		}
 		ASSERT3U(psize, <=, HDR_GET_PSIZE(hdr));
 		if (psize < asize)
 			bzero((char *)tmp + psize, asize - psize);
 		psize = HDR_GET_PSIZE(hdr);
-		abd_return_buf_copy(cabd, tmp, asize);
+		abd_return_buf_copy(cabd, tmp, size);
 		to_write = cabd;
 	}
 
@@ -11127,6 +11155,10 @@ ZFS_MODULE_PARAM(zfs_l2arc, l2arc_, rebuild_blocks_min_l2size, ULONG, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs_l2arc, l2arc_, mfuonly, INT, ZMOD_RW,
 	"Cache only MFU data from ARC into L2ARC");
+
+ZFS_MODULE_PARAM(zfs_l2arc, l2arc_, exclude_special, INT, ZMOD_RW,
+	"If set to 1 exclude dbufs on special vdevs from being cached to "
+	"L2ARC.");
 
 ZFS_MODULE_PARAM_CALL(zfs_arc, zfs_arc_, lotsfree_percent, param_set_arc_int,
 	param_get_int, ZMOD_RW, "System free memory I/O throttle in bytes");
