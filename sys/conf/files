@@ -765,8 +765,8 @@ crypto/sha2/sha256c.c		optional crypto | ekcd | geom_bde | \
 crypto/sha2/sha512c.c		optional crypto | geom_bde | zfs
 crypto/skein/skein.c		optional crypto | zfs
 crypto/skein/skein_block.c	optional crypto | zfs
-crypto/siphash/siphash.c	optional inet | inet6
-crypto/siphash/siphash_test.c	optional inet | inet6
+crypto/siphash/siphash.c	optional inet | inet6 | wg
+crypto/siphash/siphash_test.c	optional inet | inet6 | wg
 ddb/db_access.c			optional ddb
 ddb/db_break.c			optional ddb
 ddb/db_capture.c		optional ddb
@@ -1481,7 +1481,7 @@ dev/cxgbe/common/t4_hw.c	optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/common/t4vf_hw.c	optional cxgbev pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
-dev/cxgbe/crypto/t4_kern_tls.c	optional cxgbe pci kern_tls \
+dev/cxgbe/crypto/t6_kern_tls.c	optional cxgbe pci kern_tls \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/crypto/t4_keyctx.c	optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
@@ -3528,6 +3528,14 @@ dev/vt/vt_font.c		optional vt
 dev/vt/vt_sysmouse.c		optional vt
 dev/vte/if_vte.c		optional vte pci
 dev/watchdog/watchdog.c		standard
+dev/wg/if_wg.c			optional wg				\
+	compile-with "${NORMAL_C} -include $S/dev/wg/compat.h"
+dev/wg/wg_cookie.c		optional wg				\
+	compile-with "${NORMAL_C} -include $S/dev/wg/compat.h"
+dev/wg/wg_crypto.c		optional wg				\
+	compile-with "${NORMAL_C} -include $S/dev/wg/compat.h"
+dev/wg/wg_noise.c		optional wg				\
+	compile-with "${NORMAL_C} -include $S/dev/wg/compat.h"
 dev/wpi/if_wpi.c		optional wpi pci
 wpifw.c			optional wpifw					\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk wpi.fw:wpifw:153229 -mwpi -c${.TARGET}" \
@@ -3908,7 +3916,7 @@ kern/stack_protector.c		standard \
 kern/subr_acl_nfs4.c		optional ufs_acl | zfs
 kern/subr_acl_posix1e.c		optional ufs_acl
 kern/subr_asan.c		optional kasan \
-	compile-with "${NORMAL_C:N-fsanitize*}"
+	compile-with "${NORMAL_C:N-fsanitize*:N-fstack-protector*}"
 kern/subr_autoconf.c		standard
 kern/subr_blist.c		standard
 kern/subr_boot.c		standard
@@ -3923,7 +3931,7 @@ kern/subr_coverage.c		optional coverage \
 	compile-with "${NORMAL_C:N-fsanitize*}"
 kern/subr_counter.c		standard
 kern/subr_csan.c		optional kcsan \
-	compile-with "${NORMAL_C:N-fsanitize*}"
+	compile-with "${NORMAL_C:N-fsanitize*:N-fstack-protector*}"
 kern/subr_devstat.c		standard
 kern/subr_disk.c		standard
 kern/subr_early.c		standard
@@ -4647,9 +4655,10 @@ compat/linuxkpi/common/src/linux_xarray.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/lkpi_iic_if.m	optional compat_linuxkpi
 
-compat/linuxkpi/common/src/linux_seq_file.c		optional compat_linuxkpi | lindebugfs \
+compat/linuxkpi/common/src/linux_seq_file.c	optional compat_linuxkpi | lindebugfs \
 	compile-with "${LINUXKPI_C}"
-
+compat/linuxkpi/common/src/linux_simple_attr.c	optional compat_linuxkpi | lindebugfs \
+	compile-with "${LINUXKPI_C}"
 compat/lindebugfs/lindebugfs.c			optional lindebugfs \
 	compile-with "${LINUXKPI_C}"
 

@@ -2361,40 +2361,122 @@ vn_vget_ino_gen(struct vnode *vp, vn_get_ino_t alloc, void *alloc_arg,
 	return (error);
 }
 
+static void
+vn_send_sigxfsz(struct proc *p)
+{
+	PROC_LOCK(p);
+	kern_psignal(p, SIGXFSZ);
+	PROC_UNLOCK(p);
+}
+
 int
-vn_rlimit_fsize(const struct vnode *vp, const struct uio *uio,
-    struct thread *td)
+vn_rlimit_trunc(u_quad_t size, struct thread *td)
+{
+	if (size <= lim_cur(td, RLIMIT_FSIZE))
+		return (0);
+	vn_send_sigxfsz(td->td_proc);
+	return (EFBIG);
+}
+
+static int
+vn_rlimit_fsizex1(const struct vnode *vp, struct uio *uio, off_t maxfsz,
+    bool adj, struct thread *td)
 {
 	off_t lim;
 	bool ktr_write;
 
-	if (td == NULL)
+	if (vp->v_type != VREG)
 		return (0);
 
 	/*
-	 * There are conditions where the limit is to be ignored.
-	 * However, since it is almost never reached, check it first.
+	 * Handle file system maximum file size.
+	 */
+	if (maxfsz != 0 && uio->uio_offset + uio->uio_resid > maxfsz) {
+		if (!adj || uio->uio_offset >= maxfsz)
+			return (EFBIG);
+		uio->uio_resid = maxfsz - uio->uio_offset;
+	}
+
+	/*
+	 * This is kernel write (e.g. vnode_pager) or accounting
+	 * write, ignore limit.
+	 */
+	if (td == NULL || (td->td_pflags2 & TDP2_ACCT) != 0)
+		return (0);
+
+	/*
+	 * Calculate file size limit.
 	 */
 	ktr_write = (td->td_pflags & TDP_INKTRACE) != 0;
-	lim = lim_cur(td, RLIMIT_FSIZE);
-	if (__predict_false(ktr_write))
-		lim = td->td_ktr_io_lim;
+	lim = __predict_false(ktr_write) ? td->td_ktr_io_lim :
+	    lim_cur(td, RLIMIT_FSIZE);
+
+	/*
+	 * Is the limit reached?
+	 */
 	if (__predict_true((uoff_t)uio->uio_offset + uio->uio_resid <= lim))
 		return (0);
 
 	/*
-	 * The limit is reached.
+	 * Prepared filesystems can handle writes truncated to the
+	 * file size limit.
 	 */
-	if (vp->v_type != VREG ||
-	    (td->td_pflags2 & TDP2_ACCT) != 0)
+	if (adj && (uoff_t)uio->uio_offset < lim) {
+		uio->uio_resid = lim - (uoff_t)uio->uio_offset;
 		return (0);
-
-	if (!ktr_write || ktr_filesize_limit_signal) {
-		PROC_LOCK(td->td_proc);
-		kern_psignal(td->td_proc, SIGXFSZ);
-		PROC_UNLOCK(td->td_proc);
 	}
+
+	if (!ktr_write || ktr_filesize_limit_signal)
+		vn_send_sigxfsz(td->td_proc);
 	return (EFBIG);
+}
+
+/*
+ * Helper for VOP_WRITE() implementations, the common code to
+ * handle maximum supported file size on the filesystem, and
+ * RLIMIT_FSIZE, except for special writes from accounting subsystem
+ * and ktrace.
+ *
+ * For maximum file size (maxfsz argument):
+ * - return EFBIG if uio_offset is beyond it
+ * - otherwise, clamp uio_resid if write would extend file beyond maxfsz.
+ *
+ * For RLIMIT_FSIZE:
+ * - return EFBIG and send SIGXFSZ if uio_offset is beyond the limit
+ * - otherwise, clamp uio_resid if write would extend file beyond limit.
+ *
+ * If clamping occured, the adjustment for uio_resid is stored in
+ * *resid_adj, to be re-applied by vn_rlimit_fsizex_res() on return
+ * from the VOP.
+ */
+int
+vn_rlimit_fsizex(const struct vnode *vp, struct uio *uio, off_t maxfsz,
+    ssize_t *resid_adj, struct thread *td)
+{
+	ssize_t resid_orig;
+	int error;
+	bool adj;
+
+	resid_orig = uio->uio_resid;
+	adj = resid_adj != NULL;
+	error = vn_rlimit_fsizex1(vp, uio, maxfsz, adj, td);
+	if (adj)
+		*resid_adj = resid_orig - uio->uio_resid;
+	return (error);
+}
+
+void
+vn_rlimit_fsizex_res(struct uio *uio, ssize_t resid_adj)
+{
+	uio->uio_resid += resid_adj;
+}
+
+int
+vn_rlimit_fsize(const struct vnode *vp, const struct uio *uio,
+    struct thread *td)
+{
+	return (vn_rlimit_fsizex(vp, __DECONST(struct uio *, uio), 0, NULL,
+	    td));
 }
 
 int
@@ -2483,7 +2565,7 @@ vn_bmap_seekhole(struct vnode *vp, u_long cmd, off_t *off, struct ucred *cred)
 	if (error != 0)
 		goto unlock;
 	noff = *off;
-	if (noff >= va.va_size) {
+	if (noff < 0 || noff >= va.va_size) {
 		error = ENXIO;
 		goto unlock;
 	}
@@ -3154,13 +3236,12 @@ vn_generic_copy_file_range(struct vnode *invp, off_t *inoffp,
 {
 	struct vattr va, inva;
 	struct mount *mp;
-	struct uio io;
 	off_t startoff, endoff, xfer, xfer2;
 	u_long blksize;
 	int error, interrupted;
 	bool cantseek, readzeros, eof, lastblock, holetoeof;
-	ssize_t aresid;
-	size_t copylen, len, rem, savlen;
+	ssize_t aresid, r = 0;
+	size_t copylen, len, savlen;
 	char *dat;
 	long holein, holeout;
 	struct timespec curts, endts;
@@ -3188,15 +3269,20 @@ vn_generic_copy_file_range(struct vnode *invp, off_t *inoffp,
 		error = vn_lock(outvp, LK_EXCLUSIVE);
 	if (error == 0) {
 		/*
-		 * If fsize_td != NULL, do a vn_rlimit_fsize() call,
+		 * If fsize_td != NULL, do a vn_rlimit_fsizex() call,
 		 * now that outvp is locked.
 		 */
 		if (fsize_td != NULL) {
+			struct uio io;
+
 			io.uio_offset = *outoffp;
 			io.uio_resid = len;
-			error = vn_rlimit_fsize(outvp, &io, fsize_td);
-			if (error != 0)
-				error = EFBIG;
+			error = vn_rlimit_fsizex(outvp, &io, 0, &r, fsize_td);
+			len = savlen = io.uio_resid;
+			/*
+			 * No need to call vn_rlimit_fsizex_res before return,
+			 * since the uio is local.
+			 */
 		}
 		if (VOP_PATHCONF(outvp, _PC_MIN_HOLE_SIZE, &holeout) != 0)
 			holeout = 0;
@@ -3227,31 +3313,38 @@ vn_generic_copy_file_range(struct vnode *invp, off_t *inoffp,
 	if (error != 0)
 		goto out;
 
-	/*
-	 * Set the blksize to the larger of the hole sizes for invp and outvp.
-	 * If hole sizes aren't available, set the blksize to the larger 
-	 * f_iosize of invp and outvp.
-	 * This code expects the hole sizes and f_iosizes to be powers of 2.
-	 * This value is clipped at 4Kbytes and 1Mbyte.
-	 */
-	blksize = MAX(holein, holeout);
-
-	/* Clip len to end at an exact multiple of hole size. */
-	if (blksize > 1) {
-		rem = *inoffp % blksize;
-		if (rem > 0)
-			rem = blksize - rem;
-		if (len > rem && len - rem > blksize)
-			len = savlen = rounddown(len - rem, blksize) + rem;
-	}
-
-	if (blksize <= 1)
+	if (holein == 0 && holeout > 0) {
+		/*
+		 * For this special case, the input data will be scanned
+		 * for blocks of all 0 bytes.  For these blocks, the
+		 * write can be skipped for the output file to create
+		 * an unallocated region.
+		 * Therefore, use the appropriate size for the output file.
+		 */
+		blksize = holeout;
+		if (blksize <= 512) {
+			/*
+			 * Use f_iosize, since ZFS reports a _PC_MIN_HOLE_SIZE
+			 * of 512, although it actually only creates
+			 * unallocated regions for blocks >= f_iosize.
+			 */
+			blksize = outvp->v_mount->mnt_stat.f_iosize;
+		}
+	} else {
+		/*
+		 * Use the larger of the two f_iosize values.  If they are
+		 * not the same size, one will normally be an exact multiple of
+		 * the other, since they are both likely to be a power of 2.
+		 */
 		blksize = MAX(invp->v_mount->mnt_stat.f_iosize,
 		    outvp->v_mount->mnt_stat.f_iosize);
+	}
+
+	/* Clip to sane limits. */
 	if (blksize < 4096)
 		blksize = 4096;
-	else if (blksize > 1024 * 1024)
-		blksize = 1024 * 1024;
+	else if (blksize > maxphys)
+		blksize = maxphys;
 	dat = malloc(blksize, M_TEMP, M_WAITOK);
 
 	/*

@@ -30,6 +30,9 @@
 #include <priv.h> /* For setpflags() and __PROC_PROTECT  */
 #endif
 #include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "log.h"
 
@@ -40,22 +43,34 @@ platform_disable_tracing(int strict)
 	/* On FreeBSD, we should make this process untraceable */
 	int disable_trace = PROC_TRACE_CTL_DISABLE;
 
-	if (procctl(P_PID, 0, PROC_TRACE_CTL, &disable_trace) && strict)
-		fatal("unable to make the process untraceable");
+	/*
+	 * On FreeBSD, we should make this process untraceable.
+	 * pid=0 means "this process" but some older kernels do not
+	 * understand that so retry with our own pid before failing.
+	 */
+	if (procctl(P_PID, 0, PROC_TRACE_CTL, &disable_trace) == 0)
+		return;
+	if (procctl(P_PID, getpid(), PROC_TRACE_CTL, &disable_trace) == 0)
+		return;
+	if (strict)
+		fatal("unable to make the process untraceable: %s",
+		    strerror(errno));
 #endif
 #if defined(HAVE_PRCTL) && defined(PR_SET_DUMPABLE)
 	/* Disable ptrace on Linux without sgid bit */
 	if (prctl(PR_SET_DUMPABLE, 0) != 0 && strict)
-		fatal("unable to make the process undumpable");
+		fatal("unable to make the process undumpable: %s",
+		    strerror(errno));
 #endif
 #if defined(HAVE_SETPFLAGS) && defined(__PROC_PROTECT)
 	/* On Solaris, we should make this process untraceable */
 	if (setpflags(__PROC_PROTECT, 1) != 0 && strict)
-		fatal("unable to make the process untraceable");
+		fatal("unable to make the process untraceable: %s",
+		    strerror(errno));
 #endif
 #ifdef PT_DENY_ATTACH
 	/* Mac OS X */
 	if (ptrace(PT_DENY_ATTACH, 0, 0, 0) == -1 && strict)
-		fatal("unable to set PT_DENY_ATTACH");
+		fatal("unable to set PT_DENY_ATTACH: %s", strerror(errno));
 #endif
 }

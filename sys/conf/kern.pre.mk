@@ -112,7 +112,8 @@ COMPAT_FREEBSD32_ENABLED!= grep COMPAT_FREEBSD32 opt_global.h || true ; echo
 
 KASAN_ENABLED!=	grep KASAN opt_global.h || true ; echo
 .if !empty(KASAN_ENABLED)
-SAN_CFLAGS+=	-fsanitize=kernel-address \
+SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kasan \
+		-fsanitize=kernel-address \
 		-mllvm -asan-stack=true \
 		-mllvm -asan-instrument-dynamic-allocas=true \
 		-mllvm -asan-globals=true \
@@ -123,7 +124,8 @@ SAN_CFLAGS+=	-fsanitize=kernel-address \
 
 KCSAN_ENABLED!=	grep KCSAN opt_global.h || true ; echo
 .if !empty(KCSAN_ENABLED)
-SAN_CFLAGS+=	-fsanitize=thread
+SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kcsan \
+		-fsanitize=thread
 .endif
 
 KMSAN_ENABLED!= grep KMSAN opt_global.h || true ; echo
@@ -311,7 +313,8 @@ NORMAL_CTFCONVERT=	@:
 .endif
 
 # Linux Kernel Programming Interface C-flags
-LINUXKPI_INCLUDES=	-I$S/compat/linuxkpi/common/include
+LINUXKPI_INCLUDES=	-I$S/compat/linuxkpi/common/include \
+			-I$S/compat/linuxkpi/dummy/include
 LINUXKPI_C=		${NORMAL_C} ${LINUXKPI_INCLUDES}
 
 # Infiniband C flags.  Correct include paths and omit errors that linux

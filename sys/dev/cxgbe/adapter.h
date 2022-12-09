@@ -41,6 +41,7 @@
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/rwlock.h>
+#include <sys/seqc.h>
 #include <sys/sx.h>
 #include <sys/vmem.h>
 #include <vm/uma.h>
@@ -861,6 +862,15 @@ struct devnames {
 
 struct clip_entry;
 
+#define CNT_CAL_INFO 3
+struct clock_sync {
+	uint64_t hw_cur;
+	uint64_t hw_prev;
+	sbintime_t sbt_cur;
+	sbintime_t sbt_prev;
+	seqc_t gen;
+};
+
 struct adapter {
 	SLIST_ENTRY(adapter) link;
 	device_t dev;
@@ -980,6 +990,11 @@ struct adapter {
 	struct mtx sfl_lock;	/* same cache-line as sc_lock? but that's ok */
 	TAILQ_HEAD(, sge_fl) sfl;
 	struct callout sfl_callout;
+	struct callout cal_callout;
+	struct clock_sync cal_info[CNT_CAL_INFO];
+	int cal_current;
+	int cal_count;
+	uint32_t cal_gen;
 
 	/*
 	 * Driver code that can run when the adapter is suspended must use this
@@ -1297,10 +1312,10 @@ void cxgbe_media_status(struct ifnet *, struct ifmediareq *);
 void t4_os_cim_err(struct adapter *);
 
 #ifdef KERN_TLS
-/* t4_kern_tls.c */
-int cxgbe_tls_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
+/* t6_kern_tls.c */
+int t6_tls_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
     struct m_snd_tag **);
-void cxgbe_tls_tag_free(struct m_snd_tag *);
+void t6_tls_tag_free(struct m_snd_tag *);
 void t6_ktls_modload(void);
 void t6_ktls_modunload(void);
 int t6_ktls_try(struct ifnet *, struct socket *, struct ktls_session *);
@@ -1311,11 +1326,28 @@ int t6_ktls_write_wr(struct sge_txq *, void *, struct mbuf *, u_int, u_int);
 /* t4_keyctx.c */
 struct auth_hash;
 union authctx;
+#ifdef KERN_TLS
+struct ktls_session;
+struct tls_key_req;
+struct tls_keyctx;
+#endif
 
 void t4_aes_getdeckey(void *, const void *, unsigned int);
 void t4_copy_partial_hash(int, union authctx *, void *);
 void t4_init_gmac_hash(const char *, int, char *);
 void t4_init_hmac_digest(struct auth_hash *, u_int, const char *, int, char *);
+#ifdef KERN_TLS
+u_int t4_tls_key_info_size(const struct ktls_session *);
+int t4_tls_proto_ver(const struct ktls_session *);
+int t4_tls_cipher_mode(const struct ktls_session *);
+int t4_tls_auth_mode(const struct ktls_session *);
+int t4_tls_hmac_ctrl(const struct ktls_session *);
+void t4_tls_key_ctx(const struct ktls_session *, int, struct tls_keyctx *);
+int t4_alloc_tls_keyid(struct adapter *);
+void t4_free_tls_keyid(struct adapter *, int);
+void t4_write_tlskey_wr(const struct ktls_session *, int, int, int, int,
+    struct tls_key_req *);
+#endif
 
 #ifdef DEV_NETMAP
 /* t4_netmap.c */

@@ -43,10 +43,6 @@
 #error do not include this header, use machine/atomic.h
 #endif
 
-#ifndef ATOMIC_SAN_PREFIX
-#error No sanitizer prefix available
-#endif
-
 #define	ATOMIC_SAN_FUNC_1(sp, op, name, type)				\
 	void sp##_atomic_##op##_##name(volatile type *, type);		\
 	void sp##_atomic_##op##_acq_##name(volatile type *, type);	\
@@ -69,23 +65,34 @@
 	type sp##_atomic_readandclear_##name(volatile type *)
 
 #define	ATOMIC_SAN_LOAD(sp, name, type)					\
-	type sp##_atomic_load_##name(volatile type *);			\
+	type sp##_atomic_load_##name(volatile type *)
+
+#define	ATOMIC_SAN_LOAD_ACQ(sp, name, type)				\
 	type sp##_atomic_load_acq_##name(volatile type *)
 
 #define	ATOMIC_SAN_STORE(sp, name, type)				\
-	void sp##_atomic_store_##name(volatile type *, type);		\
+	void sp##_atomic_store_##name(volatile type *, type)
+
+#define	ATOMIC_SAN_STORE_REL(sp, name, type)				\
 	void sp##_atomic_store_rel_##name(volatile type *, type)
 
 #define	ATOMIC_SAN_TEST(sp, op, name, type)				\
 	int sp##_atomic_##op##_##name(volatile type *, u_int);		\
 	int sp##_atomic_##op##_acq_##name(volatile type *, u_int)
 
-#define	ATOMIC_SAN_THREAD_FENCE(sp)					\
+#define	_ATOMIC_SAN_THREAD_FENCE(sp)					\
 	void sp##_atomic_thread_fence_acq(void);			\
 	void sp##_atomic_thread_fence_rel(void);			\
 	void sp##_atomic_thread_fence_acq_rel(void);			\
 	void sp##_atomic_thread_fence_seq_cst(void);			\
 	void sp##_atomic_interrupt_fence(void)
+
+#define	ATOMIC_SAN_THREAD_FENCE(sp)					\
+	_ATOMIC_SAN_THREAD_FENCE(sp)
+
+#define	ATOMIC_SAN_LOAD_STORE(sp, name, type)				\
+	ATOMIC_SAN_LOAD(sp, name, type);				\
+	ATOMIC_SAN_STORE(sp, name, type)
 
 #define	_ATOMIC_SAN_FUNCS(sp, name, type)				\
 	ATOMIC_SAN_FUNC_1(sp, add, name, type);				\
@@ -94,17 +101,18 @@
 	ATOMIC_SAN_FCMPSET(sp, name, type);				\
 	ATOMIC_SAN_READ(sp, fetchadd, name, type);			\
 	ATOMIC_SAN_LOAD(sp, name, type);				\
+	ATOMIC_SAN_LOAD_ACQ(sp, name, type);				\
 	ATOMIC_SAN_READANDCLEAR(sp, name, type);			\
 	ATOMIC_SAN_FUNC_1(sp, set, name, type);				\
 	ATOMIC_SAN_FUNC_1(sp, subtract, name, type);			\
 	ATOMIC_SAN_STORE(sp, name, type);				\
+	ATOMIC_SAN_STORE_REL(sp, name, type);				\
 	ATOMIC_SAN_READ(sp, swap, name, type);				\
 	ATOMIC_SAN_TEST(sp, testandclear, name, type);			\
-	ATOMIC_SAN_TEST(sp, testandset, name, type);			\
-	ATOMIC_SAN_THREAD_FENCE(sp);
+	ATOMIC_SAN_TEST(sp, testandset, name, type)
 
 #define	ATOMIC_SAN_FUNCS(name, type)					\
-	_ATOMIC_SAN_FUNCS(ATOMIC_SAN_PREFIX, name, type)
+	_ATOMIC_SAN_FUNCS(SAN_INTERCEPTOR_PREFIX, name, type)
 
 ATOMIC_SAN_FUNCS(char, uint8_t);
 ATOMIC_SAN_FUNCS(short, uint16_t);
@@ -115,6 +123,8 @@ ATOMIC_SAN_FUNCS(8, uint8_t);
 ATOMIC_SAN_FUNCS(16, uint16_t);
 ATOMIC_SAN_FUNCS(32, uint32_t);
 ATOMIC_SAN_FUNCS(64, uint64_t);
+ATOMIC_SAN_LOAD_STORE(SAN_INTERCEPTOR_PREFIX, bool, bool);
+ATOMIC_SAN_THREAD_FENCE(SAN_INTERCEPTOR_PREFIX);
 
 #ifndef SAN_RUNTIME
 
@@ -123,8 +133,11 @@ ATOMIC_SAN_FUNCS(64, uint64_t);
  * For instance, KASAN callers of atomic_add_char() will be redirected to
  * kasan_atomic_add_char().
  */
-#define	ATOMIC_SAN(func)		\
-	__CONCAT(ATOMIC_SAN_PREFIX, __CONCAT(_atomic_, func))
+#define	ATOMIC_SAN(func)						\
+	__CONCAT(SAN_INTERCEPTOR_PREFIX, __CONCAT(_atomic_, func))
+
+#define	atomic_load_bool		ATOMIC_SAN(load_bool)
+#define	atomic_store_bool		ATOMIC_SAN(store_bool)
 
 #define	atomic_add_char			ATOMIC_SAN(add_char)
 #define	atomic_add_acq_char		ATOMIC_SAN(add_acq_char)

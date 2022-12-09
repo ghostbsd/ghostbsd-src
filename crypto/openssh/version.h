@@ -1,9 +1,8 @@
-/* $OpenBSD: version.h,v 1.92 2021/09/26 14:01:11 djm Exp $ */
-/* $FreeBSD$ */
+/* $OpenBSD: version.h,v 1.95 2022/09/26 22:18:40 djm Exp $ */
 
-#define SSH_VERSION	"OpenSSH_8.8"
+#define SSH_VERSION	"OpenSSH_9.1"
 
 #define SSH_PORTABLE	"p1"
 #define SSH_RELEASE	SSH_VERSION SSH_PORTABLE
 
-#define SSH_VERSION_FREEBSD	"FreeBSD-20211221"
+#define SSH_VERSION_FREEBSD	"FreeBSD-20221019"

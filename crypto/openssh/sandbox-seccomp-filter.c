@@ -23,17 +23,20 @@
  * E.g.
  *   auditctl -a task,always -F uid=<privsep uid>
  */
-/* #define SANDBOX_SECCOMP_FILTER_DEBUG 1 */
+#define SANDBOX_SECCOMP_FILTER_DEBUG 1
 
-/* XXX it should be possible to do logging via the log socket safely */
-
+#if 0
+/*
+ * For older toolchains, it may be necessary to use the kernel
+ * headers directly.
+ */
 #ifdef SANDBOX_SECCOMP_FILTER_DEBUG
-/* Use the kernel headers in case of an older toolchain. */
 # include <asm/siginfo.h>
 # define __have_siginfo_t 1
 # define __have_sigval_t 1
 # define __have_sigevent_t 1
 #endif /* SANDBOX_SECCOMP_FILTER_DEBUG */
+#endif
 
 #include "includes.h"
 
@@ -228,6 +231,9 @@ static const struct sock_filter preauth_insns[] = {
 #ifdef __NR_getrandom
 	SC_ALLOW(__NR_getrandom),
 #endif
+#ifdef __NR_gettid
+	SC_ALLOW(__NR_gettid),
+#endif
 #ifdef __NR_gettimeofday
 	SC_ALLOW(__NR_gettimeofday),
 #endif
@@ -269,6 +275,12 @@ static const struct sock_filter preauth_insns[] = {
 #endif
 #ifdef __NR__newselect
 	SC_ALLOW(__NR__newselect),
+#endif
+#ifdef __NR_ppoll
+	SC_ALLOW(__NR_ppoll),
+#endif
+#ifdef __NR_ppoll_time64
+	SC_ALLOW(__NR_ppoll_time64),
 #endif
 #ifdef __NR_poll
 	SC_ALLOW(__NR_poll),
@@ -353,7 +365,7 @@ ssh_sandbox_init(struct monitor *monitor)
 
 #ifdef SANDBOX_SECCOMP_FILTER_DEBUG
 extern struct monitor *pmonitor;
-void mm_log_handler(LogLevel level, const char *msg, void *ctx);
+void mm_log_handler(LogLevel level, int forced, const char *msg, void *ctx);
 
 static void
 ssh_sandbox_violation(int signum, siginfo_t *info, void *void_context)
@@ -363,7 +375,7 @@ ssh_sandbox_violation(int signum, siginfo_t *info, void *void_context)
 	snprintf(msg, sizeof(msg),
 	    "%s: unexpected system call (arch:0x%x,syscall:%d @ %p)",
 	    __func__, info->si_arch, info->si_syscall, info->si_call_addr);
-	mm_log_handler(SYSLOG_LEVEL_FATAL, msg, pmonitor);
+	mm_log_handler(SYSLOG_LEVEL_FATAL, 0, msg, pmonitor);
 	_exit(1);
 }
 
@@ -391,7 +403,7 @@ ssh_sandbox_child_debugging(void)
 void
 ssh_sandbox_child(struct ssh_sandbox *box)
 {
-	struct rlimit rl_zero;
+	struct rlimit rl_zero, rl_one = {.rlim_cur = 1, .rlim_max = 1};
 	int nnp_failed = 0;
 
 	/* Set rlimits for completeness if possible. */
@@ -399,7 +411,11 @@ ssh_sandbox_child(struct ssh_sandbox *box)
 	if (setrlimit(RLIMIT_FSIZE, &rl_zero) == -1)
 		fatal("%s: setrlimit(RLIMIT_FSIZE, { 0, 0 }): %s",
 			__func__, strerror(errno));
-	if (setrlimit(RLIMIT_NOFILE, &rl_zero) == -1)
+	/*
+	 * Cannot use zero for nfds, because poll(2) will fail with
+	 * errno=EINVAL if npfds>RLIMIT_NOFILE.
+	 */
+	if (setrlimit(RLIMIT_NOFILE, &rl_one) == -1)
 		fatal("%s: setrlimit(RLIMIT_NOFILE, { 0, 0 }): %s",
 			__func__, strerror(errno));
 	if (setrlimit(RLIMIT_NPROC, &rl_zero) == -1)

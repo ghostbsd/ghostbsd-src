@@ -24,11 +24,12 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd June 25, 2012
+.Dd October 28, 2022
 .Dt STRFMON 3
 .Os
 .Sh NAME
-.Nm strfmon
+.Nm strfmon ,
+.Nm strfmon_l
 .Nd convert monetary value to string
 .Sh LIBRARY
 .Lb libc
@@ -98,12 +99,18 @@ By default, there is no minimum width.
 A
 .Sq Cm #
 sign followed by a decimal number specifying the maximum
-expected number of digits after the radix character.
+expected number of digits before the radix character.
+When this option is used, values that do not exceed the
+specified number of digits are formatted so they will be
+correctly aligned with other values printed using the same
+format.
+This includes always leaving space for a possible sign
+indicator, even if none is needed for a particular value.
 .It
 A
 .Sq Cm \&.
 character followed by a decimal number specifying the number
-the number of digits after the radix character.
+of digits after the radix character.
 .It
 One of the following conversion specifiers:
 .Bl -tag -width "XXX"
@@ -155,7 +162,8 @@ The format string is invalid.
 Not enough memory for temporary buffers.
 .El
 .Sh SEE ALSO
-.Xr localeconv 3
+.Xr localeconv 3 ,
+.Xr xlocale 3
 .Sh STANDARDS
 The
 .Fn strfmon
