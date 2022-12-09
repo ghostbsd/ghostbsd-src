@@ -117,6 +117,10 @@ static device_method_t pci_methods[] = {
 	DEVMETHOD_END
 };
 
+const char *pci_power_names[] = {
+	"UNKNOWN", "D0", "D1", "D2", "D3hot", "D3cold"
+};
+
 struct linux_dma_priv {
 	uint64_t	dma_mask;
 	bus_dma_tag_t	dmat;
@@ -1138,6 +1142,45 @@ linux_dma_alloc_coherent(struct device *dev, size_t size,
 		*dma_handle = 0;
 	}
 	return (mem);
+}
+
+struct lkpi_devres_dmam_coherent {
+	size_t size;
+	dma_addr_t *handle;
+	void *mem;
+};
+
+static void
+lkpi_dmam_free_coherent(struct device *dev, void *p)
+{
+	struct lkpi_devres_dmam_coherent *dr;
+
+	dr = p;
+	dma_free_coherent(dev, dr->size, dr->mem, *dr->handle);
+}
+
+void *
+linuxkpi_dmam_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
+    gfp_t flag)
+{
+	struct lkpi_devres_dmam_coherent *dr;
+
+	dr = lkpi_devres_alloc(lkpi_dmam_free_coherent,
+	   sizeof(*dr), GFP_KERNEL | __GFP_ZERO);
+
+	if (dr == NULL)
+		return (NULL);
+
+	dr->size = size;
+	dr->mem = linux_dma_alloc_coherent(dev, size, dma_handle, flag);
+	dr->handle = dma_handle;
+	if (dr->mem == NULL) {
+		lkpi_devres_free(dr);
+		return (NULL);
+	}
+
+	lkpi_devres_add(dev, dr);
+	return (dr->mem);
 }
 
 void

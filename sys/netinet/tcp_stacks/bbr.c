@@ -2265,8 +2265,7 @@ bbr_log_ack_event(struct tcp_bbr *bbr, struct tcphdr *th, struct tcpopt *to, uin
 				log.u_bbr.lt_epoch = 0;
 			}
 			if (m->m_flags & M_TSTMP_LRO) {
-				tv.tv_sec = m->m_pkthdr.rcv_tstmp / 1000000000;
-				tv.tv_usec = (m->m_pkthdr.rcv_tstmp % 1000000000) / 1000;
+				mbuf_tstmp2timeval(m, &tv);
 				log.u_bbr.flex5 = tcp_tv_to_usectick(&tv);
 			} else {
 				/* No arrival timestamp */
@@ -4693,7 +4692,7 @@ go_for_it:
 send:
 	if (bbr->r_ctl.rc_tlp_seg_send_cnt > bbr_tlp_max_resend) {
 		/*
-		 * Can't [re]/transmit a segment we have retranmitted the
+		 * Can't [re]/transmit a segment we have retransmitted the
 		 * max times. We need the retransmit timer to take over.
 		 */
 restore:
@@ -11722,8 +11721,7 @@ bbr_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		}
 	}
 	if (m->m_flags & M_TSTMP_LRO) {
-		tv.tv_sec = m->m_pkthdr.rcv_tstmp /1000000000;
-		tv.tv_usec = (m->m_pkthdr.rcv_tstmp % 1000000000)/1000;
+		mbuf_tstmp2timeval(m, &tv);
 	} else {
 		/* Should not be should we kassert instead? */
 		tcp_get_usecs(&tv);

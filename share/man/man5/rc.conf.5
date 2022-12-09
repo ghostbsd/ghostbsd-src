@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd July 7, 2022
+.Dd December 2, 2022
 .Dt RC.CONF 5
 .Os
 .Sh NAME
@@ -2686,29 +2686,6 @@ This is mandatory when
 .Va pppoed_enable
 is set to
 .Dq Li YES .
-.It Va timed_enable
-.Pq Vt bool
-If set to
-.Dq Li YES ,
-run the
-.Xr timed 8
-service at boot time.
-This command is intended for networks of
-machines where a consistent
-.Dq "network time"
-for all hosts must be established.
-This is often useful in large NFS
-environments where time stamps on files are expected to be consistent
-network-wide.
-.It Va timed_flags
-.Pq Vt str
-If
-.Va timed_enable
-is set to
-.Dq Li YES ,
-these are the flags to pass to the
-.Xr timed 8
-service.
 .It Va ntpdate_enable
 .Pq Vt bool
 If set to
@@ -2930,10 +2907,19 @@ If not set to
 create a default route to this host name or IP address
 (use an IP address if this router is also required to get to the
 name server!).
+.It Va defaultrouter_fibN
+.Pq Vt str
+If not set to
+.Dq Li NO ,
+create a default route in FIB N to this host name or IP address.
 .It Va ipv6_defaultrouter
 .Pq Vt str
 The IPv6 equivalent of
 .Va defaultrouter .
+.It Va ipv6_defaultrouter_fibN
+.Pq Vt str
+The IPv6 equivalent of
+.Va defaultrouter_fibN .
 .It Va static_arp_pairs
 .Pq Vt str
 Set to the list of static ARP pairs that are to be added at system
@@ -4829,7 +4815,6 @@ The default is 10.
 .Xr sysctl 8 ,
 .Xr syslogd 8 ,
 .Xr sysrc 8 ,
-.Xr timed 8 ,
 .Xr unbound 8 ,
 .Xr usbconfig 8 ,
 .Xr wlandebug 8 ,

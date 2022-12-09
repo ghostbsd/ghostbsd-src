@@ -87,7 +87,6 @@ struct	intr_entropy {
 };
 
 struct	intr_event *clk_intr_event;
-struct	intr_event *tty_intr_event;
 struct proc *intrproc;
 
 static MALLOC_DEFINE(M_ITHREAD, "ithread", "Interrupt Threads");
@@ -505,6 +504,9 @@ intr_getaffinity(int irq, int mode, void *m)
 int
 intr_event_destroy(struct intr_event *ie)
 {
+
+	if (ie == NULL)
+		return (EINVAL);
 
 	mtx_lock(&event_lock);
 	mtx_lock(&ie->ie_lock);

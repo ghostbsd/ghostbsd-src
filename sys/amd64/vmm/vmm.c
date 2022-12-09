@@ -1424,8 +1424,13 @@ vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled, bool *retu)
 		if ((td->td_flags & TDF_NEEDSUSPCHK) != 0) {
 			vcpu_unlock(vcpu);
 			error = thread_check_susp(td, false);
-			if (error != 0)
+			if (error != 0) {
+				if (vcpu_halted) {
+					CPU_CLR_ATOMIC(vcpuid,
+					    &vm->halted_cpus);
+				}
 				return (error);
+			}
 			vcpu_lock(vcpu);
 		}
 	}
@@ -1690,8 +1695,6 @@ void
 vm_exit_rendezvous(struct vm *vm, int vcpuid, uint64_t rip)
 {
 	struct vm_exit *vmexit;
-
-	KASSERT(vm->rendezvous_func != NULL, ("rendezvous not in progress"));
 
 	vmexit = vm_exitinfo(vm, vcpuid);
 	vmexit->rip = rip;

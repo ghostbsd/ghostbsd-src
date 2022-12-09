@@ -65,6 +65,14 @@ int bindresvport_sa(int sd, struct sockaddr *sa);
 void closefrom(int);
 #endif
 
+#if defined(HAVE_DECL_FTRUNCATE) && HAVE_DECL_FTRUNCATE == 0
+int ftruncate(int filedes, off_t length);
+#endif
+
+#if defined(HAVE_DECL_GETENTROPY) && HAVE_DECL_GETENTROPY == 0
+int _ssh_compat_getentropy(void *, size_t);
+#endif
+
 #ifndef HAVE_GETLINE
 #include <stdio.h>
 ssize_t getline(char **, size_t *, FILE *);
@@ -76,6 +84,10 @@ int getpagesize(void);
 
 #ifndef HAVE_GETCWD
 char *getcwd(char *pt, size_t size);
+#endif
+
+#ifndef HAVE_KILLPG
+int killpg(pid_t, int);
 #endif
 
 #if defined(HAVE_DECL_MEMMEM) && HAVE_DECL_MEMMEM == 0
@@ -206,21 +218,20 @@ int writev(int, struct iovec *, int);
 int getpeereid(int , uid_t *, gid_t *);
 #endif
 
-#ifdef HAVE_ARC4RANDOM
-# ifndef HAVE_ARC4RANDOM_STIR
-#  define arc4random_stir()
-# endif
-#else
-unsigned int arc4random(void);
-void arc4random_stir(void);
+#ifndef HAVE_ARC4RANDOM
+uint32_t arc4random(void);
 #endif /* !HAVE_ARC4RANDOM */
 
 #ifndef HAVE_ARC4RANDOM_BUF
 void arc4random_buf(void *, size_t);
 #endif
 
+#ifndef HAVE_ARC4RANDOM_STIR
+# define arc4random_stir()
+#endif
+
 #ifndef HAVE_ARC4RANDOM_UNIFORM
-u_int32_t arc4random_uniform(u_int32_t);
+uint32_t arc4random_uniform(uint32_t);
 #endif
 
 #ifndef HAVE_ASPRINTF
@@ -315,8 +326,8 @@ int timingsafe_bcmp(const void *, const void *, size_t);
 #endif
 
 #ifndef HAVE_BCRYPT_PBKDF
-int	bcrypt_pbkdf(const char *, size_t, const u_int8_t *, size_t,
-    u_int8_t *, size_t, unsigned int);
+int	bcrypt_pbkdf(const char *, size_t, const uint8_t *, size_t,
+    uint8_t *, size_t, unsigned int);
 #endif
 
 #ifndef HAVE_EXPLICIT_BZERO
@@ -329,6 +340,10 @@ void freezero(void *, size_t);
 
 #ifndef HAVE_LOCALTIME_R
 struct tm *localtime_r(const time_t *, struct tm *);
+#endif
+
+#ifndef HAVE_TIMEGM
+time_t timegm(struct tm *);
 #endif
 
 char *xcrypt(const char *password, const char *salt);

@@ -2855,8 +2855,16 @@ pmap_update_pde_invalidate(pmap_t pmap, vm_offset_t va, pd_entry_t newpde)
  *   page table, and INVPCID(INVPCID_CTXGLOB)/invltlb_glob() for a
  *   user space page table(s).
  *
- *   If the INVPCID instruction is available, it is used to flush entries
- *   from the kernel page table.
+ *   If the INVPCID instruction is available, it is used to flush user
+ *   entries from the kernel page table.
+ *
+ *   When PCID is enabled, the INVLPG instruction invalidates all TLB
+ *   entries for the given page that either match the current PCID or
+ *   are global. Since TLB entries for the same page under different
+ *   PCIDs are unaffected, kernel pages which reside in all address
+ *   spaces could be problematic.  We avoid the problem by creating
+ *   all kernel PTEs with the global flag (PG_G) set, when PTI is
+ *   disabled.
  *
  * * mode: PTI disabled, PCID present.  The kernel reserves PCID 0 for its
  *   address space, all other 4095 PCIDs are used for user mode spaces
@@ -4880,13 +4888,21 @@ pmap_growkernel(vm_offset_t addr)
 	vm_page_t nkpg;
 	pd_entry_t *pde, newpdir;
 	pdp_entry_t *pdpe;
+	vm_offset_t end;
 
 	mtx_assert(&kernel_map->system_mtx, MA_OWNED);
 
 	/*
-	 * Return if "addr" is within the range of kernel page table pages
-	 * that were preallocated during pmap bootstrap.  Moreover, leave
-	 * "kernel_vm_end" and the kernel page table as they were.
+	 * The kernel map covers two distinct regions of KVA: that used
+	 * for dynamic kernel memory allocations, and the uppermost 2GB
+	 * of the virtual address space.  The latter is used to map the
+	 * kernel and loadable kernel modules.  This scheme enables the
+	 * use of a special code generation model for kernel code which
+	 * takes advantage of compact addressing modes in machine code.
+	 *
+	 * Both regions grow upwards; to avoid wasting memory, the gap
+	 * in between is unmapped.  If "addr" is above "KERNBASE", the
+	 * kernel's region is grown, otherwise the kmem region is grown.
 	 *
 	 * The correctness of this action is based on the following
 	 * argument: vm_map_insert() allocates contiguous ranges of the
@@ -4898,20 +4914,31 @@ pmap_growkernel(vm_offset_t addr)
 	 * any new kernel page table pages between "kernel_vm_end" and
 	 * "KERNBASE".
 	 */
-	if (KERNBASE < addr && addr <= KERNBASE + nkpt * NBPDR)
-		return;
+	if (KERNBASE < addr) {
+		end = KERNBASE + nkpt * NBPDR;
+		if (end == 0)
+			return;
+	} else {
+		end = kernel_vm_end;
+	}
 
 	addr = roundup2(addr, NBPDR);
 	if (addr - 1 >= vm_map_max(kernel_map))
 		addr = vm_map_max(kernel_map);
-	if (kernel_vm_end < addr)
-		kasan_shadow_map(kernel_vm_end, addr - kernel_vm_end);
-	while (kernel_vm_end < addr) {
-		pdpe = pmap_pdpe(kernel_pmap, kernel_vm_end);
+	if (addr <= end) {
+		/*
+		 * The grown region is already mapped, so there is
+		 * nothing to do.
+		 */
+		return;
+	}
+
+	kasan_shadow_map(end, addr - end);
+	while (end < addr) {
+		pdpe = pmap_pdpe(kernel_pmap, end);
 		if ((*pdpe & X86_PG_V) == 0) {
-			/* We need a new PDP entry */
 			nkpg = pmap_alloc_pt_page(kernel_pmap,
-			    kernel_vm_end >> PDPSHIFT, VM_ALLOC_WIRED |
+			    pmap_pdpe_pindex(end), VM_ALLOC_WIRED |
 			    VM_ALLOC_INTERRUPT | VM_ALLOC_ZERO);
 			if (nkpg == NULL)
 				panic("pmap_growkernel: no memory to grow kernel");
@@ -4920,31 +4947,35 @@ pmap_growkernel(vm_offset_t addr)
 			    X86_PG_A | X86_PG_M);
 			continue; /* try again */
 		}
-		pde = pmap_pdpe_to_pde(pdpe, kernel_vm_end);
+		pde = pmap_pdpe_to_pde(pdpe, end);
 		if ((*pde & X86_PG_V) != 0) {
-			kernel_vm_end = (kernel_vm_end + NBPDR) & ~PDRMASK;
-			if (kernel_vm_end - 1 >= vm_map_max(kernel_map)) {
-				kernel_vm_end = vm_map_max(kernel_map);
+			end = (end + NBPDR) & ~PDRMASK;
+			if (end - 1 >= vm_map_max(kernel_map)) {
+				end = vm_map_max(kernel_map);
 				break;                       
 			}
 			continue;
 		}
 
-		nkpg = pmap_alloc_pt_page(kernel_pmap,
-		    pmap_pde_pindex(kernel_vm_end), VM_ALLOC_WIRED |
-		    VM_ALLOC_INTERRUPT | VM_ALLOC_ZERO);
+		nkpg = pmap_alloc_pt_page(kernel_pmap, pmap_pde_pindex(end),
+		    VM_ALLOC_WIRED | VM_ALLOC_INTERRUPT | VM_ALLOC_ZERO);
 		if (nkpg == NULL)
 			panic("pmap_growkernel: no memory to grow kernel");
 		paddr = VM_PAGE_TO_PHYS(nkpg);
 		newpdir = paddr | X86_PG_V | X86_PG_RW | X86_PG_A | X86_PG_M;
 		pde_store(pde, newpdir);
 
-		kernel_vm_end = (kernel_vm_end + NBPDR) & ~PDRMASK;
-		if (kernel_vm_end - 1 >= vm_map_max(kernel_map)) {
-			kernel_vm_end = vm_map_max(kernel_map);
+		end = (end + NBPDR) & ~PDRMASK;
+		if (end - 1 >= vm_map_max(kernel_map)) {
+			end = vm_map_max(kernel_map);
 			break;                       
 		}
 	}
+
+	if (end <= KERNBASE)
+		kernel_vm_end = end;
+	else
+		nkpt = howmany(end - KERNBASE, NBPDR);
 }
 
 /***************************************************
@@ -5876,7 +5907,7 @@ pmap_demote_pde_locked(pmap_t pmap, pd_entry_t *pde, vm_offset_t va,
 	 * If the page table page is not leftover from an earlier promotion,
 	 * initialize it.
 	 */
-	if (mpte->valid == 0)
+	if (vm_page_none_valid(mpte))
 		pmap_fill_ptp(firstpte, newpte);
 
 	pmap_demote_pde_check(firstpte, newpte);
@@ -5952,7 +5983,7 @@ pmap_remove_kernel_pde(pmap_t pmap, pd_entry_t *pde, vm_offset_t va)
 	 * If this page table page was unmapped by a promotion, then it
 	 * contains valid mappings.  Zero it to invalidate those mappings.
 	 */
-	if (mpte->valid != 0)
+	if (vm_page_any_valid(mpte))
 		pagezero((void *)PHYS_TO_DMAP(mptepa));
 
 	/*
@@ -6018,7 +6049,7 @@ pmap_remove_pde(pmap_t pmap, pd_entry_t *pdq, vm_offset_t sva,
 	} else {
 		mpte = pmap_remove_pt_page(pmap, sva);
 		if (mpte != NULL) {
-			KASSERT(mpte->valid == VM_PAGE_BITS_ALL,
+			KASSERT(vm_page_all_valid(mpte),
 			    ("pmap_remove_pde: pte page not promoted"));
 			pmap_resident_count_adj(pmap, -1);
 			KASSERT(mpte->ref_count == NPTEPG,
@@ -7529,7 +7560,7 @@ pmap_object_init_pt(pmap_t pmap, vm_offset_t addr, vm_object_t object,
 		if (!vm_object_populate(object, pindex, pindex + atop(size)))
 			return;
 		p = vm_page_lookup(object, pindex);
-		KASSERT(p->valid == VM_PAGE_BITS_ALL,
+		KASSERT(vm_page_all_valid(p),
 		    ("pmap_object_init_pt: invalid page %p", p));
 		pat_mode = p->md.pat_mode;
 
@@ -7549,7 +7580,7 @@ pmap_object_init_pt(pmap_t pmap, vm_offset_t addr, vm_object_t object,
 		p = TAILQ_NEXT(p, listq);
 		for (pa = ptepa + PAGE_SIZE; pa < ptepa + size;
 		    pa += PAGE_SIZE) {
-			KASSERT(p->valid == VM_PAGE_BITS_ALL,
+			KASSERT(vm_page_all_valid(p),
 			    ("pmap_object_init_pt: invalid page %p", p));
 			if (pa != VM_PAGE_TO_PHYS(p) ||
 			    pat_mode != p->md.pat_mode)
@@ -8296,7 +8327,7 @@ pmap_remove_pages(pmap_t pmap)
 					}
 					mpte = pmap_remove_pt_page(pmap, pv->pv_va);
 					if (mpte != NULL) {
-						KASSERT(mpte->valid == VM_PAGE_BITS_ALL,
+						KASSERT(vm_page_all_valid(mpte),
 						    ("pmap_remove_pages: pte page not promoted"));
 						pmap_resident_count_adj(pmap, -1);
 						KASSERT(mpte->ref_count == NPTEPG,

@@ -3425,11 +3425,13 @@ nfs_advlockasync(struct vop_advlockasync_args *ap)
 	u_quad_t size;
 	int error;
 
-	if (NFS_ISV4(vp))
-		return (EOPNOTSUPP);
 	error = NFSVOPLOCK(vp, LK_SHARED);
 	if (error)
 		return (error);
+	if (NFS_ISV4(vp)) {
+		NFSVOPUNLOCK(vp);
+		return (EOPNOTSUPP);
+	}
 	if ((VFSTONFS(vp->v_mount)->nm_flag & NFSMNT_NOLOCKD) != 0) {
 		size = VTONFS(vp)->n_size;
 		NFSVOPUNLOCK(vp);
@@ -3801,6 +3803,7 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	struct uio io;
 	struct nfsmount *nmp;
 	size_t len, len2;
+	ssize_t r;
 	int error, inattrflag, outattrflag, ret, ret2;
 	off_t inoff, outoff;
 	bool consecutive, must_commit, tryoutcred;
@@ -3860,7 +3863,12 @@ generic_copy:
 	 */
 	io.uio_offset = *ap->a_outoffp;
 	io.uio_resid = *ap->a_lenp;
-	error = vn_rlimit_fsize(outvp, &io, ap->a_fsizetd);
+	error = vn_rlimit_fsizex(outvp, &io, 0, &r, ap->a_fsizetd);
+	*ap->a_lenp = io.uio_resid;
+	/*
+	 * No need to call vn_rlimit_fsizex_res before return, since the uio is
+	 * local.
+	 */
 
 	/*
 	 * Flush the input file so that the data is up to date before
@@ -4018,14 +4026,6 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 	int attrflag, content, error, ret;
 	bool eof = false;			/* shut up compiler. */
 
-	if (vp->v_type != VREG)
-		return (ENOTTY);
-	nmp = VFSTONFS(vp->v_mount);
-	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION) {
-		error = vop_stdioctl(ap);
-		return (error);
-	}
-
 	/* Do the actual NFSv4.2 RPC. */
 	switch (ap->a_command) {
 	case FIOSEEKDATA:
@@ -4041,6 +4041,18 @@ nfs_ioctl(struct vop_ioctl_args *ap)
 	error = vn_lock(vp, LK_SHARED);
 	if (error != 0)
 		return (EBADF);
+
+	if (vp->v_type != VREG) {
+		VOP_UNLOCK(vp);
+		return (ENOTTY);
+	}
+	nmp = VFSTONFS(vp->v_mount);
+	if (!NFSHASNFSV4(nmp) || nmp->nm_minorvers < NFSV42_MINORVERSION) {
+		VOP_UNLOCK(vp);
+		error = vop_stdioctl(ap);
+		return (error);
+	}
+
 	attrflag = 0;
 	if (*((off_t *)ap->a_data) >= VTONFS(vp)->n_size)
 		error = ENXIO;

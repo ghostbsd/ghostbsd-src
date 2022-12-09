@@ -1,4 +1,4 @@
-/* $OpenBSD: myproposal.h,v 1.68 2020/10/03 04:15:06 djm Exp $ */
+/* $OpenBSD: myproposal.h,v 1.71 2022/03/30 21:13:23 djm Exp $ */
 
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
@@ -25,6 +25,7 @@
  */
 
 #define KEX_SERVER_KEX	\
+	"sntrup761x25519-sha512@openssh.com," \
 	"curve25519-sha256," \
 	"curve25519-sha256@libssh.org," \
 	"ecdh-sha2-nistp256," \

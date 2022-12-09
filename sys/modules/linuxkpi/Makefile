@@ -21,10 +21,11 @@ SRCS=	linux_compat.c \
 	linux_pci.c \
 	linux_radix.c \
 	linux_rcu.c \
-	linux_seq_file.c \
 	linux_schedule.c \
+	linux_seq_file.c \
 	linux_shmemfs.c \
 	linux_shrinker.c \
+	linux_simple_attr.c \
 	linux_skbuff.c \
 	linux_slab.c \
 	linux_tasklet.c \
@@ -40,7 +41,7 @@ SRCS+=	opt_acpi.h acpi_if.h linux_acpi.c linux_fpu.c
 SRCS+=	opt_ddb.h
 SRCS+=	${LINUXKPI_GENSRCS}
 
-CFLAGS+= -I${SRCTOP}/sys/compat/linuxkpi/common/include
+CFLAGS+= ${LINUXKPI_INCLUDES}
 CFLAGS+= -I${SRCTOP}/sys/contrib/ck/include
 
 EXPORT_SYMS=	YES

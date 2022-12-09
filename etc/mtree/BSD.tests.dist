@@ -1044,6 +1044,8 @@
         ..
         mkimg
         ..
+        mktemp
+        ..
         ncal
         ..
         opensm
@@ -1055,6 +1057,8 @@
         printf
         ..
         procstat
+        ..
+        renice
         ..
         rs
         ..
@@ -1069,6 +1073,8 @@
         soelim
         ..
         sort
+        ..
+        split
         ..
         stat
         ..
