@@ -314,6 +314,12 @@ create_diskimage_mbr ( ) (
 			-p ${s3}:=${NANO_LOG}/_.s3a \
 			-o ${out}
 		;;
+	beaglebone)
+		mkimg -a 1 ${skiparg} ${fmtarg} ${bootmbr} -s mbr -p ${s1}:=${NANO_LOG}/_.s1 \
+			-p ${s2}:=${NANO_LOG}/_.s2 \
+			-p ${s3}:=${NANO_LOG}/_.s3 \
+			-o ${out}
+		;;
 	esac
 	rm -f ${out}.xz
 	xz -9 --keep ${out}
@@ -413,6 +419,11 @@ fix_pkg ( ) (
 	echo "./pkg/cache type=dir uname=root gname=wheel mode=0755"
 	echo "./pkg/db type=dir uname=root gname=wheel mode=0755"
 	echo "./pkg/tmp type=dir uname=root gname=wheel mode=0755"
+        echo "./etc/ssl type=dir uname=root gname=wheel mode=0755"
+        echo "./etc/ssl/blacklisted type=dir uname=root gname=wheel mode=0755"
+        echo "./etc/ssl/certs type=dir uname=root gname=wheel mode=0755"
+        echo "./usr/share/keys/ssl type=dir uname=root gname=wheel mode=0755"
+        echo "./usr/share/keys/ssl/certs type=dir uname=root gname=wheel mode=0755"
 	) >> ${NANO_METALOG}
 )
 customize_cmd fix_pkg
@@ -593,7 +604,7 @@ eval std_${NANO_ARCH}
 : ${NANO_MAKEFS_UFS:=makefs -t ffs -B ${NANO_ENDIAN}}
 : ${NANO_DISK_SCHEME:=mbr}  	# No others really supported ATM (well, gpt)
 case ${NANO_LAYOUT} in
-std-embedded)
+std-embedded|beaglebone)
 	NANO_SLICE_FAT=s1
 	NANO_SLICE_CFG=s2
 	NANO_SLICE_ROOT=s3
