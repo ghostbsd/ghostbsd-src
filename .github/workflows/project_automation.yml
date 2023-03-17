@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'issues' && (github.event.action == 'assigned')
     steps:
-      - name: Move issue to ${{ env.new }}
+      - name: Move issue to ${{ env.in_progress }}
         uses: leonsteinhaeuser/project-beta-automations@v2.1.0
         with:
           gh_token: ${{ secrets.MY_GITHUB_TOKEN }}
@@ -43,7 +43,7 @@ jobs:
           organization: ghostbsd
           project_id: 4
           resource_node_id: ${{ github.event.issue.node_id }}
-          status_value: ${{ env.new }}
+          status_value: ${{ env.in_progress }}
   pr_opened:
     name: pr_opened
     runs-on: ubuntu-latest
