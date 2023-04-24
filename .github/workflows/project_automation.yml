@@ -4,7 +4,7 @@ on:
     types:
       - opened
       - assigned
-  pull_request:
+  pull_request_target:
     types:
       - opened
 
@@ -48,9 +48,9 @@ jobs:
   pr_opened:
     name: pr_opened
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && (github.event.action == 'opened')
+    if: github.event_name == 'pull_request_target' && (github.event.action == 'opened')
     steps:
-      - name: Move PR to ${{ env.in_progress }}
+      - name: Move PR to ${{ env.in_review }}
         uses: leonsteinhaeuser/project-beta-automations@v2.1.0
         with:
           gh_token: ${{ secrets.MY_GITHUB_TOKEN }}
@@ -58,4 +58,4 @@ jobs:
           organization: ghostbsd
           project_id: 4
           resource_node_id: ${{ github.event.pull_request.node_id }}
-          status_value: ${{ env.in_progress }}
+          status_value: ${{ env.in_review }}
