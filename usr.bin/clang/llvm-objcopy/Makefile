@@ -5,23 +5,10 @@
 PROG_CXX=	llvm-objcopy
 
 SRCDIR=		llvm/tools/llvm-objcopy
-SRCS+=		COFF/COFFObjcopy.cpp
-SRCS+=		COFF/Object.cpp
-SRCS+=		COFF/Reader.cpp
-SRCS+=		COFF/Writer.cpp
-SRCS+=		ConfigManager.cpp
-SRCS+=		ELF/ELFObjcopy.cpp
-SRCS+=		ELF/Object.cpp
-SRCS+=		MachO/MachOLayoutBuilder.cpp
-SRCS+=		MachO/MachOObjcopy.cpp
-SRCS+=		MachO/MachOReader.cpp
-SRCS+=		MachO/MachOWriter.cpp
-SRCS+=		MachO/Object.cpp
+SRCS+=		ObjcopyOptions.cpp
 SRCS+=		llvm-objcopy.cpp
-SRCS+=		wasm/Object.cpp
-SRCS+=		wasm/Reader.cpp
-SRCS+=		wasm/WasmObjcopy.cpp
-SRCS+=		wasm/Writer.cpp
+
+CFLAGS.llvm-objcopy.cpp+=	-Dllvm_objcopy_main=main
 
 .include "${SRCTOP}/lib/clang/llvm.pre.mk"
 
@@ -47,7 +34,8 @@ LINKS=		${BINDIR}/llvm-objcopy ${BINDIR}/llvm-strip
 .if ${MK_LLVM_BINUTILS} != "no"
 LINKS+=		${BINDIR}/llvm-objcopy ${BINDIR}/objcopy \
 		${BINDIR}/llvm-strip ${BINDIR}/strip
-MLINKS=		llvm-objcopy.1 objcopy.1
+MLINKS=		llvm-objcopy.1 objcopy.1 \
+		llvm-objcopy.1 strip.1
 .endif
 
 .include "../llvm.prog.mk"

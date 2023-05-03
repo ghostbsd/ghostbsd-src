@@ -1,6 +1,20 @@
-# $NetBSD: varmod-loop.mk,v 1.18 2021/12/05 15:20:13 rillig Exp $
+# $NetBSD: varmod-loop.mk,v 1.23 2023/02/18 11:55:20 rillig Exp $
 #
-# Tests for the :@var@...${var}...@ variable modifier.
+# Tests for the expression modifier ':@var@body@', which replaces each word of
+# the expression with the expanded body, which may contain references to the
+# variable 'var'.  For example, '${1 2 3:L:@word@<${word}>@}' encloses each
+# word in angle quotes, resulting in '<1> <2> <3>'.
+#
+# The variable name can be chosen freely, except that it must not contain a
+# '$'.  For simplicity and readability, variable names should only use the
+# characters 'A-Za-z0-9'.
+#
+# The body may contain subexpressions in the form '${...}' or '$(...)'.  These
+# subexpressions differ from everywhere else in makefiles in that the parser
+# only scans '${...}' for balanced '{' and '}', likewise for '$(...)'.  Any
+# other '$' is left as-is during parsing.  Later, when the body is expanded
+# for each word, each '$$' is interpreted as a single '$', and the remaining
+# '$' are interpreted as expressions, like when evaluating a regular variable.
 
 # Force the test results to be independent of the default value of this
 # setting, which is 'yes' for NetBSD's usr.bin/make but 'no' for the bmake
@@ -17,7 +31,6 @@ varname-overwriting-target:
 	# undefined.  This is something that make doesn't expect, this may
 	# even trigger an assertion failure somewhere.
 	@echo :$@: :${:U1 2 3:@\@@x${@}y@}: :$@:
-
 
 
 # Demonstrate that it is possible to generate dollar signs using the
@@ -185,5 +198,49 @@ CMDLINE=	global		# needed for deleting the environment
 .if ${CMDLINE:Uundefined} != "undefined"
 .  error			# 'CMDLINE' is gone now from all scopes
 .endif
+
+
+# In the loop body text of the ':@' modifier, a literal '$' is written as '$$',
+# not '\$'.  In the following example, each '$$' turns into a single '$',
+# except for '$i', which is replaced with the then-current value '1' of the
+# iteration variable.
+#
+# See parse-var.mk, keyword 'BRACE_GROUP'.
+all: varmod-loop-literal-dollar
+varmod-loop-literal-dollar: .PHONY
+	: ${:U1:@i@ t=$$(( $${t:-0} + $i ))@}
+
+
+# When parsing the loop body, each '\$', '\@' and '\\' is unescaped to '$',
+# '@' and '\', respectively; all other backslashes are retained.
+#
+# In practice, the '$' is not escaped as '\$', as there is a second round of
+# unescaping '$$' to '$' later when the loop body is expanded after setting the
+# iteration variable.
+#
+# After the iteration variable has been set, the loop body is expanded with
+# this unescaping, regardless of whether .MAKE.SAVE_DOLLARS is set or not:
+#	$$			a literal '$'
+#	$x, ${var}, $(var)	a nested expression
+#	any other character	itself
+all: escape-modifier
+escape-modifier: .PHONY
+	# In the first round, '\$ ' is unescaped to '$ ', and since the
+	# variable named ' ' is not defined, the expression '$ ' expands to an
+	# empty string.
+	# expect: :  dollar=end
+	: ${:U1:@i@ dollar=\$ end@}
+
+	# Like in other modifiers, '\ ' is preserved, since ' ' is not one of
+	# the characters that _must_ be escaped.
+	# expect: :  backslash=\ end
+	: ${:U1:@i@ backslash=\ end@}
+
+	# expect: :  dollar=$ at=@ backslash=\ end
+	: ${:U1:@i@ dollar=\$\$ at=\@ backslash=\\ end@}
+	# expect: :  dollar=$$ at=@@ backslash=\\ end
+	: ${:U1:@i@ dollar=\$\$\$\$ at=\@\@ backslash=\\\\ end@}
+	# expect: :  dollar=$$ at=@@ backslash=\\ end
+	: ${:U1:@i@ dollar=$$$$ at=\@\@ backslash=\\\\ end@}
 
 all: .PHONY

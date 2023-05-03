@@ -41,9 +41,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/cpuset.h>
 #include <sys/domainset.h>
-#ifdef GPROF 
-#include <sys/gmon.h>
-#endif
 #include <sys/kdb.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
@@ -770,7 +767,7 @@ invltlb_invpcid_handler(pmap_t smp_tlb_pmap)
 	(*ipi_invltlb_counts[PCPU_GET(cpuid)])++;
 #endif /* COUNT_IPIS */
 
-	d.pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
+	d.pcid = pmap_get_pcid(smp_tlb_pmap);
 	d.pad = 0;
 	d.addr = 0;
 	invpcid(&d, smp_tlb_pmap == kernel_pmap ? INVPCID_CTXGLOB :
@@ -789,7 +786,7 @@ invltlb_invpcid_pti_handler(pmap_t smp_tlb_pmap)
 	(*ipi_invltlb_counts[PCPU_GET(cpuid)])++;
 #endif /* COUNT_IPIS */
 
-	d.pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
+	d.pcid = pmap_get_pcid(smp_tlb_pmap);
 	d.pad = 0;
 	d.addr = 0;
 	if (smp_tlb_pmap == kernel_pmap) {
@@ -811,8 +808,6 @@ invltlb_invpcid_pti_handler(pmap_t smp_tlb_pmap)
 static void
 invltlb_pcid_handler(pmap_t smp_tlb_pmap)
 {
-	uint32_t pcid;
-  
 #ifdef COUNT_XINVLTLB_HITS
 	xhits_gbl[PCPU_GET(cpuid)]++;
 #endif /* COUNT_XINVLTLB_HITS */
@@ -831,8 +826,8 @@ invltlb_pcid_handler(pmap_t smp_tlb_pmap)
 		 * CPU.
 		 */
 		if (smp_tlb_pmap == PCPU_GET(curpmap)) {
-			pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
-			load_cr3(smp_tlb_pmap->pm_cr3 | pcid);
+			load_cr3(smp_tlb_pmap->pm_cr3 |
+			    pmap_get_pcid(smp_tlb_pmap));
 			if (smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3)
 				PCPU_SET(ucr3_load_mask, ~CR3_PCID_SAVE);
 		}
@@ -864,12 +859,11 @@ invlpg_invpcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1)
 	(*ipi_invlpg_counts[PCPU_GET(cpuid)])++;
 #endif /* COUNT_IPIS */
 
-	invlpg(smp_tlb_addr1);
+	pmap_invlpg(smp_tlb_pmap, smp_tlb_addr1);
 	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
 	    smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3 &&
 	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
-		d.pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid |
-		    PMAP_PCID_USER_PT;
+		d.pcid = pmap_get_pcid(smp_tlb_pmap) | PMAP_PCID_USER_PT;
 		d.pad = 0;
 		d.addr = smp_tlb_addr1;
 		invpcid(&d, INVPCID_ADDR);
@@ -893,7 +887,7 @@ invlpg_pcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1)
 	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
 	    (ucr3 = smp_tlb_pmap->pm_ucr3) != PMAP_NO_CR3 &&
 	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
-		pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
+		pcid = pmap_get_pcid(smp_tlb_pmap);
 		kcr3 = smp_tlb_pmap->pm_cr3 | pcid | CR3_PCID_SAVE;
 		ucr3 |= pcid | PMAP_PCID_USER_PT | CR3_PCID_SAVE;
 		pmap_pti_pcid_invlpg(ucr3, kcr3, smp_tlb_addr1);
@@ -903,7 +897,7 @@ invlpg_pcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1)
 static void
 invlrng_handler(vm_offset_t smp_tlb_addr1, vm_offset_t smp_tlb_addr2)
 {
-	vm_offset_t addr, addr2;
+	vm_offset_t addr;
 
 #ifdef COUNT_XINVLTLB_HITS
 	xhits_rng[PCPU_GET(cpuid)]++;
@@ -913,11 +907,10 @@ invlrng_handler(vm_offset_t smp_tlb_addr1, vm_offset_t smp_tlb_addr2)
 #endif /* COUNT_IPIS */
 
 	addr = smp_tlb_addr1;
-	addr2 = smp_tlb_addr2;
 	do {
 		invlpg(addr);
 		addr += PAGE_SIZE;
-	} while (addr < addr2);
+	} while (addr < smp_tlb_addr2);
 }
 
 static void
@@ -925,7 +918,7 @@ invlrng_invpcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1,
     vm_offset_t smp_tlb_addr2)
 {
 	struct invpcid_descr d;
-	vm_offset_t addr, addr2;
+	vm_offset_t addr;
 
 #ifdef COUNT_XINVLTLB_HITS
 	xhits_rng[PCPU_GET(cpuid)]++;
@@ -935,22 +928,26 @@ invlrng_invpcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1,
 #endif /* COUNT_IPIS */
 
 	addr = smp_tlb_addr1;
-	addr2 = smp_tlb_addr2;
-	do {
-		invlpg(addr);
-		addr += PAGE_SIZE;
-	} while (addr < addr2);
+	if (smp_tlb_pmap == kernel_pmap && PCPU_GET(pcid_invlpg_workaround)) {
+		struct invpcid_descr d = { 0 };
+
+		invpcid(&d, INVPCID_CTXGLOB);
+	} else {
+		do {
+			invlpg(addr);
+			addr += PAGE_SIZE;
+		} while (addr < smp_tlb_addr2);
+	}
 	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
 	    smp_tlb_pmap->pm_ucr3 != PMAP_NO_CR3 &&
 	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
-		d.pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid |
-		    PMAP_PCID_USER_PT;
+		d.pcid = pmap_get_pcid(smp_tlb_pmap) | PMAP_PCID_USER_PT;
 		d.pad = 0;
 		d.addr = smp_tlb_addr1;
 		do {
 			invpcid(&d, INVPCID_ADDR);
 			d.addr += PAGE_SIZE;
-		} while (d.addr < addr2);
+		} while (d.addr < smp_tlb_addr2);
 	}
 }
 
@@ -958,7 +955,7 @@ static void
 invlrng_pcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1,
     vm_offset_t smp_tlb_addr2)
 {
-	vm_offset_t addr, addr2;
+	vm_offset_t addr;
 	uint64_t kcr3, ucr3;
 	uint32_t pcid;
 
@@ -970,18 +967,17 @@ invlrng_pcid_handler(pmap_t smp_tlb_pmap, vm_offset_t smp_tlb_addr1,
 #endif /* COUNT_IPIS */
 
 	addr = smp_tlb_addr1;
-	addr2 = smp_tlb_addr2;
 	do {
 		invlpg(addr);
 		addr += PAGE_SIZE;
-	} while (addr < addr2);
+	} while (addr < smp_tlb_addr2);
 	if (smp_tlb_pmap == PCPU_GET(curpmap) &&
 	    (ucr3 = smp_tlb_pmap->pm_ucr3) != PMAP_NO_CR3 &&
 	    PCPU_GET(ucr3_load_mask) == PMAP_UCR3_NOMASK) {
-		pcid = smp_tlb_pmap->pm_pcids[PCPU_GET(cpuid)].pm_pcid;
+		pcid = pmap_get_pcid(smp_tlb_pmap);
 		kcr3 = smp_tlb_pmap->pm_cr3 | pcid | CR3_PCID_SAVE;
 		ucr3 |= pcid | PMAP_PCID_USER_PT | CR3_PCID_SAVE;
-		pmap_pti_pcid_invlrng(ucr3, kcr3, smp_tlb_addr1, addr2);
+		pmap_pti_pcid_invlrng(ucr3, kcr3, smp_tlb_addr1, smp_tlb_addr2);
 	}
 }
 

@@ -4,7 +4,9 @@ subtract.bc
 add.bc
 print.bc
 parse.bc
+root.bc
 array.bc
+array2.bc
 atan.bc
 bessel.bc
 functions.bc
@@ -16,3 +18,4 @@ screen.bc
 strings2.bc
 ifs.bc
 ifs2.bc
+afl1.bc

@@ -91,10 +91,20 @@
 #define SPEED_100000 100000
 
 #define BIT_ULL(a) (1ULL << (a))
+#define min(a, b) ((a) > (b) ? (b) : (a))
+#ifndef likely
+#define likely(x)      __builtin_expect((x), 1)
+#endif
+#ifndef unlikely
+#define unlikely(x)    __builtin_expect((x), 0)
+#endif
 
 #define __aligned_u64 uint64_t __aligned(8)
 
 #define VLAN_PRIO_SHIFT 13
+#if __FreeBSD_version < 1400000
+#define IB_USER_VERBS_EX_CMD_MODIFY_QP IB_USER_VERBS_CMD_MODIFY_QP
+#endif
 
 /*
  * debug definition section
@@ -109,7 +119,7 @@ do {													\
 	irdma_debug(dev, mask, "%s\n", desc);								\
 	irdma_debug(dev, mask, "starting address virt=%p phy=%lxh\n", buf, irdma_get_virt_to_phy(buf));	\
 	for (i = 0; i < size ; i += 8)									\
-		irdma_debug(dev, mask, "index %03d val: %016lx\n", i, ((unsigned long *)buf)[i / 8]);	\
+		irdma_debug(dev, mask, "index %03d val: %016lx\n", i, ((unsigned long *)(buf))[i / 8]);	\
 } while(0)
 
 #define irdma_debug(h, m, s, ...)					\
@@ -127,11 +137,12 @@ do {                                                                    \
         if (irdma_dbg)                                                  \
                 printf("libirdma-%s: " fmt, __func__, ##args); \
 } while (0)
-#define irdma_dev_err(a, b, ...) printf(b, ##__VA_ARGS__)
-#define irdma_dev_warn(a, b, ...) printf(b, ##__VA_ARGS__) /*dev_warn(a, b)*/
+#define irdma_dev_err(ibdev, fmt, ...) \
+	pr_err("%s:%s:%d ERR "fmt, (ibdev)->name, __func__, __LINE__, ##__VA_ARGS__)
+#define irdma_dev_warn(ibdev, fmt, ...) \
+	pr_warn("%s:%s:%d WARN "fmt, (ibdev)->name, __func__, __LINE__, ##__VA_ARGS__)
 #define irdma_dev_info(a, b, ...) printf(b, ##__VA_ARGS__)
 #define irdma_pr_warn printf
-#define ibdev_err(ibdev, fmt, ...)  dev_err(&((ibdev)->dev), fmt, ##__VA_ARGS__)
 
 #define dump_struct(s, sz, name)	\
 do {				\
@@ -166,8 +177,13 @@ struct irdma_sc_vsi;
 #define irdma_usec_delay(x) DELAY(x)
 #define mdelay(x) DELAY((x) * 1000)
 
-#define rt_tos2priority(tos) (((tos >> 1) & 0x8 >> 1) | ((tos >> 2) ^ ((tos >> 3) << 1)))
+#define rt_tos2priority(tos) (tos >> 5)
 #define ah_attr_to_dmac(attr) ((attr).dmac)
+#define kc_ib_modify_qp_is_ok(cur_state, next_state, type, mask, ll) \
+        ib_modify_qp_is_ok(cur_state, next_state, type, mask)
+#define kc_typeq_ib_wr const
+#define kc_ifp_find ip_ifp_find
+#define kc_ifp6_find ip6_ifp_find
 #define kc_rdma_gid_attr_network_type(sgid_attr, gid_type, gid) \
         ib_gid_to_network_type(gid_type, gid)
 #define irdma_del_timer_compat(tt) del_timer((tt))
@@ -207,6 +223,7 @@ enum ibv_mr_type {
 struct verbs_mr {
 	struct ibv_mr           ibv_mr;
 	enum ibv_mr_type        mr_type;
+	int 			access;
 };
 #define verbs_get_mr(mr) container_of((mr), struct verbs_mr, ibv_mr)
 #endif

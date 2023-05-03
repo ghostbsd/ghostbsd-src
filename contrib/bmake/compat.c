@@ -1,4 +1,4 @@
-/*	$NetBSD: compat.c,v 1.240 2022/05/07 17:49:47 rillig Exp $	*/
+/*	$NetBSD: compat.c,v 1.246 2023/03/18 22:20:11 sjg Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990 The Regents of the University of California.
@@ -94,23 +94,24 @@
 #include "pathnames.h"
 
 /*	"@(#)compat.c	8.2 (Berkeley) 3/19/94"	*/
-MAKE_RCSID("$NetBSD: compat.c,v 1.240 2022/05/07 17:49:47 rillig Exp $");
+MAKE_RCSID("$NetBSD: compat.c,v 1.246 2023/03/18 22:20:11 sjg Exp $");
 
 static GNode *curTarg = NULL;
 static pid_t compatChild;
 static int compatSigno;
 
 /*
- * CompatDeleteTarget -- delete the file of a failed, interrupted, or
- * otherwise duffed target if not inhibited by .PRECIOUS.
+ * Delete the file of a failed, interrupted, or otherwise duffed target,
+ * unless inhibited by .PRECIOUS.
  */
 static void
 CompatDeleteTarget(GNode *gn)
 {
-	if (gn != NULL && !GNode_IsPrecious(gn)) {
+	if (gn != NULL && !GNode_IsPrecious(gn) &&
+	    (gn->type & OP_PHONY) == 0) {
 		const char *file = GNode_VarTarget(gn);
 
-		if (!opts.noExecute && unlink_file(file)) {
+		if (!opts.noExecute && unlink_file(file) == 0) {
 			Error("*** %s removed", file);
 		}
 	}
@@ -241,7 +242,7 @@ Compat_RunCommand(const char *cmdp, GNode *gn, StringListNode *ln)
 	errCheck = !(gn->type & OP_IGNORE);
 	doIt = false;
 
-	(void)Var_Subst(cmd, gn, VARE_WANTRES, &cmdStart);
+	cmdStart = Var_Subst(cmd, gn, VARE_WANTRES);
 	/* TODO: handle errors */
 
 	if (cmdStart[0] == '\0') {
@@ -283,7 +284,8 @@ Compat_RunCommand(const char *cmdp, GNode *gn, StringListNode *ln)
 			doIt = true;
 			if (shellName == NULL)	/* we came here from jobs */
 				Shell_Init();
-		} else
+		} else if (!ch_isspace(*cmd))
+			/* Ignore whitespace for compatibility with gnu make */
 			break;
 		cmd++;
 	}
@@ -573,7 +575,7 @@ MakeUnmade(GNode *gn, GNode *pgn)
 	 * to tell him/her "yes".
 	 */
 	DEBUG0(MAKE, "out-of-date.\n");
-	if (opts.query)
+	if (opts.query && gn != Targ_GetEndNode())
 		exit(1);
 
 	/*

@@ -118,29 +118,29 @@ static vdev_list_t zfs_vdevs;
  * List of ZFS features supported for read
  */
 static const char *features_for_read[] = {
-	"org.illumos:lz4_compress",
-	"com.delphix:hole_birth",
-	"com.delphix:extensible_dataset",
+	"com.datto:bookmark_v2",
+	"com.datto:encryption",
+	"com.datto:resilver_defer",
+	"com.delphix:bookmark_written",
+	"com.delphix:device_removal",
 	"com.delphix:embedded_data",
-	"org.open-zfs:large_blocks",
+	"com.delphix:extensible_dataset",
+	"com.delphix:head_errlog",
+	"com.delphix:hole_birth",
+	"com.delphix:obsolete_counts",
+	"com.delphix:spacemap_histogram",
+	"com.delphix:spacemap_v2",
+	"com.delphix:zpool_checkpoint",
+	"com.intel:allocation_classes",
+	"com.joyent:multi_vdev_crash_dump",
+	"org.freebsd:zstd_compress",
+	"org.illumos:lz4_compress",
 	"org.illumos:sha512",
 	"org.illumos:skein",
-	"org.zfsonlinux:large_dnode",
-	"com.joyent:multi_vdev_crash_dump",
-	"com.delphix:spacemap_histogram",
-	"com.delphix:zpool_checkpoint",
-	"com.delphix:spacemap_v2",
-	"com.datto:encryption",
-	"com.datto:bookmark_v2",
-	"org.zfsonlinux:allocation_classes",
-	"com.datto:resilver_defer",
-	"com.delphix:device_removal",
-	"com.delphix:obsolete_counts",
-	"com.intel:allocation_classes",
-	"org.freebsd:zstd_compress",
-	"com.delphix:bookmark_written",
-	"com.delphix:head_errlog",
+	"org.open-zfs:large_blocks",
 	"org.openzfs:blake3",
+	"org.zfsonlinux:allocation_classes",
+	"org.zfsonlinux:large_dnode",
 	NULL
 };
 
@@ -447,7 +447,7 @@ vdev_indirect_mapping_entry(vdev_indirect_mapping_t *vim, uint64_t index)
  *
  * It's possible that the given offset will not be in the mapping table
  * (i.e. no mapping entries contain this offset), in which case, the
- * return value value depends on the "next_if_missing" parameter.
+ * return value depends on the "next_if_missing" parameter.
  *
  * If the offset is not found in the table and "next_if_missing" is
  * B_FALSE, then NULL will always be returned. The behavior is intended
@@ -1365,19 +1365,6 @@ spa_find_by_name(const char *name)
 			return (spa);
 
 	return (NULL);
-}
-
-static spa_t *
-spa_find_by_dev(struct zfs_devdesc *dev)
-{
-
-	if (dev->dd.d_dev->dv_type != DEVT_ZFS)
-		return (NULL);
-
-	if (dev->pool_guid == 0)
-		return (STAILQ_FIRST(&zfs_pools));
-
-	return (spa_find_by_guid(dev->pool_guid));
 }
 
 static spa_t *
@@ -3068,11 +3055,12 @@ zfs_rlookup(const spa_t *spa, uint64_t objnum, char *result)
 	char name[256];
 	char component[256];
 	uint64_t dir_obj, parent_obj, child_dir_zapobj;
-	dnode_phys_t child_dir_zap, dataset, dir, parent;
+	dnode_phys_t child_dir_zap, snapnames_zap, dataset, dir, parent;
 	dsl_dir_phys_t *dd;
 	dsl_dataset_phys_t *ds;
 	char *p;
 	int len;
+	boolean_t issnap = B_FALSE;
 
 	p = &name[sizeof(name) - 1];
 	*p = '\0';
@@ -3083,6 +3071,8 @@ zfs_rlookup(const spa_t *spa, uint64_t objnum, char *result)
 	}
 	ds = (dsl_dataset_phys_t *)&dataset.dn_bonus;
 	dir_obj = ds->ds_dir_obj;
+	if (ds->ds_snapnames_zapobj == 0)
+		issnap = B_TRUE;
 
 	for (;;) {
 		if (objset_get_dnode(spa, spa->spa_mos, dir_obj, &dir) != 0)
@@ -3098,6 +3088,34 @@ zfs_rlookup(const spa_t *spa, uint64_t objnum, char *result)
 		    &parent) != 0)
 			return (EIO);
 		dd = (dsl_dir_phys_t *)&parent.dn_bonus;
+		if (issnap == B_TRUE) {
+			/*
+			 * The dataset we are looking up is a snapshot
+			 * the dir_obj is the parent already, we don't want
+			 * the grandparent just yet. Reset to the parent.
+			 */
+			dd = (dsl_dir_phys_t *)&dir.dn_bonus;
+			/* Lookup the dataset to get the snapname ZAP */
+			if (objset_get_dnode(spa, spa->spa_mos,
+			    dd->dd_head_dataset_obj, &dataset))
+				return (EIO);
+			ds = (dsl_dataset_phys_t *)&dataset.dn_bonus;
+			if (objset_get_dnode(spa, spa->spa_mos,
+			    ds->ds_snapnames_zapobj, &snapnames_zap) != 0)
+				return (EIO);
+			/* Get the name of the snapshot */
+			if (zap_rlookup(spa, &snapnames_zap, component,
+			    objnum) != 0)
+				return (EIO);
+			len = strlen(component);
+			p -= len;
+			memcpy(p, component, len);
+			--p;
+			*p = '@';
+			issnap = B_FALSE;
+			continue;
+		}
+
 		child_dir_zapobj = dd->dd_child_dir_zapobj;
 		if (objset_get_dnode(spa, spa->spa_mos, child_dir_zapobj,
 		    &child_dir_zap) != 0)
@@ -3127,9 +3145,11 @@ zfs_lookup_dataset(const spa_t *spa, const char *name, uint64_t *objnum)
 {
 	char element[256];
 	uint64_t dir_obj, child_dir_zapobj;
-	dnode_phys_t child_dir_zap, dir;
+	dnode_phys_t child_dir_zap, snapnames_zap, dir, dataset;
 	dsl_dir_phys_t *dd;
+	dsl_dataset_phys_t *ds;
 	const char *p, *q;
+	boolean_t issnap = B_FALSE;
 
 	if (objset_get_dnode(spa, spa->spa_mos,
 	    DMU_POOL_DIRECTORY_OBJECT, &dir))
@@ -3160,6 +3180,25 @@ zfs_lookup_dataset(const spa_t *spa, const char *name, uint64_t *objnum)
 			p += strlen(p);
 		}
 
+		if (issnap == B_TRUE) {
+		        if (objset_get_dnode(spa, spa->spa_mos,
+			    dd->dd_head_dataset_obj, &dataset))
+		                return (EIO);
+			ds = (dsl_dataset_phys_t *)&dataset.dn_bonus;
+			if (objset_get_dnode(spa, spa->spa_mos,
+			    ds->ds_snapnames_zapobj, &snapnames_zap) != 0)
+				return (EIO);
+			/* Actual loop condition #2. */
+			if (zap_lookup(spa, &snapnames_zap, element,
+			    sizeof (dir_obj), 1, &dir_obj) != 0)
+				return (ENOENT);
+			*objnum = dir_obj;
+			return (0);
+		} else if ((q = strchr(element, '@')) != NULL) {
+			issnap = B_TRUE;
+			element[q - element] = '\0';
+			p = q + 1;
+		}
 		child_dir_zapobj = dd->dd_child_dir_zapobj;
 		if (objset_get_dnode(spa, spa->spa_mos, child_dir_zapobj,
 		    &child_dir_zap) != 0)
@@ -3813,4 +3852,83 @@ done:
 	STAILQ_FOREACH_SAFE(entry, &on_cache, entry, tentry)
 		free(entry);
 	return (rc);
+}
+
+/*
+ * Return either a cached copy of the bootenv, or read each of the vdev children
+ * looking for the bootenv. Cache what's found and return the results. Returns 0
+ * when benvp is filled in, and some errno when not.
+ */
+static int
+zfs_get_bootenv_spa(spa_t *spa, nvlist_t **benvp)
+{
+	vdev_t *vd;
+	nvlist_t *benv = NULL;
+
+	if (spa->spa_bootenv == NULL) {
+		STAILQ_FOREACH(vd, &spa->spa_root_vdev->v_children,
+		    v_childlink) {
+			benv = vdev_read_bootenv(vd);
+
+			if (benv != NULL)
+				break;
+		}
+		spa->spa_bootenv = benv;
+	}
+	benv = spa->spa_bootenv;
+
+	if (benv == NULL)
+		return (ENOENT);
+
+	*benvp = benv;
+	return (0);
+}
+
+/*
+ * Store nvlist to pool label bootenv area. Also updates cached pointer in spa.
+ */
+static int
+zfs_set_bootenv_spa(spa_t *spa, nvlist_t *benv)
+{
+	vdev_t *vd;
+
+	STAILQ_FOREACH(vd, &spa->spa_root_vdev->v_children, v_childlink) {
+		vdev_write_bootenv(vd, benv);
+	}
+
+	spa->spa_bootenv = benv;
+	return (0);
+}
+
+/*
+ * Get bootonce value by key. The bootonce <key, value> pair is removed from the
+ * bootenv nvlist and the remaining nvlist is committed back to disk. This process
+ * the bootonce flag since we've reached the point in the boot that we've 'used'
+ * the BE. For chained boot scenarios, we may reach this point multiple times (but
+ * only remove it and return 0 the first time).
+ */
+static int
+zfs_get_bootonce_spa(spa_t *spa, const char *key, char *buf, size_t size)
+{
+	nvlist_t *benv;
+	char *result = NULL;
+	int result_size, rv;
+
+	if ((rv = zfs_get_bootenv_spa(spa, &benv)) != 0)
+		return (rv);
+
+	if ((rv = nvlist_find(benv, key, DATA_TYPE_STRING, NULL,
+	    &result, &result_size)) == 0) {
+		if (result_size == 0) {
+			/* ignore empty string */
+			rv = ENOENT;
+		} else if (buf != NULL) {
+			size = MIN((size_t)result_size + 1, size);
+			strlcpy(buf, result, size);
+		}
+		(void)nvlist_remove(benv, key, DATA_TYPE_STRING);
+		(void)zfs_set_bootenv_spa(spa, benv);
+	}
+
+	return (rv);
 }

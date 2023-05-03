@@ -25,6 +25,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_netlink.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 #include "opt_inet.h"
@@ -32,6 +34,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_route.h"
 #include <sys/types.h>
 #include <sys/ck.h>
+#include <sys/epoch.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/rmlock.h>
@@ -47,14 +50,13 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/scope6_var.h>
 #include <netlink/netlink.h>
 #include <netlink/netlink_ctl.h>
-#include <netlink/netlink_var.h>
 #include <netlink/netlink_route.h>
 #include <netlink/route/route_var.h>
 
 #define	DEBUG_MOD_NAME	nl_nhop
 #define	DEBUG_MAX_LEVEL	LOG_DEBUG3
 #include <netlink/netlink_debug.h>
-_DECLARE_DEBUG(LOG_DEBUG3);
+_DECLARE_DEBUG(LOG_DEBUG);
 
 /*
  * This file contains the logic to maintain kernel nexthops and
@@ -434,11 +436,9 @@ enomem:
 }
 
 static bool
-dump_nhop(const struct user_nhop *unhop, struct nlmsghdr *hdr,
+dump_nhop(const struct nhop_object *nh, uint32_t uidx, struct nlmsghdr *hdr,
     struct nl_writer *nw)
 {
-	struct nhop_object *nh = unhop->un_nhop_src;
-
 	if (!nlmsg_reply(nw, hdr, sizeof(struct nhmsg)))
 		goto enomem;
 
@@ -446,10 +446,11 @@ dump_nhop(const struct user_nhop *unhop, struct nlmsghdr *hdr,
 	ENOMEM_IF_NULL(nhm);
 	nhm->nh_family = nhop_get_neigh_family(nh);
 	nhm->nh_scope = 0; // XXX: what's that?
-	nhm->nh_protocol = unhop->un_protocol;
+	nhm->nh_protocol = nhop_get_origin(nh);
 	nhm->nh_flags = 0;
 
-	nlattr_add_u32(nw, NHA_ID, unhop->un_idx);
+	if (uidx != 0)
+		nlattr_add_u32(nw, NHA_ID, uidx);
 	if (nh->nh_flags & NHF_BLACKHOLE) {
 		nlattr_add_flag(nw, NHA_BLACKHOLE);
 		goto done;
@@ -473,6 +474,19 @@ dump_nhop(const struct user_nhop *unhop, struct nlmsghdr *hdr,
 #endif
 	}
 
+	int off = nlattr_add_nested(nw, NHA_FREEBSD);
+	if (off != 0) {
+		nlattr_add_u32(nw, NHAF_AIF, nh->nh_aifp->if_index);
+
+		if (uidx == 0) {
+			nlattr_add_u32(nw, NHAF_KID, nhop_get_idx(nh));
+			nlattr_add_u32(nw, NHAF_FAMILY, nhop_get_upper_family(nh));
+			nlattr_add_u32(nw, NHAF_TABLE, nhop_get_fibnum(nh));
+		}
+
+		nlattr_set_len(nw, off);
+	}
+
 done:
         if (nlmsg_end(nw))
 		return (true);
@@ -486,7 +500,7 @@ dump_unhop(const struct user_nhop *unhop, struct nlmsghdr *hdr,
     struct nl_writer *nw)
 {
 	if (unhop->un_nhop_src != NULL)
-		dump_nhop(unhop, hdr, nw);
+		dump_nhop(unhop->un_nhop_src, unhop->un_idx, hdr, nw);
 	else
 		dump_nhgrp(unhop, hdr, nw);
 }
@@ -553,8 +567,7 @@ delete_unhop(struct unhop_ctl *ctl, struct nlmsghdr *hdr, uint32_t uidx)
 
 	while (unhop_base != NULL) {
 		unhop_chain = unhop_base->un_nextchild;
-		epoch_call(net_epoch_preempt, destroy_unhop_epoch,
-		    &unhop_base->un_epoch_ctx);
+		NET_EPOCH_CALL(destroy_unhop_epoch, &unhop_base->un_epoch_ctx);
 		unhop_base = unhop_chain;
 	}
 
@@ -590,7 +603,7 @@ consider_resize(struct unhop_ctl *ctl, uint32_t new_size)
 }
 
 static bool __noinline
-vnet_init_unhops()
+vnet_init_unhops(void)
 {
         uint32_t num_buckets = 16;
         size_t alloc_size = CHT_SLIST_GET_RESIZE_SIZE(num_buckets);
@@ -632,7 +645,7 @@ vnet_destroy_unhops(const void *unused __unused)
 	V_un_ctl = NULL;
 
 	/* Wait till all unhop users finish their reads */
-	epoch_wait_preempt(net_epoch_preempt);
+	NET_EPOCH_WAIT();
 
 	UN_WLOCK(ctl);
 	CHT_SLIST_FOREACH_SAFE(&ctl->un_head, unhop, unhop, tmp) {
@@ -669,15 +682,29 @@ struct nl_parsed_nhop {
 	uint32_t	nha_id;
 	uint8_t		nha_blackhole;
 	uint8_t		nha_groups;
+	uint8_t		nhaf_knhops;
+	uint8_t		nhaf_family;
 	struct ifnet	*nha_oif;
 	struct sockaddr	*nha_gw;
 	struct nlattr	*nha_group;
 	uint8_t		nh_family;
 	uint8_t		nh_protocol;
+	uint32_t	nhaf_table;
+	uint32_t	nhaf_kid;
+	uint32_t	nhaf_aif;
 };
 
 #define	_IN(_field)	offsetof(struct nhmsg, _field)
 #define	_OUT(_field)	offsetof(struct nl_parsed_nhop, _field)
+static struct nlattr_parser nla_p_nh_fbsd[] = {
+	{ .type = NHAF_KNHOPS, .off = _OUT(nhaf_knhops), .cb = nlattr_get_flag },
+	{ .type = NHAF_TABLE, .off = _OUT(nhaf_table), .cb = nlattr_get_uint32 },
+	{ .type = NHAF_FAMILY, .off = _OUT(nhaf_family), .cb = nlattr_get_uint8 },
+	{ .type = NHAF_KID, .off = _OUT(nhaf_kid), .cb = nlattr_get_uint32 },
+	{ .type = NHAF_AIF, .off = _OUT(nhaf_aif), .cb = nlattr_get_uint32 },
+};
+NL_DECLARE_ATTR_PARSER(nh_fbsd_parser, nla_p_nh_fbsd);
+
 static const struct nlfield_parser nlf_p_nh[] = {
 	{ .off_in = _IN(nh_family), .off_out = _OUT(nh_family), .cb = nlf_get_u8 },
 	{ .off_in = _IN(nh_protocol), .off_out = _OUT(nh_protocol), .cb = nlf_get_u8 },
@@ -690,6 +717,7 @@ static const struct nlattr_parser nla_p_nh[] = {
 	{ .type = NHA_OIF, .off = _OUT(nha_oif), .cb = nlattr_get_ifp },
 	{ .type = NHA_GATEWAY, .off = _OUT(nha_gw), .cb = nlattr_get_ip },
 	{ .type = NHA_GROUPS, .off = _OUT(nha_groups), .cb = nlattr_get_flag },
+	{ .type = NHA_FREEBSD, .arg = &nh_fbsd_parser, .cb = nlattr_get_nested },
 };
 #undef _IN
 #undef _OUT
@@ -742,8 +770,34 @@ newnhg(struct unhop_ctl *ctl, struct nl_parsed_nhop *attrs, struct user_nhop *un
 	return (0);
 }
 
+/*
+ * Sets nexthop @nh gateway specified by @gw.
+ * If gateway is IPv6 link-local, alters @gw to include scopeid equal to
+ * @ifp ifindex.
+ * Returns 0 on success or errno.
+ */
+int
+nl_set_nexthop_gw(struct nhop_object *nh, struct sockaddr *gw, struct ifnet *ifp,
+    struct nl_pstate *npt)
+{
+#ifdef INET6
+	if (gw->sa_family == AF_INET6) {
+		struct sockaddr_in6 *gw6 = (struct sockaddr_in6 *)gw;
+		if (IN6_IS_ADDR_LINKLOCAL(&gw6->sin6_addr)) {
+			if (ifp == NULL) {
+				NLMSG_REPORT_ERR_MSG(npt, "interface not set");
+				return (EINVAL);
+			}
+			in6_set_unicast_scopeid(&gw6->sin6_addr, ifp->if_index);
+		}
+	}
+#endif
+	nhop_set_gw(nh, gw, true);
+	return (0);
+}
+
 static int
-newnhop(struct nl_parsed_nhop *attrs, struct user_nhop *unhop)
+newnhop(struct nl_parsed_nhop *attrs, struct user_nhop *unhop, struct nl_pstate *npt)
 {
 	struct ifaddr *ifa = NULL;
 	struct nhop_object *nh;
@@ -751,17 +805,17 @@ newnhop(struct nl_parsed_nhop *attrs, struct user_nhop *unhop)
 
 	if (!attrs->nha_blackhole) {
 		if (attrs->nha_gw == NULL) {
-			NL_LOG(LOG_DEBUG, "missing NHA_GATEWAY");
+			NLMSG_REPORT_ERR_MSG(npt, "missing NHA_GATEWAY");
 			return (EINVAL);
 		}
 		if (attrs->nha_oif == NULL) {
-			NL_LOG(LOG_DEBUG, "missing NHA_OIF");
+			NLMSG_REPORT_ERR_MSG(npt, "missing NHA_OIF");
 			return (EINVAL);
 		}
 		if (ifa == NULL)
 			ifa = ifaof_ifpforaddr(attrs->nha_gw, attrs->nha_oif);
 		if (ifa == NULL) {
-			NL_LOG(LOG_DEBUG, "Unable to determine default source IP");
+			NLMSG_REPORT_ERR_MSG(npt, "Unable to determine default source IP");
 			return (EINVAL);
 		}
 	}
@@ -774,11 +828,16 @@ newnhop(struct nl_parsed_nhop *attrs, struct user_nhop *unhop)
 		return (ENOMEM);
 	}
 	nhop_set_uidx(nh, attrs->nha_id);
+	nhop_set_origin(nh, attrs->nh_protocol);
 
 	if (attrs->nha_blackhole)
 		nhop_set_blackhole(nh, NHF_BLACKHOLE);
 	else {
-		nhop_set_gw(nh, attrs->nha_gw, true);
+		error = nl_set_nexthop_gw(nh, attrs->nha_gw, attrs->nha_oif, npt);
+		if (error != 0) {
+			nhop_free(nh);
+			return (error);
+		}
 		nhop_set_transmit_ifp(nh, attrs->nha_oif);
 		nhop_set_src(nh, ifa);
 	}
@@ -840,7 +899,7 @@ rtnl_handle_newnhop(struct nlmsghdr *hdr, struct nlpcb *nlp,
 	if (attrs.nha_group)
 		error = newnhg(ctl, &attrs, unhop);
 	else
-		error = newnhop(&attrs, unhop);
+		error = newnhop(&attrs, unhop, npt);
 
 	if (error != 0) {
 		free(unhop, M_NETLINK);
@@ -926,13 +985,9 @@ static int
 rtnl_handle_getnhop(struct nlmsghdr *hdr, struct nlpcb *nlp,
     struct nl_pstate *npt)
 {
-	struct unhop_ctl *ctl = atomic_load_ptr(&V_un_ctl);
 	struct user_nhop *unhop;
 	UN_TRACKER;
 	int error;
-
-	if (__predict_false(ctl == NULL))
-		return (ESRCH);
 
 	struct nl_parsed_nhop attrs = {};
 	error = nl_parse_nlmsg(hdr, &nhmsg_parser, npt, &attrs);
@@ -948,8 +1003,13 @@ rtnl_handle_getnhop(struct nlmsghdr *hdr, struct nlpcb *nlp,
 	};
 
 	if (attrs.nha_id != 0) {
+		struct unhop_ctl *ctl = atomic_load_ptr(&V_un_ctl);
+		struct user_nhop key = { .un_idx = attrs.nha_id };
+
+		if (__predict_false(ctl == NULL))
+			return (ESRCH);
+
 		NL_LOG(LOG_DEBUG2, "searching for uidx %u", attrs.nha_id);
-		struct user_nhop key= { .un_idx = attrs.nha_id };
 		UN_RLOCK(ctl);
 		CHT_SLIST_FIND_BYOBJ(&ctl->un_head, unhop, &key, unhop);
 		UN_RUNLOCK(ctl);
@@ -958,15 +1018,53 @@ rtnl_handle_getnhop(struct nlmsghdr *hdr, struct nlpcb *nlp,
 			return (ESRCH);
 		dump_unhop(unhop, &wa.hdr, wa.nw);
 		return (0);
-	}
+	} else if (attrs.nhaf_kid != 0) {
+		struct nhop_iter iter = {
+			.fibnum = attrs.nhaf_table,
+			.family = attrs.nhaf_family,
+		};
+		int error = ESRCH;
 
-	UN_RLOCK(ctl);
-	wa.hdr.nlmsg_flags |= NLM_F_MULTI;
-	CHT_SLIST_FOREACH(&ctl->un_head, unhop, unhop) {
-		if (UNHOP_IS_MASTER(unhop) && match_unhop(&attrs, unhop))
-			dump_unhop(unhop, &wa.hdr, wa.nw);
-	} CHT_SLIST_FOREACH_END;
-	UN_RUNLOCK(ctl);
+		NL_LOG(LOG_DEBUG2, "START table %u family %d", attrs.nhaf_table, attrs.nhaf_family);
+		for (struct nhop_object *nh = nhops_iter_start(&iter); nh;
+		    nh = nhops_iter_next(&iter)) {
+			NL_LOG(LOG_DEBUG3, "get %u", nhop_get_idx(nh));
+			if (nhop_get_idx(nh) == attrs.nhaf_kid) {
+				dump_nhop(nh, 0, &wa.hdr, wa.nw);
+				error = 0;
+				break;
+			}
+		}
+		nhops_iter_stop(&iter);
+		return (error);
+	} else if (attrs.nhaf_knhops) {
+		struct nhop_iter iter = {
+			.fibnum = attrs.nhaf_table,
+			.family = attrs.nhaf_family,
+		};
+
+		NL_LOG(LOG_DEBUG2, "DUMP table %u family %d", attrs.nhaf_table, attrs.nhaf_family);
+		wa.hdr.nlmsg_flags |= NLM_F_MULTI;
+		for (struct nhop_object *nh = nhops_iter_start(&iter); nh;
+		    nh = nhops_iter_next(&iter)) {
+			dump_nhop(nh, 0, &wa.hdr, wa.nw);
+		}
+		nhops_iter_stop(&iter);
+	} else {
+		struct unhop_ctl *ctl = atomic_load_ptr(&V_un_ctl);
+
+		if (__predict_false(ctl == NULL))
+			return (ESRCH);
+
+		NL_LOG(LOG_DEBUG2, "DUMP unhops");
+		UN_RLOCK(ctl);
+		wa.hdr.nlmsg_flags |= NLM_F_MULTI;
+		CHT_SLIST_FOREACH(&ctl->un_head, unhop, unhop) {
+			if (UNHOP_IS_MASTER(unhop) && match_unhop(&attrs, unhop))
+				dump_unhop(unhop, &wa.hdr, wa.nw);
+		} CHT_SLIST_FOREACH_END;
+		UN_RUNLOCK(ctl);
+	}
 
 	if (wa.error == 0) {
 		if (!nlmsg_end_dump(wa.nw, wa.error, &wa.hdr))
@@ -995,10 +1093,10 @@ static const struct rtnl_cmd_handler cmd_handlers[] = {
 	}
 };
 
-static const struct nlhdr_parser *all_parsers[] = { &nhmsg_parser };
+static const struct nlhdr_parser *all_parsers[] = { &nhmsg_parser, &nh_fbsd_parser };
 
 void
-rtnl_nexthops_init()
+rtnl_nexthops_init(void)
 {
 	NL_VERIFY_PARSERS(all_parsers);
 	rtnl_register_messages(cmd_handlers, NL_ARRAY_LEN(cmd_handlers));

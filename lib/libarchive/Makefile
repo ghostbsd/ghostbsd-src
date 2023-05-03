@@ -14,8 +14,7 @@ CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${SRCTOP}/sys/contrib/zstd/lib
 .include "Makefile.inc"
 
-.if ${MACHINE_ARCH:Marm*} != "" || ${MACHINE_ARCH:Mmips*} != "" || \
-	${MACHINE_ARCH:Mpowerpc*} != ""
+.if ${MACHINE_ARCH:Marm*} != "" || ${MACHINE_ARCH:Mpowerpc*} != ""
 NO_WCAST_ALIGN=	yes
 .if ${MACHINE_ARCH:M*64*} == ""
 CFLAGS+=	-DPPMD_32BIT
@@ -389,6 +388,7 @@ MLINKS+=	archive_write_filter.3 archive_write_add_filter_lzma.3
 MLINKS+=	archive_write_filter.3 archive_write_add_filter_none.3
 MLINKS+=	archive_write_filter.3 archive_write_add_filter_program.3
 MLINKS+=	archive_write_filter.3 archive_write_add_filter_xz.3
+MLINKS+=	archive_write_filter.3 archive_write_add_filter_zstd.3
 MLINKS+=	archive_write_format.3 archive_write_set_format_cpio.3
 MLINKS+=	archive_write_format.3 archive_write_set_format_pax.3
 MLINKS+=	archive_write_format.3 archive_write_set_format_pax_restricted.3

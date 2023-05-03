@@ -31,9 +31,8 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
-#include <sys/sdt.h>
-#include <sys/systm.h>
 #include <sys/proc.h>
+#include <sys/sdt.h>
 
 #include <amd64/linux32/linux.h>
 #include <amd64/linux32/linux32_proto.h>
@@ -45,6 +44,7 @@ LIN_SDT_PROVIDER_DECLARE(LINUX_DTRACE);
 
 UNIMPLEMENTED(break);
 UNIMPLEMENTED(ftime);
+UNIMPLEMENTED(fstat);
 UNIMPLEMENTED(gtty);
 UNIMPLEMENTED(stty);
 UNIMPLEMENTED(lock);

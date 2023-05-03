@@ -740,7 +740,7 @@ mpr_iocfacts_allocate(struct mpr_softc *sc, uint8_t attaching)
 	 * XXX If the number of MSI-X vectors changes during re-init, this
 	 * won't see it and adjust.
 	 */
-	if (attaching && (error = mpr_pci_setup_interrupts(sc)) != 0) {
+	if ((attaching || reallocating) && (error = mpr_pci_setup_interrupts(sc)) != 0) {
 		mpr_dprint(sc, MPR_INIT|MPR_ERROR,
 		    "Failed to setup interrupts\n");
 		mpr_free(sc);
@@ -2759,13 +2759,14 @@ mpr_update_events(struct mpr_softc *sc, struct mpr_event_handle *handle,
 	evtreq->SASBroadcastPrimitiveMasks = 0;
 #ifdef MPR_DEBUG_ALL_EVENTS
 	{
-		u_char fullmask[16];
-		memset(fullmask, 0x00, 16);
-		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, 16);
+		u_char fullmask[sizeof(evtreq->EventMasks)];
+		memset(fullmask, 0x00, sizeof(fullmask));
+		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, sizeof(fullmask));
 	}
 #else
+	bcopy(sc->event_mask, (uint8_t *)&evtreq->EventMasks, sizeof(sc->event_mask));
 	for (i = 0; i < MPI2_EVENT_NOTIFY_EVENTMASK_WORDS; i++)
-		evtreq->EventMasks[i] = htole32(sc->event_mask[i]);
+		evtreq->EventMasks[i] = htole32(evtreq->EventMasks[i]);
 #endif
 	cm->cm_desc.Default.RequestFlags = MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
 	cm->cm_data = NULL;
@@ -2814,13 +2815,14 @@ mpr_reregister_events(struct mpr_softc *sc)
 	evtreq->SASBroadcastPrimitiveMasks = 0;
 #ifdef MPR_DEBUG_ALL_EVENTS
 	{
-		u_char fullmask[16];
-		memset(fullmask, 0x00, 16);
-		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, 16);
+		u_char fullmask[sizeof(evtreq->EventMasks)];
+		memset(fullmask, 0x00, sizeof(fullmask));
+		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, sizeof(fullmask));
 	}
 #else
+	bcopy(sc->event_mask, (uint8_t *)&evtreq->EventMasks, sizeof(sc->event_mask));
 	for (i = 0; i < MPI2_EVENT_NOTIFY_EVENTMASK_WORDS; i++)
-		evtreq->EventMasks[i] = htole32(sc->event_mask[i]);
+		evtreq->EventMasks[i] = htole32(evtreq->EventMasks[i]);
 #endif
 	cm->cm_desc.Default.RequestFlags = MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
 	cm->cm_data = NULL;

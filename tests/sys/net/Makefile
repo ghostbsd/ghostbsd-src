@@ -6,6 +6,7 @@ TESTSDIR=	${TESTSBASE}/sys/net
 BINDIR=		${TESTSDIR}
 
 ATF_TESTS_C+=	if_epair
+ATF_TESTS_SH+=	if_epair_test
 ATF_TESTS_SH+=	if_bridge_test
 TEST_METADATA.if_bridge_test+=	required_programs="python"
 ATF_TESTS_SH+=	if_clone_test
@@ -14,6 +15,7 @@ ATF_TESTS_SH+=	if_lagg_test
 ATF_TESTS_SH+=	if_stf
 ATF_TESTS_SH+=	if_tun_test
 ATF_TESTS_SH+=	if_vlan
+ATF_TESTS_SH+=	if_wg
 
 TESTS_SUBDIRS+=	if_ovpn
 TESTS_SUBDIRS+=	routing

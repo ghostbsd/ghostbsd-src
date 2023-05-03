@@ -35,7 +35,7 @@
  * encapsulation) and whether or not an FCS is present.
  */
 #define	ETHER_MAX_FRAME(ifp, etype, hasfcs)				\
-	((ifp)->if_mtu + ETHER_HDR_LEN +				\
+	(if_getmtu(ifp) + ETHER_HDR_LEN +				\
 	 ((hasfcs) ? ETHER_CRC_LEN : 0) +				\
 	 (((etype) == ETHERTYPE_VLAN) ? ETHER_VLAN_ENCAP_LEN : 0))
 
@@ -43,6 +43,7 @@
  * Ethernet-specific mbuf flags.
  */
 #define	M_HASFCS	M_PROTO5	/* FCS included at end of frame */
+#define	M_BRIDGE_INJECT	M_PROTO6	/* if_bridge-injected frame */
 
 /*
  * Ethernet CRC32 polynomials (big- and little-endian versions).
@@ -399,15 +400,10 @@ struct ether_vlan_header {
  * ether_vlan_mtap.  This function will re-insert VLAN tags for the duration
  * of the tap, so they show up properly for network analyzers.
  */
-#define	ETHER_BPF_MTAP(_ifp, _m) do {					\
-	if (bpf_peers_present((_ifp)->if_bpf)) {			\
-		M_ASSERTVALID(_m);					\
-		if (((_m)->m_flags & M_VLANTAG) != 0)			\
-			ether_vlan_mtap((_ifp)->if_bpf, (_m), NULL, 0);	\
-		else							\
-			bpf_mtap((_ifp)->if_bpf, (_m));			\
-	}								\
-} while (0)
+struct ifnet;
+struct mbuf;
+void ether_bpf_mtap_if(struct ifnet *ifp, struct mbuf *m);
+#define	ETHER_BPF_MTAP(_ifp, _m)	ether_bpf_mtap_if((_ifp), (_m))
 
 /*
  * Names for 802.1q priorities ("802.1p").  Notice that in this scheme,

@@ -32,13 +32,12 @@ __FBSDID("$FreeBSD$");
 #include "opt_ktrace.h"
 
 #include <sys/param.h>
-#include <sys/systm.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
-#include <sys/sx.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
+#include <sys/sx.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysproto.h>
 #ifdef KTRACE
@@ -46,8 +45,6 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #include <security/audit/audit.h>
-
-#include "opt_compat.h"
 
 #ifdef COMPAT_LINUX32
 #include <machine/../linux32/linux.h>
@@ -58,7 +55,7 @@ __FBSDID("$FreeBSD$");
 #endif
 #include <compat/linux/linux_mib.h>
 #include <compat/linux/linux_signal.h>
-#include <compat/linux/linux_timer.h>
+#include <compat/linux/linux_time.h>
 #include <compat/linux/linux_util.h>
 #include <compat/linux/linux_emul.h>
 #include <compat/linux/linux_misc.h>
@@ -779,7 +776,7 @@ lsiginfo_to_siginfo(struct thread *td, const l_siginfo_t *lsi,
 
 	switch (lsi->lsi_code) {
 	case LINUX_SI_TKILL:
-		if (linux_kernver(td) >= LINUX_KERNVER_2006039) {
+		if (linux_kernver(td) >= LINUX_KERNVER(2,6,39)) {
 			linux_msg(td, "SI_TKILL forbidden since 2.6.39");
 			return (EPERM);
 		}

@@ -128,6 +128,14 @@ zil_prt_rec_rename(zilog_t *zilog, int txtype, const void *arg)
 	(void) printf("%ssdoid %llu, tdoid %llu\n", tab_prefix,
 	    (u_longlong_t)lr->lr_sdoid, (u_longlong_t)lr->lr_tdoid);
 	(void) printf("%ssrc %s tgt %s\n", tab_prefix, snm, tnm);
+	switch (txtype) {
+	case TX_RENAME_EXCHANGE:
+		(void) printf("%sflags RENAME_EXCHANGE\n", tab_prefix);
+		break;
+	case TX_RENAME_WHITEOUT:
+		(void) printf("%sflags RENAME_WHITEOUT\n", tab_prefix);
+		break;
+	}
 }
 
 static int
@@ -182,6 +190,7 @@ zil_prt_rec_write(zilog_t *zilog, int txtype, const void *arg)
 			return;
 		}
 
+		ASSERT3U(BP_GET_LSIZE(bp), !=, 0);
 		SET_BOOKMARK(&zb, dmu_objset_id(zilog->zl_os),
 		    lr->lr_foid, ZB_ZIL_LEVEL,
 		    lr->lr_offset / BP_GET_LSIZE(bp));
@@ -298,6 +307,23 @@ zil_prt_rec_acl(zilog_t *zilog, int txtype, const void *arg)
 	    (u_longlong_t)lr->lr_foid, (u_longlong_t)lr->lr_aclcnt);
 }
 
+static void
+zil_prt_rec_clone_range(zilog_t *zilog, int txtype, const void *arg)
+{
+	(void) zilog, (void) txtype;
+	const lr_clone_range_t *lr = arg;
+
+	(void) printf("%sfoid %llu, offset %llx, length %llx, blksize %llx\n",
+	    tab_prefix, (u_longlong_t)lr->lr_foid, (u_longlong_t)lr->lr_offset,
+	    (u_longlong_t)lr->lr_length, (u_longlong_t)lr->lr_blksz);
+
+	for (unsigned int i = 0; i < lr->lr_nbps; i++) {
+		(void) printf("%s[%u/%llu] ", tab_prefix, i + 1,
+		    (u_longlong_t)lr->lr_nbps);
+		print_log_bp(&lr->lr_bps[i], "");
+	}
+}
+
 typedef void (*zil_prt_rec_func_t)(zilog_t *, int, const void *);
 typedef struct zil_rec_info {
 	zil_prt_rec_func_t	zri_print;
@@ -329,6 +355,10 @@ static zil_rec_info_t zil_rec_info[TX_MAX_TYPE] = {
 	{.zri_print = zil_prt_rec_write,    .zri_name = "TX_WRITE2          "},
 	{.zri_print = zil_prt_rec_setsaxattr,
 	    .zri_name = "TX_SETSAXATTR      "},
+	{.zri_print = zil_prt_rec_rename,   .zri_name = "TX_RENAME_EXCHANGE "},
+	{.zri_print = zil_prt_rec_rename,   .zri_name = "TX_RENAME_WHITEOUT "},
+	{.zri_print = zil_prt_rec_clone_range,
+	    .zri_name = "TX_CLONE_RANGE     "},
 };
 
 static int

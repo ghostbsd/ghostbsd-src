@@ -42,12 +42,7 @@
 #include <sys/systm.h>
 #include <sys/refcount.h>
 #include <vm/uma.h>
-#ifdef WITNESS
-#include <sys/lock.h>
-#endif
-#endif
 
-#ifdef _KERNEL
 #include <sys/sdt.h>
 
 #define	MBUF_PROBE1(probe, arg0)					\
@@ -791,15 +786,11 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
 #ifdef _KERNEL
 union if_snd_tag_alloc_params;
 
-#ifdef WITNESS
 #define	MBUF_CHECKSLEEP(how) do {					\
 	if (how == M_WAITOK)						\
 		WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,		\
 		    "Sleeping in \"%s\"", __func__);			\
 } while (0)
-#else
-#define	MBUF_CHECKSLEEP(how) do {} while (0)
-#endif
 
 /*
  * Network buffer allocation API
@@ -1245,6 +1236,16 @@ m_align(struct mbuf *m, int len)
 	(M_WRITABLE(m) ? ((m)->m_data - M_START(m)) : 0)
 
 /*
+ * So M_TRAILINGROOM() is for when you want to know how much space
+ * would be there if it was writable. This can be used to
+ * detect changes in mbufs by knowing the value at one point
+ * and then being able to compare it later to the current M_TRAILINGROOM().
+ * The TRAILINGSPACE() macro is not suitable for this since an mbuf
+ * at one point might not be writable and then later it becomes writable
+ * even though the space at the back of it has not changed.
+ */
+#define M_TRAILINGROOM(m) ((M_START(m) + M_SIZE(m)) - ((m)->m_data + (m)->m_len))
+/*
  * Compute the amount of space available after the end of data in an mbuf.
  *
  * The M_WRITABLE() is a temporary, conservative safety measure: the burden
@@ -1254,9 +1255,7 @@ m_align(struct mbuf *m, int len)
  * for mbufs with external storage.  We now allow mbuf-embedded data to be
  * read-only as well.
  */
-#define	M_TRAILINGSPACE(m)						\
-	(M_WRITABLE(m) ?						\
-	    ((M_START(m) + M_SIZE(m)) - ((m)->m_data + (m)->m_len)) : 0)
+#define	M_TRAILINGSPACE(m) (M_WRITABLE(m) ? M_TRAILINGROOM(m) : 0)
 
 /*
  * Arrange to prepend space of size plen to mbuf m.  If a new mbuf must be
@@ -1675,11 +1674,23 @@ mbuf_tstmp2timespec(struct mbuf *m, struct timespec *ts)
 {
 
 	KASSERT((m->m_flags & M_PKTHDR) != 0, ("mbuf %p no M_PKTHDR", m));
-	KASSERT((m->m_flags & (M_TSTMP|M_TSTMP_LRO)) != 0, ("mbuf %p no M_TSTMP or M_TSTMP_LRO", m));
+	KASSERT((m->m_flags & (M_TSTMP|M_TSTMP_LRO)) != 0,
+	    ("mbuf %p no M_TSTMP or M_TSTMP_LRO", m));
 	ts->tv_sec = m->m_pkthdr.rcv_tstmp / 1000000000;
 	ts->tv_nsec = m->m_pkthdr.rcv_tstmp % 1000000000;
 }
 #endif
+
+static inline void
+mbuf_tstmp2timeval(struct mbuf *m, struct timeval *tv)
+{
+
+	KASSERT((m->m_flags & M_PKTHDR) != 0, ("mbuf %p no M_PKTHDR", m));
+	KASSERT((m->m_flags & (M_TSTMP|M_TSTMP_LRO)) != 0,
+	    ("mbuf %p no M_TSTMP or M_TSTMP_LRO", m));
+	tv->tv_sec = m->m_pkthdr.rcv_tstmp / 1000000000;
+	tv->tv_usec = (m->m_pkthdr.rcv_tstmp % 1000000000) / 1000;
+}
 
 #ifdef DEBUGNET
 /* Invoked from the debugnet client code. */

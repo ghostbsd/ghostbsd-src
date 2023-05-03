@@ -39,6 +39,14 @@
 #include <sys/_types.h>
 #include <sys/_pthreadtypes.h>
 
+extern char **environ;
+
+/*
+ * The kernel doesn't expose PID_MAX to the user space. Save it here
+ * to allow to run a newer world on a pre-1400079 kernel.
+ */
+#define	_PID_MAX	99999
+
 /*
  * This global flag is non-zero when a process has created one
  * or more threads. It is used to avoid calling locking functions
@@ -248,6 +256,12 @@ enum {
 #ifdef YP
 int _yp_check(char **);
 #endif
+
+void __libc_start1(int, char *[], char *[],
+    void (*)(void), int (*)(int, char *[], char *[])) __dead2;
+void __libc_start1_gcrt(int, char *[], char *[],
+    void (*)(void), int (*)(int, char *[], char *[]),
+    int *, int *) __dead2;
 
 /*
  * Initialise TLS for static programs

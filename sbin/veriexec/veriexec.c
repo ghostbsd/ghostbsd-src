@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2018, Juniper Networks, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,7 +52,7 @@ const char *Cdir = NULL;
  * @return always returns code 0
  */
 static int
-veriexec_usage()
+veriexec_usage(void)
 {
 	printf("%s",
 	    "Usage:\tveriexec [-h] [-i state] [-C] [-xv state|verbosity] [path]\n");
@@ -140,8 +142,7 @@ main(int argc, char *argv[])
 {
 	long long converted_int;
 	uint32_t state;
-	char c;
-	int x;
+	int c, x;
 
 	if (argc < 2)
 		return (veriexec_usage());

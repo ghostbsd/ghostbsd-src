@@ -35,24 +35,17 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/types.h>
 #include <sys/bus.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
 #include <sys/jail.h>
 #include <sys/malloc.h>
-#include <sys/kernel.h>
-#include <sys/linker_set.h>
 #include <sys/namei.h>
 #include <sys/proc.h>
-#include <sys/sdt.h>
+#include <sys/stat.h>
 #include <sys/syscallsubr.h>
-#include <sys/sysctl.h>
-#include <sys/systm.h>
 #include <sys/vnode.h>
-
-#include <net/if.h>
-#include <net/if_var.h>
-#include <net/if_types.h>
 
 #include <machine/stdarg.h>
 
@@ -85,11 +78,6 @@ char linux_emul_path[MAXPATHLEN] = "/compat/linux";
 SYSCTL_STRING(_compat_linux, OID_AUTO, emul_path, CTLFLAG_RWTUN,
     linux_emul_path, sizeof(linux_emul_path),
     "Linux runtime environment path");
-
-static bool use_real_ifnames = false;
-SYSCTL_BOOL(_compat_linux, OID_AUTO, use_real_ifnames, CTLFLAG_RWTUN,
-    &use_real_ifnames, 0,
-    "Use FreeBSD interface names instead of generating ethN aliases");
 
 /*
  * Search an alternate path before passing pathname arguments on to
@@ -239,6 +227,31 @@ linux_vn_get_major_minor(const struct vnode *vp, int *major, int *minor)
 	return (error);
 }
 
+void
+translate_vnhook_major_minor(struct vnode *vp, struct stat *sb)
+{
+	int major, minor;
+
+	if (vn_isdisk(vp)) {
+		sb->st_mode &= ~S_IFMT;
+		sb->st_mode |= S_IFBLK;
+	}
+
+	/*
+	 * Return the same st_dev for every devfs instance.  The reason
+	 * for this is to work around an idiosyncrasy of glibc getttynam()
+	 * implementation: it checks whether st_dev returned for fd 0
+	 * is the same as st_dev returned for the target of /proc/self/fd/0
+	 * symlink, and with linux chroots having their own devfs instance,
+	 * the check will fail if you chroot into it.
+	 */
+	if (rootdevmp != NULL && vp->v_mount->mnt_vfc == rootdevmp->mnt_vfc)
+		sb->st_dev = rootdevmp->mnt_stat.f_fsid.val[0];
+
+	if (linux_vn_get_major_minor(vp, &major, &minor) == 0)
+		sb->st_rdev = makedev(major, minor);
+}
+
 char *
 linux_get_char_devices(void)
 {
@@ -323,10 +336,4 @@ linux_device_unregister_handler(struct linux_device_handler *d)
 	}
 
 	return (EINVAL);
-}
-
-bool
-linux_use_real_ifname(const struct ifnet *ifp)
-{
-	return (use_real_ifnames || !IFP_IS_ETH(ifp));
 }

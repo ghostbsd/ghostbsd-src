@@ -44,6 +44,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_dl.h>
 #include <net/vnet.h>
 #include <net/route.h>
@@ -95,6 +96,8 @@ static int delete_route(struct rib_head *rnh, struct rtentry *rt,
 static int rt_delete_conditional(struct rib_head *rnh, struct rtentry *rt,
     int prio, rib_filter_f_t *cb, void *cbdata, struct rib_cmd_info *rc);
 
+static bool fill_pxmask_family(int family, int plen, struct sockaddr *_dst,
+    struct sockaddr **pmask);
 static int get_prio_from_info(const struct rt_addrinfo *info);
 static int nhop_get_prio(const struct nhop_object *nh);
 
@@ -390,6 +393,18 @@ lookup_prefix(struct rib_head *rnh, const struct rt_addrinfo *info,
 	return (rt);
 }
 
+const struct rtentry *
+rib_lookup_prefix_plen(struct rib_head *rnh, struct sockaddr *dst, int plen,
+    struct route_nhop_data *rnd)
+{
+	union sockaddr_union mask_storage;
+	struct sockaddr *netmask = &mask_storage.sa;
+
+	if (fill_pxmask_family(dst->sa_family, plen, dst, &netmask))
+		return (lookup_prefix_bysa(rnh, dst, netmask, rnd));
+	return (NULL);
+}
+
 static bool
 fill_pxmask_family(int family, int plen, struct sockaddr *_dst,
     struct sockaddr **pmask)
@@ -454,7 +469,7 @@ fill_pxmask_family(int family, int plen, struct sockaddr *_dst,
  * Attempts to add @dst/plen prefix with nexthop/nexhopgroup data @rnd
  * to the routing table.
  *
- * @fibnum: rtable id to insert route to
+ * @fibnum: verified kernel rtable id to insert route to
  * @dst: verified kernel-originated sockaddr, can be masked if plen non-empty
  * @plen: prefix length (or -1 if host route or not applicable for AF)
  * @op_flags: combination of RTM_F_ flags
@@ -489,6 +504,16 @@ rib_add_route_px(uint32_t fibnum, struct sockaddr *dst, int plen,
 			FIB_RH_LOG(LOG_INFO, rnh, "rtentry allocation failed");
 			return (ENOMEM);
 		}
+	} else {
+		struct route_nhop_data rnd_tmp;
+		RIB_RLOCK_TRACKER;
+
+		RIB_RLOCK(rnh);
+		rt = lookup_prefix_bysa(rnh, dst, netmask, &rnd_tmp);
+		RIB_RUNLOCK(rnh);
+
+		if (rt == NULL)
+			return (ESRCH);
 	}
 
 	return (add_route_flags(rnh, rt, rnd, op_flags, rc));
@@ -765,6 +790,8 @@ add_route_flags(struct rib_head *rnh, struct rtentry *rt, struct route_nhop_data
 	struct rtentry *rt_orig;
 	int error = 0;
 
+	MPASS(rt != NULL);
+
 	nh = rnd_add->rnd_nhop;
 
 	RIB_WLOCK(rnh);
@@ -793,6 +820,7 @@ add_route_flags(struct rib_head *rnh, struct rtentry *rt, struct route_nhop_data
 	if (op_flags & RTM_F_REPLACE) {
 		if (nhop_get_prio(rnd_orig.rnd_nhop) > nhop_get_prio(rnd_add->rnd_nhop)) {
 			/* Old path is "better" (e.g. has PINNED flag set) */
+			RIB_WUNLOCK(rnh);
 			error = EEXIST;
 			goto out;
 		}

@@ -57,9 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_param.h>
 #include <vm/vm_extern.h>
 
-#ifdef FPE
 #include <machine/fpe.h>
-#endif
 #include <machine/frame.h>
 #include <machine/pcb.h>
 #include <machine/pcpu.h>
@@ -303,6 +301,13 @@ do_trap_supervisor(struct trapframe *frame)
 		dump_regs(frame);
 		panic("Memory access exception at 0x%016lx\n", frame->tf_sepc);
 		break;
+	case SCAUSE_LOAD_MISALIGNED:
+	case SCAUSE_STORE_MISALIGNED:
+	case SCAUSE_INST_MISALIGNED:
+		dump_regs(frame);
+		panic("Misaligned address exception at %#016lx: %#016lx\n",
+		    frame->tf_sepc, frame->tf_stval);
+		break;
 	case SCAUSE_STORE_PAGE_FAULT:
 	case SCAUSE_LOAD_PAGE_FAULT:
 	case SCAUSE_INST_PAGE_FAULT:
@@ -371,6 +376,13 @@ do_trap_user(struct trapframe *frame)
 		    exception);
 		userret(td, frame);
 		break;
+	case SCAUSE_LOAD_MISALIGNED:
+	case SCAUSE_STORE_MISALIGNED:
+	case SCAUSE_INST_MISALIGNED:
+		call_trapsignal(td, SIGBUS, BUS_ADRALN, (void *)frame->tf_sepc,
+		    exception);
+		userret(td, frame);
+		break;
 	case SCAUSE_STORE_PAGE_FAULT:
 	case SCAUSE_LOAD_PAGE_FAULT:
 	case SCAUSE_INST_PAGE_FAULT:
@@ -381,7 +393,6 @@ do_trap_user(struct trapframe *frame)
 		ecall_handler();
 		break;
 	case SCAUSE_ILLEGAL_INSTRUCTION:
-#ifdef FPE
 		if ((pcb->pcb_fpflags & PCB_FP_STARTED) == 0) {
 			/*
 			 * May be a FPE trap. Enable FPE usage
@@ -393,7 +404,6 @@ do_trap_user(struct trapframe *frame)
 			pcb->pcb_fpflags |= PCB_FP_STARTED;
 			break;
 		}
-#endif
 		call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)frame->tf_sepc,
 		    exception);
 		userret(td, frame);

@@ -1682,7 +1682,7 @@ SYSCTL_PROC(_security_bsd, OID_AUTO, unprivileged_proc_debug,
 int
 p_candebug(struct thread *td, struct proc *p)
 {
-	int credentialchanged, error, grpsubset, i, uidsubset;
+	int error, grpsubset, i, uidsubset;
 
 	KASSERT(td == curthread, ("%s: td not curthread", __func__));
 	PROC_LOCK_ASSERT(p, MA_OWNED);
@@ -1725,11 +1725,6 @@ p_candebug(struct thread *td, struct proc *p)
 	    td->td_ucred->cr_uid == p->p_ucred->cr_ruid);
 
 	/*
-	 * Has the credential of the process changed since the last exec()?
-	 */
-	credentialchanged = (p->p_flag & P_SUGID);
-
-	/*
 	 * If p's gids aren't a subset, or the uids aren't a subset,
 	 * or the credential has changed, require appropriate privilege
 	 * for td to debug p.
@@ -1740,7 +1735,10 @@ p_candebug(struct thread *td, struct proc *p)
 			return (error);
 	}
 
-	if (credentialchanged) {
+	/*
+	 * Has the credential of the process changed since the last exec()?
+	 */
+	if ((p->p_flag & P_SUGID) != 0) {
 		error = priv_check(td, PRIV_DEBUG_SUGID);
 		if (error)
 			return (error);
@@ -1879,7 +1877,7 @@ crunuse(struct thread *td)
 	    __func__, cr->cr_users, cr));
 	cr->cr_users--;
 	if (cr->cr_users == 0) {
-		KASSERT(cr->cr_ref > 0, ("%s: ref %d not > 0 on cred %p",
+		KASSERT(cr->cr_ref > 0, ("%s: ref %ld not > 0 on cred %p",
 		    __func__, cr->cr_ref, cr));
 		crold = cr;
 	} else {
@@ -1907,7 +1905,7 @@ crunusebatch(struct ucred *cr, int users, int ref)
 		mtx_unlock(&cr->cr_mtx);
 		return;
 	}
-	KASSERT(cr->cr_ref >= 0, ("%s: ref %d not >= 0 on cred %p",
+	KASSERT(cr->cr_ref >= 0, ("%s: ref %ld not >= 0 on cred %p",
 	    __func__, cr->cr_ref, cr));
 	if (cr->cr_ref > 0) {
 		mtx_unlock(&cr->cr_mtx);
@@ -2053,7 +2051,7 @@ crfree(struct ucred *cr)
 		mtx_unlock(&cr->cr_mtx);
 		return;
 	}
-	KASSERT(cr->cr_ref >= 0, ("%s: ref %d not >= 0 on cred %p",
+	KASSERT(cr->cr_ref >= 0, ("%s: ref %ld not >= 0 on cred %p",
 	    __func__, cr->cr_ref, cr));
 	if (cr->cr_ref > 0) {
 		mtx_unlock(&cr->cr_mtx);
@@ -2068,7 +2066,7 @@ crfree_final(struct ucred *cr)
 
 	KASSERT(cr->cr_users == 0, ("%s: users %d not == 0 on cred %p",
 	    __func__, cr->cr_users, cr));
-	KASSERT(cr->cr_ref == 0, ("%s: ref %d not == 0 on cred %p",
+	KASSERT(cr->cr_ref == 0, ("%s: ref %ld not == 0 on cred %p",
 	    __func__, cr->cr_ref, cr));
 
 	/*
@@ -2106,6 +2104,7 @@ crcopy(struct ucred *dest, struct ucred *src)
 	bcopy(&src->cr_startcopy, &dest->cr_startcopy,
 	    (unsigned)((caddr_t)&src->cr_endcopy -
 		(caddr_t)&src->cr_startcopy));
+	dest->cr_flags = src->cr_flags;
 	crsetgroups(dest, src->cr_ngroups, src->cr_groups);
 	uihold(dest->cr_uidinfo);
 	uihold(dest->cr_ruidinfo);
@@ -2212,7 +2211,7 @@ proc_unset_cred(struct proc *p)
 	mtx_lock(&cr->cr_mtx);
 	cr->cr_users--;
 	if (cr->cr_users == 0)
-		KASSERT(cr->cr_ref > 0, ("%s: ref %d not > 0 on cred %p",
+		KASSERT(cr->cr_ref > 0, ("%s: ref %ld not > 0 on cred %p",
 		    __func__, cr->cr_ref, cr));
 	mtx_unlock(&cr->cr_mtx);
 	crfree(cr);

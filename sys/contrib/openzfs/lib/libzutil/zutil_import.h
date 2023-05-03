@@ -28,28 +28,13 @@
 #ifndef _LIBZUTIL_ZUTIL_IMPORT_H_
 #define	_LIBZUTIL_ZUTIL_IMPORT_H_
 
-#define	EZFS_BADCACHE	"invalid or missing cache file"
-#define	EZFS_BADPATH	"must be an absolute path"
-#define	EZFS_NOMEM	"out of memory"
-#define	EZFS_EACESS	"some devices require root privileges"
-
 #define	IMPORT_ORDER_PREFERRED_1	1
 #define	IMPORT_ORDER_PREFERRED_2	2
 #define	IMPORT_ORDER_SCAN_OFFSET	10
 #define	IMPORT_ORDER_DEFAULT		100
 
-typedef struct libpc_handle {
-	boolean_t lpc_printerr;
-	boolean_t lpc_open_access_error;
-	boolean_t lpc_desc_active;
-	char lpc_desc[1024];
-	pool_config_ops_t *lpc_ops;
-	void *lpc_lib_handle;
-} libpc_handle_t;
-
-
-int label_paths(libpc_handle_t *hdl, nvlist_t *label, char **path,
-    char **devid);
+int label_paths(libpc_handle_t *hdl, nvlist_t *label, const char **path,
+    const char **devid);
 int zpool_find_import_blkid(libpc_handle_t *hdl, pthread_mutex_t *lock,
     avl_tree_t **slice_cache);
 

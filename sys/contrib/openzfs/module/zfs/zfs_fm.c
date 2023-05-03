@@ -200,6 +200,42 @@ recent_events_compare(const void *a, const void *b)
 	return (0);
 }
 
+/*
+ * workaround: vdev properties don't have inheritance
+ */
+static uint64_t
+vdev_prop_get_inherited(vdev_t *vd, vdev_prop_t prop)
+{
+	uint64_t propdef, propval;
+
+	propdef = vdev_prop_default_numeric(prop);
+	switch (prop) {
+		case VDEV_PROP_CHECKSUM_N:
+			propval = vd->vdev_checksum_n;
+			break;
+		case VDEV_PROP_CHECKSUM_T:
+			propval = vd->vdev_checksum_t;
+			break;
+		case VDEV_PROP_IO_N:
+			propval = vd->vdev_io_n;
+			break;
+		case VDEV_PROP_IO_T:
+			propval = vd->vdev_io_t;
+			break;
+		default:
+			propval = propdef;
+			break;
+	}
+
+	if (propval != propdef)
+		return (propval);
+
+	if (vd->vdev_parent == NULL)
+		return (propdef);
+
+	return (vdev_prop_get_inherited(vd->vdev_parent, prop));
+}
+
 static void zfs_ereport_schedule_cleaner(void);
 
 /*
@@ -253,7 +289,6 @@ void
 zfs_ereport_clear(spa_t *spa, vdev_t *vd)
 {
 	uint64_t vdev_guid, pool_guid;
-	int cnt = 0;
 
 	ASSERT(vd != NULL || spa != NULL);
 	if (vd == NULL) {
@@ -277,7 +312,6 @@ zfs_ereport_clear(spa_t *spa, vdev_t *vd)
 			avl_remove(&recent_events_tree, entry);
 			list_remove(&recent_events_list, entry);
 			kmem_free(entry, sizeof (*entry));
-			cnt++;
 		}
 	}
 
@@ -664,6 +698,49 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 		    DATA_TYPE_UINT64, zb->zb_blkid, NULL);
 	}
 
+	/*
+	 * Payload for tuning the zed
+	 */
+	if (vd != NULL && strcmp(subclass, FM_EREPORT_ZFS_CHECKSUM) == 0) {
+		uint64_t cksum_n, cksum_t;
+
+		cksum_n = vdev_prop_get_inherited(vd, VDEV_PROP_CHECKSUM_N);
+		if (cksum_n != vdev_prop_default_numeric(VDEV_PROP_CHECKSUM_N))
+			fm_payload_set(ereport,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_CKSUM_N,
+			    DATA_TYPE_UINT64,
+			    cksum_n,
+			    NULL);
+
+		cksum_t = vdev_prop_get_inherited(vd, VDEV_PROP_CHECKSUM_T);
+		if (cksum_t != vdev_prop_default_numeric(VDEV_PROP_CHECKSUM_T))
+			fm_payload_set(ereport,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_CKSUM_T,
+			    DATA_TYPE_UINT64,
+			    cksum_t,
+			    NULL);
+	}
+
+	if (vd != NULL && strcmp(subclass, FM_EREPORT_ZFS_IO) == 0) {
+		uint64_t io_n, io_t;
+
+		io_n = vdev_prop_get_inherited(vd, VDEV_PROP_IO_N);
+		if (io_n != vdev_prop_default_numeric(VDEV_PROP_IO_N))
+			fm_payload_set(ereport,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_IO_N,
+			    DATA_TYPE_UINT64,
+			    io_n,
+			    NULL);
+
+		io_t = vdev_prop_get_inherited(vd, VDEV_PROP_IO_T);
+		if (io_t != vdev_prop_default_numeric(VDEV_PROP_IO_T))
+			fm_payload_set(ereport,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_IO_T,
+			    DATA_TYPE_UINT64,
+			    io_t,
+			    NULL);
+	}
+
 	mutex_exit(&spa->spa_errlist_lock);
 
 	*ereport_out = ereport;
@@ -678,8 +755,8 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 
 typedef struct zfs_ecksum_info {
 	/* histograms of set and cleared bits by bit number in a 64-bit word */
-	uint32_t zei_histogram_set[sizeof (uint64_t) * NBBY];
-	uint32_t zei_histogram_cleared[sizeof (uint64_t) * NBBY];
+	uint8_t zei_histogram_set[sizeof (uint64_t) * NBBY];
+	uint8_t zei_histogram_cleared[sizeof (uint64_t) * NBBY];
 
 	/* inline arrays of bits set and cleared. */
 	uint64_t zei_bits_set[ZFM_MAX_INLINE];
@@ -704,7 +781,7 @@ typedef struct zfs_ecksum_info {
 } zfs_ecksum_info_t;
 
 static void
-update_histogram(uint64_t value_arg, uint32_t *hist, uint32_t *count)
+update_histogram(uint64_t value_arg, uint8_t *hist, uint32_t *count)
 {
 	size_t i;
 	size_t bits = 0;
@@ -975,10 +1052,10 @@ annotate_ecksum(nvlist_t *ereport, zio_bad_cksum_t *info,
 	} else {
 		fm_payload_set(ereport,
 		    FM_EREPORT_PAYLOAD_ZFS_BAD_SET_HISTOGRAM,
-		    DATA_TYPE_UINT32_ARRAY,
+		    DATA_TYPE_UINT8_ARRAY,
 		    NBBY * sizeof (uint64_t), eip->zei_histogram_set,
 		    FM_EREPORT_PAYLOAD_ZFS_BAD_CLEARED_HISTOGRAM,
-		    DATA_TYPE_UINT32_ARRAY,
+		    DATA_TYPE_UINT8_ARRAY,
 		    NBBY * sizeof (uint64_t), eip->zei_histogram_cleared,
 		    NULL);
 	}

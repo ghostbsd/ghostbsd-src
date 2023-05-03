@@ -489,7 +489,7 @@ main(int argc, char **argv)
  *
  * It gets called one time for each transport.
  *
- * It returns 0 upon success, 1 for ingore the call and -1 to indicate
+ * It returns 0 upon success, 1 for ignore the call and -1 to indicate
  * bind failed with EADDRINUSE.
  *
  * Any file descriptors that have been created are stored in sock_fd and
@@ -845,7 +845,7 @@ sigalarm_handler(void)
 }
 
 void
-usage()
+usage(void)
 {
 	errx(1, "usage: rpc.lockd [-d <debuglevel>]"
 	    " [-F] [-g <grace period>] [-h <bindip>] [-p <port>]");
@@ -904,7 +904,8 @@ init_nsm(void)
 /*
  * Out of memory, fatal
  */
-void out_of_mem()
+void
+out_of_mem(void)
 {
 	syslog(LOG_ERR, "out of memory");
 	exit(2);

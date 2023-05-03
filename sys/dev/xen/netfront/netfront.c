@@ -71,6 +71,8 @@ __FBSDID("$FreeBSD$");
 #include <contrib/xen/io/netif.h>
 #include <xen/xenbus/xenbusvar.h>
 
+#include <machine/bus.h>
+
 #include "xenbus_if.h"
 
 /* Features supported by all backends.  TSO and LRO can be negotiated */
@@ -126,9 +128,8 @@ static void xn_release_tx_bufs(struct netfront_txq *);
 static void xn_rxq_intr(struct netfront_rxq *);
 static void xn_txq_intr(struct netfront_txq *);
 static void xn_intr(void *);
-static inline int xn_count_frags(struct mbuf *m);
 static int xn_assemble_tx_request(struct netfront_txq *, struct mbuf *);
-static int xn_ioctl(struct ifnet *, u_long, caddr_t);
+static int xn_ioctl(if_t, u_long, caddr_t);
 static void xn_ifinit_locked(struct netfront_info *);
 static void xn_ifinit(void *);
 static void xn_stop(struct netfront_info *);
@@ -138,15 +139,15 @@ static void netif_free(struct netfront_info *info);
 static int netfront_detach(device_t dev);
 
 static int xn_txq_mq_start_locked(struct netfront_txq *, struct mbuf *);
-static int xn_txq_mq_start(struct ifnet *, struct mbuf *);
+static int xn_txq_mq_start(if_t, struct mbuf *);
 
 static int talk_to_backend(device_t dev, struct netfront_info *info);
 static int create_netdev(device_t dev);
 static void netif_disconnect_backend(struct netfront_info *info);
 static int setup_device(device_t dev, struct netfront_info *info,
     unsigned long);
-static int xn_ifmedia_upd(struct ifnet *ifp);
-static void xn_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr);
+static int xn_ifmedia_upd(if_t ifp);
+static void xn_ifmedia_sts(if_t ifp, struct ifmediareq *ifmr);
 
 static int xn_connect(struct netfront_info *);
 static void xn_kick_rings(struct netfront_info *);
@@ -199,11 +200,22 @@ struct netfront_txq {
 	struct taskqueue 	*tq;
 	struct task       	defrtask;
 
+	bus_dma_segment_t	segs[MAX_TX_REQ_FRAGS];
+	struct mbuf_xennet {
+		struct m_tag 	tag;
+		bus_dma_tag_t	dma_tag;
+		bus_dmamap_t	dma_map;
+		struct netfront_txq *txq;
+		SLIST_ENTRY(mbuf_xennet) next;
+		u_int 		count;
+	}			xennet_tag[NET_TX_RING_SIZE + 1];
+	SLIST_HEAD(, mbuf_xennet) tags;
+
 	bool			full;
 };
 
 struct netfront_info {
-	struct ifnet 		*xn_ifp;
+	if_t			xn_ifp;
 
 	struct mtx   		sc_lock;
 
@@ -220,6 +232,8 @@ struct netfront_info {
 	int			xn_if_flags;
 
 	struct ifmedia		sc_media;
+
+	bus_dma_tag_t		dma_tag;
 
 	bool			xn_reset;
 };
@@ -299,6 +313,42 @@ xn_get_rx_ref(struct netfront_rxq *rxq, RING_IDX ri)
 	KASSERT(ref != GRANT_REF_INVALID, ("Invalid grant reference!\n"));
 	rxq->grant_ref[i] = GRANT_REF_INVALID;
 	return (ref);
+}
+
+#define MTAG_COOKIE 1218492000
+#define MTAG_XENNET 0
+
+static void mbuf_grab(struct mbuf *m)
+{
+	struct mbuf_xennet *ref;
+
+	ref = (struct mbuf_xennet *)m_tag_locate(m, MTAG_COOKIE,
+	    MTAG_XENNET, NULL);
+	KASSERT(ref != NULL, ("Cannot find refcount"));
+	ref->count++;
+}
+
+static void mbuf_release(struct mbuf *m)
+{
+	struct mbuf_xennet *ref;
+
+	ref = (struct mbuf_xennet *)m_tag_locate(m, MTAG_COOKIE,
+	    MTAG_XENNET, NULL);
+	KASSERT(ref != NULL, ("Cannot find refcount"));
+	KASSERT(ref->count > 0, ("Invalid reference count"));
+
+	if (--ref->count == 0)
+		m_freem(m);
+}
+
+static void tag_free(struct m_tag *t)
+{
+	struct mbuf_xennet *ref = (struct mbuf_xennet *)t;
+
+	KASSERT(ref->count == 0, ("Free mbuf tag with pending refcnt"));
+	bus_dmamap_sync(ref->dma_tag, ref->dma_map, BUS_DMASYNC_POSTWRITE);
+	bus_dmamap_destroy(ref->dma_tag, ref->dma_map);
+	SLIST_INSERT_HEAD(&ref->txq->tags, ref, next);
 }
 
 #define IPRINTK(fmt, args...) \
@@ -587,14 +637,14 @@ talk_to_backend(device_t dev, struct netfront_info *info)
 		message = "writing feature-sg";
 		goto abort_transaction;
 	}
-	if ((info->xn_ifp->if_capenable & IFCAP_LRO) != 0) {
+	if ((if_getcapenable(info->xn_ifp) & IFCAP_LRO) != 0) {
 		err = xs_printf(xst, node, "feature-gso-tcpv4", "%d", 1);
 		if (err != 0) {
 			message = "writing feature-gso-tcpv4";
 			goto abort_transaction;
 		}
 	}
-	if ((info->xn_ifp->if_capenable & IFCAP_RXCSUM) == 0) {
+	if ((if_getcapenable(info->xn_ifp) & IFCAP_RXCSUM) == 0) {
 		err = xs_printf(xst, node, "feature-no-csum-offload", "%d", 1);
 		if (err != 0) {
 			message = "writing feature-no-csum-offload";
@@ -635,7 +685,7 @@ static void
 xn_txq_start(struct netfront_txq *txq)
 {
 	struct netfront_info *np = txq->info;
-	struct ifnet *ifp = np->xn_ifp;
+	if_t ifp = np->xn_ifp;
 
 	XN_TX_LOCK_ASSERT(txq);
 	if (!drbr_empty(ifp, txq->br))
@@ -778,11 +828,18 @@ disconnect_txq(struct netfront_txq *txq)
 static void
 destroy_txq(struct netfront_txq *txq)
 {
+	unsigned int i;
 
 	free(txq->ring.sring, M_DEVBUF);
 	buf_ring_free(txq->br, M_DEVBUF);
 	taskqueue_drain_all(txq->tq);
 	taskqueue_free(txq->tq);
+
+	for (i = 0; i <= NET_TX_RING_SIZE; i++) {
+		bus_dmamap_destroy(txq->info->dma_tag,
+		    txq->xennet_tag[i].dma_map);
+		txq->xennet_tag[i].dma_map = NULL;
+	}
 }
 
 static void
@@ -822,10 +879,27 @@ setup_txqs(device_t dev, struct netfront_info *info,
 
 		mtx_init(&txq->lock, txq->name, "netfront transmit lock",
 		    MTX_DEF);
+		SLIST_INIT(&txq->tags);
 
 		for (i = 0; i <= NET_TX_RING_SIZE; i++) {
 			txq->mbufs[i] = (void *) ((u_long) i+1);
 			txq->grant_ref[i] = GRANT_REF_INVALID;
+			txq->xennet_tag[i].txq = txq;
+			txq->xennet_tag[i].dma_tag = info->dma_tag;
+			error = bus_dmamap_create(info->dma_tag, 0,
+			    &txq->xennet_tag[i].dma_map);
+			if (error != 0) {
+				device_printf(dev,
+				    "failed to allocate dma map\n");
+				goto fail;
+			}
+			m_tag_setup(&txq->xennet_tag[i].tag,
+			    MTAG_COOKIE, MTAG_XENNET,
+			    sizeof(txq->xennet_tag[i]) -
+			    sizeof(txq->xennet_tag[i].tag));
+			txq->xennet_tag[i].tag.m_tag_free = &tag_free;
+			SLIST_INSERT_HEAD(&txq->tags, &txq->xennet_tag[i],
+			    next);
 		}
 		txq->mbufs[NET_TX_RING_SIZE] = (void *)0;
 
@@ -933,6 +1007,12 @@ out:
 }
 
 #ifdef INET
+static u_int
+netfront_addr_cb(void *arg, struct ifaddr *a, u_int count)
+{
+	arp_ifinit((if_t)arg, a);
+	return (1);
+}
 /**
  * If this interface has an ipv4 address, send an arp for it. This
  * helps to get the network going again after migrating hosts.
@@ -940,15 +1020,10 @@ out:
 static void
 netfront_send_fake_arp(device_t dev, struct netfront_info *info)
 {
-	struct ifnet *ifp;
-	struct ifaddr *ifa;
+	if_t ifp;
 
 	ifp = info->xn_ifp;
-	CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-		if (ifa->ifa_addr->sa_family == AF_INET) {
-			arp_ifinit(ifp, ifa);
-		}
-	}
+	if_foreach_addr_type(ifp, AF_INET, netfront_addr_cb, ifp);
 }
 #endif
 
@@ -962,7 +1037,7 @@ netfront_backend_changed(device_t dev, XenbusState newstate)
 
 	DPRINTK("newstate=%d\n", newstate);
 
-	CURVNET_SET(sc->xn_ifp->if_vnet);
+	CURVNET_SET(if_getvnet(sc->xn_ifp));
 
 	switch (newstate) {
 	case XenbusStateInitialising:
@@ -1041,7 +1116,7 @@ xn_release_tx_bufs(struct netfront_txq *txq)
 		if (txq->mbufs_cnt < 0) {
 			panic("%s: tx_chain_cnt must be >= 0", __func__);
 		}
-		m_free(m);
+		mbuf_release(m);
 	}
 }
 
@@ -1154,7 +1229,7 @@ xn_release_rx_bufs(struct netfront_rxq *rxq)
 static void
 xn_rxeof(struct netfront_rxq *rxq)
 {
-	struct ifnet *ifp;
+	if_t ifp;
 	struct netfront_info *np = rxq->info;
 #if (defined(INET) || defined(INET6))
 	struct lro_ctrl *lro = &rxq->lro;
@@ -1239,16 +1314,16 @@ xn_rxeof(struct netfront_rxq *rxq)
 		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 #if (defined(INET) || defined(INET6))
 		/* Use LRO if possible */
-		if ((ifp->if_capenable & IFCAP_LRO) == 0 ||
+		if ((if_getcapenable(ifp) & IFCAP_LRO) == 0 ||
 		    lro->lro_cnt == 0 || tcp_lro_rx(lro, m, 0)) {
 			/*
 			 * If LRO fails, pass up to the stack
 			 * directly.
 			 */
-			(*ifp->if_input)(ifp, m);
+			if_input(ifp, m);
 		}
 #else
-		(*ifp->if_input)(ifp, m);
+		if_input(ifp, m);
 #endif
 	}
 
@@ -1265,7 +1340,7 @@ xn_txeof(struct netfront_txq *txq)
 {
 	RING_IDX i, prod;
 	unsigned short id;
-	struct ifnet *ifp;
+	if_t ifp;
 	netif_tx_response_t *txr;
 	struct mbuf *m;
 	struct netfront_info *np = txq->info;
@@ -1311,9 +1386,9 @@ xn_txeof(struct netfront_txq *txq)
 			txq->mbufs[id] = NULL;
 			add_id_to_freelist(txq->mbufs, id);
 			txq->mbufs_cnt--;
-			m_free(m);
+			mbuf_release(m);
 			/* Only mark the txq active if we've freed up at least one slot to try */
-			ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
+			if_setdrvflagbits(ifp, 0, IFF_DRV_OACTIVE);
 		}
 		txq->ring.rsp_cons = prod;
 
@@ -1508,68 +1583,56 @@ next_skip_queue:
 }
 
 /**
- * \brief Count the number of fragments in an mbuf chain.
- *
- * Surprisingly, there isn't an M* macro for this.
- */
-static inline int
-xn_count_frags(struct mbuf *m)
-{
-	int nfrags;
-
-	for (nfrags = 0; m != NULL; m = m->m_next)
-		nfrags++;
-
-	return (nfrags);
-}
-
-/**
  * Given an mbuf chain, make sure we have enough room and then push
  * it onto the transmit ring.
  */
 static int
 xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 {
-	struct mbuf *m;
 	struct netfront_info *np = txq->info;
-	struct ifnet *ifp = np->xn_ifp;
-	u_int nfrags;
-	int otherend_id;
+	if_t ifp = np->xn_ifp;
+	int otherend_id, error, nfrags;
+	bus_dma_segment_t *segs = txq->segs;
+	struct mbuf_xennet *tag;
+	bus_dmamap_t map;
+	unsigned int i;
 
-	/**
-	 * Defragment the mbuf if necessary.
-	 */
-	nfrags = xn_count_frags(m_head);
+	KASSERT(!SLIST_EMPTY(&txq->tags), ("no tags available"));
+	tag = SLIST_FIRST(&txq->tags);
+	SLIST_REMOVE_HEAD(&txq->tags, next);
+	KASSERT(tag->count == 0, ("tag already in-use"));
+	map = tag->dma_map;
+	error = bus_dmamap_load_mbuf_sg(np->dma_tag, map, m_head, segs,
+	    &nfrags, 0);
+	if (error == EFBIG || nfrags > np->maxfrags) {
+		struct mbuf *m;
 
-	/*
-	 * Check to see whether this request is longer than netback
-	 * can handle, and try to defrag it.
-	 */
-	/**
-	 * It is a bit lame, but the netback driver in Linux can't
-	 * deal with nfrags > MAX_TX_REQ_FRAGS, which is a quirk of
-	 * the Linux network stack.
-	 */
-	if (nfrags > np->maxfrags) {
+		bus_dmamap_unload(np->dma_tag, map);
 		m = m_defrag(m_head, M_NOWAIT);
 		if (!m) {
 			/*
 			 * Defrag failed, so free the mbuf and
 			 * therefore drop the packet.
 			 */
+			SLIST_INSERT_HEAD(&txq->tags, tag, next);
 			m_freem(m_head);
 			return (EMSGSIZE);
 		}
 		m_head = m;
+		error = bus_dmamap_load_mbuf_sg(np->dma_tag, map, m_head, segs,
+		    &nfrags, 0);
+		if (error != 0 || nfrags > np->maxfrags) {
+			bus_dmamap_unload(np->dma_tag, map);
+			SLIST_INSERT_HEAD(&txq->tags, tag, next);
+			m_freem(m_head);
+			return (error ?: EFBIG);
+		}
+	} else if (error != 0) {
+		SLIST_INSERT_HEAD(&txq->tags, tag, next);
+		m_freem(m_head);
+		return (error);
 	}
 
-	/* Determine how many fragments now exist */
-	nfrags = xn_count_frags(m_head);
-
-	/*
-	 * Check to see whether the defragmented packet has too many
-	 * segments for the Linux netback driver.
-	 */
 	/**
 	 * The FreeBSD TCP stack, with TSO enabled, can produce a chain
 	 * of mbufs longer than Linux can handle.  Make sure we don't
@@ -1583,6 +1646,8 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 		       "won't be able to handle it, dropping\n",
 		       __func__, nfrags, MAX_TX_REQ_FRAGS);
 #endif
+		SLIST_INSERT_HEAD(&txq->tags, tag, next);
+		bus_dmamap_unload(np->dma_tag, map);
 		m_freem(m_head);
 		return (EMSGSIZE);
 	}
@@ -1604,9 +1669,9 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 	 * the fragment pointers. Stop when we run out
 	 * of fragments or hit the end of the mbuf chain.
 	 */
-	m = m_head;
 	otherend_id = xenbus_get_otherend_id(np->xbdev);
-	for (m = m_head; m; m = m->m_next) {
+	m_tag_prepend(m_head, &tag->tag);
+	for (i = 0; i < nfrags; i++) {
 		netif_tx_request_t *tx;
 		uintptr_t id;
 		grant_ref_t ref;
@@ -1621,17 +1686,20 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 		if (txq->mbufs_cnt > NET_TX_RING_SIZE)
 			panic("%s: tx_chain_cnt must be <= NET_TX_RING_SIZE\n",
 			    __func__);
-		txq->mbufs[id] = m;
+		mbuf_grab(m_head);
+		txq->mbufs[id] = m_head;
 		tx->id = id;
 		ref = gnttab_claim_grant_reference(&txq->gref_head);
 		KASSERT((short)ref >= 0, ("Negative ref"));
-		mfn = virt_to_mfn(mtod(m, vm_offset_t));
+		mfn = atop(segs[i].ds_addr);
 		gnttab_grant_foreign_access_ref(ref, otherend_id,
 		    mfn, GNTMAP_readonly);
 		tx->gref = txq->grant_ref[id] = ref;
-		tx->offset = mtod(m, vm_offset_t) & (PAGE_SIZE - 1);
+		tx->offset = segs[i].ds_addr & PAGE_MASK;
+		KASSERT(tx->offset + segs[i].ds_len <= PAGE_SIZE,
+		    ("mbuf segment crosses a page boundary"));
 		tx->flags = 0;
-		if (m == m_head) {
+		if (i == 0) {
 			/*
 			 * The first fragment has the entire packet
 			 * size, subsequent fragments have just the
@@ -1640,7 +1708,7 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 			 * subtracting the sizes of the other
 			 * fragments.
 			 */
-			tx->size = m->m_pkthdr.len;
+			tx->size = m_head->m_pkthdr.len;
 
 			/*
 			 * The first fragment contains the checksum flags
@@ -1654,12 +1722,12 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 			 * so we have to test for CSUM_TSO
 			 * explicitly.
 			 */
-			if (m->m_pkthdr.csum_flags
+			if (m_head->m_pkthdr.csum_flags
 			    & (CSUM_DELAY_DATA | CSUM_TSO)) {
 				tx->flags |= (NETTXF_csum_blank
 				    | NETTXF_data_validated);
 			}
-			if (m->m_pkthdr.csum_flags & CSUM_TSO) {
+			if (m_head->m_pkthdr.csum_flags & CSUM_TSO) {
 				struct netif_extra_info *gso =
 					(struct netif_extra_info *)
 					RING_GET_REQUEST(&txq->ring,
@@ -1667,7 +1735,7 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 
 				tx->flags |= NETTXF_extra_info;
 
-				gso->u.gso.size = m->m_pkthdr.tso_segsz;
+				gso->u.gso.size = m_head->m_pkthdr.tso_segsz;
 				gso->u.gso.type =
 					XEN_NETIF_GSO_TYPE_TCPV4;
 				gso->u.gso.pad = 0;
@@ -1677,13 +1745,14 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 				gso->flags = 0;
 			}
 		} else {
-			tx->size = m->m_len;
+			tx->size = segs[i].ds_len;
 		}
-		if (m->m_next)
+		if (i != nfrags - 1)
 			tx->flags |= NETTXF_more_data;
 
 		txq->ring.req_prod_pvt++;
 	}
+	bus_dmamap_sync(np->dma_tag, map, BUS_DMASYNC_PREWRITE);
 	BPF_MTAP(ifp, m_head);
 
 	if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
@@ -1700,7 +1769,7 @@ xn_assemble_tx_request(struct netfront_txq *txq, struct mbuf *m_head)
 static void
 xn_ifinit_locked(struct netfront_info *np)
 {
-	struct ifnet *ifp;
+	if_t ifp;
 	int i;
 	struct netfront_rxq *rxq;
 
@@ -1708,7 +1777,7 @@ xn_ifinit_locked(struct netfront_info *np)
 
 	ifp = np->xn_ifp;
 
-	if (ifp->if_drv_flags & IFF_DRV_RUNNING || !netfront_carrier_ok(np))
+	if (if_getdrvflags(ifp) & IFF_DRV_RUNNING || !netfront_carrier_ok(np))
 		return;
 
 	xn_stop(np);
@@ -1723,8 +1792,8 @@ xn_ifinit_locked(struct netfront_info *np)
 		XN_RX_UNLOCK(rxq);
 	}
 
-	ifp->if_drv_flags |= IFF_DRV_RUNNING;
-	ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
+	if_setdrvflagbits(ifp, IFF_DRV_RUNNING, 0);
+	if_setdrvflagbits(ifp, 0, IFF_DRV_OACTIVE);
 	if_link_state_change(ifp, LINK_STATE_UP);
 }
 
@@ -1739,9 +1808,9 @@ xn_ifinit(void *xsc)
 }
 
 static int
-xn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
+xn_ioctl(if_t ifp, u_long cmd, caddr_t data)
 {
-	struct netfront_info *sc = ifp->if_softc;
+	struct netfront_info *sc = if_getsoftc(ifp);
 	struct ifreq *ifr = (struct ifreq *) data;
 	device_t dev;
 #ifdef INET
@@ -1756,8 +1825,8 @@ xn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 #ifdef INET
 		XN_LOCK(sc);
 		if (ifa->ifa_addr->sa_family == AF_INET) {
-			ifp->if_flags |= IFF_UP;
-			if (!(ifp->if_drv_flags & IFF_DRV_RUNNING))
+			if_setflagbits(ifp, IFF_UP, 0);
+			if (!(if_getdrvflags(ifp) & IFF_DRV_RUNNING))
 				xn_ifinit_locked(sc);
 			arp_ifinit(ifp, ifa);
 			XN_UNLOCK(sc);
@@ -1770,16 +1839,16 @@ xn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 #endif
 		break;
 	case SIOCSIFMTU:
-		if (ifp->if_mtu == ifr->ifr_mtu)
+		if (if_getmtu(ifp) == ifr->ifr_mtu)
 			break;
 
-		ifp->if_mtu = ifr->ifr_mtu;
-		ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
+		if_setmtu(ifp, ifr->ifr_mtu);
+		if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
 		xn_ifinit(sc);
 		break;
 	case SIOCSIFFLAGS:
 		XN_LOCK(sc);
-		if (ifp->if_flags & IFF_UP) {
+		if (if_getflags(ifp) & IFF_UP) {
 			/*
 			 * If only the state of the PROMISC flag changed,
 			 * then just use the 'set promisc mode' command
@@ -1790,24 +1859,24 @@ xn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			 */
 			xn_ifinit_locked(sc);
 		} else {
-			if (ifp->if_drv_flags & IFF_DRV_RUNNING) {
+			if (if_getdrvflags(ifp) & IFF_DRV_RUNNING) {
 				xn_stop(sc);
 			}
 		}
-		sc->xn_if_flags = ifp->if_flags;
+		sc->xn_if_flags = if_getflags(ifp);
 		XN_UNLOCK(sc);
 		break;
 	case SIOCSIFCAP:
-		mask = ifr->ifr_reqcap ^ ifp->if_capenable;
+		mask = ifr->ifr_reqcap ^ if_getcapenable(ifp);
 		reinit = 0;
 
 		if (mask & IFCAP_TXCSUM) {
-			ifp->if_capenable ^= IFCAP_TXCSUM;
-			ifp->if_hwassist ^= XN_CSUM_FEATURES;
+			if_togglecapenable(ifp, IFCAP_TXCSUM);
+			if_togglehwassist(ifp, XN_CSUM_FEATURES);
 		}
 		if (mask & IFCAP_TSO4) {
-			ifp->if_capenable ^= IFCAP_TSO4;
-			ifp->if_hwassist ^= CSUM_TSO;
+			if_togglecapenable(ifp, IFCAP_TSO4);
+			if_togglehwassist(ifp, CSUM_TSO);
 		}
 
 		if (mask & (IFCAP_RXCSUM | IFCAP_LRO)) {
@@ -1815,9 +1884,9 @@ xn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			reinit = 1;
 
 			if (mask & IFCAP_RXCSUM)
-				ifp->if_capenable ^= IFCAP_RXCSUM;
+				if_togglecapenable(ifp, IFCAP_RXCSUM);
 			if (mask & IFCAP_LRO)
-				ifp->if_capenable ^= IFCAP_LRO;
+				if_togglecapenable(ifp, IFCAP_LRO);
 		}
 
 		if (reinit == 0)
@@ -1875,13 +1944,13 @@ xn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 static void
 xn_stop(struct netfront_info *sc)
 {
-	struct ifnet *ifp;
+	if_t ifp;
 
 	XN_LOCK_ASSERT(sc);
 
 	ifp = sc->xn_ifp;
 
-	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
+	if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 	if_link_state_change(ifp, LINK_STATE_DOWN);
 }
 
@@ -2009,9 +2078,9 @@ xn_query_features(struct netfront_info *np)
 		"feature-gso-tcpv4", NULL, "%d", &val) != 0)
 		val = 0;
 
-	np->xn_ifp->if_capabilities &= ~(IFCAP_TSO4|IFCAP_LRO);
+	if_setcapabilitiesbit(np->xn_ifp, 0, IFCAP_TSO4 | IFCAP_LRO);
 	if (val) {
-		np->xn_ifp->if_capabilities |= IFCAP_TSO4|IFCAP_LRO;
+		if_setcapabilitiesbit(np->xn_ifp, IFCAP_TSO4 | IFCAP_LRO, 0);
 		printf(" feature-gso-tcp4");
 	}
 
@@ -2023,9 +2092,9 @@ xn_query_features(struct netfront_info *np)
 		"feature-no-csum-offload", NULL, "%d", &val) != 0)
 		val = 0;
 
-	np->xn_ifp->if_capabilities |= IFCAP_HWCSUM;
+	if_setcapabilitiesbit(np->xn_ifp, IFCAP_HWCSUM, 0);
 	if (val) {
-		np->xn_ifp->if_capabilities &= ~(IFCAP_HWCSUM);
+		if_setcapabilitiesbit(np->xn_ifp, 0, IFCAP_HWCSUM);
 		printf(" feature-no-csum-offload");
 	}
 
@@ -2039,49 +2108,50 @@ xn_configure_features(struct netfront_info *np)
 #if (defined(INET) || defined(INET6))
 	int i;
 #endif
-	struct ifnet *ifp;
+	if_t ifp;
 
 	ifp = np->xn_ifp;
 	err = 0;
 
-	if ((ifp->if_capenable & ifp->if_capabilities) == ifp->if_capenable) {
+	if ((if_getcapenable(ifp) & if_getcapabilities(ifp)) == if_getcapenable(ifp)) {
 		/* Current options are available, no need to do anything. */
 		return (0);
 	}
 
 	/* Try to preserve as many options as possible. */
-	cap_enabled = ifp->if_capenable;
-	ifp->if_capenable = ifp->if_hwassist = 0;
+	cap_enabled = if_getcapenable(ifp);
+	if_setcapenable(ifp, 0);
+	if_sethwassist(ifp, 0);
 
 #if (defined(INET) || defined(INET6))
 	if ((cap_enabled & IFCAP_LRO) != 0)
 		for (i = 0; i < np->num_queues; i++)
 			tcp_lro_free(&np->rxq[i].lro);
 	if (xn_enable_lro &&
-	    (ifp->if_capabilities & cap_enabled & IFCAP_LRO) != 0) {
-	    	ifp->if_capenable |= IFCAP_LRO;
+	    (if_getcapabilities(ifp) & cap_enabled & IFCAP_LRO) != 0) {
+	    	if_setcapenablebit(ifp, IFCAP_LRO, 0);
 		for (i = 0; i < np->num_queues; i++) {
 			err = tcp_lro_init(&np->rxq[i].lro);
 			if (err != 0) {
 				device_printf(np->xbdev,
 				    "LRO initialization failed\n");
-				ifp->if_capenable &= ~IFCAP_LRO;
+				if_setcapenablebit(ifp, 0, IFCAP_LRO);
 				break;
 			}
 			np->rxq[i].lro.ifp = ifp;
 		}
 	}
-	if ((ifp->if_capabilities & cap_enabled & IFCAP_TSO4) != 0) {
-		ifp->if_capenable |= IFCAP_TSO4;
-		ifp->if_hwassist |= CSUM_TSO;
+	if ((if_getcapabilities(ifp) & cap_enabled & IFCAP_TSO4) != 0) {
+		if_setcapenablebit(ifp, IFCAP_TSO4, 0);
+		if_sethwassistbits(ifp, CSUM_TSO, 0);
 	}
 #endif
-	if ((ifp->if_capabilities & cap_enabled & IFCAP_TXCSUM) != 0) {
-		ifp->if_capenable |= IFCAP_TXCSUM;
-		ifp->if_hwassist |= XN_CSUM_FEATURES;
+	if ((if_getcapabilities(ifp) & cap_enabled & IFCAP_TXCSUM) != 0) {
+		if_setcapenablebit(ifp, IFCAP_TXCSUM, 0);
+		if_sethwassistbits(ifp, XN_CSUM_FEATURES, 0);
 	}
-	if ((ifp->if_capabilities & cap_enabled & IFCAP_RXCSUM) != 0)
-		ifp->if_capenable |= IFCAP_RXCSUM;
+	if ((if_getcapabilities(ifp) & cap_enabled & IFCAP_RXCSUM) != 0)
+		if_setcapenablebit(ifp, IFCAP_RXCSUM, 0);
 
 	return (err);
 }
@@ -2090,7 +2160,7 @@ static int
 xn_txq_mq_start_locked(struct netfront_txq *txq, struct mbuf *m)
 {
 	struct netfront_info *np;
-	struct ifnet *ifp;
+	if_t ifp;
 	struct buf_ring *br;
 	int error, notify;
 
@@ -2101,7 +2171,7 @@ xn_txq_mq_start_locked(struct netfront_txq *txq, struct mbuf *m)
 
 	XN_TX_LOCK_ASSERT(txq);
 
-	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
+	if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0 ||
 	    !netfront_carrier_ok(np)) {
 		if (m != NULL)
 			error = drbr_enqueue(ifp, br, m);
@@ -2141,13 +2211,13 @@ xn_txq_mq_start_locked(struct netfront_txq *txq, struct mbuf *m)
 }
 
 static int
-xn_txq_mq_start(struct ifnet *ifp, struct mbuf *m)
+xn_txq_mq_start(if_t ifp, struct mbuf *m)
 {
 	struct netfront_info *np;
 	struct netfront_txq *txq;
 	int i, npairs, error;
 
-	np = ifp->if_softc;
+	np = if_getsoftc(ifp);
 	npairs = np->num_queues;
 
 	if (!netfront_carrier_ok(np))
@@ -2175,14 +2245,14 @@ xn_txq_mq_start(struct ifnet *ifp, struct mbuf *m)
 }
 
 static void
-xn_qflush(struct ifnet *ifp)
+xn_qflush(if_t ifp)
 {
 	struct netfront_info *np;
 	struct netfront_txq *txq;
 	struct mbuf *m;
 	int i;
 
-	np = ifp->if_softc;
+	np = if_getsoftc(ifp);
 
 	for (i = 0; i < np->num_queues; i++) {
 		txq = &np->txq[i];
@@ -2205,7 +2275,7 @@ create_netdev(device_t dev)
 {
 	struct netfront_info *np;
 	int err;
-	struct ifnet *ifp;
+	if_t ifp;
 
 	np = device_get_softc(dev);
 
@@ -2223,28 +2293,42 @@ create_netdev(device_t dev)
 
 	/* Set up ifnet structure */
 	ifp = np->xn_ifp = if_alloc(IFT_ETHER);
-    	ifp->if_softc = np;
-    	if_initname(ifp, "xn",  device_get_unit(dev));
-    	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
-    	ifp->if_ioctl = xn_ioctl;
+	if_setsoftc(ifp, np);
+	if_initname(ifp, "xn",  device_get_unit(dev));
+	if_setflags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
+	if_setioctlfn(ifp, xn_ioctl);
 
-	ifp->if_transmit = xn_txq_mq_start;
-	ifp->if_qflush = xn_qflush;
+	if_settransmitfn(ifp, xn_txq_mq_start);
+	if_setqflushfn(ifp, xn_qflush);
 
-    	ifp->if_init = xn_ifinit;
+	if_setinitfn(ifp, xn_ifinit);
 
-    	ifp->if_hwassist = XN_CSUM_FEATURES;
+	if_sethwassist(ifp, XN_CSUM_FEATURES);
 	/* Enable all supported features at device creation. */
-	ifp->if_capenable = ifp->if_capabilities =
-	    IFCAP_HWCSUM|IFCAP_TSO4|IFCAP_LRO;
-	ifp->if_hw_tsomax = 65536 - (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN);
-	ifp->if_hw_tsomaxsegcount = MAX_TX_REQ_FRAGS;
-	ifp->if_hw_tsomaxsegsize = PAGE_SIZE;
+	if_setcapabilities(ifp, IFCAP_HWCSUM|IFCAP_TSO4|IFCAP_LRO);
+	if_setcapenable(ifp, if_getcapabilities(ifp));
 
-    	ether_ifattach(ifp, np->mac);
+	if_sethwtsomax(ifp, 65536 - (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN));
+	if_sethwtsomaxsegcount(ifp, MAX_TX_REQ_FRAGS);
+	if_sethwtsomaxsegsize(ifp, PAGE_SIZE);
+
+	ether_ifattach(ifp, np->mac);
 	netfront_carrier_off(np);
 
-	return (0);
+	err = bus_dma_tag_create(
+	    bus_get_dma_tag(dev),		/* parent */
+	    1, PAGE_SIZE,			/* algnmnt, boundary */
+	    BUS_SPACE_MAXADDR,			/* lowaddr */
+	    BUS_SPACE_MAXADDR,			/* highaddr */
+	    NULL, NULL,				/* filter, filterarg */
+	    PAGE_SIZE * MAX_TX_REQ_FRAGS,	/* max request size */
+	    MAX_TX_REQ_FRAGS,			/* max segments */
+	    PAGE_SIZE,				/* maxsegsize */
+	    BUS_DMA_ALLOCNOW,			/* flags */
+	    NULL, NULL,				/* lockfunc, lockarg */
+	    &np->dma_tag);
+
+	return (err);
 
 error:
 	KASSERT(err != 0, ("Error path with no error code specified"));
@@ -2277,6 +2361,7 @@ netif_free(struct netfront_info *np)
 	if_free(np->xn_ifp);
 	np->xn_ifp = NULL;
 	ifmedia_removeall(&np->sc_media);
+	bus_dma_tag_destroy(np->dma_tag);
 }
 
 static void
@@ -2301,14 +2386,14 @@ netif_disconnect_backend(struct netfront_info *np)
 }
 
 static int
-xn_ifmedia_upd(struct ifnet *ifp)
+xn_ifmedia_upd(if_t ifp)
 {
 
 	return (0);
 }
 
 static void
-xn_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
+xn_ifmedia_sts(if_t ifp, struct ifmediareq *ifmr)
 {
 
 	ifmr->ifm_status = IFM_AVALID|IFM_ACTIVE;

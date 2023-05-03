@@ -68,13 +68,17 @@ INCS+=		stdlib.h
 SRCS+=		reallocarray.c
 .endif
 
+.if exists(${HOST_INCLUDE_ROOT}/sys/stat.h)
 _WITH_UTIMENS!= grep -c utimensat ${HOST_INCLUDE_ROOT}/sys/stat.h || true
+.else
+_WITH_UTIMENS= 0
+.endif
 .if ${_WITH_UTIMENS} == 0
 SYSINCS+=	stat.h
 SRCS+=		futimens.c utimensat.c
 .endif
 
-_WITH_EXPLICIT_BZERO!= grep -c explicit_bzero ${HOST_INCLUDE_ROOT}/strings.h || true
+_WITH_EXPLICIT_BZERO!= cat ${HOST_INCLUDE_ROOT}/strings.h ${HOST_INCLUDE_ROOT}/string.h | grep -c explicit_bzero || true
 .if ${_WITH_EXPLICIT_BZERO} == 0
 # .PATH: ${SRCTOP}/sys/libkern
 # Adding sys/libkern to .PATH breaks building the cross-build compat library
@@ -121,7 +125,11 @@ CHACHA20INCSDIR=	${INCLUDEDIR}/crypto/chacha20
 CHACHA20INCS+=	${SRCTOP}/sys/crypto/chacha20/_chacha.h \
 	${SRCTOP}/sys/crypto/chacha20/chacha.h
 
+.if ${MACHINE} == "host"
+_host_arch= ${_HOST_ARCH}
+.else
 _host_arch=${MACHINE}
+.endif
 .if ${_host_arch} == "x86_64"
 # bmake on Linux/mac often prints that instead of amd64
 _host_arch=amd64
@@ -150,17 +158,17 @@ INCS+=	${SRCTOP}/include/nlist.h
 SYSINCS+=	${SRCTOP}/sys/sys/imgact_aout.h
 SYSINCS+=	${SRCTOP}/sys/sys/nlist_aout.h
 
+# macOS's bitstring lacks FreeBSD-specific additions used by makefs's ZFS code
+# and Linux doesn't have it at all.  Older FreeBSD versions lack recent
+# additions.
+INCS+=	${SRCTOP}/include/bitstring.h
+SYSINCS+=	${SRCTOP}/sys/sys/bitstring.h
 
 .if ${.MAKE.OS} != "FreeBSD"
 .PATH: ${.CURDIR}/cross-build
 
 # Needed by our sys/types.h wrapper
 SYSINCS+=	${SRCTOP}/sys/sys/bitcount.h
-
-# macOS's bitstring lacks FreeBSD-specific additions used by makefs's ZFS code
-# and Linux doesn't have it at all.
-INCS+=	${SRCTOP}/include/bitstring.h
-SYSINCS+=	${SRCTOP}/sys/sys/bitstring.h
 
 # dbopen() behaves differently on Linux and FreeBSD so we ensure that we
 # bootstrap the FreeBSD db code. The cross-build headers #define dbopen() to
@@ -200,7 +208,14 @@ CFLAGS.closefrom.c+=	-DSTDC_HEADERS -DHAVE_SYS_DIR_H -DHAVE_DIRENT_H \
 SRCS+=	progname.c
 # Stub implementations of fflagstostr/strtofflags
 SRCS+=	fflags.c
-.endif
+
+.endif # ${MAKE.OS} == "Linux"
+
+.if ${.MAKE.OS} == "Darwin"
+# Standalone implementation of secure_getenv(), not available on MacOS.
+SRCS+=	secure_getenv.c
+.endif # ${MAKE.OS} == "Darwin"
+
 # Provide the same arc4random implementation on Linux/macOS
 CFLAGS.arc4random.c+=	-I${SRCTOP}/sys/crypto/chacha20 -D__isthreaded=1
 SRCS+=	arc4random.c arc4random_uniform.c
@@ -223,7 +238,7 @@ subr_capability.c: ${SRCTOP}/sys/kern/subr_capability.c
 	cp ${.ALLSRC} ${.TARGET}
 SRCS+=	subr_capability.c
 CLEANFILES+=	subr_capability.c
-.endif
+.endif # ${MAKE.OS} != "FreeBSD"
 
 CASPERINC+=	${SRCTOP}/lib/libcasper/services/cap_fileargs/cap_fileargs.h
 CASPERINC+=	${SRCTOP}/lib/libcasper/services/cap_net/cap_net.h
@@ -350,7 +365,6 @@ host-symlinks:
 # yet (this happens if we are crossbuilding from Linux/Mac).
 INSTALLDIR_LIST= \
 	bin \
-	lib/casper \
 	lib/geom \
 	usr/include/casper \
 	usr/include/private/ucl \

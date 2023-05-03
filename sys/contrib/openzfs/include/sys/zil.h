@@ -164,7 +164,10 @@ typedef enum zil_create {
 #define	TX_MKDIR_ACL_ATTR	19	/* mkdir with ACL + attrs */
 #define	TX_WRITE2		20	/* dmu_sync EALREADY write */
 #define	TX_SETSAXATTR		21	/* Set sa xattrs on file */
-#define	TX_MAX_TYPE		22	/* Max transaction type */
+#define	TX_RENAME_EXCHANGE	22	/* Atomic swap via renameat2 */
+#define	TX_RENAME_WHITEOUT	23	/* Atomic whiteout via renameat2 */
+#define	TX_CLONE_RANGE		24	/* Clone a file range */
+#define	TX_MAX_TYPE		25	/* Max transaction type */
 
 /*
  * The transactions for mkdir, symlink, remove, rmdir, link, and rename
@@ -174,9 +177,9 @@ typedef enum zil_create {
 #define	TX_CI	((uint64_t)0x1 << 63) /* case-insensitive behavior requested */
 
 /*
- * Transactions for write, truncate, setattr, acl_v0, and acl can be logged
- * out of order.  For convenience in the code, all such records must have
- * lr_foid at the same offset.
+ * Transactions for operations below can be logged out of order.
+ * For convenience in the code, all such records must have lr_foid
+ * at the same offset.
  */
 #define	TX_OOO(txtype)			\
 	((txtype) == TX_WRITE ||	\
@@ -185,7 +188,8 @@ typedef enum zil_create {
 	(txtype) == TX_ACL_V0 ||	\
 	(txtype) == TX_ACL ||		\
 	(txtype) == TX_WRITE2 ||	\
-	(txtype) == TX_SETSAXATTR)
+	(txtype) == TX_SETSAXATTR ||	\
+	(txtype) == TX_CLONE_RANGE)
 
 /*
  * The number of dnode slots consumed by the object is stored in the 8
@@ -318,6 +322,19 @@ typedef struct {
 } lr_rename_t;
 
 typedef struct {
+	lr_rename_t	lr_rename;	/* common rename portion */
+	/* members related to the whiteout file (based on lr_create_t) */
+	uint64_t	lr_wfoid;	/* obj id of the new whiteout file */
+	uint64_t	lr_wmode;	/* mode of object */
+	uint64_t	lr_wuid;	/* uid of whiteout */
+	uint64_t	lr_wgid;	/* gid of whiteout */
+	uint64_t	lr_wgen;	/* generation (txg of creation) */
+	uint64_t	lr_wcrtime[2];	/* creation time */
+	uint64_t	lr_wrdev;	/* always makedev(0, 0) */
+	/* 2 strings: names of source and destination follow this */
+} lr_rename_whiteout_t;
+
+typedef struct {
 	lr_t		lr_common;	/* common portion of log record */
 	uint64_t	lr_foid;	/* file object to write */
 	uint64_t	lr_offset;	/* offset to write to */
@@ -371,6 +388,17 @@ typedef struct {
 	uint64_t	lr_acl_flags;	/* ACL flags */
 	/* lr_acl_bytes number of variable sized ace's follows */
 } lr_acl_t;
+
+typedef struct {
+	lr_t		lr_common;	/* common portion of log record */
+	uint64_t	lr_foid;	/* file object to clone into */
+	uint64_t	lr_offset;	/* offset to clone to */
+	uint64_t	lr_length;	/* length of the blocks to clone */
+	uint64_t	lr_blksz;	/* file's block size */
+	uint64_t	lr_nbps;	/* number of block pointers */
+	blkptr_t	lr_bps[];
+	/* block pointers of the blocks to clone follows */
+} lr_clone_range_t;
 
 /*
  * ZIL structure definitions, interface function prototype and globals.
@@ -524,10 +552,10 @@ extern zilog_t	*zil_open(objset_t *os, zil_get_data_t *get_data,
     zil_sums_t *zil_sums);
 extern void	zil_close(zilog_t *zilog);
 
-extern void	zil_replay(objset_t *os, void *arg,
+extern boolean_t zil_replay(objset_t *os, void *arg,
     zil_replay_func_t *const replay_func[TX_MAX_TYPE]);
 extern boolean_t zil_replaying(zilog_t *zilog, dmu_tx_t *tx);
-extern void	zil_destroy(zilog_t *zilog, boolean_t keep_first);
+extern boolean_t zil_destroy(zilog_t *zilog, boolean_t keep_first);
 extern void	zil_destroy_sync(zilog_t *zilog, dmu_tx_t *tx);
 
 extern itx_t	*zil_itx_create(uint64_t txtype, size_t lrsize);
@@ -559,7 +587,7 @@ extern void	zil_set_sync(zilog_t *zilog, uint64_t syncval);
 extern void	zil_set_logbias(zilog_t *zilog, uint64_t slogval);
 
 extern uint64_t	zil_max_copied_data(zilog_t *zilog);
-extern uint64_t	zil_max_log_data(zilog_t *zilog);
+extern uint64_t	zil_max_log_data(zilog_t *zilog, size_t hdrsize);
 
 extern void zil_sums_init(zil_sums_t *zs);
 extern void zil_sums_fini(zil_sums_t *zs);

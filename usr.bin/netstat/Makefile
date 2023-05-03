@@ -63,4 +63,10 @@ LIBADD+=	netgraph
 CFLAGS+=-DNETGRAPH
 .endif
 
+.if ${MK_NETLINK_SUPPORT} != "no"
+SRCS+=	route_netlink.c
+.else
+CFLAGS+=-DWITHOUT_NETLINK
+.endif
+
 .include <bsd.prog.mk>

@@ -34,6 +34,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/asan.h>
 #include <sys/buf.h>
 #include <sys/bus.h>
 #include <sys/cons.h>
@@ -78,6 +79,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/armreg.h>
 #include <machine/cpu.h>
 #include <machine/debug_monitor.h>
+#include <machine/hypervisor.h>
 #include <machine/kdb.h>
 #include <machine/machdep.h>
 #include <machine/metadata.h>
@@ -99,6 +101,14 @@ __FBSDID("$FreeBSD$");
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 #endif
+
+#include <dev/smbios/smbios.h>
+
+_Static_assert(sizeof(struct pcb) == 1248, "struct pcb is incorrect size");
+_Static_assert(offsetof(struct pcb, pcb_fpusaved) == 136,
+    "pcb_fpusaved changed offset");
+_Static_assert(offsetof(struct pcb, pcb_fpustate) == 192,
+    "pcb_fpustate changed offset");
 
 enum arm64_bus arm64_bus_method = ARM64_BUS_NONE;
 
@@ -122,6 +132,7 @@ static struct trapframe proc0_tf;
 int early_boot = 1;
 int cold = 1;
 static int boot_el;
+static uint64_t hcr_el2;
 
 struct kva_md_info kmi;
 
@@ -189,7 +200,11 @@ bool
 has_hyp(void)
 {
 
-	return (boot_el == 2);
+	/*
+	 * XXX The E2H check is wrong, but it's close enough for now.  Needs to
+	 * be re-evaluated once we're running regularly in EL2.
+	 */
+	return (boot_el == 2 && (hcr_el2 & HCR_E2H) == 0);
 }
 
 static void
@@ -300,8 +315,7 @@ cpu_pcpu_init(struct pcpu *pcpu, int cpuid, size_t size)
 {
 
 	pcpu->pc_acpi_id = 0xffffffff;
-	pcpu->pc_mpidr_low = 0xffffffff;
-	pcpu->pc_mpidr_high = 0xffffffff;
+	pcpu->pc_mpidr = UINT64_MAX;
 }
 
 void
@@ -348,10 +362,10 @@ makectx(struct trapframe *tf, struct pcb *pcb)
 	int i;
 
 	for (i = 0; i < nitems(pcb->pcb_x); i++)
-		pcb->pcb_x[i] = tf->tf_x[i];
+		pcb->pcb_x[i] = tf->tf_x[i + PCB_X_START];
 
-	/* NB: pcb_lr is the PC, see PC_REGS() in db_machdep.h */
-	pcb->pcb_lr = tf->tf_elr;
+	/* NB: pcb_x[PCB_LR] is the PC, see PC_REGS() in db_machdep.h */
+	pcb->pcb_x[PCB_LR] = tf->tf_elr;
 	pcb->pcb_sp = tf->tf_sp;
 }
 
@@ -365,12 +379,13 @@ init_proc0(vm_offset_t kstack)
 
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
-	thread0.td_kstack_pages = KSTACK_PAGES;
+	thread0.td_kstack_pages = kstack_pages;
 #if defined(PERTHREAD_SSP)
 	thread0.td_md.md_canary = boot_canary;
 #endif
 	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
 	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
+	thread0.td_pcb->pcb_flags = 0;
 	thread0.td_pcb->pcb_fpflags = 0;
 	thread0.td_pcb->pcb_fpusaved = &thread0.td_pcb->pcb_fpustate;
 	thread0.td_pcb->pcb_vfpcpu = UINT_MAX;
@@ -421,10 +436,10 @@ arm64_get_writable_addr(vm_offset_t addr, vm_offset_t *out)
 	return (false);
 }
 
-typedef void (*efi_map_entry_cb)(struct efi_md *);
+typedef void (*efi_map_entry_cb)(struct efi_md *, void *argp);
 
 static void
-foreach_efi_map_entry(struct efi_map_header *efihdr, efi_map_entry_cb cb)
+foreach_efi_map_entry(struct efi_map_header *efihdr, efi_map_entry_cb cb, void *argp)
 {
 	struct efi_md *map, *p;
 	size_t efisz;
@@ -435,7 +450,7 @@ foreach_efi_map_entry(struct efi_map_header *efihdr, efi_map_entry_cb cb)
 	 * Boot Services API.
 	 */
 	efisz = (sizeof(struct efi_map_header) + 0xf) & ~0xf;
-	map = (struct efi_md *)((uint8_t *)efihdr + efisz); 
+	map = (struct efi_md *)((uint8_t *)efihdr + efisz);
 
 	if (efihdr->descriptor_size == 0)
 		return;
@@ -443,40 +458,29 @@ foreach_efi_map_entry(struct efi_map_header *efihdr, efi_map_entry_cb cb)
 
 	for (i = 0, p = map; i < ndesc; i++,
 	    p = efi_next_descriptor(p, efihdr->descriptor_size)) {
-		cb(p);
+		cb(p, argp);
 	}
 }
 
+/*
+ * Handle the EFI memory map list.
+ *
+ * We will make two passes at this, the first (exclude == false) to populate
+ * physmem with valid physical memory ranges from recognized map entry types.
+ * In the second pass we will exclude memory ranges from physmem which must not
+ * be used for general allocations, either because they are used by runtime
+ * firmware or otherwise reserved.
+ *
+ * Adding the runtime-reserved memory ranges to physmem and excluding them
+ * later ensures that they are included in the DMAP, but excluded from
+ * phys_avail[].
+ *
+ * Entry types not explicitly listed here are ignored and not mapped.
+ */
 static void
-exclude_efi_map_entry(struct efi_md *p)
+handle_efi_map_entry(struct efi_md *p, void *argp)
 {
-
-	switch (p->md_type) {
-	case EFI_MD_TYPE_CODE:
-	case EFI_MD_TYPE_DATA:
-	case EFI_MD_TYPE_BS_CODE:
-	case EFI_MD_TYPE_BS_DATA:
-	case EFI_MD_TYPE_FREE:
-		/*
-		 * We're allowed to use any entry with these types.
-		 */
-		break;
-	default:
-		physmem_exclude_region(p->md_phys, p->md_pages * EFI_PAGE_SIZE,
-		    EXFLAG_NOALLOC);
-	}
-}
-
-static void
-exclude_efi_map_entries(struct efi_map_header *efihdr)
-{
-
-	foreach_efi_map_entry(efihdr, exclude_efi_map_entry);
-}
-
-static void
-add_efi_map_entry(struct efi_md *p)
-{
+	bool exclude = *(bool *)argp;
 
 	switch (p->md_type) {
 	case EFI_MD_TYPE_RECLAIM:
@@ -488,7 +492,7 @@ add_efi_map_entry(struct efi_md *p)
 		/*
 		 * Some UEFI implementations put the system table in the
 		 * runtime code section. Include it in the DMAP, but will
-		 * be excluded from phys_avail later.
+		 * be excluded from phys_avail.
 		 */
 	case EFI_MD_TYPE_RT_DATA:
 		/*
@@ -496,6 +500,12 @@ add_efi_map_entry(struct efi_md *p)
 		 * region is created to stop it from being added
 		 * to phys_avail.
 		 */
+		if (exclude) {
+			physmem_exclude_region(p->md_phys,
+			    p->md_pages * EFI_PAGE_SIZE, EXFLAG_NOALLOC);
+			break;
+		}
+		/* FALLTHROUGH */
 	case EFI_MD_TYPE_CODE:
 	case EFI_MD_TYPE_DATA:
 	case EFI_MD_TYPE_BS_CODE:
@@ -504,8 +514,12 @@ add_efi_map_entry(struct efi_md *p)
 		/*
 		 * We're allowed to use any entry with these types.
 		 */
-		physmem_hardware_region(p->md_phys,
-		    p->md_pages * EFI_PAGE_SIZE);
+		if (!exclude)
+			physmem_hardware_region(p->md_phys,
+			    p->md_pages * EFI_PAGE_SIZE);
+		break;
+	default:
+		/* Other types shall not be handled by physmem. */
 		break;
 	}
 }
@@ -513,12 +527,19 @@ add_efi_map_entry(struct efi_md *p)
 static void
 add_efi_map_entries(struct efi_map_header *efihdr)
 {
-
-	foreach_efi_map_entry(efihdr, add_efi_map_entry);
+	bool exclude = false;
+	foreach_efi_map_entry(efihdr, handle_efi_map_entry, &exclude);
 }
 
 static void
-print_efi_map_entry(struct efi_md *p)
+exclude_efi_map_entries(struct efi_map_header *efihdr)
+{
+	bool exclude = true;
+	foreach_efi_map_entry(efihdr, handle_efi_map_entry, &exclude);
+}
+
+static void
+print_efi_map_entry(struct efi_md *p, void *argp __unused)
 {
 	const char *type;
 	static const char *types[] = {
@@ -578,7 +599,116 @@ print_efi_map_entries(struct efi_map_header *efihdr)
 
 	printf("%23s %12s %12s %8s %4s\n",
 	    "Type", "Physical", "Virtual", "#Pages", "Attr");
-	foreach_efi_map_entry(efihdr, print_efi_map_entry);
+	foreach_efi_map_entry(efihdr, print_efi_map_entry, NULL);
+}
+
+/*
+ * Map the passed in VA in EFI space to a void * using the efi memory table to
+ * find the PA and return it in the DMAP, if it exists. We're used between the
+ * calls to pmap_bootstrap() and physmem_init_kernel_globals() to parse CFG
+ * tables We assume that either the entry you are mapping fits within its page,
+ * or if it spills to the next page, that's contiguous in PA and in the DMAP.
+ * All observed tables obey the first part of this precondition.
+ */
+struct early_map_data
+{
+	vm_offset_t va;
+	vm_offset_t pa;
+};
+
+static void
+efi_early_map_entry(struct efi_md *p, void *argp)
+{
+	struct early_map_data *emdp = argp;
+	vm_offset_t s, e;
+
+	if (emdp->pa != 0)
+		return;
+	if ((p->md_attr & EFI_MD_ATTR_RT) == 0)
+		return;
+	s = p->md_virt;
+	e = p->md_virt + p->md_pages * EFI_PAGE_SIZE;
+	if (emdp->va < s  || emdp->va >= e)
+		return;
+	emdp->pa = p->md_phys + (emdp->va - p->md_virt);
+}
+
+static void *
+efi_early_map(vm_offset_t va)
+{
+	struct early_map_data emd = { .va = va };
+
+	foreach_efi_map_entry(efihdr, efi_early_map_entry, &emd);
+	if (emd.pa == 0)
+		return NULL;
+	return (void *)PHYS_TO_DMAP(emd.pa);
+}
+
+
+/*
+ * When booted via kboot, the prior kernel will pass in reserved memory areas in
+ * a EFI config table. We need to find that table and walk through it excluding
+ * the memory ranges in it. btw, this is called too early for the printf to do
+ * anything since msgbufp isn't initialized, let alone a console...
+ */
+static void
+exclude_efi_memreserve(vm_offset_t efi_systbl_phys)
+{
+	struct efi_systbl *systbl;
+	struct uuid efi_memreserve = LINUX_EFI_MEMRESERVE_TABLE;
+
+	systbl = (struct efi_systbl *)PHYS_TO_DMAP(efi_systbl_phys);
+	if (systbl == NULL) {
+		printf("can't map systbl\n");
+		return;
+	}
+	if (systbl->st_hdr.th_sig != EFI_SYSTBL_SIG) {
+		printf("Bad signature for systbl %#lx\n", systbl->st_hdr.th_sig);
+		return;
+	}
+
+	/*
+	 * We don't yet have the pmap system booted enough to create a pmap for
+	 * the efi firmware's preferred address space from the GetMemoryMap()
+	 * table. The st_cfgtbl is a VA in this space, so we need to do the
+	 * mapping ourselves to a kernel VA with efi_early_map. We assume that
+	 * the cfgtbl entries don't span a page. Other pointers are PAs, as
+	 * noted below.
+	 */
+	if (systbl->st_cfgtbl == 0)	/* Failsafe st_entries should == 0 in this case */
+		return;
+	for (int i = 0; i < systbl->st_entries; i++) {
+		struct efi_cfgtbl *cfgtbl;
+		struct linux_efi_memreserve *mr;
+
+		cfgtbl = efi_early_map(systbl->st_cfgtbl + i * sizeof(*cfgtbl));
+		if (cfgtbl == NULL)
+			panic("Can't map the config table entry %d\n", i);
+		if (memcmp(&cfgtbl->ct_uuid, &efi_memreserve, sizeof(struct uuid)) != 0)
+			continue;
+
+		/*
+		 * cfgtbl points are either VA or PA, depending on the GUID of
+		 * the table. memreserve GUID pointers are PA and not converted
+		 * after a SetVirtualAddressMap(). The list's mr_next pointer
+		 * is also a PA.
+		 */
+		mr = (struct linux_efi_memreserve *)PHYS_TO_DMAP(
+			(vm_offset_t)cfgtbl->ct_data);
+		while (true) {
+			for (int j = 0; j < mr->mr_count; j++) {
+				struct linux_efi_memreserve_entry *mre;
+
+				mre = &mr->mr_entry[j];
+				physmem_exclude_region(mre->mre_base, mre->mre_size,
+				    EXFLAG_NODUMP | EXFLAG_NOALLOC);
+			}
+			if (mr->mr_next == 0)
+				break;
+			mr = (struct linux_efi_memreserve *)PHYS_TO_DMAP(mr->mr_next);
+		};
+	}
+
 }
 
 #ifdef FDT
@@ -755,6 +885,7 @@ initarm(struct arm64_bootparams *abp)
 	TSRAW(&thread0, TS_ENTER, __func__, NULL);
 
 	boot_el = abp->boot_el;
+	hcr_el2 = abp->hcr_el2;
 
 	/* Parse loader or FDT boot parametes. Determine last used address. */
 	lastaddr = parse_boot_param(abp);
@@ -765,6 +896,8 @@ initarm(struct arm64_bootparams *abp)
 		kmdp = preload_search_by_type("elf64 kernel");
 
 	identify_cpu(0);
+	identify_hypervisor_smbios();
+
 	update_special_regs(0);
 
 	link_elf_ireloc(kmdp);
@@ -826,6 +959,21 @@ initarm(struct arm64_bootparams *abp)
 	/* Exclude entries needed in the DMAP region, but not phys_avail */
 	if (efihdr != NULL)
 		exclude_efi_map_entries(efihdr);
+	/*  Do the same for reserve entries in the EFI MEMRESERVE table */
+	if (efi_systbl_phys != 0)
+		exclude_efi_memreserve(efi_systbl_phys);
+
+	/*
+	 * We carefully bootstrap the sanitizer map after we've excluded
+	 * absolutely everything else that could impact phys_avail.  There's not
+	 * always enough room for the initial shadow map after the kernel, so
+	 * we'll end up searching for segments that we can safely use.  Those
+	 * segments also get excluded from phys_avail.
+	 */
+#if defined(KASAN)
+	pmap_bootstrap_san(KERNBASE - abp->kern_delta);
+#endif
+
 	physmem_init_kernel_globals();
 
 	devmap_bootstrap(0, NULL);
@@ -869,6 +1017,7 @@ initarm(struct arm64_bootparams *abp)
 	pan_enable();
 
 	kcsan_cpu_init(0);
+	kasan_init();
 
 	env = kern_getenv("kernelname");
 	if (env != NULL)

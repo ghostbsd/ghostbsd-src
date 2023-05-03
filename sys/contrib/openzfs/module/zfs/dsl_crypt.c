@@ -143,7 +143,7 @@ dsl_crypto_params_create_nvlist(dcp_cmd_t cmd, nvlist_t *props,
 	dsl_wrapping_key_t *wkey = NULL;
 	uint8_t *wkeydata = NULL;
 	uint_t wkeydata_len = 0;
-	char *keylocation = NULL;
+	const char *keylocation = NULL;
 
 	dcp = kmem_zalloc(sizeof (dsl_crypto_params_t), KM_SLEEP);
 	dcp->cp_cmd = cmd;
@@ -540,6 +540,12 @@ dsl_crypto_key_open(objset_t *mos, dsl_wrapping_key_t *wkey,
 	    &crypt);
 	if (ret != 0)
 		goto error;
+
+	/* handle a future crypto suite that we don't support */
+	if (crypt >= ZIO_CRYPT_FUNCTIONS) {
+		ret = (SET_ERROR(ZFS_ERR_CRYPTO_NOTSUP));
+		goto error;
+	}
 
 	ret = zap_lookup(mos, dckobj, DSL_CRYPTO_KEY_GUID, 8, 1, &guid);
 	if (ret != 0)
@@ -2119,9 +2125,6 @@ dsl_crypto_recv_raw_objset_sync(dsl_dataset_t *ds, dmu_objset_type_t ostype,
 		zio = zio_root(dp->dp_spa, NULL, NULL, ZIO_FLAG_MUSTSUCCEED);
 		dsl_dataset_sync(ds, zio, tx);
 		VERIFY0(zio_wait(zio));
-
-		/* dsl_dataset_sync_done will drop this reference. */
-		dmu_buf_add_ref(ds->ds_dbuf, ds);
 		dsl_dataset_sync_done(ds, tx);
 	}
 }
@@ -2144,9 +2147,15 @@ dsl_crypto_recv_raw_key_check(dsl_dataset_t *ds, nvlist_t *nvl, dmu_tx_t *tx)
 	 * wrapping key.
 	 */
 	ret = nvlist_lookup_uint64(nvl, DSL_CRYPTO_KEY_CRYPTO_SUITE, &intval);
-	if (ret != 0 || intval >= ZIO_CRYPT_FUNCTIONS ||
-	    intval <= ZIO_CRYPT_OFF)
+	if (ret != 0 || intval <= ZIO_CRYPT_OFF)
 		return (SET_ERROR(EINVAL));
+
+	/*
+	 * Flag a future crypto suite that we don't support differently, so
+	 * we can return a more useful error to the user.
+	 */
+	if (intval >= ZIO_CRYPT_FUNCTIONS)
+		return (SET_ERROR(ZFS_ERR_CRYPTO_NOTSUP));
 
 	ret = nvlist_lookup_uint64(nvl, DSL_CRYPTO_KEY_GUID, &intval);
 	if (ret != 0)
@@ -2671,6 +2680,7 @@ spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
 	objset_phys_t *osp = buf;
 	uint8_t portable_mac[ZIO_OBJSET_MAC_LEN];
 	uint8_t local_mac[ZIO_OBJSET_MAC_LEN];
+	const uint8_t zeroed_mac[ZIO_OBJSET_MAC_LEN] = {0};
 
 	/* look up the key from the spa's keystore */
 	ret = spa_keystore_lookup_key(spa, dsobj, FTAG, &dck);
@@ -2696,8 +2706,21 @@ spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
 	if (memcmp(portable_mac, osp->os_portable_mac,
 	    ZIO_OBJSET_MAC_LEN) != 0 ||
 	    memcmp(local_mac, osp->os_local_mac, ZIO_OBJSET_MAC_LEN) != 0) {
-		abd_return_buf(abd, buf, datalen);
-		return (SET_ERROR(ECKSUM));
+		/*
+		 * If the MAC is zeroed out, we failed to decrypt it.
+		 * This should only arise, at least on Linux,
+		 * if we hit edge case handling for useraccounting, since we
+		 * shouldn't get here without bailing out on error earlier
+		 * otherwise.
+		 *
+		 * So if we're in that case, we can just fall through and
+		 * special-casing noticing that it's zero will handle it
+		 * elsewhere, since we can just regenerate it.
+		 */
+		if (memcmp(local_mac, zeroed_mac, ZIO_OBJSET_MAC_LEN) != 0) {
+			abd_return_buf(abd, buf, datalen);
+			return (SET_ERROR(ECKSUM));
+		}
 	}
 
 	abd_return_buf(abd, buf, datalen);

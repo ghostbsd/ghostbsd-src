@@ -40,7 +40,6 @@ SRCF+=		divtc3
 SRCF+=		divti3
 SRCF+=		divxc3
 SRCF+=		enable_execute_stack
-SRCF+=		eprintf
 SRCF+=		extendhfsf2
 SRCF+=		ffsdi2
 SRCF+=		ffssi2
@@ -190,8 +189,7 @@ SRCF+=		trunctfsf2
 .endif
 
 # These are already shipped by libc.a on some architectures.
-.if ${MACHINE_CPUARCH} != "arm" && ${MACHINE_CPUARCH} != "mips" && \
-    ${MACHINE_CPUARCH} != "riscv"
+.if ${MACHINE_CPUARCH} != "arm" && ${MACHINE_CPUARCH} != "riscv"
 SRCF+=		adddf3
 SRCF+=		addsf3
 SRCF+=		divdf3
@@ -208,7 +206,7 @@ SRCF+=		subsf3
 SRCF+=		truncdfsf2
 .endif
 
-.if ${MACHINE_CPUARCH} != "arm" && ${MACHINE_CPUARCH} != "mips"
+.if ${MACHINE_CPUARCH} != "arm"
 SRCF+=		comparedf2
 SRCF+=		comparesf2
 .endif
@@ -219,14 +217,10 @@ SRCF+=		comparesf2
 
 SRCF+=		stdatomic
 CFLAGS+=	-DEMIT_SYNC_ATOMICS
-.elif ${MACHINE_CPUARCH} == "mips"
-.PATH:		${SRCTOP}/sys/mips/mips
-
-SRCF+=		stdatomic
 .endif
 
 .for file in ${SRCF}
-.if ${MACHINE_ARCH:Marmv[67]*} && (!defined(CPUTYPE) || ${CPUTYPE:M*soft*} == "") \
+.if ${MACHINE_CPUARCH} == "arm" && (!defined(CPUTYPE) || ${CPUTYPE:M*soft*} == "") \
     && exists(${CRTSRC}/${CRTARCH}/${file}vfp.S)
 SRCS+=		${file}vfp.S
 . elif exists(${CRTSRC}/${CRTARCH}/${file}.S)
@@ -251,8 +245,4 @@ SRCS+=		switch32.S
 SRCS+=		switch8.S
 SRCS+=		switchu8.S
 SRCS+=		sync_synchronize.S
-.endif
-
-.if ${MACHINE_ARCH:Mriscv*sf}
-CFLAGS+=	-D__SOFT_FP__
 .endif

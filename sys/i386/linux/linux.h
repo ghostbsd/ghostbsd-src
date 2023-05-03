@@ -55,7 +55,6 @@ typedef char		*l_caddr_t;
 typedef l_ulong		l_uintptr_t;
 typedef l_long		l_clock_t;
 typedef l_int		l_daddr_t;
-typedef l_ushort	l_dev_t;
 typedef l_uint		l_gid_t;
 typedef l_ushort	l_gid16_t;
 typedef l_ulong		l_ino_t;
@@ -95,9 +94,9 @@ typedef struct {
 /*
  * Miscellaneous
  */
-#define LINUX_AT_COUNT		20	/* Count of used aux entry types.
+#define LINUX_AT_COUNT		21	/* Count of used aux entry types.
 					 * Keep this synchronized with
-					 * linux_fixup_elf() code.
+					 * linux_copyout_auxargs() code.
 					 */
 struct l___sysctl_args
 {
@@ -153,15 +152,13 @@ struct l_timespec64 {
 };
 
 struct l_newstat {
-	l_ushort	st_dev;
-	l_ushort	__pad1;
+	l_ulong		st_dev;
 	l_ulong		st_ino;
 	l_ushort	st_mode;
 	l_ushort	st_nlink;
 	l_ushort	st_uid;
 	l_ushort	st_gid;
-	l_ushort	st_rdev;
-	l_ushort	__pad2;
+	l_ulong		st_rdev;
 	l_ulong		st_size;
 	l_ulong		st_blksize;
 	l_ulong		st_blocks;
@@ -172,7 +169,8 @@ struct l_newstat {
 	l_ulong		__unused5;
 };
 
-struct l_stat {
+/* __old_kernel_stat now */
+struct l_old_stat {
 	l_ushort	st_dev;
 	l_ulong		st_ino;
 	l_ushort	st_mode;
@@ -191,19 +189,18 @@ struct l_stat {
 };
 
 struct l_stat64 {
-	l_ushort	st_dev;
-	u_char		__pad0[10];
+	l_ulonglong	st_dev;
+	u_char		__pad0[4];
 	l_ulong		__st_ino;
 	l_uint		st_mode;
 	l_uint		st_nlink;
 	l_ulong		st_uid;
 	l_ulong		st_gid;
-	l_ushort	st_rdev;
-	u_char		__pad3[10];
+	l_ulonglong	st_rdev;
+	u_char		__pad3[4];
 	l_longlong	st_size;
 	l_ulong		st_blksize;
-	l_ulong		st_blocks;
-	l_ulong		__pad4;
+	l_ulonglong	st_blocks;
 	struct l_timespec	st_atim;
 	struct l_timespec	st_mtim;
 	struct l_timespec	st_ctim;
@@ -278,39 +275,6 @@ union l_semun {
 	l_uintptr_t	__buf;
 	l_uintptr_t	__pad;
 };
-
-struct l_ifmap {
-	l_ulong		mem_start;
-	l_ulong		mem_end;
-	l_ushort	base_addr;
-	u_char		irq;
-	u_char		dma;
-	u_char		port;
-};
-
-struct l_ifreq {
-	union {
-		char	ifrn_name[LINUX_IFNAMSIZ];
-	} ifr_ifrn;
-
-	union {
-		struct l_sockaddr	ifru_addr;
-		struct l_sockaddr	ifru_dstaddr;
-		struct l_sockaddr	ifru_broadaddr;
-		struct l_sockaddr	ifru_netmask;
-		struct l_sockaddr	ifru_hwaddr;
-		l_short		ifru_flags[1];
-		l_int		ifru_ivalue;
-		l_int		ifru_mtu;
-		struct l_ifmap	ifru_map;
-		char		ifru_slave[LINUX_IFNAMSIZ];
-		l_caddr_t	ifru_data;
-	} ifr_ifru;
-};
-
-#define	ifr_name	ifr_ifrn.ifrn_name	/* Interface name */
-#define	ifr_hwaddr	ifr_ifru.ifru_hwaddr	/* MAC address */
-#define	ifr_ifindex	ifr_ifru.ifru_ivalue	/* Interface index */
 
 struct l_user_desc {
 	l_uint		entry_number;
@@ -395,15 +359,32 @@ struct l_desc_struct {
 
 #define	linux_copyout_rusage(r, u)	copyout(r, u, sizeof(*r))
 
-/* robust futexes */
-struct linux_robust_list {
-	struct linux_robust_list	*next;
+/* This corresponds to 'struct user_regs_struct' in Linux. */
+struct linux_pt_regset {
+	l_uint ebx;
+	l_uint ecx;
+	l_uint edx;
+	l_uint esi;
+	l_uint edi;
+	l_uint ebp;
+	l_uint eax;
+	l_uint ds;
+	l_uint es;
+	l_uint fs;
+	l_uint gs;
+	l_uint orig_eax;
+	l_uint eip;
+	l_uint cs;
+	l_uint eflags;
+	l_uint esp;
+	l_uint ss;
 };
 
-struct linux_robust_list_head {
-	struct linux_robust_list	list;
-	l_long				futex_offset;
-	struct linux_robust_list	*pending_list;
-};
+#ifdef _KERNEL
+struct reg;
+
+void	bsd_to_linux_regset(const struct reg *b_reg,
+	    struct linux_pt_regset *l_regset);
+#endif /* _KERNEL */
 
 #endif /* !_I386_LINUX_H_ */

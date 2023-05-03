@@ -84,6 +84,7 @@ CFLAGS+= -DHAVE_ISSETUGID
 
 CFLAGS+=	-I${.OBJDIR} -I${.CURDIR} \
 		-I${SRCTOP}/sys/cddl/dev/dtrace/${MACHINE_ARCH} \
+		-I${SRCTOP}/sys/cddl/dev/kinst \
 		-I${SRCTOP}/sys/cddl/compat/opensolaris \
 		-I${SRCTOP}/cddl/compat/opensolaris/include \
 		-I${OPENSOLARIS_USR_DISTDIR}/head \
@@ -121,8 +122,13 @@ CFLAGS+=	-I${OPENSOLARIS_SYS_DISTDIR}/uts/intel
 .endif
 
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "amd64"
-SRCS+=		dis_tables.c
+SRCS+=		dis_tables.c instr_size.c
 DSRCS+=		regs_x86.d
+.endif
+
+.if ${MACHINE_CPUARCH} == "riscv"
+SRCS+=		instr_size.c
+DSRCS+=		regs_riscv.d
 .endif
 
 YFLAGS+=-d

@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_dl.h>
 #include <net/route.h>
 #include <net/route/route_ctl.h>
@@ -638,8 +639,7 @@ nhop_free(struct nhop_object *nh)
 	}
 	NET_EPOCH_EXIT(et);
 
-	epoch_call(net_epoch_preempt, destroy_nhop_epoch,
-	    &nh_priv->nh_epoch_ctx);
+	NET_EPOCH_CALL(destroy_nhop_epoch, &nh_priv->nh_epoch_ctx);
 }
 
 void
@@ -715,6 +715,7 @@ nhop_copy(struct nhop_object *nh, const struct nhop_object *nh_orig)
 	nh_priv->nh_type = nh_orig->nh_priv->nh_type;
 	nh_priv->rt_flags = nh_orig->nh_priv->rt_flags;
 	nh_priv->nh_fibnum = nh_orig->nh_priv->nh_fibnum;
+	nh_priv->nh_origin = nh_orig->nh_priv->nh_origin;
 }
 
 void
@@ -822,6 +823,33 @@ nhop_set_blackhole(struct nhop_object *nh, int blackhole_rt_flag)
 		nh->nh_flags |= NHF_REJECT;
 		nh->nh_priv->rt_flags |= RTF_REJECT;
 		break;
+	default:
+		/* Not a blackhole nexthop */
+		return;
+	}
+
+	nh->nh_ifp = V_loif;
+	nh->nh_flags &= ~NHF_GATEWAY;
+	nh->nh_priv->rt_flags &= ~RTF_GATEWAY;
+	nh->nh_priv->nh_neigh_family = nh->nh_priv->nh_upper_family;
+
+	bzero(&nh->gw_sa, sizeof(nh->gw_sa));
+
+	switch (nh->nh_priv->nh_upper_family) {
+#ifdef INET
+	case AF_INET:
+		nh->gw4_sa.sin_family = AF_INET;
+		nh->gw4_sa.sin_len = sizeof(struct sockaddr_in);
+		nh->gw4_sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		break;
+#endif
+#ifdef INET6
+	case AF_INET6:
+		nh->gw6_sa.sin6_family = AF_INET6;
+		nh->gw6_sa.sin6_len = sizeof(struct sockaddr_in6);
+		nh->gw6_sa.sin6_addr = in6addr_loopback;
+		break;
+#endif
 	}
 }
 
@@ -1046,6 +1074,56 @@ nhops_update_ifmtu(struct rib_head *rh, struct ifnet *ifp, uint32_t mtu)
 	} CHT_SLIST_FOREACH_END;
 	NHOPS_WUNLOCK(ctl);
 
+}
+
+struct nhop_object *
+nhops_iter_start(struct nhop_iter *iter)
+{
+	if (iter->rh == NULL)
+		iter->rh = rt_tables_get_rnh_safe(iter->fibnum, iter->family);
+	if (iter->rh != NULL) {
+		struct nh_control *ctl = iter->rh->nh_control;
+
+		NHOPS_RLOCK(ctl);
+
+		iter->_i = 0;
+		iter->_next = CHT_FIRST(&ctl->nh_head, iter->_i);
+
+		return (nhops_iter_next(iter));
+	} else
+		return (NULL);
+}
+
+struct nhop_object *
+nhops_iter_next(struct nhop_iter *iter)
+{
+	struct nhop_priv *nh_priv = iter->_next;
+
+	if (nh_priv != NULL) {
+		iter->_next = nh_priv->nh_next;
+		return (nh_priv->nh);
+	}
+
+	struct nh_control *ctl = iter->rh->nh_control;
+	while (++iter->_i < ctl->nh_head.hash_size) {
+		nh_priv = CHT_FIRST(&ctl->nh_head, iter->_i);
+		if (nh_priv != NULL) {
+			iter->_next = nh_priv->nh_next;
+			return (nh_priv->nh);
+		}
+	}
+
+	return (NULL);
+}
+
+void
+nhops_iter_stop(struct nhop_iter *iter)
+{
+	if (iter->rh != NULL) {
+		struct nh_control *ctl = iter->rh->nh_control;
+
+		NHOPS_RUNLOCK(ctl);
+	}
 }
 
 /*

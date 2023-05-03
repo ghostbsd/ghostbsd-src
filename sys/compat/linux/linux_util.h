@@ -36,13 +36,6 @@
 #ifndef	_LINUX_UTIL_H_
 #define	_LINUX_UTIL_H_
 
-#include <vm/vm.h>
-#include <vm/vm_param.h>
-#include <vm/pmap.h>
-#include <sys/exec.h>
-#include <sys/sysent.h>
-#include <sys/syslog.h>
-#include <sys/cdefs.h>
 #include <sys/uio.h>
 
 MALLOC_DECLARE(M_LINUX);
@@ -112,6 +105,8 @@ struct linux_device_handler {
 	int	linux_char_device;
 };
 
+struct stat;
+
 int	linux_device_register_handler(struct linux_device_handler *h);
 int	linux_device_unregister_handler(struct linux_device_handler *h);
 char	*linux_driver_get_name_dev(device_t dev);
@@ -119,15 +114,7 @@ int	linux_driver_get_major_minor(const char *node, int *major, int *minor);
 int	linux_vn_get_major_minor(const struct vnode *vn, int *major, int *minor);
 char	*linux_get_char_devices(void);
 void	linux_free_get_char_devices(char *string);
-
-/*
- * Criteria for interface name translation
- */
-#define	IFP_IS_ETH(ifp)		((ifp)->if_type == IFT_ETHER)
-#define	IFP_IS_LOOP(ifp)	((ifp)->if_type == IFT_LOOP)
-
-struct ifnet;
-bool	linux_use_real_ifname(const struct ifnet *ifp);
+void	translate_vnhook_major_minor(struct vnode *vp, struct stat *sb);
 
 #if defined(KTR)
 

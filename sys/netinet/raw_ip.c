@@ -97,7 +97,6 @@ VNET_DEFINE(struct inpcbinfo, ripcbinfo);
  * The data hooks are not used here but it is convenient
  * to keep them all in one place.
  */
-VNET_DEFINE(ip_fw_chk_ptr_t, ip_fw_chk_ptr) = NULL;
 VNET_DEFINE(ip_fw_ctl_ptr_t, ip_fw_ctl_ptr) = NULL;
 
 int	(*ip_dn_ctl_ptr)(struct sockopt *);
@@ -167,8 +166,8 @@ rip_inshash(struct inpcb *inp)
 		    inp->inp_faddr.s_addr, pcbinfo->ipi_hashmask);
 	} else
 		hash = 0;
-	pcbhash = &pcbinfo->ipi_hashbase[hash];
-	CK_LIST_INSERT_HEAD(pcbhash, inp, inp_hash);
+	pcbhash = &pcbinfo->ipi_hash_exact[hash];
+	CK_LIST_INSERT_HEAD(pcbhash, inp, inp_hash_exact);
 }
 
 static void
@@ -178,11 +177,11 @@ rip_delhash(struct inpcb *inp)
 	INP_HASH_WLOCK_ASSERT(inp->inp_pcbinfo);
 	INP_WLOCK_ASSERT(inp);
 
-	CK_LIST_REMOVE(inp, inp_hash);
+	CK_LIST_REMOVE(inp, inp_hash_exact);
 }
 #endif /* INET */
 
-INPCBSTORAGE_DEFINE(ripcbstor, "rawinp", "ripcb", "rip", "riphash");
+INPCBSTORAGE_DEFINE(ripcbstor, inpcb, "rawinp", "ripcb", "rip", "riphash");
 
 static void
 rip_init(void *arg __unused)

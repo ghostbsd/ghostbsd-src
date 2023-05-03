@@ -1,4 +1,4 @@
-CLANG_SUBDIR=clang/14.0.5
+CLANG_SUBDIR=clang/15.0.7
 CLANGDIR=	/usr/lib/${CLANG_SUBDIR}
 SANITIZER_LIBDIR=		${CLANGDIR}/lib/freebsd
 SANITIZER_SHAREDIR=		${CLANGDIR}/share
@@ -9,7 +9,7 @@ SANITIZER_SHAREDIR=		${CLANGDIR}/share
     (!defined(CPUTYPE) || ${CPUTYPE:M*soft*} == "")
 CRTARCH?=	armhf
 .else
-CRTARCH?=	${MACHINE_ARCH:S/amd64/x86_64/:C/sf$//}
+CRTARCH?=	${MACHINE_ARCH:S/amd64/x86_64/}
 .endif
 
 .if ${COMPILER_TYPE} == "clang"

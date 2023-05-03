@@ -144,7 +144,7 @@ struct if_data {
 #define	IFF_DEBUG	0x4		/* (n) turn on debugging */
 #define	IFF_LOOPBACK	0x8		/* (i) is a loopback net */
 #define	IFF_POINTOPOINT	0x10		/* (i) is a point-to-point link */
-#define	IFF_KNOWSEPOCH	0x20		/* (i) calls if_input in net epoch */
+#define	IFF_NEEDSEPOCH	0x20		/* (i) calls if_input w/o net epoch */
 #define	IFF_DRV_RUNNING	0x40		/* (d) resources allocated */
 #define	IFF_NOARP	0x80		/* (n) no address resolution protocol */
 #define	IFF_PROMISC	0x100		/* (n) receive all packets */
@@ -164,6 +164,7 @@ struct if_data {
 #define	IFF_DYING	0x200000	/* (n) interface is winding down */
 #define	IFF_RENAMING	0x400000	/* (n) interface is being renamed */
 #define	IFF_NOGROUP	0x800000	/* (n) interface is not part of any groups */
+#define	IFF_NETLINK_1	0x1000000	/* (n) used by netlink */
 
 /*
  * Old names for driver flags so that user space tools can continue to use
@@ -178,7 +179,7 @@ struct if_data {
 #define	IFF_CANTCHANGE \
 	(IFF_BROADCAST|IFF_POINTOPOINT|IFF_DRV_RUNNING|IFF_DRV_OACTIVE|\
 	    IFF_SIMPLEX|IFF_MULTICAST|IFF_ALLMULTI|IFF_PROMISC|\
-	    IFF_DYING|IFF_CANTCONFIG|IFF_KNOWSEPOCH)
+	    IFF_DYING|IFF_CANTCONFIG|IFF_NEEDSEPOCH)
 
 /*
  * Values for if_link_state.
@@ -253,8 +254,11 @@ struct if_data {
 #define	IFCAP_VXLAN_HWTSO	0x40000000 /* can do IFCAP_TSO on VXLANs */
 #define	IFCAP_TXTLS_RTLMT	0x80000000 /* can do TLS with rate limiting */
 
-#define	IFCAP2_RXTLS4		0x00001
-#define	IFCAP2_RXTLS6		0x00002
+/* IFCAP2_* are integers, not bits. */
+#define	IFCAP2_RXTLS4		0
+#define	IFCAP2_RXTLS6		1
+
+#define	IFCAP2_BIT(x)		(1UL << (x))
 
 #define IFCAP_HWCSUM_IPV6	(IFCAP_RXCSUM_IPV6 | IFCAP_TXCSUM_IPV6)
 
@@ -263,7 +267,6 @@ struct if_data {
 #define	IFCAP_WOL	(IFCAP_WOL_UCAST | IFCAP_WOL_MCAST | IFCAP_WOL_MAGIC)
 #define	IFCAP_TOE	(IFCAP_TOE4 | IFCAP_TOE6)
 #define	IFCAP_TXTLS	(IFCAP_TXTLS4 | IFCAP_TXTLS6)
-#define	IFCAP2_RXTLS	(IFCAP2_RXTLS4 | IFCAP2_RXTLS6)
 
 #define	IFCAP_CANTCHANGE	(IFCAP_NETMAP | IFCAP_NV)
 #define	IFCAP_ALLCAPS		0xffffffff
@@ -647,6 +650,12 @@ struct ifdownreason {
 };
 
 #endif /* __BSD_VISIBLE */
+
+/*
+ * Opaque interface structure.
+ */
+
+typedef struct ifnet * if_t;
 
 #ifdef _KERNEL
 #ifdef MALLOC_DECLARE

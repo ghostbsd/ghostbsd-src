@@ -28,6 +28,8 @@
 #ifndef _LINUXKPI_LINUX_TIME_H_
 #define	_LINUXKPI_LINUX_TIME_H_
 
+#define	MSEC_PER_SEC	1000L
+
 #define	NSEC_PER_USEC	1000L
 #define	NSEC_PER_MSEC	1000000L
 #define	NSEC_PER_SEC	1000000000L
@@ -39,6 +41,8 @@
 
 #include <sys/time.h>
 #include <sys/stdint.h>
+
+#include <linux/math64.h>
 
 static inline struct timeval
 ns_to_timeval(const int64_t nsec)

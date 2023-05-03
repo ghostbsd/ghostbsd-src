@@ -99,11 +99,21 @@
 #define	MAXPAGESIZES	3		/* maximum number of supported page sizes */
 
 #ifndef KSTACK_PAGES
+#if defined(KASAN) || defined(KMSAN)
+#define	KSTACK_PAGES	6
+#else
 #define	KSTACK_PAGES	4	/* pages of kernel stack (with pcb) */
+#endif
 #endif
 
 #define	KSTACK_GUARD_PAGES	1	/* pages of kstack guard; 0 disables */
 #define	PCPU_PAGES		1
+
+#ifdef PERTHREAD_SSP
+#define	NO_PERTHREAD_SSP	__nostackprotector
+#else
+#define	NO_PERTHREAD_SSP
+#endif
 
 /*
  * Mach derived conversion macros

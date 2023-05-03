@@ -114,7 +114,7 @@ struct zvol_state_os {
 	boolean_t use_blk_mq;
 };
 
-taskq_t *zvol_taskq;
+static taskq_t *zvol_taskq;
 static struct ida zvol_ida;
 
 typedef struct zv_request_stack {
@@ -342,8 +342,7 @@ zvol_discard(zv_request_t *zvr)
 	struct request_queue *q = zv->zv_zso->zvo_queue;
 	struct gendisk *disk = zv->zv_zso->zvo_disk;
 	unsigned long start_time = 0;
-
-	boolean_t acct = blk_queue_io_stat(q);
+	boolean_t acct = B_FALSE;
 
 	ASSERT3P(zv, !=, NULL);
 	ASSERT3U(zv->zv_open_count, >, 0);
@@ -1279,6 +1278,7 @@ zvol_os_create_minor(const char *name)
 	int error = 0;
 	int idx;
 	uint64_t hash = zvol_name_hash(name);
+	bool replayed_zil = B_FALSE;
 
 	if (zvol_inhibit_dev)
 		return (0);
@@ -1420,11 +1420,12 @@ zvol_os_create_minor(const char *name)
 	zv->zv_zilog = zil_open(os, zvol_get_data, &zv->zv_kstat.dk_zil_sums);
 	if (spa_writeable(dmu_objset_spa(os))) {
 		if (zil_replay_disable)
-			zil_destroy(zv->zv_zilog, B_FALSE);
+			replayed_zil = zil_destroy(zv->zv_zilog, B_FALSE);
 		else
-			zil_replay(os, zv, zvol_replay_vector);
+			replayed_zil = zil_replay(os, zv, zvol_replay_vector);
 	}
-	zil_close(zv->zv_zilog);
+	if (replayed_zil)
+		zil_close(zv->zv_zilog);
 	zv->zv_zilog = NULL;
 
 	/*

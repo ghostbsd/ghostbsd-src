@@ -330,12 +330,13 @@ struct table_value {
 	uint16_t	divert;		/* O_DIVERT/O_TEE */
 	uint16_t	skipto;		/* skipto, CALLRET */
 	uint32_t	netgraph;	/* O_NETGRAPH/O_NGTEE */
-	uint32_t	fib;		/* O_SETFIB */
-	uint32_t	nat;		/* O_NAT */
+	uint16_t	fib;		/* O_SETFIB */
+	uint16_t	nat;		/* O_NAT */
+	uint32_t	mark;		/* O_SETMARK/O_MARK */
 	uint32_t	nh4;
 	uint8_t		dscp;
 	uint8_t		spare0;
-	uint16_t	spare1;
+	uint16_t	kidx;		/* value kernel index */
 	/* -- 32 bytes -- */
 	struct in6_addr	nh6;
 	uint32_t	limit;		/* O_LIMIT */
@@ -719,7 +720,7 @@ void ipfw_objhash_bitmap_swap(struct namedobj_instance *ni,
 void ipfw_objhash_bitmap_free(void *idx, int blocks);
 void ipfw_objhash_set_hashf(struct namedobj_instance *ni, objhash_hash_f *f);
 struct named_object *ipfw_objhash_lookup_name(struct namedobj_instance *ni,
-    uint32_t set, char *name);
+    uint32_t set, const char *name);
 struct named_object *ipfw_objhash_lookup_name_type(struct namedobj_instance *ni,
     uint32_t set, uint32_t type, const char *name);
 struct named_object *ipfw_objhash_lookup_kidx(struct namedobj_instance *ni,

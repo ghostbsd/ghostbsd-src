@@ -140,10 +140,12 @@ bryanv [label="Bryan Venteicher\nbryanv@FreeBSD.org\n2012/11/03"]
 bschmidt [label="Bernhard Schmidt\nbschmidt@FreeBSD.org\n2010/02/06"]
 bwidawsk [label="Ben Widawsky\nbwidawsk@FreeBSD.org\n2018/07/05"]
 bz [label="Bjoern A. Zeeb\nbz@FreeBSD.org\n2004/07/27"]
+cc [label="Cheng Cui\ncc@FreeBSD.org\n2023/02/15"]
 cem [label="Conrad Meyer\ncem@FreeBSD.org\n2015/07/05"]
 chuck [label="Chuck Tuffli\nchuck@FreeBSD.org\n2017/09/06"]
 cognet [label="Olivier Houchard\ncognet@FreeBSD.org\n2002/10/09"]
 cokane [label="Coleman Kane\ncokane@FreeBSD.org\n2000/06/19"]
+corvink [label="Corvin Köhne\ncorvink@FreeBSD.org\n2022/11/02"]
 cperciva [label="Colin Percival\ncperciva@FreeBSD.org\n2004/01/20"]
 csjp [label="Christian S.J. Peron\ncsjp@FreeBSD.org\n2004/05/04"]
 cy [label="Cy Schubert\ncy@FreeBSD.org\n2013/04/23"]
@@ -382,6 +384,7 @@ yongari [label="Pyun YongHyeon\nyongari@FreeBSD.org\n2004/08/01"]
 yuripv [label="Yuri Pankov\nyuripv@FreeBSD.org\n2018/10/09"]
 zbb [label="Zbigniew Bodek\nzbb@FreeBSD.org\n2013/09/02"]
 zec [label="Marko Zec\nzec@FreeBSD.org\n2008/06/22"]
+zlei [label="Zhenlei Huang\nzlei@FreeBSD.org\n2022/11/02"]
 zml [label="Zachary Loafman\nzml@FreeBSD.org\n2009/05/27"]
 zont [label="Andrey Zonov\nzont@FreeBSD.org\n2012/08/21"]
 
@@ -549,20 +552,22 @@ gibbs -> njl
 gibbs -> royger
 gibbs -> whu
 
+glebius -> cy
 glebius -> mav
 
-gnn -> jinmei
-gnn -> rrs
-gnn -> ivoras
-gnn -> vanhu
-gnn -> lstewart
-gnn -> np
-gnn -> davide
 gnn -> arybchik
+gnn -> davide
 gnn -> erj
-gnn -> kp
+gnn -> ivoras
+gnn -> jinmei
+gnn -> jkoshy
 gnn -> jtl
 gnn -> karels
+gnn -> kp
+gnn -> lstewart
+gnn -> np
+gnn -> rrs
+gnn -> vanhu
 
 gonzo -> jmcneill
 gonzo -> wulf
@@ -720,9 +725,11 @@ kmacy -> lstewart
 
 kp -> donner
 kp -> nick
+kp -> zlei
 
 lwhsu -> khng
 
+manu -> corvink
 manu -> oh
 
 marcel -> allanjude
@@ -749,6 +756,8 @@ mav -> ram
 mdf -> gleb
 
 mdodd -> jake
+
+melifaro -> zlei
 
 mike -> das
 
@@ -837,6 +846,8 @@ rrs -> bcran
 rrs -> jchandra
 rrs -> tuexen
 
+rscheff -> cc
+
 rstone -> markj
 rstone -> mjoras
 
@@ -912,6 +923,7 @@ thompsa -> eri
 trasz -> jh
 trasz -> mjg
 
+tuexen -> cc
 tuexen -> rscheff
 
 ume -> jinmei

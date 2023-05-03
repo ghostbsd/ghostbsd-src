@@ -65,6 +65,7 @@ typedef struct spa_aux_vdev spa_aux_vdev_t;
 typedef struct ddt ddt_t;
 typedef struct ddt_entry ddt_entry_t;
 typedef struct zbookmark_phys zbookmark_phys_t;
+typedef struct zbookmark_err_phys zbookmark_err_phys_t;
 
 struct bpobj;
 struct bplist;
@@ -600,7 +601,7 @@ typedef struct blkptr {
 
 /*
  * This macro allows code sharing between zfs, libzpool, and mdb.
- * 'func' is either snprintf() or mdb_snprintf().
+ * 'func' is either kmem_scnprintf() or mdb_snprintf().
  * 'ws' (whitespace) can be ' ' for single-line format, '\n' for multi-line.
  */
 
@@ -663,6 +664,7 @@ typedef struct blkptr {
 			    (u_longlong_t)DVA_GET_ASIZE(dva),		\
 			    ws);					\
 		}							\
+		ASSERT3S(copies, >, 0);					\
 		if (BP_IS_ENCRYPTED(bp)) {				\
 			len += func(buf + len, size - len,		\
 			    "salt=%llx iv=%llx:%llx%c",			\
@@ -678,7 +680,7 @@ typedef struct blkptr {
 		len += func(buf + len, size - len,			\
 		    "[L%llu %s] %s %s %s %s %s %s %s%c"			\
 		    "size=%llxL/%llxP birth=%lluL/%lluP fill=%llu%c"	\
-		    "cksum=%llx:%llx:%llx:%llx",			\
+		    "cksum=%016llx:%016llx:%016llx:%016llx",		\
 		    (u_longlong_t)BP_GET_LEVEL(bp),			\
 		    type,						\
 		    checksum,						\
@@ -785,6 +787,7 @@ extern int bpobj_enqueue_free_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx);
 #define	SPA_ASYNC_L2CACHE_REBUILD		0x800
 #define	SPA_ASYNC_L2CACHE_TRIM			0x1000
 #define	SPA_ASYNC_REBUILD_DONE			0x2000
+#define	SPA_ASYNC_DETACH_SPARE			0x4000
 
 /* device manipulation */
 extern int spa_vdev_add(spa_t *spa, nvlist_t *nvroot);
@@ -974,6 +977,8 @@ extern int spa_import_progress_set_state(uint64_t pool_guid,
 extern int spa_config_tryenter(spa_t *spa, int locks, const void *tag,
     krw_t rw);
 extern void spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw);
+extern void spa_config_enter_mmp(spa_t *spa, int locks, const void *tag,
+    krw_t rw);
 extern void spa_config_exit(spa_t *spa, int locks, const void *tag);
 extern int spa_config_held(spa_t *spa, int locks, krw_t rw);
 
@@ -1133,7 +1138,8 @@ extern const char *spa_state_to_name(spa_t *spa);
 
 /* error handling */
 struct zbookmark_phys;
-extern void spa_log_error(spa_t *spa, const zbookmark_phys_t *zb);
+extern void spa_log_error(spa_t *spa, const zbookmark_phys_t *zb,
+    const uint64_t *birth);
 extern void spa_remove_error(spa_t *spa, zbookmark_phys_t *zb);
 extern int zfs_ereport_post(const char *clazz, spa_t *spa, vdev_t *vd,
     const zbookmark_phys_t *zb, zio_t *zio, uint64_t state);
@@ -1146,7 +1152,7 @@ extern nvlist_t *zfs_event_create(spa_t *spa, vdev_t *vd, const char *type,
 extern void zfs_post_remove(spa_t *spa, vdev_t *vd);
 extern void zfs_post_state_change(spa_t *spa, vdev_t *vd, uint64_t laststate);
 extern void zfs_post_autoreplace(spa_t *spa, vdev_t *vd);
-extern uint64_t spa_get_errlog_size(spa_t *spa);
+extern uint64_t spa_approx_errlog_size(spa_t *spa);
 extern int spa_get_errlog(spa_t *spa, void *uaddr, uint64_t *count);
 extern void spa_errlog_rotate(spa_t *spa);
 extern void spa_errlog_drain(spa_t *spa);
@@ -1218,9 +1224,9 @@ int param_set_deadman_failmode(ZFS_MODULE_PARAM_ARGS);
 
 extern spa_mode_t spa_mode_global;
 extern int zfs_deadman_enabled;
-extern unsigned long zfs_deadman_synctime_ms;
-extern unsigned long zfs_deadman_ziotime_ms;
-extern unsigned long zfs_deadman_checktime_ms;
+extern uint64_t zfs_deadman_synctime_ms;
+extern uint64_t zfs_deadman_ziotime_ms;
+extern uint64_t zfs_deadman_checktime_ms;
 
 extern kmem_cache_t *zio_buf_cache[];
 extern kmem_cache_t *zio_data_buf_cache[];

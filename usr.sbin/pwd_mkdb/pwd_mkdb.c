@@ -123,13 +123,10 @@ main(int argc, char *argv[])
 	makeold = 0;
 	username = NULL;
 	oldfp = NULL;
-	while ((ch = getopt(argc, argv, "CNd:ips:u:v")) != -1)
+	while ((ch = getopt(argc, argv, "Cd:iNps:u:v")) != -1)
 		switch(ch) {
 		case 'C':                       /* verify only */
 			Cflag = 1;
-			break;
-		case 'N':			/* do not wait for lock	*/
-			nblock = LOCK_NB;	/* will fail if locked */
 			break;
 		case 'd':
 			dflag++;
@@ -137,6 +134,9 @@ main(int argc, char *argv[])
 			break;
 		case 'i':
 			iflag++;
+			break;
+		case 'N':			/* do not wait for lock	*/
+			nblock = LOCK_NB;	/* will fail if locked */
 			break;
 		case 'p':			/* create V7 "file.orig" */
 			makeold = 1;
@@ -462,11 +462,14 @@ main(int argc, char *argv[])
 					error("put");
 			}
 		}
-		/* Create original format password file entry */
-		if (is_comment && makeold){	/* copy comments */
-			if (fprintf(oldfp, "%s\n", line) < 0)
-				error("write old");
-		} else if (makeold) {
+		/*
+		 * Create original style password file entry.
+		 *
+		 * Don't copy comments since this could reveal encrypted
+		 * passwords if entries have been simply commented out
+		 * in master.passwd.
+		 */
+		if (makeold && !is_comment) {
 			char uidstr[20];
 			char gidstr[20];
 
@@ -672,6 +675,6 @@ usage(void)
 {
 
 	(void)fprintf(stderr,
-"usage: pwd_mkdb [-BCiLNp] [-d directory] [-s cachesize] [-u username] file\n");
+"usage: pwd_mkdb [-CiNp] [-d directory] [-s cachesize] [-u username] file\n");
 	exit(1);
 }

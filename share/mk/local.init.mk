@@ -19,7 +19,10 @@ CFLAGS_LAST+= --sysroot=${SYSROOT}
 CXXFLAGS_LAST+= --sysroot=${SYSROOT}
 LDADD+= --sysroot=${SYSROOT}
 .elif ${MK_STAGING} == "yes"
-CFLAGS+= -isystem ${STAGE_INCLUDEDIR}
+ISYSTEM?= ${STAGE_INCLUDEDIR}
+# no space after -isystem makes it easier to
+# grep the flag out of command lines (in meta files) to see its value.
+CFLAGS+= -isystem${ISYSTEM}
 # XXX: May be needed for GCC to build with libc++ rather than libstdc++. See Makefile.inc1
 #CXXFLAGS+= -std=gnu++11
 #LDADD+= -L${STAGE_LIBDIR}/libc++
@@ -36,5 +39,6 @@ CFLAGS+= ${HOST_CFLAGS}
 .endif
 
 .-include "src.init.mk"
+.-include <site.init.mk>
 .-include "${.CURDIR}/local.init.mk"
 .endif

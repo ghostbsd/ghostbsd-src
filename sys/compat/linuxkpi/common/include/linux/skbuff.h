@@ -89,8 +89,16 @@ enum sk_buff_pkt_type {
 
 struct sk_buff_head {
 		/* XXX TODO */
-	struct sk_buff		*next;
-	struct sk_buff		*prev;
+	union {
+		struct {
+			struct sk_buff		*next;
+			struct sk_buff		*prev;
+		};
+		struct sk_buff_head_l {
+			struct sk_buff		*next;
+			struct sk_buff		*prev;
+		} list;
+	};
 	size_t			qlen;
 	spinlock_t		lock;
 };
@@ -143,7 +151,8 @@ struct sk_buff {
 	uint16_t		l4hdroff;	/* transport header offset from *head */
 	uint32_t		priority;
 	uint16_t		qmap;		/* queue mapping */
-	uint16_t		_spareu16_0;
+	uint16_t		_flags;		/* Internal flags. */
+#define	_SKB_FLAGS_SKBEXTFRAG	0x0001
 	enum sk_buff_pkt_type	pkt_type;
 
 	/* "Scratch" area for layers to store metadata. */
@@ -174,6 +183,7 @@ struct sk_buff {
 
 struct sk_buff *linuxkpi_alloc_skb(size_t, gfp_t);
 struct sk_buff *linuxkpi_dev_alloc_skb(size_t, gfp_t);
+struct sk_buff *linuxkpi_build_skb(void *, size_t);
 void linuxkpi_kfree_skb(struct sk_buff *);
 
 struct sk_buff *linuxkpi_skb_copy(struct sk_buff *, gfp_t);
@@ -239,6 +249,16 @@ dev_kfree_skb_irq(struct sk_buff *skb)
 	SKB_TRACE(skb);
 	SKB_IMPROVE("Do we have to defer this?");
 	dev_kfree_skb(skb);
+}
+
+static inline struct sk_buff *
+build_skb(void *data, unsigned int fragsz)
+{
+	struct sk_buff *skb;
+
+	skb = linuxkpi_build_skb(data, fragsz);
+	SKB_TRACE(skb);
+	return (skb);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -467,6 +487,7 @@ skb_add_rx_frag(struct sk_buff *skb, int fragno, struct page *page,
 	shinfo->frags[fragno].size = size;
 	shinfo->nr_frags = fragno + 1;
         skb->len += size;
+	skb->data_len += size;
         skb->truesize += truesize;
 
 	/* XXX TODO EXTEND truesize? */
@@ -514,8 +535,8 @@ __skb_insert(struct sk_buff *new, struct sk_buff *prev, struct sk_buff *next,
 	SKB_TRACE_FMT(new, "prev %p next %p q %p", prev, next, q);
 	new->prev = prev;
 	new->next = next;
-	next->prev = new;
-	prev->next = new;
+	((struct sk_buff_head_l *)next)->prev = new;
+	((struct sk_buff_head_l *)prev)->next = new;
 	q->qlen++;
 }
 
@@ -525,7 +546,7 @@ __skb_queue_after(struct sk_buff_head *q, struct sk_buff *skb,
 {
 
 	SKB_TRACE_FMT(q, "skb %p new %p", skb, new);
-	__skb_insert(new, skb, skb->next, q);
+	__skb_insert(new, skb, ((struct sk_buff_head_l *)skb)->next, q);
 }
 
 static inline void
@@ -538,24 +559,30 @@ __skb_queue_before(struct sk_buff_head *q, struct sk_buff *skb,
 }
 
 static inline void
-__skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
+__skb_queue_tail(struct sk_buff_head *q, struct sk_buff *new)
 {
-	struct sk_buff *s;
 
-	SKB_TRACE2(q, skb);
-	q->qlen++;
-	s = (struct sk_buff *)q;
-	s->prev->next = skb;
-	skb->prev = s->prev;
-	skb->next = s;
-	s->prev = skb;
+	SKB_TRACE2(q, new);
+	__skb_queue_after(q, (struct sk_buff *)q, new);
 }
 
 static inline void
-skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
+skb_queue_tail(struct sk_buff_head *q, struct sk_buff *new)
 {
 	SKB_TRACE2(q, skb);
-	return (__skb_queue_tail(q, skb));
+	return (__skb_queue_tail(q, new));
+}
+
+static inline struct sk_buff *
+skb_peek(struct sk_buff_head *q)
+{
+	struct sk_buff *skb;
+
+	skb = q->next;
+	SKB_TRACE2(q, skb);
+	if (skb == (struct sk_buff *)q)
+		return (NULL);
+	return (skb);
 }
 
 static inline struct sk_buff *
@@ -736,13 +763,6 @@ skb_frag_size(const skb_frag_t *frag)
 	return (-1);
 }
 
-static inline bool
-skb_is_nonlinear(struct sk_buff *skb)
-{
-	SKB_TRACE(skb);
-	return ((skb->data_len > 0) ? true : false);
-}
-
 #define	skb_walk_frags(_skb, _frag)					\
 	for ((_frag) = (_skb); false; (_frag)++)
 
@@ -773,7 +793,7 @@ static inline void
 skb_free_frag(void *frag)
 {
 
-	SKB_TODO();
+	page_frag_free(frag);
 }
 
 static inline struct sk_buff *
@@ -800,25 +820,30 @@ skb_mark_not_on_list(struct sk_buff *skb)
 }
 
 static inline void
+___skb_queue_splice_init(const struct sk_buff_head *from,
+    struct sk_buff *p, struct sk_buff *n)
+{
+	struct sk_buff *b, *e;
+
+	b = from->next;
+	e = from->prev;
+
+	b->prev = p;
+	((struct sk_buff_head_l *)p)->next = b;
+	e->next = n;
+	((struct sk_buff_head_l *)n)->prev = e;
+}
+
+static inline void
 skb_queue_splice_init(struct sk_buff_head *from, struct sk_buff_head *to)
 {
-	struct sk_buff *b, *e, *n;
 
 	SKB_TRACE2(from, to);
 
 	if (skb_queue_empty(from))
 		return;
 
-	/* XXX do we need a barrier around this? */
-	b = from->next;
-	e = from->prev;
-	n = to->next;
-
-	b->prev = (struct sk_buff *)to;
-	to->next = b;
-	e->next = n;
-	n->prev = e;
-
+	___skb_queue_splice_init(from, (struct sk_buff *)to, to->next);
 	to->qlen += from->qlen;
 	__skb_queue_head_init(from);
 }
@@ -847,12 +872,26 @@ skb_network_header(struct sk_buff *skb)
         return (skb->head + skb->l3hdroff);
 }
 
+static inline bool
+skb_is_nonlinear(struct sk_buff *skb)
+{
+	SKB_TRACE(skb);
+	return ((skb->data_len > 0) ? true : false);
+}
+
 static inline int
 __skb_linearize(struct sk_buff *skb)
 {
 	SKB_TRACE(skb);
 	SKB_TODO();
 	return (ENXIO);
+}
+
+static inline int
+skb_linearize(struct sk_buff *skb)
+{
+
+	return (skb_is_nonlinear(skb) ? __skb_linearize(skb) : 0);
 }
 
 static inline int
@@ -910,14 +949,6 @@ skb_reset_mac_header(struct sk_buff *skb)
 	SKB_TODO();
 }
 
-static inline struct sk_buff *
-skb_peek(struct sk_buff_head *q)
-{
-	SKB_TRACE(q);
-	SKB_TODO();
-	return (NULL);
-}
-
 static inline __sum16
 csum_unfold(__sum16 sum)
 {
@@ -936,7 +967,10 @@ skb_reset_tail_pointer(struct sk_buff *skb)
 {
 
 	SKB_TRACE(skb);
+#ifdef SKB_DOING_OFFSETS_US_NOT
 	skb->tail = (uint8_t *)(uintptr_t)(skb->data - skb->head);
+#endif
+	skb->tail = skb->data;
 	SKB_TRACE(skb);
 }
 
@@ -965,14 +999,6 @@ skb_copy_from_linear_data(const struct sk_buff *skb, void *dst, size_t len)
 	memcpy(dst, skb->data, len);
 }
 
-static inline struct sk_buff *
-build_skb(void *data, unsigned int fragsz)
-{
-
-	SKB_TODO();
-	return (NULL);
-}
-
 static inline int
 skb_pad(struct sk_buff *skb, int pad)
 {
@@ -996,15 +1022,6 @@ napi_consume_skb(struct sk_buff *skb, int budget)
 
 	SKB_TRACE(skb);
 	SKB_TODO();
-}
-
-static inline bool
-skb_linearize(struct sk_buff *skb)
-{
-
-	SKB_TRACE(skb);
-	SKB_TODO();
-	return (false);
 }
 
 #define	SKB_WITH_OVERHEAD(_s)						\

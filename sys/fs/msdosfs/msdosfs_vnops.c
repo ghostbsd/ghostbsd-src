@@ -127,8 +127,7 @@ static vop_vptofh_t	msdosfs_vptofh;
 /*
  * Create a regular file. On entry the directory to contain the file being
  * created is locked.  We must release before we return. We must also free
- * the pathname buffer pointed at by cnp->cn_pnbuf, always on error, or
- * only if the SAVESTART bit in cn_flags is clear on success.
+ * the pathname buffer pointed at by cnp->cn_pnbuf, always on error.
  */
 static int
 msdosfs_create(struct vop_create_args *ap)
@@ -314,8 +313,11 @@ msdosfs_getattr(struct vop_getattr_args *ap)
 		vap->va_flags |= UF_SYSTEM;
 	vap->va_gen = 0;
 	vap->va_blocksize = pmp->pm_bpcluster;
-	vap->va_bytes =
-	    (dep->de_FileSize + pmp->pm_crbomask) & ~pmp->pm_crbomask;
+	if (dep->de_StartCluster != MSDOSFSROOT)
+		vap->va_bytes =
+		    (dep->de_FileSize + pmp->pm_crbomask) & ~pmp->pm_crbomask;
+	else
+		vap->va_bytes = 0; /* FAT12/FAT16 root dir in reserved area */
 	vap->va_type = ap->a_vp->v_type;
 	vap->va_filerev = dep->de_modrev;
 	return (0);
@@ -1127,8 +1129,6 @@ relock:
 		}
 		if (error != 0)
 			goto unlock;
-		if ((tcnp->cn_flags & SAVESTART) == 0)
-			panic("msdosfs_rename: lost to startdir");
 	}
 
 	if (tip != NULL) {

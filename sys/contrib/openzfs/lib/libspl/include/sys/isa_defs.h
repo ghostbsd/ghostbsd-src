@@ -227,8 +227,12 @@ extern "C" {
  * RISC-V arch specific defines
  * only RV64G (including atomic) LP64 is supported yet
  */
-#elif defined(__riscv) && defined(_LP64) && _LP64 && \
+#elif defined(__riscv) && defined(__riscv_xlen) && __riscv_xlen == 64 && \
 	defined(__riscv_atomic) && __riscv_atomic
+
+#if !defined(_LP64)
+#define	_LP64 1
+#endif
 
 #ifndef	__riscv__
 #define	__riscv__
@@ -242,10 +246,26 @@ extern "C" {
 
 #define	_SUNOS_VTOC_16
 
+/*
+ * LoongArch arch specific defines
+ * only LoongArch64 is supported yet
+ */
+#elif defined(__loongarch__) && defined(__loongarch_lp64)
+
+#if !defined(_LP64)
+#define	_LP64
+#endif
+
+#define	_ZFS_LITTLE_ENDIAN
+#define	_SUNOS_VTOC_16
+
+/* not all LoongArch cores support unaligned accesses in hardware */
+#define	_ALIGNMENT_REQUIRED	1
+
 #else
 /*
  * Currently supported:
- * x86_64, x32, i386, arm, powerpc, s390, sparc, mips, and RV64G
+ * x86_64, x32, i386, arm, powerpc, s390, sparc, mips, RV64G, and LoongArch64
  */
 #error "Unsupported ISA type"
 #endif

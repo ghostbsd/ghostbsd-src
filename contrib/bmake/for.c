@@ -1,4 +1,4 @@
-/*	$NetBSD: for.c,v 1.168 2022/06/12 16:09:21 rillig Exp $	*/
+/*	$NetBSD: for.c,v 1.171 2023/02/14 21:38:31 rillig Exp $	*/
 
 /*
  * Copyright (c) 1992, The Regents of the University of California.
@@ -58,7 +58,7 @@
 #include "make.h"
 
 /*	"@(#)for.c	8.1 (Berkeley) 6/6/93"	*/
-MAKE_RCSID("$NetBSD: for.c,v 1.168 2022/06/12 16:09:21 rillig Exp $");
+MAKE_RCSID("$NetBSD: for.c,v 1.171 2023/02/14 21:38:31 rillig Exp $");
 
 
 typedef struct ForLoop {
@@ -168,7 +168,9 @@ ForLoop_ParseItems(ForLoop *f, const char *p)
 
 	cpp_skip_whitespace(&p);
 
-	if (Var_Subst(p, SCOPE_GLOBAL, VARE_WANTRES, &items) != VPR_OK) {
+	items = Var_Subst(p, SCOPE_GLOBAL, VARE_WANTRES);
+	if (items == var_Error) {
+		/* TODO: Make this part of the code reachable. */
 		Parse_Error(PARSE_FATAL, "Error in .for loop items");
 		return false;
 	}
@@ -488,6 +490,13 @@ For_NextIteration(ForLoop *f, Buffer *body)
 	ForLoop_SubstBody(f, f->nextItem - (unsigned int)f->vars.len, body);
 	DEBUG1(FOR, "For: loop body:\n%s", body->data);
 	return true;
+}
+
+/* Break out of the .for loop. */
+void
+For_Break(ForLoop *f)
+{
+	f->nextItem = (unsigned int)f->items.len;
 }
 
 /* Run the .for loop, imitating the actions of an include file. */

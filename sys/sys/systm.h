@@ -40,13 +40,13 @@
 #ifndef _SYS_SYSTM_H_
 #define	_SYS_SYSTM_H_
 
-#include <sys/cdefs.h>
-#include <machine/atomic.h>
-#include <machine/cpufunc.h>
+#include <sys/types.h>
 #include <sys/callout.h>
 #include <sys/kassert.h>
 #include <sys/queue.h>
 #include <sys/stdint.h>		/* for people using printf mainly */
+#include <machine/atomic.h>
+#include <machine/cpufunc.h>
 
 __NULLABILITY_PRAGMA_PUSH
 
@@ -510,10 +510,6 @@ int alloc_unr_specific(struct unrhdr *uh, u_int item);
 int alloc_unrl(struct unrhdr *uh);
 void free_unr(struct unrhdr *uh, u_int item);
 
-#ifndef __LP64__
-#define UNR64_LOCKED
-#endif
-
 struct unrhdr64 {
         uint64_t	counter;
 };
@@ -525,16 +521,12 @@ new_unrhdr64(struct unrhdr64 *unr64, uint64_t low)
 	unr64->counter = low;
 }
 
-#ifdef UNR64_LOCKED
-uint64_t alloc_unr64(struct unrhdr64 *);
-#else
 static __inline uint64_t
 alloc_unr64(struct unrhdr64 *unr64)
 {
 
 	return (atomic_fetchadd_64(&unr64->counter, 1));
 }
-#endif
 
 void	intr_prof_stack_use(struct thread *td, struct trapframe *frame);
 

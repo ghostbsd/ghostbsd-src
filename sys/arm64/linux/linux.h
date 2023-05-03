@@ -49,7 +49,6 @@ typedef uint16_t	l_ushort;
 typedef l_ulong		l_uintptr_t;
 typedef l_long		l_clock_t;
 typedef l_int		l_daddr_t;
-typedef l_ulong		l_dev_t;
 typedef l_uint		l_gid_t;
 typedef l_ushort	l_gid16_t;	/* XXX */
 typedef l_uint		l_uid_t;
@@ -81,7 +80,10 @@ typedef struct {
 #define	l_fd_set	fd_set
 
 /* Miscellaneous */
-#define	LINUX_AT_COUNT		21
+#define	LINUX_AT_COUNT		21	/* Count of used aux entry types.
+					 * Keep this synchronized with
+					 * linux_copyout_auxargs() code.
+					 */
 
 struct l___sysctl_args
 {
@@ -125,7 +127,7 @@ struct l_timespec {
 #define	LINUX_O_LARGEFILE	000400000
 
 struct l_newstat {
-	l_dev_t		st_dev;
+	l_ulong		st_dev;
 	l_ino_t		st_ino;
 	l_uint		st_mode;
 	l_uint		st_nlink;
@@ -133,7 +135,7 @@ struct l_newstat {
 	l_uid_t		st_uid;
 	l_gid_t		st_gid;
 
-	l_dev_t		st_rdev;
+	l_ulong		st_rdev;
 	l_ulong		__st_pad1;
 	l_off_t		st_size;
 	l_int		st_blksize;
@@ -181,52 +183,7 @@ union l_semun {
 	l_uintptr_t	__pad;
 };
 
-struct l_ifmap {
-	l_ulong		mem_start;
-	l_ulong		mem_end;
-	l_ushort	base_addr;
-	u_char		irq;
-	u_char		dma;
-	u_char		port;
-	/* 3 bytes spare*/
-};
-
-struct l_ifreq {
-	union {
-		char	ifrn_name[LINUX_IFNAMSIZ];
-	} ifr_ifrn;
-
-	union {
-		struct l_sockaddr	ifru_addr;
-		struct l_sockaddr	ifru_dstaddr;
-		struct l_sockaddr	ifru_broadaddr;
-		struct l_sockaddr	ifru_netmask;
-		struct l_sockaddr	ifru_hwaddr;
-		l_short		ifru_flags[1];
-		l_int		ifru_ivalue;
-		l_int		ifru_mtu;
-		struct l_ifmap	ifru_map;
-		char		ifru_slave[LINUX_IFNAMSIZ];
-		l_uintptr_t	ifru_data;
-	} ifr_ifru;
-};
-
-#define	ifr_name	ifr_ifrn.ifrn_name	/* Interface name */
-#define	ifr_hwaddr	ifr_ifru.ifru_hwaddr	/* MAC address */
-#define	ifr_ifindex	ifr_ifru.ifru_ivalue	/* Interface index */
-
 #define	linux_copyout_rusage(r, u)	copyout(r, u, sizeof(*r))
-
-/* robust futexes */
-struct linux_robust_list {
-	l_uintptr_t			next;
-};
-
-struct linux_robust_list_head {
-	struct linux_robust_list	list;
-	l_long				futex_offset;
-	l_uintptr_t			pending_list;
-};
 
 struct linux_pt_regset {
 	l_ulong x[31];

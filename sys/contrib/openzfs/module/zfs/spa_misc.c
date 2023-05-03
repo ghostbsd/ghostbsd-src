@@ -57,6 +57,7 @@
 #include <sys/fs/zfs.h>
 #include <sys/metaslab_impl.h>
 #include <sys/arc.h>
+#include <sys/brt.h>
 #include <sys/ddt.h>
 #include <sys/kstat.h>
 #include "zfs_prop.h"
@@ -304,20 +305,20 @@ int zfs_free_leak_on_eio = B_FALSE;
  * has not completed in zfs_deadman_synctime_ms is considered "hung" resulting
  * in one of three behaviors controlled by zfs_deadman_failmode.
  */
-unsigned long zfs_deadman_synctime_ms = 600000UL;  /* 10 min. */
+uint64_t zfs_deadman_synctime_ms = 600000UL;  /* 10 min. */
 
 /*
  * This value controls the maximum amount of time zio_wait() will block for an
  * outstanding IO.  By default this is 300 seconds at which point the "hung"
  * behavior will be applied as described for zfs_deadman_synctime_ms.
  */
-unsigned long zfs_deadman_ziotime_ms = 300000UL;  /* 5 min. */
+uint64_t zfs_deadman_ziotime_ms = 300000UL;  /* 5 min. */
 
 /*
  * Check time in milliseconds. This defines the frequency at which we check
  * for hung I/O.
  */
-unsigned long zfs_deadman_checktime_ms = 60000UL;  /* 1 min. */
+uint64_t zfs_deadman_checktime_ms = 60000UL;  /* 1 min. */
 
 /*
  * By default the deadman is enabled.
@@ -492,8 +493,9 @@ spa_config_tryenter(spa_t *spa, int locks, const void *tag, krw_t rw)
 	return (1);
 }
 
-void
-spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
+static void
+spa_config_enter_impl(spa_t *spa, int locks, const void *tag, krw_t rw,
+    int mmp_flag)
 {
 	(void) tag;
 	int wlocks_held = 0;
@@ -508,7 +510,8 @@ spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
 			continue;
 		mutex_enter(&scl->scl_lock);
 		if (rw == RW_READER) {
-			while (scl->scl_writer || scl->scl_write_wanted) {
+			while (scl->scl_writer ||
+			    (!mmp_flag && scl->scl_write_wanted)) {
 				cv_wait(&scl->scl_cv, &scl->scl_lock);
 			}
 		} else {
@@ -524,6 +527,27 @@ spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
 		mutex_exit(&scl->scl_lock);
 	}
 	ASSERT3U(wlocks_held, <=, locks);
+}
+
+void
+spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
+{
+	spa_config_enter_impl(spa, locks, tag, rw, 0);
+}
+
+/*
+ * The spa_config_enter_mmp() allows the mmp thread to cut in front of
+ * outstanding write lock requests. This is needed since the mmp updates are
+ * time sensitive and failure to service them promptly will result in a
+ * suspended pool. This pool suspension has been seen in practice when there is
+ * a single disk in a pool that is responding slowly and presumably about to
+ * fail.
+ */
+
+void
+spa_config_enter_mmp(spa_t *spa, int locks, const void *tag, krw_t rw)
+{
+	spa_config_enter_impl(spa, locks, tag, rw, 1);
 }
 
 void
@@ -1290,7 +1314,7 @@ spa_vdev_config_exit(spa_t *spa, vdev_t *vd, uint64_t txg, int error,
 	 * If the config changed, update the config cache.
 	 */
 	if (config_changed)
-		spa_write_cachefile(spa, B_FALSE, B_TRUE, B_FALSE);
+		spa_write_cachefile(spa, B_FALSE, B_TRUE, B_TRUE);
 }
 
 /*
@@ -1536,7 +1560,7 @@ snprintf_blkptr(char *buf, size_t buflen, const blkptr_t *bp)
 		compress = zio_compress_table[BP_GET_COMPRESS(bp)].ci_name;
 	}
 
-	SNPRINTF_BLKPTR(snprintf, ' ', buf, buflen, bp, type, checksum,
+	SNPRINTF_BLKPTR(kmem_scnprintf, ' ', buf, buflen, bp, type, checksum,
 	    compress);
 }
 
@@ -1834,7 +1858,7 @@ void
 spa_update_dspace(spa_t *spa)
 {
 	spa->spa_dspace = metaslab_class_get_dspace(spa_normal_class(spa)) +
-	    ddt_get_dedup_dspace(spa);
+	    ddt_get_dedup_dspace(spa) + brt_get_dspace(spa);
 	if (spa->spa_nonallocating_dspace > 0) {
 		/*
 		 * Subtract the space provided by all non-allocating vdevs that
@@ -2306,7 +2330,7 @@ spa_import_progress_add(spa_t *spa)
 {
 	spa_history_list_t *shl = spa_import_progress_list;
 	spa_import_progress_t *sip;
-	char *poolname = NULL;
+	const char *poolname = NULL;
 
 	sip = kmem_zalloc(sizeof (spa_import_progress_t), KM_SLEEP);
 	sip->pool_guid = spa_guid(spa);
@@ -2410,6 +2434,7 @@ spa_init(spa_mode_t mode)
 	unique_init();
 	zfs_btree_init();
 	metaslab_stat_init();
+	brt_init();
 	ddt_init();
 	zio_init();
 	dmu_init();
@@ -2446,6 +2471,7 @@ spa_fini(void)
 	dmu_fini();
 	zio_fini();
 	ddt_fini();
+	brt_fini();
 	metaslab_stat_fini();
 	zfs_btree_fini();
 	unique_fini();
@@ -2556,7 +2582,6 @@ spa_scan_stat_init(spa_t *spa)
 	spa->spa_scan_pass_scrub_spent_paused = 0;
 	spa->spa_scan_pass_exam = 0;
 	spa->spa_scan_pass_issued = 0;
-	vdev_scan_stat_init(spa->spa_root_vdev);
 }
 
 /*
@@ -2922,7 +2947,7 @@ ZFS_MODULE_PARAM(zfs, zfs_, recover, INT, ZMOD_RW,
 ZFS_MODULE_PARAM(zfs, zfs_, free_leak_on_eio, INT, ZMOD_RW,
 	"Set to ignore IO errors during free and permanently leak the space");
 
-ZFS_MODULE_PARAM(zfs_deadman, zfs_deadman_, checktime_ms, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_deadman, zfs_deadman_, checktime_ms, U64, ZMOD_RW,
 	"Dead I/O check interval in milliseconds");
 
 ZFS_MODULE_PARAM(zfs_deadman, zfs_deadman_, enabled, INT, ZMOD_RW,
@@ -2943,11 +2968,11 @@ ZFS_MODULE_PARAM_CALL(zfs_deadman, zfs_deadman_, failmode,
 	"Failmode for deadman timer");
 
 ZFS_MODULE_PARAM_CALL(zfs_deadman, zfs_deadman_, synctime_ms,
-	param_set_deadman_synctime, param_get_ulong, ZMOD_RW,
+	param_set_deadman_synctime, spl_param_get_u64, ZMOD_RW,
 	"Pool sync expiration time in milliseconds");
 
 ZFS_MODULE_PARAM_CALL(zfs_deadman, zfs_deadman_, ziotime_ms,
-	param_set_deadman_ziotime, param_get_ulong, ZMOD_RW,
+	param_set_deadman_ziotime, spl_param_get_u64, ZMOD_RW,
 	"IO expiration time in milliseconds");
 
 ZFS_MODULE_PARAM(zfs, zfs_, special_class_metadata_reserve_pct, UINT, ZMOD_RW,

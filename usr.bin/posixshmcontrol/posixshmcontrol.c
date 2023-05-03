@@ -308,8 +308,10 @@ list_shm(int argc, char **argv)
 			continue;
 		fd = shm_open(kif->kf_path, O_RDONLY, 0);
 		if (fd == -1) {
-			warn("open %s", kif->kf_path);
-			ret = 1;
+			if (errno != EACCES) {
+				warn("open %s", kif->kf_path);
+				ret = 1;
+			}
 			continue;
 		}
 		error = fstat(fd, &st);
@@ -404,6 +406,8 @@ stat_one_shm(const char *path, bool hsize, bool uname)
 	char sizebuf[8];
 	struct stat st;
 	int error, fd, ret;
+	struct shm_largepage_conf conf_dummy;
+	bool largepage;
 
 	fd = shm_open(path, O_RDONLY, 0);
 	if (fd == -1) {
@@ -442,9 +446,13 @@ stat_one_shm(const char *path, bool hsize, bool uname)
 		    (long)st.st_ctim.tv_nsec);
 		printf("birth\t%ld.%09ld\n", (long)st.st_birthtim.tv_sec,
 		    (long)st.st_birthtim.tv_nsec);
-		if (st.st_blocks != 0)
+		error = ioctl(fd, FIOGSHMLPGCNF, &conf_dummy);
+		largepage = error == 0;
+		if (st.st_blocks != 0 && largepage)
 			printf("pagesz\t%jd\n", roundup((uintmax_t)st.st_size,
 			    PAGE_SIZE) / st.st_blocks);
+		else
+			printf("pages\t%jd\n", st.st_blocks);
 	}
 	close(fd);
 	return (ret);

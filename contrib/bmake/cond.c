@@ -1,4 +1,4 @@
-/*	$NetBSD: cond.c,v 1.334 2022/04/15 09:33:20 rillig Exp $	*/
+/*	$NetBSD: cond.c,v 1.344 2023/02/14 21:08:00 rillig Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990 The Regents of the University of California.
@@ -81,12 +81,9 @@
  *			of one of the .if directives or the condition in a
  *			':?then:else' variable modifier.
  *
- *	Cond_save_depth
- *	Cond_restore_depth
- *			Save and restore the nesting of the conditions, at
- *			the start and end of including another makefile, to
- *			ensure that in each makefile the conditional
- *			directives are well-balanced.
+ *	Cond_EndFile
+ *			At the end of reading a makefile, ensure that the
+ *			conditional directives are well-balanced.
  */
 
 #include <errno.h>
@@ -95,7 +92,7 @@
 #include "dir.h"
 
 /*	"@(#)cond.c	8.2 (Berkeley) 1/2/94"	*/
-MAKE_RCSID("$NetBSD: cond.c,v 1.334 2022/04/15 09:33:20 rillig Exp $");
+MAKE_RCSID("$NetBSD: cond.c,v 1.344 2023/02/14 21:08:00 rillig Exp $");
 
 /*
  * Conditional expressions conform to this grammar:
@@ -178,8 +175,7 @@ typedef struct CondParser {
 
 static CondResult CondParser_Or(CondParser *par, bool);
 
-static unsigned int cond_depth = 0;	/* current .if nesting level */
-static unsigned int cond_min_depth = 0;	/* depth at makefile open */
+unsigned int cond_depth = 0;	/* current .if nesting level */
 
 /* Names for ComparisonOp. */
 static const char opname[][3] = { "<", "<=", ">", ">=", "==", "!=" };
@@ -239,8 +235,7 @@ ParseWord(const char **pp, bool doEval)
 			VarEvalMode emode = doEval
 			    ? VARE_UNDEFERR
 			    : VARE_PARSE_ONLY;
-			FStr nestedVal;
-			(void)Var_Parse(&p, SCOPE_CMDLINE, emode, &nestedVal);
+			FStr nestedVal = Var_Parse(&p, SCOPE_CMDLINE, emode);
 			/* TODO: handle errors */
 			Buf_AddStr(&word, nestedVal.str);
 			FStr_Done(&nestedVal);
@@ -384,7 +379,9 @@ is_separator(char ch)
 
 /*
  * In a quoted or unquoted string literal or a number, parse a variable
- * expression.
+ * expression and add its value to the buffer.
+ *
+ * Return whether to continue parsing the leaf.
  *
  * Example: .if x${CENTER}y == "${PREFIX}${SUFFIX}" || 0x${HEX}
  */
@@ -396,7 +393,6 @@ CondParser_StringExpr(CondParser *par, const char *start,
 	VarEvalMode emode;
 	const char *p;
 	bool atStart;
-	VarParseResult parseResult;
 
 	emode = doEval && quoted ? VARE_WANTRES
 	    : doEval ? VARE_UNDEFERR
@@ -404,27 +400,10 @@ CondParser_StringExpr(CondParser *par, const char *start,
 
 	p = par->p;
 	atStart = p == start;
-	parseResult = Var_Parse(&p, SCOPE_CMDLINE, emode, inout_str);
+	*inout_str = Var_Parse(&p, SCOPE_CMDLINE, emode);
 	/* TODO: handle errors */
 	if (inout_str->str == var_Error) {
-		if (parseResult == VPR_ERR) {
-			/*
-			 * FIXME: Even if an error occurs, there is no
-			 *  guarantee that it is reported.
-			 *
-			 * See cond-token-plain.mk $$$$$$$$.
-			 */
-			par->printedError = true;
-		}
-		/*
-		 * XXX: Can there be any situation in which a returned
-		 * var_Error needs to be freed?
-		 */
 		FStr_Done(inout_str);
-		/*
-		 * Even if !doEval, we still report syntax errors, which is
-		 * what getting var_Error back with !doEval means.
-		 */
 		*inout_str = FStr_InitRefer(NULL);
 		return false;
 	}
@@ -432,8 +411,8 @@ CondParser_StringExpr(CondParser *par, const char *start,
 
 	/*
 	 * If the '$' started the string literal (which means no quotes), and
-	 * the variable expression is followed by a space, looks like a
-	 * comparison operator or is the end of the expression, we are done.
+	 * the expression is followed by a space, a comparison operator or
+	 * the end of the expression, we are done.
 	 */
 	if (atStart && is_separator(par->p[0]))
 		return false;
@@ -570,10 +549,10 @@ EvalCompareNum(double lhs, ComparisonOp op, double rhs)
 		return lhs > rhs;
 	case GE:
 		return lhs >= rhs;
-	case NE:
-		return lhs != rhs;
-	default:
+	case EQ:
 		return lhs == rhs;
+	default:
+		return lhs != rhs;
 	}
 }
 
@@ -583,7 +562,9 @@ EvalCompareStr(CondParser *par, const char *lhs,
 {
 	if (op != EQ && op != NE) {
 		Parse_Error(PARSE_FATAL,
-		    "String comparison operator must be either == or !=");
+		    "Comparison with '%s' requires both operands "
+		    "'%s' and '%s' to be numeric",
+		    opname[op], lhs, rhs);
 		par->printedError = true;
 		return TOK_ERROR;
 	}
@@ -693,8 +674,8 @@ CondParser_FuncCallEmpty(CondParser *par, bool doEval, Token *out_token)
 		return false;
 
 	cp--;			/* Make cp[1] point to the '('. */
-	(void)Var_Parse(&cp, SCOPE_CMDLINE,
-	    doEval ? VARE_WANTRES : VARE_PARSE_ONLY, &val);
+	val = Var_Parse(&cp, SCOPE_CMDLINE,
+	    doEval ? VARE_WANTRES : VARE_PARSE_ONLY);
 	/* TODO: handle errors */
 
 	if (val.str == var_Error)
@@ -1135,7 +1116,7 @@ Cond_EvalLine(const char *line)
 			    "The .endif directive does not take arguments");
 		}
 
-		if (cond_depth == cond_min_depth) {
+		if (cond_depth == CurFile_CondMinDepth()) {
 			Parse_Error(PARSE_FATAL, "if-less endif");
 			return CR_TRUE;
 		}
@@ -1165,7 +1146,7 @@ Cond_EvalLine(const char *line)
 				    "The .else directive "
 				    "does not take arguments");
 
-			if (cond_depth == cond_min_depth) {
+			if (cond_depth == CurFile_CondMinDepth()) {
 				Parse_Error(PARSE_FATAL, "if-less else");
 				return CR_TRUE;
 			}
@@ -1200,7 +1181,7 @@ Cond_EvalLine(const char *line)
 		return CR_ERROR;
 
 	if (isElif) {
-		if (cond_depth == cond_min_depth) {
+		if (cond_depth == CurFile_CondMinDepth()) {
 			Parse_Error(PARSE_FATAL, "if-less elif");
 			return CR_TRUE;
 		}
@@ -1254,24 +1235,13 @@ Cond_EvalLine(const char *line)
 }
 
 void
-Cond_restore_depth(unsigned int saved_depth)
+Cond_EndFile(void)
 {
-	unsigned int open_conds = cond_depth - cond_min_depth;
+	unsigned int open_conds = cond_depth - CurFile_CondMinDepth();
 
-	if (open_conds != 0 || saved_depth > cond_depth) {
+	if (open_conds != 0) {
 		Parse_Error(PARSE_FATAL, "%u open conditional%s",
 		    open_conds, open_conds == 1 ? "" : "s");
-		cond_depth = cond_min_depth;
+		cond_depth = CurFile_CondMinDepth();
 	}
-
-	cond_min_depth = saved_depth;
-}
-
-unsigned int
-Cond_save_depth(void)
-{
-	unsigned int depth = cond_min_depth;
-
-	cond_min_depth = cond_depth;
-	return depth;
 }

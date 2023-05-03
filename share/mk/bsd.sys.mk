@@ -49,8 +49,11 @@ CWARNFLAGS+=	-Werror
 CWARNFLAGS+=	-Wall -Wno-format-y2k
 .endif # WARNS >= 2
 .if ${WARNS} >= 3
-CWARNFLAGS+=	-W -Wno-unused-parameter -Wstrict-prototypes\
-		-Wmissing-prototypes -Wpointer-arith
+CWARNFLAGS+=	-W -Wno-unused-parameter
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} < 150000
+CWARNFLAGS+=	-Wstrict-prototypes
+.endif
+CWARNFLAGS+=	-Wmissing-prototypes -Wpointer-arith
 .endif # WARNS >= 3
 .if ${WARNS} >= 4
 CWARNFLAGS+=	-Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch -Wshadow\
@@ -58,6 +61,11 @@ CWARNFLAGS+=	-Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch -Wshadow\
 .if !defined(NO_WCAST_ALIGN) && !defined(NO_WCAST_ALIGN.${COMPILER_TYPE})
 CWARNFLAGS+=	-Wcast-align
 .endif # !NO_WCAST_ALIGN !NO_WCAST_ALIGN.${COMPILER_TYPE}
+.endif # WARNS >= 4
+.if ${WARNS} >= 5
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 150000
+CWARNFLAGS+=	-Wstrict-prototypes
+.endif
 .endif # WARNS >= 4
 .if ${WARNS} >= 6
 CWARNFLAGS+=	-Wchar-subscripts -Wnested-externs \
@@ -75,6 +83,9 @@ CWARNFLAGS.clang+=	-Wthread-safety
 CWARNFLAGS+=	-Wno-uninitialized
 .endif # WARNS >=2 && WARNS <= 4
 CWARNFLAGS+=	-Wno-pointer-sign
+.if !defined(NO_WDATE_TIME)
+CWARNFLAGS+=	-Wdate-time
+.endif # NO_WDATE_TIME
 # Clang has more warnings enabled by default, and when using -Wall, so if WARNS
 # is set to low values, these have to be disabled explicitly.
 .if ${WARNS} <= 6
@@ -82,6 +93,9 @@ CWARNFLAGS.clang+=	-Wno-empty-body -Wno-string-plus-int
 CWARNFLAGS.clang+=	-Wno-unused-const-variable
 .if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 130000
 CWARNFLAGS.clang+=	-Wno-error=unused-but-set-variable
+.endif
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 150000
+CWARNFLAGS.clang+=	-Wno-error=unused-but-set-parameter
 .endif
 .endif # WARNS <= 6
 .if ${WARNS} <= 3
@@ -91,10 +105,6 @@ CWARNFLAGS.clang+=	-Wno-unused-local-typedef
 CWARNFLAGS.clang+=	-Wno-address-of-packed-member
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 90100
 CWARNFLAGS.gcc+=	-Wno-address-of-packed-member
-.endif
-.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 70000 && \
-    ${MACHINE_CPUARCH} == "arm" && !${MACHINE_ARCH:Marmv[67]*}
-CWARNFLAGS.clang+=	-Wno-atomic-alignment
 .endif
 .endif # WARNS <= 3
 .if ${WARNS} <= 2
@@ -114,11 +124,20 @@ CWARNFLAGS+=		-Wno-misleading-indentation
 .if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 140000
 NO_WBITWISE_INSTEAD_OF_LOGICAL=	-Wno-bitwise-instead-of-logical
 .endif
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 150000
+NO_WARRAY_PARAMETER=	-Wno-array-parameter
+NO_WSTRICT_PROTOTYPES=	-Wno-strict-prototypes
+NO_WDEPRECATED_NON_PROTOTYPE=-Wno-deprecated-non-prototype
+.endif
+.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 100100
+NO_WZERO_LENGTH_BOUNDS=	-Wno-zero-length-bounds
+.endif
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 110100
 NO_WARRAY_PARAMETER=	-Wno-array-parameter
 .endif
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 120100
 NO_WUSE_AFTER_FREE=	-Wno-use-after-free
+NO_WDANGLING_POINTER=	-Wno-dangling-pointer
 .endif
 .endif # WARNS
 
@@ -129,7 +148,7 @@ WFORMAT=	1
 .if ${WFORMAT} > 0
 #CWARNFLAGS+=	-Wformat-nonliteral -Wformat-security -Wno-format-extra-args
 CWARNFLAGS+=	-Wformat=2 -Wno-format-extra-args
-.if ${WARNS} <= 3
+.if ${WARNS:U0} <= 3
 CWARNFLAGS.clang+=	-Wno-format-nonliteral
 .endif # WARNS <= 3
 .if ${MK_WERROR} != "no" && ${MK_WERROR.${COMPILER_TYPE}:Uyes} != "no"
@@ -211,6 +230,14 @@ CWARNFLAGS+=	-Wno-error=overflow
 .endif
 .endif
 
+# GCC 12.1.0
+.if ${COMPILER_VERSION} >= 120100
+# These warnings are raised by headers in libc++ so are disabled
+# globally for all C++
+CXXWARNFLAGS+=	-Wno-literal-suffix 			\
+		-Wno-error=unknown-pragmas
+.endif
+
 # GCC produces false positives for functions that switch on an
 # enum (GCC bug 87950)
 CWARNFLAGS+=	-Wno-return-type
@@ -222,7 +249,8 @@ CWARNFLAGS+=	-Wno-system-headers
 .endif	# gcc
 
 # How to handle FreeBSD custom printf format specifiers.
-.if ${COMPILER_TYPE} == "clang"
+.if ${COMPILER_TYPE} == "clang" || \
+    (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 120100)
 FORMAT_EXTENSIONS=	-D__printf__=__freebsd_kprintf__
 .else
 FORMAT_EXTENSIONS=	-fformat-extensions
@@ -406,6 +434,14 @@ stage_as.ldscript: ${SHLIB_LINK:R}.ld
 STAGE_DIR.ldscript = ${STAGE_LIBDIR}
 STAGE_AS_${SHLIB_LINK:R}.ld:= ${SHLIB_LINK}
 NO_SHLIB_LINKS=
+.endif
+
+.if defined(STATIC_LDSCRIPT) && target(lib${LIB}.ald)
+STAGE_AS_SETS+= ald
+STAGE_DIR.ald = ${STAGE_LIBDIR}
+STAGE_AS.ald+= lib${LIB}.ald
+STAGE_AS_lib${LIB}.ald = lib${LIB}.a
+stage_as.ald: lib${LIB}.ald
 .endif
 
 .if target(stage_files.shlib)

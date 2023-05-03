@@ -59,7 +59,6 @@ __DEFAULT_YES_OPTIONS = \
     ACPI \
     APM \
     AT \
-    ATM \
     AUDIT \
     AUTHPF \
     AUTOFS \
@@ -81,13 +80,11 @@ __DEFAULT_YES_OPTIONS = \
     CDDL \
     CLANG \
     CLANG_BOOTSTRAP \
-    CLANG_IS_CC \
     CLEAN \
     CPP \
     CROSS_COMPILER \
     CRYPT \
     CUSE \
-    CXX \
     CXGBETOOL \
     DIALOG \
     DICT \
@@ -98,7 +95,6 @@ __DEFAULT_YES_OPTIONS = \
     EFI \
     ELFTOOLCHAIN_BOOTSTRAP \
     EXAMPLES \
-    FDT \
     FILE \
     FINGER \
     FLOPPY \
@@ -147,9 +143,9 @@ __DEFAULT_YES_OPTIONS = \
     MAILWRAPPER \
     MAKE \
     MLX5TOOL \
-    NDIS \
     NETCAT \
     NETGRAPH \
+    NETLINK_SUPPORT \
     NLS_CATALOGS \
     NS_CACHING \
     NTP \
@@ -160,7 +156,6 @@ __DEFAULT_YES_OPTIONS = \
     PF \
     PKGBOOTSTRAP \
     PMC \
-    PORTSNAP \
     PPP \
     QUOTAS \
     RADIUS_SUPPORT \
@@ -202,10 +197,10 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_EXTRAS \
     CLANG_FORMAT \
     DETECT_TZ_CHANGES \
+    DISK_IMAGE_TOOLS_BOOTSTRAP \
     DTRACE_TESTS \
     EXPERIMENTAL \
     HESIOD \
-    LOADER_FIREWIRE \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
     LLVM_BINUTILS \
@@ -266,7 +261,7 @@ __LLVM_TARGETS= \
 		powerpc \
 		riscv \
 		x86
-__LLVM_TARGET_FILT=	C/(amd64|i386)/x86/:C/powerpc.*/powerpc/:C/armv[67]/arm/:C/riscv.*/riscv/:C/mips.*/mips/
+__LLVM_TARGET_FILT=	C/(amd64|i386)/x86/:C/powerpc.*/powerpc/:C/armv[67]/arm/:C/riscv.*/riscv/
 .for __llt in ${__LLVM_TARGETS}
 # Default enable the given TARGET's LLVM_TARGET support
 .if ${__T:${__LLVM_TARGET_FILT}} == ${__llt}
@@ -283,6 +278,12 @@ __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_${__llt:${__LLVM_TARGET_FILT}:tu}/LLVM
 __DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF LLVM_TARGET_MIPS
 
 .include <bsd.compiler.mk>
+
+.if ${__T} == "i386" || ${__T} == "amd64"
+__DEFAULT_NO_OPTIONS += FDT
+.else
+__DEFAULT_YES_OPTIONS += FDT
+.endif
 
 .if ${__T:Marm*} == "" && ${__T:Mriscv64*} == ""
 __DEFAULT_YES_OPTIONS+=LLDB
@@ -303,8 +304,8 @@ BROKEN_OPTIONS+=EFI
 .if ${__T:Mpowerpc*} == ""
 BROKEN_OPTIONS+=LOADER_OFW
 .endif
-# KBOOT is only for powerpc64 (powerpc64le broken) and kinda for amd64
-.if ${__T} != "powerpc64" && ${__T} != "amd64"
+# KBOOT is only for powerpc64 (powerpc64le broken) amd64 and aarch64
+.if ${__T} != "powerpc64" && ${__T} != "amd64" && ${__T} != "aarch64"
 BROKEN_OPTIONS+=LOADER_KBOOT
 .endif
 # UBOOT is only for arm, and big-endian powerpc
@@ -319,8 +320,8 @@ BROKEN_OPTIONS+=LOADER_UBOOT
 BROKEN_OPTIONS+=LOADER_GELI LOADER_LUA
 .endif
 
-# Kernel TLS is enabled by default on amd64 and aarch64
-.if ${__T} == "aarch64" || ${__T} == "amd64"
+# Kernel TLS is enabled by default on amd64, aarch64 and powerpc64*
+.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T:Mpowerpc64*} != ""
 __DEFAULT_YES_OPTIONS+=OPENSSL_KTLS
 .else
 __DEFAULT_NO_OPTIONS+=OPENSSL_KTLS
@@ -332,8 +333,7 @@ BROKEN_OPTIONS+=CXGBETOOL
 BROKEN_OPTIONS+=MLX5TOOL
 .endif
 
-# HyperV is currently x86-only
-.if ${__T} != "amd64" && ${__T} != "i386"
+.if ${__T} != "amd64" && ${__T} != "i386" && ${__T} != "aarch64"
 BROKEN_OPTIONS+=HYPERV
 .endif
 
@@ -349,6 +349,19 @@ __DEFAULT_YES_OPTIONS+=OPENMP
 .else
 __DEFAULT_NO_OPTIONS+=OPENMP
 .endif
+
+# Broken on 32-bit arm, kernel module compile errors
+.if ${__T:Marm*} != ""
+BROKEN_OPTIONS+= OFED
+.endif
+
+# MK_host_egacy is set by local.sys.mk so is valid here
+.if ${MACHINE} == "host" && ${MK_host_egacy} == "yes"
+# we cannot expect tests to work
+BROKEN_OPTIONS+= TESTS
+.endif
+
+.-include <site.src.opts.mk>
 
 .include <bsd.mkopt.mk>
 
@@ -379,15 +392,6 @@ MK_KERBEROS:=	no
 MK_KERBEROS_SUPPORT:=	no
 .endif
 
-.if ${MK_CXX} == "no"
-MK_CLANG:=	no
-MK_GOOGLETEST:=	no
-MK_OFED:=	no
-MK_OPENMP:=	no
-MK_PMC:=	no
-MK_TESTS:=	no
-.endif
-
 .if ${MK_DIALOG} == "no"
 MK_BSDINSTALL:=	no
 .endif
@@ -403,7 +407,6 @@ MK_DMAGENT:=	no
 .endif
 
 .if ${MK_NETGRAPH} == "no"
-MK_ATM:=	no
 MK_BLUETOOTH:=	no
 .endif
 
@@ -419,6 +422,7 @@ MK_KERBEROS:=	no
 MK_KERBEROS_SUPPORT:=	no
 MK_LDNS:=	no
 MK_PKGBOOTSTRAP:=	no
+MK_LOADER_ZFS:=	no
 MK_ZFS:=	no
 .endif
 
@@ -455,7 +459,6 @@ MK_LLD_BOOTSTRAP:= no
 
 .if ${MK_TOOLCHAIN} == "no"
 MK_CLANG:=	no
-MK_INCLUDES:=	no
 MK_LLD:=	no
 MK_LLDB:=	no
 MK_LLVM_BINUTILS:=	no

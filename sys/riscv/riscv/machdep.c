@@ -81,6 +81,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_pager.h>
 
 #include <machine/cpu.h>
+#include <machine/fpe.h>
 #include <machine/intr.h>
 #include <machine/kdb.h>
 #include <machine/machdep.h>
@@ -91,10 +92,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/sbi.h>
 #include <machine/trap.h>
 #include <machine/vmparam.h>
-
-#ifdef FPE
-#include <machine/fpe.h>
-#endif
 
 #ifdef FDT
 #include <contrib/libfdt/libfdt.h>
@@ -291,7 +288,7 @@ init_proc0(vm_offset_t kstack)
 
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
-	thread0.td_kstack_pages = KSTACK_PAGES;
+	thread0.td_kstack_pages = kstack_pages;
 	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
 	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
 	thread0.td_pcb->pcb_fpflags = 0;

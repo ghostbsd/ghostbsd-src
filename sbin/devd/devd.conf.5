@@ -40,7 +40,7 @@
 .\" ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
 .\" SOFTWARE.
 .\"
-.Dd September 22, 2022
+.Dd December 1, 2022
 .Dt DEVD.CONF 5
 .Os
 .Sh NAME
@@ -475,14 +475,6 @@ The network interface address removed.
 .Pp
 .Bl -column "System" "Subsystem" "1234567" -compact
 .Sy "System" Ta Sy "Subsystem" Ta Sy "Type" Ta Sy "Description"
-.It Li kern Ta Li power Ta Li resume Ta
-Notification that the system has woken from the suspended state.
-Note: this notification is deprecated and will be removed in
-.Fx 14.0 .
-.El
-.Pp
-.Bl -column "System" "Subsystem" "1234567" -compact
-.Sy "System" Ta Sy "Subsystem" Ta Sy "Type" Ta Sy "Description"
 .It Li kernel Ta Li signal Ta Li coredump Ta
 Notification that a process has crashed and dumped core.
 .It Li kernel Ta Li power Ta Li resume Ta
@@ -551,7 +543,7 @@ device has detected the lid openinging.
 .It Li PMU Ta Li POWER Ta ACLINE Ta
 The
 .Xr pmc 4
-device has deteted an AC line state ($notify=0x00 is offline, 0x01 is online).
+device has detected an AC line state ($notify=0x00 is offline, 0x01 is online).
 .It Li PMU Ta Li USB Ta overvoltage Ta
 An over-voltage condition on the power lines for the USB power pins.
 .It Li PMU Ta Li USB Ta plugged Ta

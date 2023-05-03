@@ -72,6 +72,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/refcount.h>
 #include <sys/resourcevar.h>
 #include <sys/rwlock.h>
+#include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
 #include <sys/syscallsubr.h>
@@ -117,7 +118,7 @@ struct bufqueue {
 #define	BQ_ASSERT_LOCKED(bq)	mtx_assert(BQ_LOCKPTR((bq)), MA_OWNED)
 
 struct bufdomain {
-	struct bufqueue	bd_subq[MAXCPU + 1]; /* Per-cpu sub queues + global */
+	struct bufqueue	*bd_subq;
 	struct bufqueue bd_dirtyq;
 	struct bufqueue	*bd_cleanq;
 	struct mtx_padalign bd_run_lock;
@@ -764,6 +765,9 @@ bufspace_daemon_shutdown(void *arg, int howto __unused)
 {
 	struct bufdomain *bd = arg;
 	int error;
+
+	if (KERNEL_PANICKED())
+		return;
 
 	BD_RUN_LOCK(bd);
 	bd->bd_shutdown = true;
@@ -1425,8 +1429,7 @@ bufshutdown(int show_busybufs)
 		 * threads to run.
 		 */
 		for (subiter = 0; subiter < 50 * iter; subiter++) {
-			thread_lock(curthread);
-			mi_switch(SW_VOL);
+			sched_relinquish(curthread);
 			DELAY(1000);
 		}
 #endif
@@ -1911,6 +1914,9 @@ bd_init(struct bufdomain *bd)
 {
 	int i;
 
+	/* Per-CPU clean buf queues, plus one global queue. */
+	bd->bd_subq = mallocarray(mp_maxid + 2, sizeof(struct bufqueue),
+	    M_BIOBUF, M_WAITOK | M_ZERO);
 	bd->bd_cleanq = &bd->bd_subq[mp_maxid + 1];
 	bq_init(bd->bd_cleanq, QUEUE_CLEAN, mp_maxid + 1, "bufq clean lock");
 	bq_init(&bd->bd_dirtyq, QUEUE_DIRTY, -1, "bufq dirty lock");
@@ -3416,6 +3422,9 @@ buf_daemon_shutdown(void *arg __unused, int howto __unused)
 {
 	int error;
 
+	if (KERNEL_PANICKED())
+		return;
+
 	mtx_lock(&bdlock);
 	bd_shutdown = true;
 	wakeup(&bd_request);
@@ -4363,8 +4372,9 @@ allocbuf(struct buf *bp, int size)
 	if (bp->b_bcount == size)
 		return (1);
 
-	if (bp->b_kvasize != 0 && bp->b_kvasize < size)
-		panic("allocbuf: buffer too small");
+	KASSERT(bp->b_kvasize == 0 || bp->b_kvasize >= size,
+	    ("allocbuf: buffer too small %p %#x %#x",
+	    bp, bp->b_kvasize, size));
 
 	newbsize = roundup2(size, DEV_BSIZE);
 	if ((bp->b_flags & B_VMIO) == 0) {
@@ -4381,11 +4391,12 @@ allocbuf(struct buf *bp, int size)
 	} else {
 		int desiredpages;
 
-		desiredpages = (size == 0) ? 0 :
+		desiredpages = size == 0 ? 0 :
 		    num_pages((bp->b_offset & PAGE_MASK) + newbsize);
 
-		if (bp->b_flags & B_MALLOC)
-			panic("allocbuf: VMIO buffer can't be malloced");
+		KASSERT((bp->b_flags & B_MALLOC) == 0,
+		    ("allocbuf: VMIO buffer can't be malloced %p", bp));
+
 		/*
 		 * Set B_CACHE initially if buffer is 0 length or will become
 		 * 0-length.
@@ -5212,24 +5223,7 @@ bdata2bio(struct buf *bp, struct bio *bip)
 	}
 }
 
-/*
- * The MIPS pmap code currently doesn't handle aliased pages.
- * The VIPT caches may not handle page aliasing themselves, leading
- * to data corruption.
- *
- * As such, this code makes a system extremely unhappy if said
- * system doesn't support unaliasing the above situation in hardware.
- * Some "recent" systems (eg some mips24k/mips74k cores) don't enable
- * this feature at build time, so it has to be handled in software.
- *
- * Once the MIPS pmap/cache code grows to support this function on
- * earlier chips, it should be flipped back off.
- */
-#ifdef	__mips__
-static int buf_pager_relbuf = 1;
-#else
-static int buf_pager_relbuf = 0;
-#endif
+static int buf_pager_relbuf;
 SYSCTL_INT(_vfs, OID_AUTO, buf_pager_relbuf, CTLFLAG_RWTUN,
     &buf_pager_relbuf, 0,
     "Make buffer pager release buffers after reading");

@@ -29,6 +29,12 @@
 #   (write a meaningful commit message)
 # $ git push freebsd HEAD:stable/12
 #
+#
+# If there are changes to zone1970.tab, update the baseline file by running
+# `make baseline` in usr.sbin/tzsetup to check if tzsetup is able to parse new
+# contents (if not, report/fix tzsetup).  Check that update does not
+# introduce breaking/unexpected changes to continents/countries/zones,
+# and commit the updated baseline file.
 
 .include <src.opts.mk>
 
@@ -51,7 +57,6 @@ LEAPFILE=
 TZFILES=	africa antarctica asia australasia etcetera europe \
 		factory northamerica southamerica
 TZFILES+=	backward
-POSIXRULES=	America/New_York
 
 TZFILES:=	${TZFILES:S/^/${CONTRIBDIR}/}
 
@@ -78,11 +83,20 @@ all: zoneinfo
 .endif
 META_TARGETS+=	zoneinfo install-zoneinfo
 
+#
+# Produce “fat” zoneinfo files for backward compatibility.
+#
+ZICFLAGS?=	-b fat
+
+.if ${MK_DIRDEPS_BUILD} == "yes"
+ZIC= ${STAGE_HOST_OBJTOP}/usr/sbin/zic
+.endif
+
 zoneinfo: ${TDATA}
 	mkdir -p ${TZBUILDDIR}
 	cd ${TZBUILDDIR}; mkdir -p ${TZBUILDSUBDIRS}
 	umask 022; cd ${.CURDIR}; \
-	zic -D -d ${TZBUILDDIR} -p ${POSIXRULES} -m ${NOBINMODE} \
+	${ZIC:Uzic} -D -d ${TZBUILDDIR} ${ZICFLAGS} -m ${NOBINMODE} \
 	    ${LEAPFILE} ${TZFILES}
 
 #

@@ -1,4 +1,4 @@
-# $NetBSD: varparse-errors.mk,v 1.5 2022/01/24 22:59:49 rillig Exp $
+# $NetBSD: varparse-errors.mk,v 1.8 2023/02/14 21:56:48 rillig Exp $
 
 # Tests for parsing and evaluating all kinds of variable expressions.
 #
@@ -6,7 +6,6 @@
 # Var_Subst, collecting typical and not so typical use cases.
 #
 # See also:
-#	VarParseResult
 #	Var_Parse
 #	Var_Subst
 
@@ -68,4 +67,21 @@ IND=	${:OX}
 _:=	${:U:OX:U${IND}} ${:U:OX:U${IND}}
 #.MAKEFLAGS: -d0
 
-all:
+
+# Before var.c 1.032 from 2022-08-24, make complained about 'Unknown modifier'
+# or 'Bad modifier' when in fact the modifier was entirely correct, it was
+# just not delimited by either ':' or '}' but instead by '\0'.
+UNCLOSED:=	${:U:Q
+UNCLOSED:=	${:U:sh
+UNCLOSED:=	${:U:tA
+UNCLOSED:=	${:U:tsX
+UNCLOSED:=	${:U:ts
+UNCLOSED:=	${:U:ts\040
+UNCLOSED:=	${:U:u
+UNCLOSED:=	${:U:H
+UNCLOSED:=	${:U:[1]
+UNCLOSED:=	${:U:hash
+UNCLOSED:=	${:U:range
+UNCLOSED:=	${:U:_
+UNCLOSED:=	${:U:gmtime
+UNCLOSED:=	${:U:localtime

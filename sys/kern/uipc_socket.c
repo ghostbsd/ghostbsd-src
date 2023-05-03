@@ -252,13 +252,6 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, numopensockets, CTLFLAG_RD,
     &numopensockets, 0, "Number of open sockets");
 
 /*
- * accept_mtx locks down per-socket fields relating to accept queues.  See
- * socketvar.h for an annotation of the protected fields of struct socket.
- */
-struct mtx accept_mtx;
-MTX_SYSINIT(accept_mtx, &accept_mtx, "accept", MTX_DEF);
-
-/*
  * so_global_mtx protects so_gencnt, numopensockets, and the per-socket
  * so_gencnt field.
  */
@@ -585,6 +578,10 @@ SYSCTL_INT(_regression, OID_AUTO, sonewconn_earlytest, CTLFLAG_RW,
     &regression_sonewconn_earlytest, 0, "Perform early sonewconn limit test");
 #endif
 
+static int sooverprio = LOG_DEBUG;
+SYSCTL_INT(_kern_ipc, OID_AUTO, sooverprio, CTLFLAG_RW,
+    &sooverprio, 0, "Log priority for listen socket overflows: 0..7 or -1 to disable");
+
 static struct timeval overinterval = { 60, 0 };
 SYSCTL_TIMEVAL_SEC(_kern_ipc, OID_AUTO, sooverinterval, CTLFLAG_RW,
     &overinterval,
@@ -624,7 +621,8 @@ solisten_clone(struct socket *head)
 	if (over) {
 #endif
 		head->sol_overcount++;
-		dolog = !!ratecheck(&head->sol_lastover, &overinterval);
+		dolog = (sooverprio >= 0) &&
+			!!ratecheck(&head->sol_lastover, &overinterval);
 
 		/*
 		 * If we're going to log, copy the overflow count and queue
@@ -713,14 +711,16 @@ solisten_clone(struct socket *head)
 			 * sys/kern/sonewconn_overflow checks for it.
 			 */
 			if (head->so_cred == 0) {
-				log(LOG_DEBUG, "sonewconn: pcb %p (%s): "
+				log(LOG_PRI(sooverprio),
+				    "sonewconn: pcb %p (%s): "
 				    "Listen queue overflow: %i already in "
 				    "queue awaiting acceptance (%d "
 				    "occurrences)\n", head->so_pcb,
 				    sbuf_data(&descrsb),
 			    	qlen, overcount);
 			} else {
-				log(LOG_DEBUG, "sonewconn: pcb %p (%s): "
+				log(LOG_PRI(sooverprio),
+				    "sonewconn: pcb %p (%s): "
 				    "Listen queue overflow: "
 				    "%i already in queue awaiting acceptance "
 				    "(%d occurrences), euid %d, rgid %d, jail %s\n",
@@ -994,13 +994,24 @@ solisten_proto_check(struct socket *so)
 	mtx_lock(&so->so_snd_mtx);
 	mtx_lock(&so->so_rcv_mtx);
 
-	/* Interlock with soo_aio_queue(). */
-	if (!SOLISTENING(so) &&
-	   ((so->so_snd.sb_flags & (SB_AIO | SB_AIO_RUNNING)) != 0 ||
-	   (so->so_rcv.sb_flags & (SB_AIO | SB_AIO_RUNNING)) != 0)) {
-		solisten_proto_abort(so);
-		return (EINVAL);
+	/* Interlock with soo_aio_queue() and KTLS. */
+	if (!SOLISTENING(so)) {
+		bool ktls;
+
+#ifdef KERN_TLS
+		ktls = so->so_snd.sb_tls_info != NULL ||
+		    so->so_rcv.sb_tls_info != NULL;
+#else
+		ktls = false;
+#endif
+		if (ktls ||
+		    (so->so_snd.sb_flags & (SB_AIO | SB_AIO_RUNNING)) != 0 ||
+		    (so->so_rcv.sb_flags & (SB_AIO | SB_AIO_RUNNING)) != 0) {
+			solisten_proto_abort(so);
+			return (EINVAL);
+		}
 	}
+
 	return (0);
 }
 
@@ -1352,10 +1363,14 @@ soconnectat(int fd, struct socket *so, struct sockaddr *nam, struct thread *td)
 	int error;
 
 	CURVNET_SET(so->so_vnet);
+
 	/*
 	 * If protocol is connection-based, can only connect once.
 	 * Otherwise, if connected, try to disconnect first.  This allows
 	 * user to disconnect by connecting to, e.g., a null address.
+	 *
+	 * Note, this check is racy and may need to be re-evaluated at the
+	 * protocol layer.
 	 */
 	if (so->so_state & (SS_ISCONNECTED|SS_ISCONNECTING) &&
 	    ((so->so_proto->pr_flags & PR_CONNREQUIRED) ||
@@ -1829,6 +1844,14 @@ out:
 	return (error);
 }
 
+/*
+ * Send to a socket from a kernel thread.
+ *
+ * XXXGL: in almost all cases uio is NULL and the mbuf is supplied.
+ * Exception is nfs/bootp_subr.c.  It is arguable that the VNET context needs
+ * to be set at all.  This function should just boil down to a static inline
+ * calling the protocol method.
+ */
 int
 sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
     struct mbuf *top, struct mbuf *control, int flags, struct thread *td)
@@ -1839,6 +1862,54 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 	error = so->so_proto->pr_sosend(so, addr, uio,
 	    top, control, flags, td);
 	CURVNET_RESTORE();
+	return (error);
+}
+
+/*
+ * send(2), write(2) or aio_write(2) on a socket.
+ */
+int
+sousrsend(struct socket *so, struct sockaddr *addr, struct uio *uio,
+    struct mbuf *control, int flags, struct proc *userproc)
+{
+	struct thread *td;
+	ssize_t len;
+	int error;
+
+	td = uio->uio_td;
+	len = uio->uio_resid;
+	CURVNET_SET(so->so_vnet);
+	error = so->so_proto->pr_sosend(so, addr, uio, NULL, control, flags,
+	    td);
+	CURVNET_RESTORE();
+	if (error != 0) {
+		/*
+		 * Clear transient errors for stream protocols if they made
+		 * some progress.  Make exclusion for aio(4) that would
+		 * schedule a new write in case of EWOULDBLOCK and clear
+		 * error itself.  See soaio_process_job().
+		 */
+		if (uio->uio_resid != len &&
+		    (so->so_proto->pr_flags & PR_ATOMIC) == 0 &&
+		    userproc == NULL &&
+		    (error == ERESTART || error == EINTR ||
+		    error == EWOULDBLOCK))
+			error = 0;
+		/* Generation of SIGPIPE can be controlled per socket. */
+		if (error == EPIPE && (so->so_options & SO_NOSIGPIPE) == 0 &&
+		    (flags & MSG_NOSIGNAL) == 0) {
+			if (userproc != NULL) {
+				/* aio(4) job */
+				PROC_LOCK(userproc);
+				kern_psignal(userproc, SIGPIPE);
+				PROC_UNLOCK(userproc);
+			} else {
+				PROC_LOCK(td->td_proc);
+				tdsignal(td, SIGPIPE);
+				PROC_UNLOCK(td->td_proc);
+			}
+		}
+	}
 	return (error);
 }
 

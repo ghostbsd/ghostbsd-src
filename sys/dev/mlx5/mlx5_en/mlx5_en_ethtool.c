@@ -1035,11 +1035,6 @@ mlx5e_ethtool_handler(SYSCTL_HANDLER_ARGS)
 		priv->params_ethtool.rx_queue_size =
 		    1 << priv->params.log_rq_size;
 
-		/* update least number of RX WQEs */
-		priv->params.min_rx_wqes = min(
-		    priv->params_ethtool.rx_queue_size - 1,
-		    MLX5E_PARAMS_DEFAULT_MIN_RX_WQES);
-
 		/* restart network interface, if any */
 		if (was_opened)
 			mlx5e_open_locked(priv->ifp);
@@ -1133,7 +1128,7 @@ mlx5e_ethtool_handler(SYSCTL_HANDLER_ARGS)
 		    MLX5_CAP_ETH(priv->mdev, lro_cap)) {
 			priv->params_ethtool.hw_lro = 1;
 			/* check if feature should actually be enabled */
-			if (priv->ifp->if_capenable & IFCAP_LRO) {
+			if (if_getcapenable(priv->ifp) & IFCAP_LRO) {
 				priv->params.hw_lro_en = true;
 			} else {
 				priv->params.hw_lro_en = false;

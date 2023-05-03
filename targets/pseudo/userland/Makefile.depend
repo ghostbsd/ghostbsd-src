@@ -645,9 +645,6 @@ DIRDEPS+= \
 	usr.sbin/pmccontrol \
 	usr.sbin/pmcstat \
 	usr.sbin/pmcstudy \
-	usr.sbin/portsnap/make_index \
-	usr.sbin/portsnap/phttpget \
-	usr.sbin/portsnap/portsnap \
 	usr.sbin/powerd \
 	usr.sbin/ppp \
 	usr.sbin/pppctl \
@@ -700,7 +697,6 @@ DIRDEPS+= \
 	usr.sbin/timed/timedc \
 	usr.sbin/traceroute \
 	usr.sbin/traceroute6 \
-	usr.sbin/trpt \
 	usr.sbin/tzsetup \
 	usr.sbin/uathload \
 	usr.sbin/uefisign \
@@ -785,7 +781,6 @@ DIRDEPS.i386= \
 	sbin/bsdlabel \
 	sbin/fdisk \
 	sbin/nvmecontrol \
-	sbin/sconfig \
 	usr.sbin/apm \
 	usr.sbin/apmd \
 	usr.sbin/btxld \

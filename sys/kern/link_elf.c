@@ -34,9 +34,6 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#ifdef GPROF
-#include <sys/gmon.h>
-#endif
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -1180,14 +1177,6 @@ link_elf_load_file(linker_class_t cls, const char* filename,
 		    segs[i]->p_memsz - segs[i]->p_filesz);
 	}
 
-#ifdef GPROF
-	/* Update profiling information with the new text segment. */
-	mtx_lock(&Giant);
-	kmupetext((uintfptr_t)(mapbase + segs[0]->p_vaddr - base_vaddr +
-	    segs[0]->p_memsz));
-	mtx_unlock(&Giant);
-#endif
-
 	ef->dynamic = (Elf_Dyn *) (mapbase + phdyn->p_vaddr - base_vaddr);
 
 	lf->address = ef->address;
@@ -1481,23 +1470,20 @@ relocate_file(elf_file_t ef)
 }
 
 /*
- * Hash function for symbol table lookup.  Don't even think about changing
- * this.  It is specified by the System V ABI.
+ * SysV hash function for symbol table lookup.  It is specified by the
+ * System V ABI.
  */
-static unsigned long
+static Elf32_Word
 elf_hash(const char *name)
 {
-	const unsigned char *p = (const unsigned char *) name;
-	unsigned long h = 0;
-	unsigned long g;
+	const unsigned char *p = (const unsigned char *)name;
+	Elf32_Word h = 0;
 
 	while (*p != '\0') {
 		h = (h << 4) + *p++;
-		if ((g = h & 0xf0000000) != 0)
-			h ^= g >> 24;
-		h &= ~g;
+		h ^= (h >> 24) & 0xf0;
 	}
-	return (h);
+	return (h & 0x0fffffff);
 }
 
 static int
@@ -1508,7 +1494,7 @@ link_elf_lookup_symbol1(linker_file_t lf, const char *name, c_linker_sym_t *sym,
 	unsigned long symnum;
 	const Elf_Sym* symp;
 	const char *strp;
-	unsigned long hash;
+	Elf32_Word hash;
 
 	/* If we don't have a hash, bail. */
 	if (ef->buckets == NULL || ef->nbuckets == 0) {

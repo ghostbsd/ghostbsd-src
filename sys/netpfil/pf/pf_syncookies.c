@@ -80,6 +80,7 @@
 #include <net/route.h>
 
 #include <netinet/in.h>
+#include <netinet/in_pcb.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
@@ -126,7 +127,13 @@ pf_syncookies_init(void)
 {
 	callout_init(&V_pf_syncookie_status.keytimeout, 1);
 	PF_RULES_WLOCK();
-	pf_syncookies_setmode(PF_SYNCOOKIES_NEVER);
+
+	V_pf_syncookie_status.hiwat = PF_SYNCOOKIES_HIWATPCT *
+	    V_pf_limits[PF_LIMIT_STATES].limit / 100;
+	V_pf_syncookie_status.lowat = PF_SYNCOOKIES_LOWATPCT *
+	    V_pf_limits[PF_LIMIT_STATES].limit / 100;
+	pf_syncookies_setmode(PF_SYNCOOKIES_ADAPTIVE);
+
 	PF_RULES_WUNLOCK();
 }
 
@@ -293,15 +300,15 @@ pf_syncookie_send(struct mbuf *m, int off, struct pf_pdesc *pd)
 	iss = pf_syncookie_generate(m, off, pd, mss);
 	pf_send_tcp(NULL, pd->af, pd->dst, pd->src, *pd->dport, *pd->sport,
 	    iss, ntohl(pd->hdr.tcp.th_seq) + 1, TH_SYN|TH_ACK, 0, mss,
-	    0, 1, 0);
+	    0, 1, 0, pd->act.rtableid);
 	counter_u64_add(V_pf_status.lcounters[KLCNT_SYNCOOKIES_SENT], 1);
 	/* XXX Maybe only in adaptive mode? */
 	atomic_add_64(&V_pf_status.syncookies_inflight[V_pf_syncookie_status.oddeven],
 	    1);
 }
 
-uint8_t
-pf_syncookie_validate(struct pf_pdesc *pd)
+bool
+pf_syncookie_check(struct pf_pdesc *pd)
 {
 	uint32_t		 hash, ack, seq;
 	union pf_syncookie	 cookie;
@@ -314,13 +321,28 @@ pf_syncookie_validate(struct pf_pdesc *pd)
 	cookie.cookie = (ack & 0xff) ^ (ack >> 24);
 
 	/* we don't know oddeven before setting the cookie (union) */
-        if (atomic_load_64(&V_pf_status.syncookies_inflight[cookie.flags.oddeven])
+	if (atomic_load_64(&V_pf_status.syncookies_inflight[cookie.flags.oddeven])
 	    == 0)
-                return (0);
+		return (0);
 
 	hash = pf_syncookie_mac(pd, cookie, seq);
 	if ((ack & ~0xff) != (hash & ~0xff))
+		return (false);
+
+	return (true);
+}
+
+uint8_t
+pf_syncookie_validate(struct pf_pdesc *pd)
+{
+	uint32_t		 ack;
+	union pf_syncookie	 cookie;
+
+	if (! pf_syncookie_check(pd))
 		return (0);
+
+	ack = ntohl(pd->hdr.tcp.th_ack) - 1;
+	cookie.cookie = (ack & 0xff) ^ (ack >> 24);
 
 	counter_u64_add(V_pf_status.lcounters[KLCNT_SYNCOOKIES_VALID], 1);
 	atomic_add_64(&V_pf_status.syncookies_inflight[cookie.flags.oddeven], -1);
@@ -497,5 +519,5 @@ pf_syncookie_recreate_syn(uint8_t ttl, int off, struct pf_pdesc *pd)
 
 	return (pf_build_tcp(NULL, pd->af, pd->src, pd->dst, *pd->sport,
 	    *pd->dport, seq, 0, TH_SYN, wscale, mss, ttl, 0,
-	    PF_TAG_SYNCOOKIE_RECREATED));
+	    PF_TAG_SYNCOOKIE_RECREATED, pd->act.rtableid));
 }

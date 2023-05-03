@@ -301,6 +301,10 @@ kcsan_memmove(void *dst, const void *src, size_t len)
 	return __builtin_memmove(dst, src, len);
 }
 
+__strong_reference(kcsan_memcpy, __tsan_memcpy);
+__strong_reference(kcsan_memset, __tsan_memset);
+__strong_reference(kcsan_memmove, __tsan_memmove);
+
 char *
 kcsan_strcpy(char *dst, const char *src)
 {
@@ -519,6 +523,9 @@ kcsan_copyout(const void *kaddr, void *uaddr, size_t len)
 		    __RET_ADDR);					\
 		return (atomic_testandset_##name(ptr, val)); 		\
 	}
+
+_CSAN_ATOMIC_FUNC_LOAD(bool, bool)
+_CSAN_ATOMIC_FUNC_STORE(bool, bool)
 
 CSAN_ATOMIC_FUNC_ADD(8, uint8_t)
 CSAN_ATOMIC_FUNC_CLEAR(8, uint8_t)

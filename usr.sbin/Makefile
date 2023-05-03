@@ -28,6 +28,7 @@ SUBDIR=	adduser \
 	fifolog \
 	fstyp \
 	fwcontrol \
+	fwget \
 	getfmac \
 	getpmac \
 	gstat \
@@ -93,7 +94,6 @@ SUBDIR=	adduser \
 	tcpsso \
 	traceroute \
 	trim \
-	trpt \
 	tzsetup \
 	ugidfw \
 	valectl \
@@ -102,6 +102,7 @@ SUBDIR=	adduser \
 	wake \
 	watch \
 	watchdogd \
+	zdump \
 	zic \
 	zonectl
 
@@ -129,7 +130,7 @@ SUBDIR.${MK_OPENSSL}+=	certctl
 .endif
 SUBDIR.${MK_CXGBETOOL}+=	cxgbetool
 SUBDIR.${MK_DIALOG}+=	bsdconfig
-SUBDIR.${MK_EFI}+=	efivar efidp efibootmgr efitable
+SUBDIR.${MK_EFI}+=	efivar efidp efibootmgr efitable efiwake
 .if ${MK_OPENSSL} != "no"
 SUBDIR.${MK_EFI}+=	uefisign
 .endif
@@ -140,6 +141,7 @@ SUBDIR.${MK_FLOPPY}+=	fdwrite
 SUBDIR.${MK_FREEBSD_UPDATE}+=	freebsd-update
 SUBDIR.${MK_GSSAPI}+=	gssd
 SUBDIR.${MK_GPIO}+=	gpioctl
+SUBDIR.${MK_HYPERV}+=	hyperv
 SUBDIR.${MK_INET6}+=	ip6addrctl
 SUBDIR.${MK_INET6}+=	mld6query
 SUBDIR.${MK_INET6}+=	ndp
@@ -186,7 +188,6 @@ SUBDIR.${MK_OPENSSL_KTLS}+=	rpc.tlsservd
 SUBDIR.${MK_PF}+=	ftp-proxy
 SUBDIR.${MK_PKGBOOTSTRAP}+=	pkg
 SUBDIR.${MK_PMC}+=	pmc pmcannotate pmccontrol pmcstat pmcstudy
-SUBDIR.${MK_PORTSNAP}+=	portsnap
 SUBDIR.${MK_PPP}+=	ppp
 SUBDIR.${MK_QUOTAS}+=	edquota
 SUBDIR.${MK_QUOTAS}+=	quotaon

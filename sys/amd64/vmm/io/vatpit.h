@@ -32,7 +32,7 @@
 #ifndef _VATPIT_H_
 #define	_VATPIT_H_
 
-#include <machine/timerreg.h>
+#include <x86/timerreg.h>
 
 #define	NMISC_PORT	0x61
 
@@ -41,10 +41,9 @@ struct vm_snapshot_meta;
 struct vatpit *vatpit_init(struct vm *vm);
 void vatpit_cleanup(struct vatpit *vatpit);
 
-int vatpit_handler(struct vm *vm, int vcpuid, bool in, int port, int bytes,
+int vatpit_handler(struct vm *vm, bool in, int port, int bytes, uint32_t *eax);
+int vatpit_nmisc_handler(struct vm *vm, bool in, int port, int bytes,
     uint32_t *eax);
-int vatpit_nmisc_handler(struct vm *vm, int vcpuid, bool in, int port,
-    int bytes, uint32_t *eax);
 #ifdef BHYVE_SNAPSHOT
 int vatpit_snapshot(struct vatpit *vatpit, struct vm_snapshot_meta *meta);
 #endif

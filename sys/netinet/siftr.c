@@ -112,8 +112,8 @@ __FBSDID("$FreeBSD$");
  * Z is bumped to mark backwards compatible changes
  */
 #define V_MAJOR		1
-#define V_BACKBREAK	2
-#define V_BACKCOMPAT	4
+#define V_BACKBREAK	3
+#define V_BACKCOMPAT	0
 #define MODVERSION	__CONCAT(V_MAJOR, __CONCAT(V_BACKBREAK, V_BACKCOMPAT))
 #define MODVERSION_STR	__XSTRING(V_MAJOR) "." __XSTRING(V_BACKBREAK) "." \
     __XSTRING(V_BACKCOMPAT)
@@ -179,8 +179,6 @@ struct pkt_node {
 	}			direction;
 	/* IP version pkt_node relates to; either INP_IPV4 or INP_IPV6. */
 	uint8_t			ipver;
-	/* Hash of the pkt which triggered the log message. */
-	uint32_t		hash;
 	/* Local/foreign IP address. */
 #ifdef SIFTR_IPV6
 	uint32_t		ip_laddr[4];
@@ -207,11 +205,8 @@ struct pkt_node {
 	int			conn_state;
 	/* Max Segment Size (bytes). */
 	u_int			max_seg_size;
-	/*
-	 * Smoothed RTT stored as found in the TCP control block
-	 * in units of (TCP_RTT_SCALE*hz).
-	 */
-	int			smoothed_rtt;
+	/* Smoothed RTT (usecs). */
+	uint32_t		srtt;
 	/* Is SACK enabled? */
 	u_char			sack_enabled;
 	/* Window scaling for snd window. */
@@ -220,8 +215,8 @@ struct pkt_node {
 	u_char			rcv_scale;
 	/* TCP control block flags. */
 	u_int			flags;
-	/* Retransmit timeout length. */
-	int			rxt_length;
+	/* Retransmission timeout (usec). */
+	uint32_t		rto;
 	/* Size of the TCP send buffer in bytes. */
 	u_int			snd_buf_hiwater;
 	/* Current num bytes in the send socket buffer. */
@@ -257,9 +252,6 @@ struct siftr_stats
 	/* # pkts skipped due to failed malloc calls. */
 	uint32_t nskip_in_malloc;
 	uint32_t nskip_out_malloc;
-	/* # pkts skipped due to failed mtx acquisition. */
-	uint32_t nskip_in_mtx;
-	uint32_t nskip_out_mtx;
 	/* # pkts skipped due to failed inpcb lookups. */
 	uint32_t nskip_in_inpcb;
 	uint32_t nskip_out_inpcb;
@@ -276,7 +268,6 @@ DPCPU_DEFINE_STATIC(struct siftr_stats, ss);
 static volatile unsigned int siftr_exit_pkt_manager_thread = 0;
 static unsigned int siftr_enabled = 0;
 static unsigned int siftr_pkts_per_log = 1;
-static unsigned int siftr_generate_hashes = 0;
 static uint16_t     siftr_port_filter = 0;
 /* static unsigned int siftr_binary_log = 0; */
 static char siftr_logfile[PATH_MAX] = "/var/log/siftr.log";
@@ -315,10 +306,6 @@ SYSCTL_PROC(_net_inet_siftr, OID_AUTO, logfile,
 SYSCTL_UINT(_net_inet_siftr, OID_AUTO, ppl, CTLFLAG_RW,
     &siftr_pkts_per_log, 1,
     "number of packets between generating a log message");
-
-SYSCTL_UINT(_net_inet_siftr, OID_AUTO, genhashes, CTLFLAG_RW,
-    &siftr_generate_hashes, 0,
-    "enable packet hash generation");
 
 SYSCTL_U16(_net_inet_siftr, OID_AUTO, port_filter, CTLFLAG_RW,
     &siftr_port_filter, 0,
@@ -454,11 +441,10 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 		/* Construct an IPv6 log message. */
 		log_buf->ae_bytesused = snprintf(log_buf->ae_data,
 		    MAX_LOG_MSG_LEN,
-		    "%c,0x%08x,%zd.%06ld,%x:%x:%x:%x:%x:%x:%x:%x,%u,%x:%x:%x:"
+		    "%c,%zd.%06ld,%x:%x:%x:%x:%x:%x:%x:%x,%u,%x:%x:%x:"
 		    "%x:%x:%x:%x:%x,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
-		    "%u,%d,%u,%u,%u,%u,%u,%u,%u,%u\n",
+		    "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
 		    direction[pkt_node->direction],
-		    pkt_node->hash,
 		    pkt_node->tval.tv_sec,
 		    pkt_node->tval.tv_usec,
 		    UPPER_SHORT(pkt_node->ip_laddr[0]),
@@ -488,10 +474,10 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 		    pkt_node->rcv_scale,
 		    pkt_node->conn_state,
 		    pkt_node->max_seg_size,
-		    pkt_node->smoothed_rtt,
+		    pkt_node->srtt,
 		    pkt_node->sack_enabled,
 		    pkt_node->flags,
-		    pkt_node->rxt_length,
+		    pkt_node->rto,
 		    pkt_node->snd_buf_hiwater,
 		    pkt_node->snd_buf_cc,
 		    pkt_node->rcv_buf_hiwater,
@@ -514,10 +500,9 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 		/* Construct an IPv4 log message. */
 		log_buf->ae_bytesused = snprintf(log_buf->ae_data,
 		    MAX_LOG_MSG_LEN,
-		    "%c,0x%08x,%jd.%06ld,%u.%u.%u.%u,%u,%u.%u.%u.%u,%u,%u,%u,"
-		    "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u\n",
+		    "%c,%jd.%06ld,%u.%u.%u.%u,%u,%u.%u.%u.%u,%u,%u,%u,"
+		    "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
 		    direction[pkt_node->direction],
-		    pkt_node->hash,
 		    (intmax_t)pkt_node->tval.tv_sec,
 		    pkt_node->tval.tv_usec,
 		    pkt_node->ip_laddr[0],
@@ -539,10 +524,10 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 		    pkt_node->rcv_scale,
 		    pkt_node->conn_state,
 		    pkt_node->max_seg_size,
-		    pkt_node->smoothed_rtt,
+		    pkt_node->srtt,
 		    pkt_node->sack_enabled,
 		    pkt_node->flags,
-		    pkt_node->rxt_length,
+		    pkt_node->rto,
 		    pkt_node->snd_buf_hiwater,
 		    pkt_node->snd_buf_cc,
 		    pkt_node->rcv_buf_hiwater,
@@ -633,36 +618,6 @@ siftr_pkt_manager_thread(void *arg)
 
 	/* Calls wakeup on this thread's struct thread ptr. */
 	kthread_exit();
-}
-
-static uint32_t
-hash_pkt(struct mbuf *m, uint32_t offset)
-{
-	uint32_t hash;
-
-	hash = 0;
-
-	while (m != NULL && offset > m->m_len) {
-		/*
-		 * The IP packet payload does not start in this mbuf, so
-		 * need to figure out which mbuf it starts in and what offset
-		 * into the mbuf's data region the payload starts at.
-		 */
-		offset -= m->m_len;
-		m = m->m_next;
-	}
-
-	while (m != NULL) {
-		/* Ensure there is data in the mbuf */
-		if ((m->m_len - offset) > 0)
-			hash = hash32_buf(m->m_data + offset,
-			    m->m_len - offset, hash);
-
-		m = m->m_next;
-		offset = 0;
-        }
-
-	return (hash);
 }
 
 /*
@@ -788,10 +743,10 @@ siftr_siftdata(struct pkt_node *pn, struct inpcb *inp, struct tcpcb *tp,
 	pn->rcv_scale = tp->rcv_scale;
 	pn->conn_state = tp->t_state;
 	pn->max_seg_size = tp->t_maxseg;
-	pn->smoothed_rtt = tp->t_srtt;
+	pn->srtt = ((u_int64_t)tp->t_srtt * tick) >> TCP_RTT_SHIFT;
 	pn->sack_enabled = (tp->t_flags & TF_SACK_PERMIT) != 0;
 	pn->flags = tp->t_flags;
-	pn->rxt_length = tp->t_rxtcur;
+	pn->rto = tp->t_rxtcur * tick;
 	pn->snd_buf_hiwater = inp->inp_socket->so_snd.sb_hiwat;
 	pn->snd_buf_cc = sbused(&inp->inp_socket->so_snd);
 	pn->rcv_buf_hiwater = inp->inp_socket->so_rcv.sb_hiwat;
@@ -854,6 +809,24 @@ siftr_chkpkt(struct mbuf **m, struct ifnet *ifp, int flags,
 		goto ret;
 
 	/*
+	 * Create a tcphdr struct starting at the correct offset
+	 * in the IP packet. ip->ip_hl gives the ip header length
+	 * in 4-byte words, so multiply it to get the size in bytes.
+	 */
+	ip_hl = (ip->ip_hl << 2);
+	th = (struct tcphdr *)((caddr_t)ip + ip_hl);
+
+	/*
+	 * Only pkts selected by the tcp port filter
+	 * can be inserted into the pkt_queue
+	 */
+	if ((siftr_port_filter != 0) &&
+	    (siftr_port_filter != ntohs(th->th_sport)) &&
+	    (siftr_port_filter != ntohs(th->th_dport))) {
+		goto ret;
+	}
+
+	/*
 	 * If a kernel subsystem reinjects packets into the stack, our pfil
 	 * hook will be called multiple times for the same packet.
 	 * Make sure we only process unique packets.
@@ -865,14 +838,6 @@ siftr_chkpkt(struct mbuf **m, struct ifnet *ifp, int flags,
 		ss->n_in++;
 	else
 		ss->n_out++;
-
-	/*
-	 * Create a tcphdr struct starting at the correct offset
-	 * in the IP packet. ip->ip_hl gives the ip header length
-	 * in 4-byte words, so multiply it to get the size in bytes.
-	 */
-	ip_hl = (ip->ip_hl << 2);
-	th = (struct tcphdr *)((caddr_t)ip + ip_hl);
 
 	/*
 	 * If the pfil hooks don't provide a pointer to the
@@ -896,10 +861,9 @@ siftr_chkpkt(struct mbuf **m, struct ifnet *ifp, int flags,
 
 	/*
 	 * If we can't find the TCP control block (happens occasionaly for a
-	 * packet sent during the shutdown phase of a TCP connection),
-	 * or we're in the timewait state, bail
+	 * packet sent during the shutdown phase of a TCP connection), bail
 	 */
-	if (tp == NULL || inp->inp_flags & INP_TIMEWAIT) {
+	if (tp == NULL) {
 		if (dir == PFIL_IN)
 			ss->nskip_in_tcpcb++;
 		else
@@ -908,15 +872,6 @@ siftr_chkpkt(struct mbuf **m, struct ifnet *ifp, int flags,
 		goto inp_unlock;
 	}
 
-	/*
-	 * Only pkts selected by the tcp port filter
-	 * can be inserted into the pkt_queue
-	 */
-	if ((siftr_port_filter != 0) &&
-	    (siftr_port_filter != ntohs(inp->inp_lport)) &&
-	    (siftr_port_filter != ntohs(inp->inp_fport))) {
-		goto inp_unlock;
-	}
 
 	pn = malloc(sizeof(struct pkt_node), M_SIFTR_PKTNODE, M_NOWAIT|M_ZERO);
 
@@ -930,68 +885,6 @@ siftr_chkpkt(struct mbuf **m, struct ifnet *ifp, int flags,
 	}
 
 	siftr_siftdata(pn, inp, tp, INP_IPV4, dir, inp_locally_locked);
-
-	if (siftr_generate_hashes) {
-		if ((*m)->m_pkthdr.csum_flags & CSUM_TCP) {
-			/*
-			 * For outbound packets, the TCP checksum isn't
-			 * calculated yet. This is a problem for our packet
-			 * hashing as the receiver will calc a different hash
-			 * to ours if we don't include the correct TCP checksum
-			 * in the bytes being hashed. To work around this
-			 * problem, we manually calc the TCP checksum here in
-			 * software. We unset the CSUM_TCP flag so the lower
-			 * layers don't recalc it.
-			 */
-			(*m)->m_pkthdr.csum_flags &= ~CSUM_TCP;
-
-			/*
-			 * Calculate the TCP checksum in software and assign
-			 * to correct TCP header field, which will follow the
-			 * packet mbuf down the stack. The trick here is that
-			 * tcp_output() sets th->th_sum to the checksum of the
-			 * pseudo header for us already. Because of the nature
-			 * of the checksumming algorithm, we can sum over the
-			 * entire IP payload (i.e. TCP header and data), which
-			 * will include the already calculated pseduo header
-			 * checksum, thus giving us the complete TCP checksum.
-			 *
-			 * To put it in simple terms, if checksum(1,2,3,4)=10,
-			 * then checksum(1,2,3,4,5) == checksum(10,5).
-			 * This property is what allows us to "cheat" and
-			 * checksum only the IP payload which has the TCP
-			 * th_sum field populated with the pseudo header's
-			 * checksum, and not need to futz around checksumming
-			 * pseudo header bytes and TCP header/data in one hit.
-			 * Refer to RFC 1071 for more info.
-			 *
-			 * NB: in_cksum_skip(struct mbuf *m, int len, int skip)
-			 * in_cksum_skip 2nd argument is NOT the number of
-			 * bytes to read from the mbuf at "skip" bytes offset
-			 * from the start of the mbuf (very counter intuitive!).
-			 * The number of bytes to read is calculated internally
-			 * by the function as len-skip i.e. to sum over the IP
-			 * payload (TCP header + data) bytes, it is INCORRECT
-			 * to call the function like this:
-			 * in_cksum_skip(at, ip->ip_len - offset, offset)
-			 * Rather, it should be called like this:
-			 * in_cksum_skip(at, ip->ip_len, offset)
-			 * which means read "ip->ip_len - offset" bytes from
-			 * the mbuf cluster "at" at offset "offset" bytes from
-			 * the beginning of the "at" mbuf's data pointer.
-			 */
-			th->th_sum = in_cksum_skip(*m, ntohs(ip->ip_len),
-			    ip_hl);
-		}
-
-		/*
-		 * XXX: Having to calculate the checksum in software and then
-		 * hash over all bytes is really inefficient. Would be nice to
-		 * find a way to create the hash and checksum in the same pass
-		 * over the bytes.
-		 */
-		pn->hash = hash_pkt(*m, ip_hl);
-	}
 
 	mtx_lock(&siftr_pkt_queue_mtx);
 	STAILQ_INSERT_TAIL(&pkt_queue, pn, nodes);
@@ -1040,6 +933,23 @@ siftr_chkpkt6(struct mbuf **m, struct ifnet *ifp, int flags,
 		goto ret6;
 
 	/*
+	 * Create a tcphdr struct starting at the correct offset
+	 * in the ipv6 packet.
+	 */
+	ip6_hl = sizeof(struct ip6_hdr);
+	th = (struct tcphdr *)((caddr_t)ip6 + ip6_hl);
+
+	/*
+	 * Only pkts selected by the tcp port filter
+	 * can be inserted into the pkt_queue
+	 */
+	if ((siftr_port_filter != 0) &&
+	    (siftr_port_filter != ntohs(th->th_sport)) &&
+	    (siftr_port_filter != ntohs(th->th_dport))) {
+		goto ret6;
+	}
+
+	/*
 	 * If a kernel subsystem reinjects packets into the stack, our pfil
 	 * hook will be called multiple times for the same packet.
 	 * Make sure we only process unique packets.
@@ -1051,15 +961,6 @@ siftr_chkpkt6(struct mbuf **m, struct ifnet *ifp, int flags,
 		ss->n_in++;
 	else
 		ss->n_out++;
-
-	ip6_hl = sizeof(struct ip6_hdr);
-
-	/*
-	 * Create a tcphdr struct starting at the correct offset
-	 * in the ipv6 packet. ip->ip_hl gives the ip header length
-	 * in 4-byte words, so multiply it to get the size in bytes.
-	 */
-	th = (struct tcphdr *)((caddr_t)ip6 + ip6_hl);
 
 	/*
 	 * For inbound packets, the pfil hooks don't provide a pointer to the
@@ -1081,10 +982,9 @@ siftr_chkpkt6(struct mbuf **m, struct ifnet *ifp, int flags,
 
 	/*
 	 * If we can't find the TCP control block (happens occasionaly for a
-	 * packet sent during the shutdown phase of a TCP connection),
-	 * or we're in the timewait state, bail.
+	 * packet sent during the shutdown phase of a TCP connection), bail
 	 */
-	if (tp == NULL || inp->inp_flags & INP_TIMEWAIT) {
+	if (tp == NULL) {
 		if (dir == PFIL_IN)
 			ss->nskip_in_tcpcb++;
 		else
@@ -1093,15 +993,6 @@ siftr_chkpkt6(struct mbuf **m, struct ifnet *ifp, int flags,
 		goto inp_unlock6;
 	}
 
-	/*
-	 * Only pkts selected by the tcp port filter
-	 * can be inserted into the pkt_queue
-	 */
-	if ((siftr_port_filter != 0) &&
-	    (siftr_port_filter != ntohs(inp->inp_lport)) &&
-	    (siftr_port_filter != ntohs(inp->inp_fport))) {
-		goto inp_unlock6;
-	}
 
 	pn = malloc(sizeof(struct pkt_node), M_SIFTR_PKTNODE, M_NOWAIT|M_ZERO);
 
@@ -1141,18 +1032,16 @@ VNET_DEFINE_STATIC(pfil_hook_t, siftr_inet6_hook);
 static int
 siftr_pfil(int action)
 {
-	struct pfil_hook_args pha;
-	struct pfil_link_args pla;
-
-	pha.pa_version = PFIL_VERSION;
-	pha.pa_flags = PFIL_IN | PFIL_OUT;
-	pha.pa_modname = "siftr";
-	pha.pa_ruleset = NULL;
-	pha.pa_rulname = "default";
-
-	pla.pa_version = PFIL_VERSION;
-	pla.pa_flags = PFIL_IN | PFIL_OUT |
-	    PFIL_HEADPTR | PFIL_HOOKPTR;
+	struct pfil_hook_args pha = {
+		.pa_version = PFIL_VERSION,
+		.pa_flags = PFIL_IN | PFIL_OUT,
+		.pa_modname = "siftr",
+		.pa_rulname = "default",
+	};
+	struct pfil_link_args pla = {
+		.pa_version = PFIL_VERSION,
+		.pa_flags = PFIL_IN | PFIL_OUT | PFIL_HEADPTR | PFIL_HOOKPTR,
+	};
 
 	VNET_ITERATOR_DECL(vnet_iter);
 
@@ -1161,14 +1050,14 @@ siftr_pfil(int action)
 		CURVNET_SET(vnet_iter);
 
 		if (action == HOOK) {
-			pha.pa_func = siftr_chkpkt;
+			pha.pa_mbuf_chk = siftr_chkpkt;
 			pha.pa_type = PFIL_TYPE_IP4;
 			V_siftr_inet_hook = pfil_add_hook(&pha);
 			pla.pa_hook = V_siftr_inet_hook;
 			pla.pa_head = V_inet_pfil_head;
 			(void)pfil_link(&pla);
 #ifdef SIFTR_IPV6
-			pha.pa_func = siftr_chkpkt6;
+			pha.pa_mbuf_chk = siftr_chkpkt6;
 			pha.pa_type = PFIL_TYPE_IP6;
 			V_siftr_inet6_hook = pfil_add_hook(&pha);
 			pla.pa_hook = V_siftr_inet6_hook;
@@ -1277,10 +1166,9 @@ siftr_manage_ops(uint8_t action)
 
 		sbuf_printf(s,
 		    "enable_time_secs=%jd\tenable_time_usecs=%06ld\t"
-		    "siftrver=%s\thz=%u\ttcp_rtt_scale=%u\tsysname=%s\t"
-		    "sysver=%u\tipmode=%u\n",
-		    (intmax_t)tval.tv_sec, tval.tv_usec, MODVERSION_STR, hz,
-		    TCP_RTT_SCALE, SYS_NAME, __FreeBSD_version, SIFTR_IPMODE);
+		    "siftrver=%s\tsysname=%s\tsysver=%u\tipmode=%u\n",
+		    (intmax_t)tval.tv_sec, tval.tv_usec, MODVERSION_STR,
+		    SYS_NAME, __FreeBSD_version, SIFTR_IPMODE);
 
 		sbuf_finish(s);
 		alq_writen(siftr_alq, sbuf_data(s), sbuf_len(s), ALQ_WAITOK);
@@ -1318,16 +1206,13 @@ siftr_manage_ops(uint8_t action)
 		totalss.n_out = DPCPU_VARSUM(ss, n_out);
 		totalss.nskip_in_malloc = DPCPU_VARSUM(ss, nskip_in_malloc);
 		totalss.nskip_out_malloc = DPCPU_VARSUM(ss, nskip_out_malloc);
-		totalss.nskip_in_mtx = DPCPU_VARSUM(ss, nskip_in_mtx);
-		totalss.nskip_out_mtx = DPCPU_VARSUM(ss, nskip_out_mtx);
 		totalss.nskip_in_tcpcb = DPCPU_VARSUM(ss, nskip_in_tcpcb);
 		totalss.nskip_out_tcpcb = DPCPU_VARSUM(ss, nskip_out_tcpcb);
 		totalss.nskip_in_inpcb = DPCPU_VARSUM(ss, nskip_in_inpcb);
 		totalss.nskip_out_inpcb = DPCPU_VARSUM(ss, nskip_out_inpcb);
 
 		total_skipped_pkts = totalss.nskip_in_malloc +
-		    totalss.nskip_out_malloc + totalss.nskip_in_mtx +
-		    totalss.nskip_out_mtx + totalss.nskip_in_tcpcb +
+		    totalss.nskip_out_malloc + totalss.nskip_in_tcpcb +
 		    totalss.nskip_out_tcpcb + totalss.nskip_in_inpcb +
 		    totalss.nskip_out_inpcb;
 
@@ -1338,8 +1223,6 @@ siftr_manage_ops(uint8_t action)
 		    "num_inbound_tcp_pkts=%ju\tnum_outbound_tcp_pkts=%ju\t"
 		    "total_tcp_pkts=%ju\tnum_inbound_skipped_pkts_malloc=%u\t"
 		    "num_outbound_skipped_pkts_malloc=%u\t"
-		    "num_inbound_skipped_pkts_mtx=%u\t"
-		    "num_outbound_skipped_pkts_mtx=%u\t"
 		    "num_inbound_skipped_pkts_tcpcb=%u\t"
 		    "num_outbound_skipped_pkts_tcpcb=%u\t"
 		    "num_inbound_skipped_pkts_inpcb=%u\t"
@@ -1352,8 +1235,6 @@ siftr_manage_ops(uint8_t action)
 		    (uintmax_t)(totalss.n_in + totalss.n_out),
 		    totalss.nskip_in_malloc,
 		    totalss.nskip_out_malloc,
-		    totalss.nskip_in_mtx,
-		    totalss.nskip_out_mtx,
 		    totalss.nskip_in_tcpcb,
 		    totalss.nskip_out_tcpcb,
 		    totalss.nskip_in_inpcb,

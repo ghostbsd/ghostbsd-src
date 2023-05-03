@@ -1,4 +1,4 @@
-/*	$NetBSD: job.c,v 1.453 2022/05/07 08:01:20 rillig Exp $	*/
+/*	$NetBSD: job.c,v 1.459 2023/02/15 06:52:58 rillig Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990 The Regents of the University of California.
@@ -155,7 +155,7 @@
 #include "trace.h"
 
 /*	"@(#)job.c	8.2 (Berkeley) 3/19/94"	*/
-MAKE_RCSID("$NetBSD: job.c,v 1.453 2022/05/07 08:01:20 rillig Exp $");
+MAKE_RCSID("$NetBSD: job.c,v 1.459 2023/02/15 06:52:58 rillig Exp $");
 
 /*
  * A shell defines how the commands are run.  All commands for a target are
@@ -541,7 +541,7 @@ JobDeleteTarget(GNode *gn)
 		return;
 
 	file = GNode_Path(gn);
-	if (unlink_file(file))
+	if (unlink_file(file) == 0)
 		Error("*** %s removed", file);
 }
 
@@ -761,7 +761,8 @@ ParseCommandFlags(char **pp, CommandFlags *out_cmdFlags)
 			out_cmdFlags->ignerr = true;
 		else if (*p == '+')
 			out_cmdFlags->always = true;
-		else
+		else if (!ch_isspace(*p))
+			/* Ignore whitespace for compatibility with gnu make */
 			break;
 		p++;
 	}
@@ -939,7 +940,7 @@ JobWriteCommand(Job *job, ShellWriter *wr, StringListNode *ln, const char *ucmd)
 
 	run = GNode_ShouldExecute(job->node);
 
-	(void)Var_Subst(ucmd, job->node, VARE_WANTRES, &xcmd);
+	xcmd = Var_Subst(ucmd, job->node, VARE_WANTRES);
 	/* TODO: handle errors */
 	xcmdStart = xcmd;
 
@@ -1068,7 +1069,7 @@ JobSaveCommands(Job *job)
 		 * variables such as .TARGET, .IMPSRC.  It is not intended to
 		 * expand the other variables as well; see deptgt-end.mk.
 		 */
-		(void)Var_Subst(cmd, job->node, VARE_WANTRES, &expanded_cmd);
+		expanded_cmd = Var_Subst(cmd, job->node, VARE_WANTRES);
 		/* TODO: handle errors */
 		Lst_Append(&Targ_GetEndNode()->commands, expanded_cmd);
 	}
@@ -1104,8 +1105,7 @@ DebugFailedJob(const Job *job)
 		debug_printf("\t%s\n", cmd);
 
 		if (strchr(cmd, '$') != NULL) {
-			char *xcmd;
-			(void)Var_Subst(cmd, job->node, VARE_WANTRES, &xcmd);
+			char *xcmd = Var_Subst(cmd, job->node, VARE_WANTRES);
 			debug_printf("\t=> %s\n", xcmd);
 			free(xcmd);
 		}
@@ -1868,46 +1868,36 @@ again:
 	if (nRead < 0) {
 		if (errno == EAGAIN)
 			return;
-		if (DEBUG(JOB)) {
+		if (DEBUG(JOB))
 			perror("CollectOutput(piperead)");
-		}
 		nr = 0;
-	} else {
+	} else
 		nr = (size_t)nRead;
-	}
+
+	if (nr == 0)
+		finish = false;	/* stop looping */
 
 	/*
 	 * If we hit the end-of-file (the job is dead), we must flush its
 	 * remaining output, so pretend we read a newline if there's any
 	 * output remaining in the buffer.
-	 * Also clear the 'finish' flag so we stop looping.
 	 */
 	if (nr == 0 && job->curPos != 0) {
 		job->outBuf[job->curPos] = '\n';
 		nr = 1;
-		finish = false;
-	} else if (nr == 0) {
-		finish = false;
 	}
 
-	/*
-	 * Look for the last newline in the bytes we just got. If there is
-	 * one, break out of the loop with 'i' as its index and gotNL set
-	 * true.
-	 */
 	max = job->curPos + nr;
+	for (i = job->curPos; i < max; i++)
+		if (job->outBuf[i] == '\0')
+			job->outBuf[i] = ' ';
+
+	/* Look for the last newline in the bytes we just got. */
 	for (i = job->curPos + nr - 1;
 	     i >= job->curPos && i != (size_t)-1; i--) {
 		if (job->outBuf[i] == '\n') {
 			gotNL = true;
 			break;
-		} else if (job->outBuf[i] == '\0') {
-			/*
-			 * FIXME: The null characters are only replaced with
-			 * space _after_ the last '\n'.  Everywhere else they
-			 * hide the rest of the command output.
-			 */
-			job->outBuf[i] = ' ';
 		}
 	}
 
@@ -2241,12 +2231,12 @@ Job_SetPrefix(void)
 {
 	if (targPrefix != NULL) {
 		free(targPrefix);
-	} else if (!Var_Exists(SCOPE_GLOBAL, MAKE_JOB_PREFIX)) {
-		Global_Set(MAKE_JOB_PREFIX, "---");
+	} else if (!Var_Exists(SCOPE_GLOBAL, ".MAKE.JOB.PREFIX")) {
+		Global_Set(".MAKE.JOB.PREFIX", "---");
 	}
 
-	(void)Var_Subst("${" MAKE_JOB_PREFIX "}",
-	    SCOPE_GLOBAL, VARE_WANTRES, &targPrefix);
+	targPrefix = Var_Subst("${.MAKE.JOB.PREFIX}",
+	    SCOPE_GLOBAL, VARE_WANTRES);
 	/* TODO: handle errors */
 }
 

@@ -843,6 +843,7 @@ ASAN_ATOMIC_FUNC_FCMPSET(int, u_int);
 ASAN_ATOMIC_FUNC_FCMPSET(long, u_long);
 ASAN_ATOMIC_FUNC_FCMPSET(ptr, uintptr_t);
 
+_ASAN_ATOMIC_FUNC_LOAD(bool, bool);
 ASAN_ATOMIC_FUNC_LOAD(8, uint8_t);
 ASAN_ATOMIC_FUNC_LOAD(16, uint16_t);
 ASAN_ATOMIC_FUNC_LOAD(32, uint32_t);
@@ -853,6 +854,7 @@ ASAN_ATOMIC_FUNC_LOAD(int, u_int);
 ASAN_ATOMIC_FUNC_LOAD(long, u_long);
 ASAN_ATOMIC_FUNC_LOAD(ptr, uintptr_t);
 
+_ASAN_ATOMIC_FUNC_STORE(bool, bool);
 ASAN_ATOMIC_FUNC_STORE(8, uint8_t);
 ASAN_ATOMIC_FUNC_STORE(16, uint16_t);
 ASAN_ATOMIC_FUNC_STORE(32, uint32_t);
@@ -955,6 +957,13 @@ ASAN_BUS_READ_PTR_FUNC(region, 4, uint32_t)
 ASAN_BUS_READ_PTR_FUNC(region_stream, 4, uint32_t)
 
 ASAN_BUS_READ_FUNC(, 8, uint64_t)
+#if defined(__aarch64__)
+ASAN_BUS_READ_FUNC(_stream, 8, uint64_t)
+ASAN_BUS_READ_PTR_FUNC(multi, 8, uint64_t)
+ASAN_BUS_READ_PTR_FUNC(multi_stream, 8, uint64_t)
+ASAN_BUS_READ_PTR_FUNC(region, 8, uint64_t)
+ASAN_BUS_READ_PTR_FUNC(region_stream, 8, uint64_t)
+#endif
 
 #define	ASAN_BUS_WRITE_FUNC(func, width, type)				\
 	void kasan_bus_space_write##func##_##width(bus_space_tag_t tag,	\

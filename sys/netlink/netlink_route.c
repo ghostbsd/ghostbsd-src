@@ -29,6 +29,7 @@
 __FBSDID("$FreeBSD$");
 #include <sys/types.h>
 #include <sys/ck.h>
+#include <sys/epoch.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
@@ -37,7 +38,6 @@ __FBSDID("$FreeBSD$");
 #include <net/route/route_ctl.h>
 #include <netlink/netlink.h>
 #include <netlink/netlink_ctl.h>
-#include <netlink/netlink_var.h>
 #include <netlink/netlink_route.h>
 #include <netlink/route/route_var.h>
 
@@ -93,6 +93,11 @@ rtnl_handle_message(struct nlmsghdr *hdr, struct nl_pstate *npt)
 	} else if (cmd->priv != 0)
 		NLP_LOG(LOG_DEBUG3, nlp, "priv %d check passed for msg %s", cmd->priv, cmd->name);
 
+	if (!nlp_unconstrained_vnet(nlp) && (cmd->flags & RTNL_F_ALLOW_NONVNET_JAIL) == 0) {
+		NLP_LOG(LOG_DEBUG2, nlp, "jail check failed for msg %s", cmd->name);
+		return (EPERM);
+	}
+
 	bool need_epoch = !(cmd->flags & RTNL_F_NOEPOCH);
 
 	if (need_epoch)
@@ -106,13 +111,16 @@ rtnl_handle_message(struct nlmsghdr *hdr, struct nl_pstate *npt)
 	return (error);
 }
 
-static struct rtbridge nlbridge = { .route_f = rtnl_handle_route_event };
+static struct rtbridge nlbridge = {
+	.route_f = rtnl_handle_route_event,
+	.ifmsg_f = rtnl_handle_ifnet_event,
+};
 static struct rtbridge *nlbridge_orig_p;
 
 static void
 rtnl_load(void *u __unused)
 {
-	NL_LOG(LOG_NOTICE, "rtnl loading");
+	NL_LOG(LOG_DEBUG2, "rtnl loading");
 	nlbridge_orig_p = netlink_callback_p;
 	netlink_callback_p = &nlbridge;
 	rtnl_neighs_init();
@@ -131,6 +139,6 @@ rtnl_unload(void *u __unused)
 	rtnl_neighs_destroy();
 
 	/* Wait till all consumers read nlbridge data */
-	epoch_wait_preempt(net_epoch_preempt);
+	NET_EPOCH_WAIT();
 }
 SYSUNINIT(rtnl_unload, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, rtnl_unload, NULL);

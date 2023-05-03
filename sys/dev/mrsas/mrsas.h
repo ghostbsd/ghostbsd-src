@@ -138,12 +138,6 @@ __FBSDID("$FreeBSD$");
 /*
  * Boolean types
  */
-#if (__FreeBSD_version < 901000)
-typedef enum _boolean {
-	false, true
-}	boolean;
-
-#endif
 enum err {
 	SUCCESS, FAIL
 };
@@ -998,7 +992,7 @@ typedef struct _MR_FW_RAID_MAP_EXT {
 
 typedef struct _MR_DRV_RAID_MAP {
 	/*
-	 * Total size of this structure, including this field. This feild
+	 * Total size of this structure, including this field. This field
 	 * will be manupulated by driver for ext raid map, else pick the
 	 * value from firmware raid map.
 	 */
@@ -3632,15 +3626,9 @@ struct mrsas_softc {
 };
 
 /* Compatibility shims for different OS versions */
-#if __FreeBSD_version >= 800001
 #define	mrsas_kproc_create(func, farg, proc_ptr, flags, stackpgs, fmtstr, arg) \
     kproc_create(func, farg, proc_ptr, flags, stackpgs, fmtstr, arg)
 #define	mrsas_kproc_exit(arg)   kproc_exit(arg)
-#else
-#define	mrsas_kproc_create(func, farg, proc_ptr, flags, stackpgs, fmtstr, arg) \
-    kthread_create(func, farg, proc_ptr, flags, stackpgs, fmtstr, arg)
-#define	mrsas_kproc_exit(arg)   kthread_exit(arg)
-#endif
 
 static __inline void
 mrsas_clear_bit(int b, volatile void *p)
@@ -3659,5 +3647,8 @@ mrsas_test_bit(int b, volatile void *p)
 {
 	return ((volatile int *)p)[b >> 5] & (1 << (b & 0x1f));
 }
+
+#include "mrsas_ioctl.h"
+extern int mrsas_user_command(struct mrsas_softc *, struct mfi_ioc_passthru *);
 
 #endif					/* MRSAS_H */

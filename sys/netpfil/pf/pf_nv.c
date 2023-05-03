@@ -1051,6 +1051,11 @@ pf_keth_rule_to_nveth_rule(const struct pf_keth_rule *krule)
 	if (nvl == NULL)
 		return (NULL);
 
+	for (int i = 0; i < PF_RULE_MAX_LABEL_COUNT; i++) {
+		nvlist_append_string_array(nvl, "labels", krule->label[i]);
+	}
+	nvlist_add_number(nvl, "ridentifier", krule->ridentifier);
+
 	nvlist_add_number(nvl, "nr", krule->nr);
 	nvlist_add_bool(nvl, "quick", krule->quick);
 	nvlist_add_string(nvl, "ifname", krule->ifname);
@@ -1114,6 +1119,7 @@ pf_keth_rule_to_nveth_rule(const struct pf_keth_rule *krule)
 	nvlist_add_number(nvl, "anchor_relative", krule->anchor_relative);
 	nvlist_add_number(nvl, "anchor_wildcard", krule->anchor_wildcard);
 
+	nvlist_add_string(nvl, "bridge_to", krule->bridge_to_name);
 	nvlist_add_number(nvl, "action", krule->action);
 
 	return (nvl);
@@ -1125,7 +1131,28 @@ pf_nveth_rule_to_keth_rule(const nvlist_t *nvl,
 {
 	int error = 0;
 
+#define ERROUT(x)	ERROUT_FUNCTION(errout, x)
+
 	bzero(krule, sizeof(*krule));
+
+	if (nvlist_exists_string_array(nvl, "labels")) {
+		const char *const *strs;
+		size_t items;
+		int ret;
+
+		strs = nvlist_get_string_array(nvl, "labels", &items);
+		if (items > PF_RULE_MAX_LABEL_COUNT)
+			ERROUT(E2BIG);
+
+		for (size_t i = 0; i < items; i++) {
+			ret = strlcpy(krule->label[i], strs[i],
+			    sizeof(krule->label[0]));
+			if (ret >= sizeof(krule->label[0]))
+				ERROUT(E2BIG);
+		}
+	}
+
+	PFNV_CHK(pf_nvuint32_opt(nvl, "ridentifier", &krule->ridentifier, 0));
 
 	PFNV_CHK(pf_nvuint32(nvl, "nr", &krule->nr));
 	PFNV_CHK(pf_nvbool(nvl, "quick", &krule->quick));
@@ -1182,6 +1209,8 @@ pf_nveth_rule_to_keth_rule(const nvlist_t *nvl,
 
 	PFNV_CHK(pf_nvuint16_opt(nvl, "dnpipe", &krule->dnpipe, 0));
 	PFNV_CHK(pf_nvuint32_opt(nvl, "dnflags", &krule->dnflags, 0));
+	PFNV_CHK(pf_nvstring(nvl, "bridge_to", krule->bridge_to_name,
+	    sizeof(krule->bridge_to_name)));
 
 	PFNV_CHK(pf_nvuint8(nvl, "action", &krule->action));
 
@@ -1189,6 +1218,7 @@ pf_nveth_rule_to_keth_rule(const nvlist_t *nvl,
 	    krule->action != PF_MATCH)
 		return (EBADMSG);
 
+#undef ERROUT
 errout:
 	return (error);
 }

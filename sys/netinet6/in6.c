@@ -88,6 +88,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/route/route_ctl.h>
@@ -166,6 +167,9 @@ static void in6_leave_proxy_ndp_mc(struct ifnet *, const struct in6_addr *);
 
 #define ifa2ia6(ifa)	((struct in6_ifaddr *)(ifa))
 #define ia62ifa(ia6)	(&((ia6)->ia_ifa))
+
+static struct sx in6_control_sx;
+SX_SYSINIT(in6_control_sx, &in6_control_sx, "in6_control");
 
 void
 in6_newaddrmsg(struct in6_ifaddr *ia, int cmd)
@@ -253,6 +257,7 @@ in6_control(struct socket *so, u_long cmd, void *data,
 	struct	in6_aliasreq *ifra = (struct in6_aliasreq *)data;
 	struct sockaddr_in6 *sa6;
 	int error;
+	bool control_locked = false;
 
 	/*
 	 * Compat to make pre-10.x ifconfig(8) operable.
@@ -410,6 +415,8 @@ in6_control(struct socket *so, u_long cmd, void *data,
 		if (td != NULL && (error = prison_check_ip6(td->td_ucred,
 		    &sa6->sin6_addr)) != 0)
 			return (error);
+		sx_xlock(&in6_control_sx);
+		control_locked = true;
 		ia = in6ifa_ifpwithaddr(ifp, &sa6->sin6_addr);
 	} else
 		ia = NULL;
@@ -581,6 +588,9 @@ in6_control(struct socket *so, u_long cmd, void *data,
 
 	error = 0;
 out:
+	if (control_locked)
+		sx_xunlock(&in6_control_sx);
+
 	if (ia != NULL)
 		ifa_free(&ia->ia_ifa);
 	return (error);

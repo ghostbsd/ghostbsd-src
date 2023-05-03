@@ -29,9 +29,8 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#include <sys/kernel.h>
-#include <sys/sdt.h>
 #include <sys/systm.h>
+#include <sys/sdt.h>
 #include <sys/proc.h>
 
 /*
@@ -136,7 +135,6 @@ DUMMY(fsconfig);
 DUMMY(fsmount);
 DUMMY(fspick);
 DUMMY(pidfd_open);
-DUMMY(close_range);
 DUMMY(openat2);
 DUMMY(pidfd_getfd);
 DUMMY(process_madvise);

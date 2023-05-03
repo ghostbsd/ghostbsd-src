@@ -52,6 +52,10 @@ tests = ['zfs_share_005_pos', 'zfs_share_007_neg', 'zfs_share_009_neg',
     'zfs_share_012_pos', 'zfs_share_013_pos']
 tags = ['functional', 'cli_root', 'zfs_share']
 
+[tests/functional/cli_root/zfs_unshare:Linux]
+tests = ['zfs_unshare_008_pos']
+tags = ['functional', 'cli_root', 'zfs_unshare']
+
 [tests/functional/cli_root/zfs_sysfs:Linux]
 tests = ['zfeature_set_unsupported', 'zfs_get_unsupported',
     'zfs_set_unsupported', 'zfs_sysfs_live', 'zpool_get_unsupported',
@@ -86,7 +90,8 @@ tests = ['devices_001_pos', 'devices_002_neg', 'devices_003_pos']
 tags = ['functional', 'devices']
 
 [tests/functional/events:Linux]
-tests = ['events_001_pos', 'events_002_pos', 'zed_rc_filter', 'zed_fd_spill']
+tests = ['events_001_pos', 'events_002_pos', 'zed_rc_filter', 'zed_fd_spill',
+    'zed_cksum_reported', 'zed_cksum_config', 'zed_io_config']
 tags = ['functional', 'events']
 
 [tests/functional/fadvise:Linux]
@@ -120,7 +125,7 @@ post =
 tags = ['functional', 'largest_pool']
 
 [tests/functional/mmap:Linux]
-tests = ['mmap_libaio_001_pos']
+tests = ['mmap_libaio_001_pos', 'mmap_sync_001_pos']
 tags = ['functional', 'mmap']
 
 [tests/functional/mmp:Linux]
@@ -156,6 +161,10 @@ tags = ['functional', 'projectquota']
 [tests/functional/dos_attributes:Linux]
 tests = ['read_dos_attrs_001', 'write_dos_attrs_001']
 tags = ['functional', 'dos_attributes']
+
+[tests/functional/renameat2:Linux]
+tests = ['renameat2_noreplace', 'renameat2_exchange', 'renameat2_whiteout']
+tags = ['functional', 'renameat2']
 
 [tests/functional/rsend:Linux]
 tests = ['send_realloc_dnode_size', 'send_encrypted_files']
@@ -194,3 +203,7 @@ tags = ['functional', 'userquota']
 tests = ['zvol_misc_fua']
 tags = ['functional', 'zvol', 'zvol_misc']
 
+[tests/functional/idmap_mount:Linux]
+tests = ['idmap_mount_001', 'idmap_mount_002', 'idmap_mount_003',
+    'idmap_mount_004', 'idmap_mount_005']
+tags = ['functional', 'idmap_mount']

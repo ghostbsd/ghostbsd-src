@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2011, Lawrence Livermore National Security, LLC.
+ * Copyright (c) 2023, Datto Inc. All rights reserved.
  */
 
 
@@ -276,11 +277,28 @@ zpl_test_super(struct super_block *s, void *data)
 {
 	zfsvfs_t *zfsvfs = s->s_fs_info;
 	objset_t *os = data;
+	int match;
 
-	if (zfsvfs == NULL)
+	/*
+	 * If the os doesn't match the z_os in the super_block, assume it is
+	 * not a match. Matching would imply a multimount of a dataset. It is
+	 * possible that during a multimount, there is a simultaneous operation
+	 * that changes the z_os, e.g., rollback, where the match will be
+	 * missed, but in that case the user will get an EBUSY.
+	 */
+	if (zfsvfs == NULL || os != zfsvfs->z_os)
 		return (0);
 
-	return (os == zfsvfs->z_os);
+	/*
+	 * If they do match, recheck with the lock held to prevent mounting the
+	 * wrong dataset since z_os can be stale when the teardown lock is held.
+	 */
+	if (zpl_enter(zfsvfs, FTAG) != 0)
+		return (0);
+	match = (os == zfsvfs->z_os);
+	zpl_exit(zfsvfs, FTAG);
+
+	return (match);
 }
 
 static struct super_block *
@@ -374,7 +392,11 @@ const struct super_operations zpl_super_operations = {
 struct file_system_type zpl_fs_type = {
 	.owner			= THIS_MODULE,
 	.name			= ZFS_DRIVER,
+#if defined(HAVE_IDMAP_MNT_API)
+	.fs_flags		= FS_USERNS_MOUNT | FS_ALLOW_IDMAP,
+#else
 	.fs_flags		= FS_USERNS_MOUNT,
+#endif
 	.mount			= zpl_mount,
 	.kill_sb		= zpl_kill_sb,
 };

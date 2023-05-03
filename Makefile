@@ -84,9 +84,9 @@
 #  4.  `make installkernel KERNCONF=YOUR_KERNEL_HERE'   (default is GENERIC).
 #       [steps 3. & 4. can be combined by using the "kernel" target]
 #  5.  `reboot'        (in single user mode: boot -s from the loader prompt).
-#  6.  `mergemaster -p'
+#  6.  `etcupdate -p'
 #  7.  `make installworld'
-#  8.  `mergemaster'            (you may wish to use -i, along with -U or -F).
+#  8.  `etcupdate -B'
 #  9.  `make delete-old'
 # 10.  `reboot'
 # 11.  `make delete-old-libs' (in case no 3rd party program uses them anymore)
@@ -118,6 +118,16 @@
 #
 # For more information, see the build(7) manual page.
 #
+
+# Include jobs.mk early if we need it.
+# It will turn:
+# 	make buildworld-jobs
+# into
+# 	make -j${JOB_MAX} buildworld > ../buildworld.log 2>&1
+#
+.if make(*-jobs)
+.include <jobs.mk>
+.endif
 
 .if defined(UNIVERSE_TARGET) || defined(MAKE_JUST_WORLDS) || defined(WITHOUT_KERNELS)
 __DO_KERNELS=no
@@ -217,9 +227,14 @@ META_TGT_WHITELIST+= \
 .ORDER: buildkernel reinstallkernel
 .ORDER: buildkernel reinstallkernel.debug
 
+# Only sanitize PATH on FreeBSD.
+# PATH may include tools that are required to cross-build
+# on non-FreeBSD systems.
+.if ${.MAKE.OS} == "FreeBSD"
 PATH=	/sbin:/bin:/usr/sbin:/usr/bin
+.endif
 MAKEOBJDIRPREFIX?=	/usr/obj
-_MAKEOBJDIRPREFIX!= /usr/bin/env -i PATH=${PATH} ${MAKE} MK_AUTO_OBJ=no \
+_MAKEOBJDIRPREFIX!= /usr/bin/env -i PATH=${PATH:Q} ${MAKE} MK_AUTO_OBJ=no \
     ${.MAKEFLAGS:MMAKEOBJDIRPREFIX=*} __MAKE_CONF=${__MAKE_CONF} \
     SRCCONF=${SRCCONF} SRC_ENV_CONF= \
     -f /dev/null -V MAKEOBJDIRPREFIX dummy
@@ -262,7 +277,7 @@ SUB_MAKE= `test -x ${MYMAKE} && echo ${MYMAKE} || echo ${MAKE}` \
 SUB_MAKE= ${MAKE} -m ${.CURDIR}/share/mk
 .endif
 
-_MAKE=	PATH=${PATH} MAKE_CMD="${MAKE}" ${SUB_MAKE} -f Makefile.inc1 \
+_MAKE=	PATH=${PATH:Q} MAKE_CMD="${MAKE}" ${SUB_MAKE} -f Makefile.inc1 \
 	TARGET=${_TARGET} TARGET_ARCH=${_TARGET_ARCH} ${_MAKEARGS}
 
 .if defined(MK_META_MODE) && ${MK_META_MODE} == "yes"
@@ -520,20 +535,20 @@ _UNIVERSE_TARGETS=	${TARGETS}
 TARGET_ARCHES_arm?=	armv6 armv7
 TARGET_ARCHES_arm64?=	aarch64
 TARGET_ARCHES_powerpc?=	powerpc powerpc64 powerpc64le ${EXTRA_ARCHES_powerpc}
-TARGET_ARCHES_riscv?=	riscv64 riscv64sf
+TARGET_ARCHES_riscv?=	riscv64
 .for target in ${TARGETS}
 TARGET_ARCHES_${target}?= ${target}
 .endfor
 
 .if defined(USE_GCC_TOOLCHAINS)
-TOOLCHAINS_amd64=	amd64-gcc9
-TOOLCHAINS_arm=		armv6-gcc9 armv7-gcc9
-TOOLCHAIN_armv7=	armv7-gcc9
-TOOLCHAINS_arm64=	aarch64-gcc9
-TOOLCHAINS_i386=	i386-gcc9
-TOOLCHAINS_powerpc=	powerpc-gcc9 powerpc64-gcc9
-TOOLCHAIN_powerpc64=	powerpc64-gcc9
-TOOLCHAINS_riscv=	riscv64-gcc9
+TOOLCHAINS_amd64=	amd64-gcc12
+TOOLCHAINS_arm=		armv6-gcc12 armv7-gcc12
+TOOLCHAIN_armv7=	armv7-gcc12
+TOOLCHAINS_arm64=	aarch64-gcc12
+TOOLCHAINS_i386=	i386-gcc12
+TOOLCHAINS_powerpc=	powerpc-gcc12 powerpc64-gcc12
+TOOLCHAIN_powerpc64=	powerpc64-gcc12
+TOOLCHAINS_riscv=	riscv64-gcc12
 .endif
 
 # If a target is using an external toolchain, set MAKE_PARAMS to enable use
@@ -590,7 +605,7 @@ universe-toolchain: .PHONY universe_prologue
 	@echo "> Toolchain bootstrap started on `LC_ALL=C date`"
 	@echo "--------------------------------------------------------------"
 	${_+_}@cd ${.CURDIR}; \
-	    env PATH=${PATH} ${SUB_MAKE} ${JFLAG} kernel-toolchain \
+	    env PATH=${PATH:Q} ${SUB_MAKE} ${JFLAG} kernel-toolchain \
 	    TARGET=${MACHINE} TARGET_ARCH=${MACHINE_ARCH} \
 	    OBJTOP="${HOST_OBJTOP}" \
 	    WITHOUT_SYSTEM_COMPILER=yes \

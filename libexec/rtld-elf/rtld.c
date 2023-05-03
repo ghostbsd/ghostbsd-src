@@ -269,7 +269,7 @@ static int osreldate;
 size_t *pagesizes;
 size_t page_size;
 
-static int stack_prot = PROT_READ | PROT_WRITE | RTLD_DEFAULT_STACK_EXEC;
+static int stack_prot = PROT_READ | PROT_WRITE | PROT_EXEC;
 static int max_stack_flags;
 
 /*
@@ -1200,6 +1200,8 @@ static const struct {
 	{ .kw = "${OSREL}", .pass_obj = false, .subst = uts.release },
 	{ .kw = "$PLATFORM", .pass_obj = false, .subst = uts.machine },
 	{ .kw = "${PLATFORM}", .pass_obj = false, .subst = uts.machine },
+	{ .kw = "$LIB", .pass_obj = false, .subst = TOKEN_LIB },
+	{ .kw = "${LIB}", .pass_obj = false, .subst = TOKEN_LIB },
 };
 
 static char *
@@ -1794,23 +1796,20 @@ donelist_check(DoneList *dlp, const Obj_Entry *obj)
 }
 
 /*
- * Hash function for symbol table lookup.  Don't even think about changing
- * this.  It is specified by the System V ABI.
+ * SysV hash function for symbol table lookup.  It is a slightly optimized
+ * version of the hash specified by the System V ABI.
  */
-unsigned long
+Elf32_Word
 elf_hash(const char *name)
 {
-    const unsigned char *p = (const unsigned char *) name;
-    unsigned long h = 0;
-    unsigned long g;
+	const unsigned char *p = (const unsigned char *)name;
+	Elf32_Word h = 0;
 
-    while (*p != '\0') {
-	h = (h << 4) + *p++;
-	if ((g = h & 0xf0000000) != 0)
-	    h ^= g >> 24;
-	h &= ~g;
-    }
-    return (h);
+	while (*p != '\0') {
+		h = (h << 4) + *p++;
+		h ^= (h >> 24) & 0xf0;
+	}
+	return (h & 0x0fffffff);
 }
 
 /*
@@ -2530,10 +2529,6 @@ initlist_add_objects(Obj_Entry *obj, Obj_Entry *tail, Objlist *list)
 	obj->on_fini_list = true;
     }
 }
-
-#ifndef FPTR_TARGET
-#define FPTR_TARGET(f)	((Elf_Addr) (f))
-#endif
 
 static void
 free_needed_filtees(Needed_Entry *n, RtldLockState *lockstate)
@@ -6034,13 +6029,16 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
 					_rtld_error("Both -b and -f specified");
 					rtld_die();
 				}
+				if (j != arglen - 1) {
+					_rtld_error("Invalid options: %s", arg);
+					rtld_die();
+				}
 				i++;
 				*argv0 = argv[i];
 				seen_b = true;
 				break;
 			} else if (opt == 'd') {
 				*dir_ignore = true;
-				break;
 			} else if (opt == 'f') {
 				if (seen_b) {
 					_rtld_error("Both -b and -f specified");
@@ -6055,7 +6053,8 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
 				 * name but the descriptor is what
 				 * will actually be executed).
 				 *
-				 * -f must be the last option in, e.g., -abcf.
+				 * -f must be the last option in the
+				 * group, e.g., -abcf <fd>.
 				 */
 				if (j != arglen - 1) {
 					_rtld_error("Invalid options: %s", arg);

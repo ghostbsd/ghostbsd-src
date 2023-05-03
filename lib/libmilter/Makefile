@@ -15,6 +15,11 @@ CFLAGS+=-DSM_CONF_POLL
 CFLAGS+=-DNETINET6
 .endif
 
+.if ${MK_OPENSSL} != "no"
+# STARTTLS support
+CFLAGS+=-DSTARTTLS
+.endif
+
 # User customizations to the sendmail build environment
 CFLAGS+=${SENDMAIL_CFLAGS}
 
@@ -35,3 +40,5 @@ sm_os.h: ${SENDMAIL_DIR}/include/sm/os/sm_os_freebsd.h .NOMETA
 	ln -sf ${.ALLSRC} ${.TARGET}
 
 .include <bsd.lib.mk>
+
+CWARNFLAGS+= ${NO_WDEPRECATED_NON_PROTOTYPE}

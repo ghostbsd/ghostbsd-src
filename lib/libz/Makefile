@@ -83,3 +83,5 @@ test: example minigzip
 PCFILES=	zlib.pc
 
 .include <bsd.lib.mk>
+
+CWARNFLAGS+=	${NO_WDEPRECATED_NON_PROTOTYPE} ${NO_WSTRICT_PROTOTYPES}

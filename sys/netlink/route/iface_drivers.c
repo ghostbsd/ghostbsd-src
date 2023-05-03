@@ -25,6 +25,7 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_netlink.h"
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 #include "opt_inet.h"
@@ -59,107 +60,88 @@ __FBSDID("$FreeBSD$");
 _DECLARE_DEBUG(LOG_DEBUG);
 
 /*
- *
- * {len=76, type=RTM_NEWLINK, flags=NLM_F_REQUEST|NLM_F_ACK|NLM_F_EXCL|NLM_F_CREATE, seq=1662892737, pid=0},
- *  {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_NETROM, ifi_index=0, ifi_flags=0, ifi_change=0},
- *   [
- *    {{nla_len=8, nla_type=IFLA_LINK}, 2},
- *    {{nla_len=12, nla_type=IFLA_IFNAME}, "xvlan22"},
- *    {{nla_len=24, nla_type=IFLA_LINKINFO},
- *     [
- *      {{nla_len=8, nla_type=IFLA_INFO_KIND}, "vlan"...},
- *      {{nla_len=12, nla_type=IFLA_INFO_DATA}, "\x06\x00\x01\x00\x16\x00\x00\x00"}]}]}, iov_len=76}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 76
+ * Generic modification interface handler.
+ * Responsible for changing network stack interface attributes
+ * such as state, mtu or description.
  */
-
-struct nl_parsed_vlan {
-	uint16_t vlan_id;
-	uint16_t vlan_proto;
-	struct ifla_vlan_flags vlan_flags;
-};
-
-#define	_OUT(_field)	offsetof(struct nl_parsed_vlan, _field)
-static const struct nlattr_parser nla_p_vlan[] = {
-	{ .type = IFLA_VLAN_ID, .off = _OUT(vlan_id), .cb = nlattr_get_uint16 },
-	{ .type = IFLA_VLAN_FLAGS, .off = _OUT(vlan_flags), .cb = nlattr_get_nla },
-	{ .type = IFLA_VLAN_PROTOCOL, .off = _OUT(vlan_proto), .cb = nlattr_get_uint16 },
-};
-#undef _OUT
-NL_DECLARE_ATTR_PARSER(vlan_parser, nla_p_vlan);
-
-static int
-create_vlan(struct nl_parsed_link *lattrs, struct nlpcb *nlp, struct nl_pstate *npt)
+int
+_nl_modify_ifp_generic(struct ifnet *ifp, struct nl_parsed_link *lattrs,
+    const struct nlattr_bmask *bm, struct nl_pstate *npt)
 {
-	struct epoch_tracker et;
-        struct ifnet *ifp;
 	int error;
 
-	/*
-	 * lattrs.ifla_ifname is the new interface name
-	 * lattrs.ifi_index contains parent interface index
-	 * lattrs.ifla_idata contains un-parsed vlan data
-	 */
+	if (lattrs->ifla_ifalias != NULL) {
+		if (nlp_has_priv(npt->nlp, PRIV_NET_SETIFDESCR)) {
+			int len = strlen(lattrs->ifla_ifalias) + 1;
+			char *buf = if_allocdescr(len, M_WAITOK);
 
-	struct nl_parsed_vlan attrs = {
-		.vlan_id = 0xFEFE,
-		.vlan_proto = ETHERTYPE_VLAN
-	};
-	NLP_LOG(LOG_DEBUG3, nlp, "nested: %p len %d", lattrs->ifla_idata, lattrs->ifla_idata->nla_len);
-
-	if (lattrs->ifla_idata == NULL) {
-		NLMSG_REPORT_ERR_MSG(npt, "vlan id is required, guessing not supported");
-		return (ENOTSUP);
+			memcpy(buf, lattrs->ifla_ifalias, len);
+			if_setdescr(ifp, buf);
+			getmicrotime(&ifp->if_lastchange);
+		} else {
+			nlmsg_report_err_msg(npt, "Not enough privileges to set descr");
+			return (EPERM);
+		}
 	}
 
-	error = nl_parse_nested(lattrs->ifla_idata, &vlan_parser, npt, &attrs);
-	if (error != 0)
-		return (error);
-	if (attrs.vlan_id > 4095) {
-		NLMSG_REPORT_ERR_MSG(npt, "Invalid VID: %d", attrs.vlan_id);
-		return (EINVAL);
-	}
-	if (attrs.vlan_proto != ETHERTYPE_VLAN && attrs.vlan_proto != ETHERTYPE_QINQ) {
-		NLMSG_REPORT_ERR_MSG(npt, "Unsupported ethertype: 0x%04X", attrs.vlan_proto);
-		return (ENOTSUP);
+	if ((lattrs->ifi_change & IFF_UP) && (lattrs->ifi_flags & IFF_UP) == 0) {
+		/* Request to down the interface */
+		if_down(ifp);
 	}
 
-	NET_EPOCH_ENTER(et);
-	ifp = ifnet_byindex_ref(lattrs->ifi_index);
-	NET_EPOCH_EXIT(et);
-	if (ifp == NULL) {
-		NLP_LOG(LOG_DEBUG, nlp, "unable to find parent interface %u",
-		    lattrs->ifi_index);
-		return (ENOENT);
+	if (lattrs->ifla_mtu > 0) {
+		if (nlp_has_priv(npt->nlp, PRIV_NET_SETIFMTU)) {
+			struct ifreq ifr = { .ifr_mtu = lattrs->ifla_mtu };
+			error = ifhwioctl(SIOCSIFMTU, ifp, (char *)&ifr, curthread);
+		} else {
+			nlmsg_report_err_msg(npt, "Not enough privileges to set mtu");
+			return (EPERM);
+		}
 	}
 
-	/* Waiting till if_clone changes lands */
+	if (lattrs->ifi_change & IFF_PROMISC) {
+		error = ifpromisc(ifp, lattrs->ifi_flags & IFF_PROMISC);
+		if (error != 0) {
+			nlmsg_report_err_msg(npt, "unable to set promisc");
+			return (error);
+		}
+	}
+
+	return (0);
+}
+
 /*
-	struct vlanreq params = {
-		.vlr_tag = attrs.vlan_id,
-		.vlr_proto = attrs.vlan_proto,
-	};
-*/
-	int ifname_len = strlen(lattrs->ifla_ifname) + 1;
-	error = if_clone_create(lattrs->ifla_ifname, ifname_len, (char *)NULL);
-
-	NLP_LOG(LOG_DEBUG2, nlp, "clone for %s returned %d", lattrs->ifla_ifname, error);
-
-	if_rele(ifp);
-	return (error);
-}
-
-static struct nl_cloner vlan_cloner = {
-	.name = "vlan",
-	.create_f = create_vlan,
-
-};
-
-static const struct nlhdr_parser *all_parsers[] = { &vlan_parser };
-
+ * Saves the resulting ifindex and ifname to report them
+ *  to userland along with the operation result.
+ * NLA format:
+ * NLMSGERR_ATTR_COOKIE(nested)
+ *  IFLA_NEW_IFINDEX(u32)
+ *  IFLA_IFNAME(string)
+ */
 void
-rtnl_iface_drivers_register(void)
+_nl_store_ifp_cookie(struct nl_pstate *npt, struct ifnet *ifp)
 {
-	rtnl_iface_add_cloner(&vlan_cloner);
-	NL_VERIFY_PARSERS(all_parsers);
-}
+	int ifname_len = strlen(if_name(ifp));
+	uint32_t ifindex = (uint32_t)ifp->if_index;
 
+	int nla_len = sizeof(struct nlattr) * 3 +
+		sizeof(ifindex) + NL_ITEM_ALIGN(ifname_len + 1);
+	struct nlattr *nla_cookie = npt_alloc(npt, nla_len);
+
+	/* Nested TLV */
+	nla_cookie->nla_len = nla_len;
+	nla_cookie->nla_type = NLMSGERR_ATTR_COOKIE;
+
+	struct nlattr *nla = nla_cookie + 1;
+	nla->nla_len = sizeof(struct nlattr) + sizeof(ifindex);
+	nla->nla_type = IFLA_NEW_IFINDEX;
+	memcpy(NLA_DATA(nla), &ifindex, sizeof(ifindex));
+
+	nla = NLA_NEXT(nla);
+	nla->nla_len = sizeof(struct nlattr) + ifname_len + 1;
+	nla->nla_type = IFLA_IFNAME;
+	strlcpy(NLA_DATA(nla), if_name(ifp), ifname_len + 1);
+
+	nlmsg_report_cookie(npt, nla_cookie);
+}
 

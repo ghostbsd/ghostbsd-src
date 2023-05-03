@@ -2153,7 +2153,6 @@ vt_mouse_event(int type, int x, int y, int event, int cnt, int mlevel)
 	vd = main_vd;
 	vw = vd->vd_curwindow;
 	vf = vw->vw_font;
-	mark = 0;
 
 	if (vw->vw_flags & (VWF_MOUSE_HIDE | VWF_GRAPHICS))
 		/*
@@ -2191,7 +2190,7 @@ vt_mouse_event(int type, int x, int y, int event, int cnt, int mlevel)
 
 		vd->vd_mx = x;
 		vd->vd_my = y;
-		if (vd->vd_mstate & MOUSE_BUTTON1DOWN)
+		if (vd->vd_mstate & (MOUSE_BUTTON1DOWN | VT_MOUSE_EXTENDBUTTON))
 			vtbuf_set_mark(&vw->vw_buf, VTB_MARK_MOVE,
 			    vd->vd_mx / vf->vf_width,
 			    vd->vd_my / vf->vf_height);
@@ -2217,7 +2216,7 @@ vt_mouse_event(int type, int x, int y, int event, int cnt, int mlevel)
 		case 2:	/* double click: cut a word */
 			mark = VTB_MARK_WORD;
 			break;
-		case 3:	/* triple click: cut a line */
+		default:	/* triple click: cut a line */
 			mark = VTB_MARK_ROW;
 			break;
 		}
@@ -2228,6 +2227,10 @@ vt_mouse_event(int type, int x, int y, int event, int cnt, int mlevel)
 			break;
 		default:
 			vt_mouse_paste();
+			/* clear paste buffer selection after paste */
+			vtbuf_set_mark(&vw->vw_buf, VTB_MARK_START,
+			    vd->vd_mx / vf->vf_width,
+			    vd->vd_my / vf->vf_height);
 			break;
 		}
 		return; /* Done */
@@ -2237,7 +2240,7 @@ vt_mouse_event(int type, int x, int y, int event, int cnt, int mlevel)
 			if (!(vd->vd_mstate & MOUSE_BUTTON1DOWN))
 				mark = VTB_MARK_EXTEND;
 			else
-				mark = 0;
+				mark = VTB_MARK_NONE;
 			break;
 		default:
 			mark = VTB_MARK_EXTEND;
@@ -2286,7 +2289,7 @@ vt_mouse_event(int type, int x, int y, int event, int cnt, int mlevel)
 			VD_PASTEBUFSZ(vd) = len;
 		}
 		/* Request copy/paste buffer data, no more than `len' */
-		vtbuf_extract_marked(&vw->vw_buf, VD_PASTEBUF(vd), len);
+		vtbuf_extract_marked(&vw->vw_buf, VD_PASTEBUF(vd), len, mark);
 
 		VD_PASTEBUFLEN(vd) = len;
 
@@ -2401,6 +2404,10 @@ skip_thunk:
 	case PIO_KEYMAP:
 	case GIO_DEADKEYMAP:
 	case PIO_DEADKEYMAP:
+#ifdef COMPAT_FREEBSD13
+	case OGIO_DEADKEYMAP:
+	case OPIO_DEADKEYMAP:
+#endif /* COMPAT_FREEBSD13 */
 	case GETFKEY:
 	case SETFKEY:
 	case KDGKBINFO:
@@ -3134,12 +3141,12 @@ vt_resume_handler(void *priv)
 	vd->vd_flags &= ~VDF_SUSPENDED;
 }
 
-void
+int
 vt_allocate(const struct vt_driver *drv, void *softc)
 {
 
 	if (!vty_enabled(VTY_VT))
-		return;
+		return (EINVAL);
 
 	if (main_vd->vd_driver == NULL) {
 		main_vd->vd_driver = drv;
@@ -3153,31 +3160,35 @@ vt_allocate(const struct vt_driver *drv, void *softc)
 		if (drv->vd_priority <= main_vd->vd_driver->vd_priority) {
 			printf("VT: Driver priority %d too low. Current %d\n ",
 			    drv->vd_priority, main_vd->vd_driver->vd_priority);
-			return;
+			return (EEXIST);
 		}
 		printf("VT: Replacing driver \"%s\" with new \"%s\".\n",
 		    main_vd->vd_driver->vd_name, drv->vd_name);
 	}
 
 	vt_replace_backend(drv, softc);
+
+	return (0);
 }
 
-void
+int
 vt_deallocate(const struct vt_driver *drv, void *softc)
 {
 
 	if (!vty_enabled(VTY_VT))
-		return;
+		return (EINVAL);
 
 	if (main_vd->vd_prev_driver == NULL ||
 	    main_vd->vd_driver != drv ||
 	    main_vd->vd_softc != softc)
-		return;
+		return (EPERM);
 
 	printf("VT: Switching back from \"%s\" to \"%s\".\n",
 	    main_vd->vd_driver->vd_name, main_vd->vd_prev_driver->vd_name);
 
 	vt_replace_backend(NULL, NULL);
+
+	return (0);
 }
 
 void

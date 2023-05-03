@@ -150,6 +150,9 @@ static struct val2str str_alg_auth[] = {
 #ifdef SADB_X_AALG_AES_XCBC_MAC
 	{ SADB_X_AALG_AES_XCBC_MAC, "aes-xcbc-mac", },
 #endif
+#ifdef SADB_X_AALG_CHACHA20POLY1305
+	{ SADB_X_AALG_CHACHA20POLY1305, "chacha20-poly1305", },
+#endif
 	{ -1, NULL, },
 };
 
@@ -170,6 +173,9 @@ static struct val2str str_alg_enc[] = {
 #endif
 #ifdef SADB_X_EALG_AESGCM16
 	{ SADB_X_EALG_AESGCM16, "aes-gcm-16", },
+#endif
+#ifdef SADB_X_EALG_CHACHA20POLY1305
+	{ SADB_X_EALG_CHACHA20POLY1305, "chacha20-poly1305", },
 #endif
 	{ -1, NULL, },
 };
@@ -193,8 +199,7 @@ static struct val2str str_sp_scope[] = {
  * dump SADB_MSG formatted.  For debugging, you should use kdebug_sadb().
  */
 void
-pfkey_sadump(m)
-	struct sadb_msg *m;
+pfkey_sadump(struct sadb_msg *m)
 {
 	caddr_t mhp[SADB_EXT_MAX + 1];
 	struct sadb_sa *m_sa;
@@ -511,8 +516,7 @@ pfkey_spdump(struct sadb_msg *m)
  * set "ipaddress" to buffer.
  */
 static char *
-str_ipaddr(sa)
-	struct sockaddr *sa;
+str_ipaddr(struct sockaddr *sa)
 {
 	static char buf[NI_MAXHOST];
 	const int niflag = NI_NUMERICHOST;
@@ -529,8 +533,7 @@ str_ipaddr(sa)
  * set "/prefix[port number]" to buffer.
  */
 static char *
-str_prefport(family, pref, port, ulp)
-	u_int family, pref, port, ulp;
+str_prefport(u_int family, u_int pref, u_int port, u_int ulp)
 {
 	static char buf[128];
 	char prefbuf[128];
@@ -568,8 +571,7 @@ str_prefport(family, pref, port, ulp)
 }
 
 static void
-str_upperspec(ulp, p1, p2)
-	u_int ulp, p1, p2;
+str_upperspec(u_int ulp, u_int p1, u_int p2)
 {
 	if (ulp == IPSEC_ULPROTO_ANY)
 		printf("any");
@@ -601,8 +603,7 @@ str_upperspec(ulp, p1, p2)
  * set "Mon Day Time Year" to buffer
  */
 static char *
-str_time(t)
-	time_t t;
+str_time(time_t t)
 {
 	static char buf[128];
 
@@ -621,9 +622,7 @@ str_time(t)
 }
 
 static void
-str_lifetime_byte(x, str)
-	struct sadb_lifetime *x;
-	char *str;
+str_lifetime_byte(struct sadb_lifetime *x, char *str)
 {
 	double y;
 	char *unit;

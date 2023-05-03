@@ -286,11 +286,14 @@
 
 #ifndef LOCORE
 
+#include <sys/kassert.h>
 #include <sys/queue.h>
 #include <sys/_cpuset.h>
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
 #include <sys/_pctrie.h>
+#include <machine/_pmap.h>
+#include <sys/_pv_entry.h>
 #include <sys/_rangeset.h>
 #include <sys/_smr.h>
 
@@ -353,8 +356,6 @@ extern pt_entry_t pg_nx;
 /*
  * Pmap stuff
  */
-struct	pv_entry;
-struct	pv_chunk;
 
 /*
  * Locks
@@ -370,11 +371,6 @@ enum pmap_type {
 	PT_X86,			/* regular x86 page tables */
 	PT_EPT,			/* Intel's nested page tables */
 	PT_RVI,			/* AMD's nested page tables */
-};
-
-struct pmap_pcids {
-	uint32_t	pm_pcid;
-	uint32_t	pm_gen;
 };
 
 /*
@@ -395,7 +391,7 @@ struct pmap {
 	long			pm_eptgen;	/* EPT pmap generation id */
 	smr_t			pm_eptsmr;
 	int			pm_flags;
-	struct pmap_pcids	pm_pcids[MAXCPU];
+	struct pmap_pcid	*pm_pcidp;
 	struct rangeset		pm_pkru;
 };
 
@@ -424,40 +420,6 @@ extern struct pmap	kernel_pmap_store;
 
 int	pmap_pinit_type(pmap_t pmap, enum pmap_type pm_type, int flags);
 int	pmap_emulate_accessed_dirty(pmap_t pmap, vm_offset_t va, int ftype);
-#endif
-
-/*
- * For each vm_page_t, there is a list of all currently valid virtual
- * mappings of that page.  An entry is a pv_entry_t, the list is pv_list.
- */
-typedef struct pv_entry {
-	vm_offset_t	pv_va;		/* virtual address for mapping */
-	TAILQ_ENTRY(pv_entry)	pv_next;
-} *pv_entry_t;
-
-/*
- * pv_entries are allocated in chunks per-process.  This avoids the
- * need to track per-pmap assignments.
- */
-#define	_NPCPV	168
-#define	_NPCM	howmany(_NPCPV, 64)
-
-#define	PV_CHUNK_HEADER							\
-	pmap_t			pc_pmap;				\
-	TAILQ_ENTRY(pv_chunk)	pc_list;				\
-	uint64_t		pc_map[_NPCM];	/* bitmap; 1 = free */	\
-	TAILQ_ENTRY(pv_chunk)	pc_lru;
-
-struct pv_chunk_header {
-	PV_CHUNK_HEADER
-};
-
-struct pv_chunk {
-	PV_CHUNK_HEADER
-	struct pv_entry		pc_pventry[_NPCPV];
-};
-
-#ifdef	_KERNEL
 
 extern caddr_t	CADDR1;
 extern pt_entry_t *CMAP1;
@@ -466,6 +428,8 @@ extern vm_offset_t virtual_end;
 extern vm_paddr_t dmaplimit;
 extern int pmap_pcid_enabled;
 extern int invpcid_works;
+extern int pmap_pcid_invlpg_workaround;
+extern int pmap_pcid_invlpg_workaround_uena;
 
 #define	pmap_page_get_memattr(m)	((vm_memattr_t)(m)->md.pat_mode)
 #define	pmap_page_is_write_mapped(m)	(((m)->a.flags & PGA_WRITEABLE) != 0)
@@ -519,6 +483,7 @@ void	pmap_force_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva);
 void	pmap_get_mapping(pmap_t pmap, vm_offset_t va, uint64_t *ptr, int *num);
 boolean_t pmap_map_io_transient(vm_page_t *, vm_offset_t *, int, boolean_t);
 void	pmap_unmap_io_transient(vm_page_t *, vm_offset_t *, int, boolean_t);
+void	pmap_map_delete(pmap_t, vm_offset_t, vm_offset_t);
 void	pmap_pti_add_kva(vm_offset_t sva, vm_offset_t eva, bool exec);
 void	pmap_pti_remove_kva(vm_offset_t sva, vm_offset_t eva);
 void	pmap_pti_pcid_invalidate(uint64_t ucr3, uint64_t kcr3);
@@ -547,6 +512,37 @@ static __inline volatile cpuset_t *
 pmap_invalidate_cpu_mask(pmap_t pmap)
 {
 	return (&pmap->pm_active);
+}
+
+#if defined(_SYS_PCPU_H_) && defined(_MACHINE_CPUFUNC_H_)
+/*
+ * It seems that AlderLake+ small cores have some microarchitectural
+ * bug, which results in the INVLPG instruction failing to flush all
+ * global TLB entries when PCID is enabled.  Work around it for now,
+ * by doing global invalidation on small cores instead of INVLPG.
+ */
+static __inline void
+pmap_invlpg(pmap_t pmap, vm_offset_t va)
+{
+	if (pmap == kernel_pmap && PCPU_GET(pcid_invlpg_workaround)) {
+		struct invpcid_descr d = { 0 };
+
+		invpcid(&d, INVPCID_CTXGLOB);
+	} else {
+		invlpg(va);
+	}
+}
+#endif /* sys/pcpu.h && machine/cpufunc.h */
+
+/* Return pcid for the pmap pmap on current cpu */
+static __inline uint32_t
+pmap_get_pcid(pmap_t pmap)
+{
+	struct pmap_pcid *pcidp;
+
+	MPASS(pmap_pcid_enabled);
+	pcidp = zpcpu_get(pmap->pm_pcidp);
+	return (pcidp->pm_pcid);
 }
 
 #endif /* _KERNEL */

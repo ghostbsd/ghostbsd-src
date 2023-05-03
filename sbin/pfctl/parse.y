@@ -225,13 +225,21 @@ struct node_qassign {
 
 static struct filter_opts {
 	int			 marker;
-#define FOM_FLAGS	0x01
-#define FOM_ICMP	0x02
-#define FOM_TOS		0x04
-#define FOM_KEEP	0x08
-#define FOM_SRCTRACK	0x10
+#define FOM_FLAGS	0x0001
+#define FOM_ICMP	0x0002
+#define FOM_TOS		0x0004
+#define FOM_KEEP	0x0008
+#define FOM_SRCTRACK	0x0010
+#define FOM_MINTTL	0x0020
+#define FOM_MAXMSS	0x0040
+#define FOM_AFTO	0x0080 /* not yet implemmented */
+#define FOM_SETTOS	0x0100
+#define FOM_SCRUB_TCP	0x0200
 #define FOM_SETPRIO	0x0400
+#define FOM_ONCE	0x1000 /* not yet implemmented */
 #define FOM_PRIO	0x2000
+#define FOM_SETDELAY	0x4000
+#define FOM_FRAGCACHE	0x8000 /* does not exist in OpenBSD */
 	struct node_uid		*uid;
 	struct node_gid		*gid;
 	struct {
@@ -266,6 +274,12 @@ static struct filter_opts {
 		struct node_host	*addr;
 		u_int16_t		port;
 	}			 divert;
+	/* new-style scrub opts */
+	int			 nodf;
+	int			 minttl;
+	int			 settos;
+	int			 randomid;
+	int			 max_mss;
 } filter_opts;
 
 static struct antispoof_opts {
@@ -277,10 +291,6 @@ static struct antispoof_opts {
 
 static struct scrub_opts {
 	int			 marker;
-#define SOM_MINTTL	0x01
-#define SOM_MAXMSS	0x02
-#define SOM_FRAGCACHE	0x04
-#define SOM_SETTOS	0x08
 	int			 nodf;
 	int			 minttl;
 	int			 maxmss;
@@ -341,7 +351,7 @@ int		 rdr_consistent(struct pfctl_rule *);
 int		 process_tabledef(char *, struct table_opts *);
 void		 expand_label_str(char *, size_t, const char *, const char *);
 void		 expand_label_if(const char *, char *, size_t, const char *);
-void		 expand_label_addr(const char *, char *, size_t, u_int8_t,
+void		 expand_label_addr(const char *, char *, size_t, sa_family_t,
 		    struct pf_rule_addr *);
 void		 expand_label_port(const char *, char *, size_t,
 		    struct pf_rule_addr *);
@@ -351,7 +361,8 @@ void		 expand_label_nr(const char *, char *, size_t,
 void		 expand_eth_rule(struct pfctl_eth_rule *,
 		    struct node_if *, struct node_etherproto *,
 		    struct node_mac *, struct node_mac *,
-		    struct node_host *, struct node_host *, const char *);
+		    struct node_host *, struct node_host *, const char *,
+		    const char *);
 void		 expand_rule(struct pfctl_rule *, struct node_if *,
 		    struct node_host *, struct node_proto *, struct node_os *,
 		    struct node_host *, struct node_port *, struct node_host *,
@@ -368,6 +379,7 @@ int		 expand_skip_interface(struct node_if *);
 int	 check_rulestate(int);
 int	 getservice(char *);
 int	 rule_label(struct pfctl_rule *, char *s[PF_RULE_MAX_LABEL_COUNT]);
+int	 eth_rule_label(struct pfctl_eth_rule *, char *s[PF_RULE_MAX_LABEL_COUNT]);
 int	 rt_tableid_max(void);
 
 void	 mv_rules(struct pfctl_ruleset *, struct pfctl_ruleset *);
@@ -432,6 +444,7 @@ typedef struct {
 		struct {
 			struct node_mac	*mac;
 		} etheraddr;
+		char			*bridge_to;
 		struct {
 			struct node_host	*host;
 			u_int8_t		 rt;
@@ -490,7 +503,7 @@ int	parseport(char *, struct range *r, int);
 %token	ICMP6TYPE CODE KEEP MODULATE STATE PORT RDR NAT BINAT ARROW NODF
 %token	MINTTL ERROR ALLOWOPTS FASTROUTE FILENAME ROUTETO DUPTO REPLYTO NO LABEL
 %token	NOROUTE URPFFAILED FRAGMENT USER GROUP MAXMSS MAXIMUM TTL TOS DROP TABLE
-%token	REASSEMBLE FRAGDROP FRAGCROP ANCHOR NATANCHOR RDRANCHOR BINATANCHOR
+%token	REASSEMBLE ANCHOR NATANCHOR RDRANCHOR BINATANCHOR
 %token	SET OPTIMIZATION TIMEOUT LIMIT LOGINTERFACE BLOCKPOLICY FAILPOLICY
 %token	RANDOMID REQUIREORDER SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
 %token	ANTISPOOF FOR INCLUDE KEEPCOUNTERS SYNCOOKIES L3
@@ -503,13 +516,13 @@ int	parseport(char *, struct range *r, int);
 %token	STICKYADDRESS MAXSRCSTATES MAXSRCNODES SOURCETRACK GLOBAL RULE
 %token	MAXSRCCONN MAXSRCCONNRATE OVERLOAD FLUSH SLOPPY
 %token	TAGGED TAG IFBOUND FLOATING STATEPOLICY STATEDEFAULTS ROUTE SETTOS
-%token	DIVERTTO DIVERTREPLY
+%token	DIVERTTO DIVERTREPLY BRIDGE_TO
 %token	<v.string>		STRING
 %token	<v.number>		NUMBER
 %token	<v.i>			PORTBINARY
 %type	<v.interface>		interface if_list if_item_not if_item
 %type	<v.number>		number icmptype icmp6type uid gid
-%type	<v.number>		tos not yesno
+%type	<v.number>		tos not yesno optnodf
 %type	<v.probability>		probability
 %type	<v.i>			no dir af fragcache optimizer syncookie_val
 %type	<v.i>			sourcetrack flush unaryop statelock
@@ -563,6 +576,7 @@ int	parseport(char *, struct range *r, int);
 %type	<v.etherproto>		etherproto etherproto_list etherproto_item
 %type	<v.etherfromto>		etherfromto
 %type	<v.etheraddr>		etherfrom etherto
+%type	<v.bridge_to>		bridge
 %type	<v.mac>			xmac mac mac_list macspec
 %%
 
@@ -628,7 +642,16 @@ optimizer	: string	{
 		}
 		;
 
-option		: SET OPTIMIZATION STRING		{
+optnodf		: /* empty */	{ $$ = 0; }
+		| NODF		{ $$ = 1; }
+		;
+
+option		: SET REASSEMBLE yesno optnodf		{
+			if (check_rulestate(PFCTL_STATE_OPTION))
+				YYERROR;
+			pfctl_set_reassembly(pf, $3, $4);
+		}
+		| SET OPTIMIZATION STRING		{
 			if (check_rulestate(PFCTL_STATE_OPTION)) {
 				free($3);
 				YYERROR;
@@ -1195,7 +1218,7 @@ scrubaction	: no SCRUB {
 		}
 		;
 
-etherrule	: ETHER action dir quick interface etherproto etherfromto l3fromto etherfilter_opts
+etherrule	: ETHER action dir quick interface bridge etherproto etherfromto l3fromto etherfilter_opts
 		{
 			struct pfctl_eth_rule	r;
 
@@ -1207,23 +1230,28 @@ etherrule	: ETHER action dir quick interface etherproto etherfromto l3fromto eth
 			r.action = $2.b1;
 			r.direction = $3;
 			r.quick = $4.quick;
-			if ($9.tag != NULL)
-				memcpy(&r.tagname, $9.tag, sizeof(r.tagname));
-			if ($9.match_tag)
-				if (strlcpy(r.match_tagname, $9.match_tag,
+			if ($10.tag != NULL)
+				memcpy(&r.tagname, $10.tag, sizeof(r.tagname));
+			if ($10.match_tag)
+				if (strlcpy(r.match_tagname, $10.match_tag,
 				    PF_TAG_NAME_SIZE) >= PF_TAG_NAME_SIZE) {
 					yyerror("tag too long, max %u chars",
 					    PF_TAG_NAME_SIZE - 1);
 					YYERROR;
 				}
-			r.match_tag_not = $9.match_tag_not;
-			if ($9.queues.qname != NULL)
-				memcpy(&r.qname, $9.queues.qname, sizeof(r.qname));
-			r.dnpipe = $9.dnpipe;
-			r.dnflags = $9.free_flags;
+			r.match_tag_not = $10.match_tag_not;
+			if ($10.queues.qname != NULL)
+				memcpy(&r.qname, $10.queues.qname, sizeof(r.qname));
+			r.dnpipe = $10.dnpipe;
+			r.dnflags = $10.free_flags;
+			if (eth_rule_label(&r, $10.label))
+				YYERROR;
+			for (int i = 0; i < PF_RULE_MAX_LABEL_COUNT; i++)
+				free($10.label[i]);
+			r.ridentifier = $10.ridentifier;
 
-			expand_eth_rule(&r, $5, $6, $7.src, $7.dst,
-			    $8.src.host, $8.dst.host, "");
+			expand_eth_rule(&r, $5, $7, $8.src, $8.dst,
+			    $9.src.host, $9.dst.host, $6, "");
 		}
 		;
 
@@ -1315,7 +1343,7 @@ etheranchorrule	: ETHER ANCHOR anchorname dir quick interface etherproto etherfr
 			r.quick = $5.quick;
 
 			expand_eth_rule(&r, $6, $7, $8.src, $8.dst,
-			    $9.src.host, $9.dst.host,
+			    $9.src.host, $9.dst.host, NULL,
 			    pf->eastack[pf->asd + 1] ? pf->ealast->name : $3);
 
 			free($3);
@@ -1344,6 +1372,16 @@ etherfilter_opt	: etherqname	{
 			}
 			filter_opts.queues = $1;
 		}
+		| RIDENTIFIER number {
+			filter_opts.ridentifier = $2;
+		}
+		| label	{
+			if (filter_opts.labelcount >= PF_RULE_MAX_LABEL_COUNT) {
+				yyerror("label can only be used %d times", PF_RULE_MAX_LABEL_COUNT);
+				YYERROR;
+			}
+			filter_opts.label[filter_opts.labelcount++] = $1;
+		}
 		| TAG string				{
 			filter_opts.tag = $2;
 		}
@@ -1358,6 +1396,14 @@ etherfilter_opt	: etherqname	{
 		| DNQUEUE number {
 			filter_opts.dnpipe = $2;
 			filter_opts.free_flags |= PFRULE_DN_IS_QUEUE;
+		}
+		;
+
+bridge		:	/* empty */		{
+			$$ = NULL;
+		}
+		| BRIDGE_TO STRING {
+			$$ = strdup($2);
 		}
 		;
 
@@ -1397,7 +1443,7 @@ scrubrule	: scrubaction dir logquick interface af proto fromto scrub_opts
 				r.min_ttl = $8.minttl;
 			if ($8.maxmss)
 				r.max_mss = $8.maxmss;
-			if ($8.marker & SOM_SETTOS) {
+			if ($8.marker & FOM_SETTOS) {
 				r.rule_flag |= PFRULE_SET_TOS;
 				r.set_tos = $8.settos;
 			}
@@ -1432,7 +1478,7 @@ scrub_opts	:	{
 		}
 		;
 
-scrub_opts_l	: scrub_opts_l scrub_opt
+scrub_opts_l	: scrub_opts_l comma scrub_opt
 		| scrub_opt
 		;
 
@@ -1444,7 +1490,7 @@ scrub_opt	: NODF	{
 			scrub_opts.nodf = 1;
 		}
 		| MINTTL NUMBER {
-			if (scrub_opts.marker & SOM_MINTTL) {
+			if (scrub_opts.marker & FOM_MINTTL) {
 				yyerror("min-ttl cannot be respecified");
 				YYERROR;
 			}
@@ -1452,11 +1498,11 @@ scrub_opt	: NODF	{
 				yyerror("illegal min-ttl value %d", $2);
 				YYERROR;
 			}
-			scrub_opts.marker |= SOM_MINTTL;
+			scrub_opts.marker |= FOM_MINTTL;
 			scrub_opts.minttl = $2;
 		}
 		| MAXMSS NUMBER {
-			if (scrub_opts.marker & SOM_MAXMSS) {
+			if (scrub_opts.marker & FOM_MAXMSS) {
 				yyerror("max-mss cannot be respecified");
 				YYERROR;
 			}
@@ -1464,23 +1510,23 @@ scrub_opt	: NODF	{
 				yyerror("illegal max-mss value %d", $2);
 				YYERROR;
 			}
-			scrub_opts.marker |= SOM_MAXMSS;
+			scrub_opts.marker |= FOM_MAXMSS;
 			scrub_opts.maxmss = $2;
 		}
 		| SETTOS tos {
-			if (scrub_opts.marker & SOM_SETTOS) {
+			if (scrub_opts.marker & FOM_SETTOS) {
 				yyerror("set-tos cannot be respecified");
 				YYERROR;
 			}
-			scrub_opts.marker |= SOM_SETTOS;
+			scrub_opts.marker |= FOM_SETTOS;
 			scrub_opts.settos = $2;
 		}
 		| fragcache {
-			if (scrub_opts.marker & SOM_FRAGCACHE) {
+			if (scrub_opts.marker & FOM_FRAGCACHE) {
 				yyerror("fragcache cannot be respecified");
 				YYERROR;
 			}
-			scrub_opts.marker |= SOM_FRAGCACHE;
+			scrub_opts.marker |= FOM_FRAGCACHE;
 			scrub_opts.fragcache = $1;
 		}
 		| REASSEMBLE STRING {
@@ -1517,9 +1563,8 @@ scrub_opt	: NODF	{
 		}
 		;
 
-fragcache	: FRAGMENT REASSEMBLE	{ $$ = 0; /* default */ }
-		| FRAGMENT FRAGCROP	{ $$ = 0; }
-		| FRAGMENT FRAGDROP	{ $$ = 0; }
+fragcache	: FRAGMENT REASSEMBLE		{ $$ = 0; /* default */ }
+		| FRAGMENT NO REASSEMBLE	{ $$ = PFRULE_FRAGMENT_NOREASS; }
 		;
 
 antispoof	: ANTISPOOF logquick antispoof_ifspc af antispoof_opts {
@@ -2341,6 +2386,21 @@ pfrule		: action dir logquick interface route af proto fromto
 			r.prob = $9.prob;
 			r.rtableid = $9.rtableid;
 
+			if ($9.nodf)
+				r.scrub_flags |= PFSTATE_NODF;
+			if ($9.randomid)
+				r.scrub_flags |= PFSTATE_RANDOMID;
+			if ($9.minttl)
+				r.min_ttl = $9.minttl;
+			if ($9.max_mss)
+				r.max_mss = $9.max_mss;
+			if ($9.marker & FOM_SETTOS) {
+				r.scrub_flags |= PFSTATE_SETTOS;
+				r.set_tos = $9.settos;
+			}
+			if ($9.marker & FOM_SCRUB_TCP)
+				r.scrub_flags |= PFSTATE_SCRUB_TCP;
+
 			if ($9.marker & FOM_PRIO) {
 				if ($9.prio == 0)
 					r.prio = PF_PRIO_ZERO;
@@ -2923,6 +2983,24 @@ filter_opt	: USER uids {
 			filter_opts.divert.port = 1;	/* some random value */
 #endif
 		}
+		| SCRUB '(' scrub_opts ')' {
+			filter_opts.nodf = $3.nodf;
+			filter_opts.minttl = $3.minttl;
+			if ($3.marker & FOM_SETTOS) {
+				/* Old style rules are "scrub set-tos 0x42"
+				 * New style are "set tos 0x42 scrub (...)"
+				 * What is in "scrub(...)"" is unfortunately the
+				 * original scrub syntax so it would overwrite
+				 * "set tos" of a pass/match rule.
+				 */
+				filter_opts.settos = $3.settos;
+			}
+			filter_opts.randomid = $3.randomid;
+			filter_opts.max_mss = $3.maxmss;
+			if ($3.reassemble_tcp)
+				filter_opts.marker |= FOM_SCRUB_TCP;
+			filter_opts.marker |= $3.marker;
+		}
 		| filter_sets
 		;
 
@@ -2942,6 +3020,14 @@ filter_set	: prio {
 			filter_opts.marker |= FOM_SETPRIO;
 			filter_opts.set_prio[0] = $1.b1;
 			filter_opts.set_prio[1] = $1.b2;
+		}
+		| TOS tos {
+			if (filter_opts.marker & FOM_SETTOS) {
+				yyerror("tos cannot be respecified");
+				YYERROR;
+			}
+			filter_opts.marker |= FOM_SETTOS;
+			filter_opts.settos = $2;
 		}
 prio		: PRIO NUMBER {
 			if ($2 < 0 || $2 > PF_PRIO_MAX) {
@@ -5160,6 +5246,7 @@ rule_consistent(struct pfctl_rule *r, int anchor_call)
 
 	switch (r->action) {
 	case PF_PASS:
+	case PF_MATCH:
 	case PF_DROP:
 	case PF_SCRUB:
 	case PF_NOSCRUB:
@@ -5230,8 +5317,8 @@ filter_consistent(struct pfctl_rule *r, int anchor_call)
 		yyerror("max-src-nodes requires 'source-track rule'");
 		problems++;
 	}
-	if (r->action == PF_DROP && r->keep_state) {
-		yyerror("keep state on block rules doesn't make sense");
+	if (r->action != PF_PASS && r->keep_state) {
+		yyerror("keep state is great, but only for pass rules");
 		problems++;
 	}
 	if (r->rule_flag & PFRULE_STATESLOPPY &&
@@ -5240,6 +5327,18 @@ filter_consistent(struct pfctl_rule *r, int anchor_call)
 		yyerror("sloppy state matching cannot be used with "
 		    "synproxy state or modulate state");
 		problems++;
+	}
+	/* match rules rules */
+	if (r->action == PF_MATCH) {
+		if (r->divert.port) {
+			yyerror("divert is not supported on match rules");
+			problems++;
+		}
+		if (r->rt) {
+			yyerror("route-to, reply-to, dup-to and fastroute "
+			   "must not be used on match rules");
+			problems++;
+		}
 	}
 	return (-problems);
 }
@@ -5801,7 +5900,8 @@ void
 expand_eth_rule(struct pfctl_eth_rule *r,
     struct node_if *interfaces, struct node_etherproto *protos,
     struct node_mac *srcs, struct node_mac *dsts,
-    struct node_host *ipsrcs, struct node_host *ipdsts, const char *anchor_call)
+    struct node_host *ipsrcs, struct node_host *ipdsts,
+    const char *bridge_to, const char *anchor_call)
 {
 	char tagname[PF_TAG_NAME_SIZE];
 	char match_tagname[PF_TAG_NAME_SIZE];
@@ -5851,6 +5951,9 @@ expand_eth_rule(struct pfctl_eth_rule *r,
 			errx(1, "expand_eth_rule: r->match_tagname");
 		if (strlcpy(r->qname, qname, sizeof(r->qname)) >= sizeof(r->qname))
 			errx(1, "expand_eth_rule: r->qname");
+
+		if (bridge_to)
+			strlcpy(r->bridge_to, bridge_to, sizeof(r->bridge_to));
 
 		pfctl_append_eth_rule(pf, r, anchor_call);
 	))))));
@@ -6110,18 +6213,17 @@ lookup(char *s)
 		{ "bitmask",		BITMASK},
 		{ "block",		BLOCK},
 		{ "block-policy",	BLOCKPOLICY},
+		{ "bridge-to",		BRIDGE_TO},
 		{ "buckets",		BUCKETS},
 		{ "cbq",		CBQ},
 		{ "code",		CODE},
 		{ "codelq",		CODEL},
-		{ "crop",		FRAGCROP},
 		{ "debug",		DEBUG},
 		{ "divert-reply",	DIVERTREPLY},
 		{ "divert-to",		DIVERTTO},
 		{ "dnpipe",		DNPIPE},
 		{ "dnqueue",		DNQUEUE},
 		{ "drop",		DROP},
-		{ "drop-ovl",		FRAGDROP},
 		{ "dup-to",		DUPTO},
 		{ "ether",		ETHER},
 		{ "fail-policy",	FAILPOLICY},
@@ -6844,6 +6946,23 @@ getservice(char *n)
 
 int
 rule_label(struct pfctl_rule *r, char *s[PF_RULE_MAX_LABEL_COUNT])
+{
+	for (int i = 0; i < PF_RULE_MAX_LABEL_COUNT; i++) {
+		if (s[i] == NULL)
+			return (0);
+
+		if (strlcpy(r->label[i], s[i], sizeof(r->label[0])) >=
+		    sizeof(r->label[0])) {
+			yyerror("rule label too long (max %d chars)",
+			    sizeof(r->label[0])-1);
+			return (-1);
+		}
+	}
+	return (0);
+}
+
+int
+eth_rule_label(struct pfctl_eth_rule *r, char *s[PF_RULE_MAX_LABEL_COUNT])
 {
 	for (int i = 0; i < PF_RULE_MAX_LABEL_COUNT; i++) {
 		if (s[i] == NULL)

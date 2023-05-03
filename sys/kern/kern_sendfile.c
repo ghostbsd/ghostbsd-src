@@ -57,6 +57,9 @@ __FBSDID("$FreeBSD$");
 #include <net/vnet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netinet/in_pcb.h>
+#include <netinet/tcp_var.h>
+#include <netinet/tcp_log_buf.h>
 
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
@@ -563,7 +566,6 @@ sendfile_getobj(struct thread *td, struct file *fp, vm_object_t *obj_res,
     struct vnode **vp_res, struct shmfd **shmfd_res, off_t *obj_size,
     int *bsize)
 {
-	struct vattr va;
 	vm_object_t obj;
 	struct vnode *vp;
 	struct shmfd *shmfd;
@@ -602,10 +604,9 @@ sendfile_getobj(struct thread *td, struct file *fp, vm_object_t *obj_res,
 			VM_OBJECT_RLOCK(obj);
 			*obj_size = obj->un_pager.vnp.vnp_size;
 		} else {
-			error = VOP_GETATTR(vp, &va, td->td_ucred);
+			error = vn_getsize_locked(vp, obj_size, td->td_ucred);
 			if (error != 0)
 				goto out;
-			*obj_size = va.va_size;
 			VM_OBJECT_RLOCK(obj);
 		}
 	} else if (fp->f_type == DTYPE_SHM) {
@@ -1190,6 +1191,12 @@ prepend_header:
 			    NULL, NULL, td);
 			sendfile_iodone(sfio, NULL, 0, error);
 		}
+#ifdef TCP_REQUEST_TRK
+		if (so->so_proto->pr_protocol == IPPROTO_TCP) {
+			/* log the sendfile call to the TCP log, if enabled */
+			tcp_log_sendfile(so, offset, nbytes, flags);
+		}
+#endif
 		CURVNET_RESTORE();
 
 		m = NULL;

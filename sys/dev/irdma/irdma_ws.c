@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0 or Linux-OpenIB
  *
- * Copyright (c) 2017 - 2021 Intel Corporation
+ * Copyright (c) 2017 - 2022 Intel Corporation
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -59,7 +59,7 @@ irdma_alloc_node(struct irdma_sc_vsi *vsi,
 	u16 node_index = 0;
 
 	ws_mem.size = sizeof(struct irdma_ws_node);
-	ws_mem.va = kzalloc(ws_mem.size, GFP_ATOMIC);
+	ws_mem.va = kzalloc(ws_mem.size, GFP_KERNEL);
 	if (!ws_mem.va)
 		return NULL;
 
@@ -83,7 +83,6 @@ irdma_alloc_node(struct irdma_sc_vsi *vsi,
 		if (!node->rel_bw)
 			node->rel_bw = 1;
 
-		node->lan_qs_handle = vsi->qos[user_pri].lan_qos_handle;
 		node->prio_type = IRDMA_PRIO_WEIGHTED_RR;
 	} else {
 		node->rel_bw = 1;
@@ -383,7 +382,6 @@ irdma_ws_add(struct irdma_sc_vsi *vsi, u8 user_pri)
 	for (i = 0; i < IRDMA_MAX_USER_PRIORITY; i++) {
 		if (vsi->qos[i].traffic_class == traffic_class) {
 			vsi->qos[i].qs_handle = tc_node->qs_handle;
-			vsi->qos[i].lan_qos_handle = tc_node->lan_qs_handle;
 			vsi->qos[i].l2_sched_node_id = tc_node->l2_sched_node_id;
 			vsi->qos[i].valid = true;
 		}

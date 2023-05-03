@@ -1,4 +1,4 @@
-# $NetBSD: cond-token-plain.mk,v 1.15 2021/12/30 02:14:55 rillig Exp $
+# $NetBSD: cond-token-plain.mk,v 1.17 2023/02/14 20:49:09 rillig Exp $
 #
 # Tests for plain tokens (that is, string literals without quotes)
 # in .if conditions.  These are also called bare words.
@@ -63,10 +63,10 @@
 # anybody really use this?  This is neither documented nor obvious since
 # the '#' is escaped.  It's much clearer to write a comment in the line
 # above the condition.
-.if ${0 \# comment :?yes:no} != no
+.if ${0 \# comment:?yes:no} != no
 .  error
 .endif
-.if ${1 \# comment :?yes:no} != yes
+.if ${1 \# comment:?yes:no} != yes
 .  error
 .endif
 
@@ -89,7 +89,7 @@
 # a coincidence that the '!' is both used in the '!=' comparison operator
 # as well as for negating a comparison result.
 #
-# The boolean operators '&' and '|' don't terminate a comparison operand.
+# The characters '&' and '|' are part of the comparison operand.
 .if ${:Uvar}&&name != "var&&name"
 .  error
 .endif
@@ -97,8 +97,8 @@
 .  error
 .endif
 
-# A bare word may appear alone in a condition, without any comparison
-# operator.  It is implicitly converted into defined(bare).
+# A bare word may occur alone in a condition, without any comparison
+# operator.  It is interpreted as the function call 'defined(bare)'.
 .if bare
 .  error
 .else

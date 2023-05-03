@@ -39,15 +39,18 @@ CFLAGS+=-DSHELL -I. -I${.CURDIR}
 CLEANFILES+= mknodes mksyntax
 CLEANFILES+= ${GENSRCS} ${GENHDRS}
 
+.if ${MACHINE} == "host" || ${MK_DIRDEPS_BUILD} == "no"
 build-tools: mknodes mksyntax
+
+DEPENDOBJS+= mknodes mksyntax
+mknodes mksyntax: ${BUILD_TOOLS_META}
+.endif
 
 .ORDER: builtins.c builtins.h
 builtins.h: .NOMETA
 builtins.c builtins.h: mkbuiltins builtins.def
 	sh ${.CURDIR}/mkbuiltins ${.CURDIR}
 
-DEPENDOBJS+= mknodes mksyntax
-mknodes mksyntax: ${BUILD_TOOLS_META}
 
 .ORDER: nodes.c nodes.h
 nodes.h: .NOMETA
@@ -68,7 +71,8 @@ SUBDIR.${MK_TESTS}+= tests
 #beforeinstallconfig:
 #	rm -f ${DESTDIR}/.profile
 
-#afterinstallconfig:
-#	${INSTALL_LINK} ${TAG_ARGS} ${DESTDIR}/root/.profile ${DESTDIR}/.profile
+LINKMODE=${CONFMODE}
+afterinstallconfig:
+	${INSTALL_LINK} ${TAG_ARGS} ${DESTDIR}/root/.profile ${DESTDIR}/.profile
 
 .include <bsd.prog.mk>

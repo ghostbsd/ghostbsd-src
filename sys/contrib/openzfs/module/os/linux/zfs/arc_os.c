@@ -358,11 +358,11 @@ arc_lowmem_fini(void)
 }
 
 int
-param_set_arc_long(const char *buf, zfs_kernel_param_t *kp)
+param_set_arc_u64(const char *buf, zfs_kernel_param_t *kp)
 {
 	int error;
 
-	error = param_set_long(buf, kp);
+	error = spl_param_set_u64(buf, kp);
 	if (error < 0)
 		return (SET_ERROR(error));
 
@@ -374,13 +374,13 @@ param_set_arc_long(const char *buf, zfs_kernel_param_t *kp)
 int
 param_set_arc_min(const char *buf, zfs_kernel_param_t *kp)
 {
-	return (param_set_arc_long(buf, kp));
+	return (param_set_arc_u64(buf, kp));
 }
 
 int
 param_set_arc_max(const char *buf, zfs_kernel_param_t *kp)
 {
-	return (param_set_arc_long(buf, kp));
+	return (param_set_arc_u64(buf, kp));
 }
 
 int
@@ -504,7 +504,7 @@ arc_prune_task(void *ptr)
 /*
  * Notify registered consumers they must drop holds on a portion of the ARC
  * buffered they reference.  This provides a mechanism to ensure the ARC can
- * honor the arc_meta_limit and reclaim otherwise pinned ARC buffers.  This
+ * honor the metadata limit and reclaim otherwise pinned ARC buffers.  This
  * is analogous to dnlc_reduce_cache() but more generic.
  *
  * This operation is performed asynchronously so it may be safely called

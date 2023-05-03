@@ -67,7 +67,7 @@ SUBDIR=	\
 	${_bxe} \
 	${_bios} \
 	${_blake2} \
-	bnxt \
+	${_bnxt} \
 	bridgestp \
 	bwi \
 	bwn \
@@ -82,12 +82,10 @@ SUBDIR=	\
 	${_ccp} \
 	cd9660 \
 	cd9660_iconv \
-	${_ce} \
 	${_cfi} \
 	${_chromebook_platform} \
 	${_ciss} \
 	${_coretemp} \
-	${_cp} \
 	${_cpsw} \
 	${_cpuctl} \
 	${_cpufreq} \
@@ -99,6 +97,7 @@ SUBDIR=	\
 	dc \
 	dcons \
 	dcons_crom \
+	${_dpaa2} \
 	${_dpdk_lpm4} \
 	${_dpdk_lpm6} \
 	${_dpms} \
@@ -108,6 +107,7 @@ SUBDIR=	\
 	${_efirt} \
 	${_em} \
 	${_ena} \
+	${_enic} \
 	${_enetc} \
 	${_et} \
 	evdev \
@@ -122,6 +122,7 @@ SUBDIR=	\
 	firewire \
 	firmware \
 	flash \
+	${_ftgpio} \
 	${_ftwd} \
 	fusefs \
 	${_fxp} \
@@ -163,6 +164,7 @@ SUBDIR=	\
 	if_tuntap \
 	if_vlan \
 	if_vxlan \
+	${_if_wg} \
 	iflib \
 	${_igc} \
 	imgact_binmisc \
@@ -214,6 +216,7 @@ SUBDIR=	\
 	libmchain \
 	lindebugfs \
 	linuxkpi \
+	linuxkpi_hdmi \
 	linuxkpi_wlan \
 	${_lio} \
 	lpt \
@@ -232,6 +235,11 @@ SUBDIR=	\
 	${_mac_seeotheruids} \
 	${_mac_stub} \
 	${_mac_test} \
+	${_mac_veriexec} \
+	${_mac_veriexec_sha1} \
+	${_mac_veriexec_sha256} \
+	${_mac_veriexec_sha384} \
+	${_mac_veriexec_sha512} \
 	${_malo} \
 	${_mana} \
 	md \
@@ -369,6 +377,7 @@ SUBDIR=	\
 	sym \
 	${_syscons} \
 	sysvipc \
+	tarfs \
 	tcp \
 	${_ti} \
 	tmpfs \
@@ -395,6 +404,7 @@ SUBDIR=	\
 	vr \
 	vte \
 	${_wbwd} \
+	${_wdatwd} \
 	wlan \
 	wlan_acl \
 	wlan_amrr \
@@ -416,12 +426,15 @@ _autofs=	autofs
 .endif
 
 .if ${MK_DTRACE} != "no" || defined(ALL_MODULES)
-.if ${MACHINE_CPUARCH} != "arm" || ${MACHINE_ARCH:Marmv[67]*} != ""
 .if ${KERN_OPTS:MKDTRACE_HOOKS}
 SUBDIR+=	dtrace
 .endif
-.endif
 SUBDIR+=	opensolaris
+.endif
+
+# Requires bus_space_read_8
+.if ${MACHINE_ARCH} != "i386"
+_bnxt=		bnxt
 .endif
 
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
@@ -450,6 +463,9 @@ _toecore=	toecore
 _if_enc=	if_enc
 _if_gif=	if_gif
 _if_gre=	if_gre
+.if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
+_if_wg=		if_wg
+.endif
 _ipfw_pmod=	ipfw_pmod
 .if ${KERN_OPTS:MIPSEC_SUPPORT} && !${KERN_OPTS:MIPSEC}
 _ipsec=		ipsec
@@ -512,19 +528,19 @@ SUBDIR+=	linux64
 SUBDIR+=	linux_common
 .endif
 
-.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
-    ${MACHINE_CPUARCH} == "i386"
-_ena=		ena
+.if ${MACHINE_CPUARCH} != "arm"
 .if ${MK_OFED} != "no" || defined(ALL_MODULES)
 _ibcore=	ibcore
 _ipoib=		ipoib
 _iser=		iser
+_mthca=		mthca
+_rdma=		rdma
 .endif
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
+    ${MACHINE_CPUARCH} == "i386" || ${MACHINE_ARCH:Mpowerpc64*} != ""
 _ipmi=		ipmi
-_iwlwifi=	iwlwifi
-.if ${MK_SOURCELESS_UCODE} != "no"
-_iwlwififw=	iwlwififw
-.endif
 _mlx4=		mlx4
 _mlx5=		mlx5
 .if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
@@ -533,9 +549,17 @@ _mlx4en=	mlx4en
 _mlx5en=	mlx5en
 .endif
 .if ${MK_OFED} != "no" || defined(ALL_MODULES)
-_mthca=		mthca
 _mlx4ib=	mlx4ib
 _mlx5ib=	mlx5ib
+.endif
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
+    ${MACHINE_CPUARCH} == "i386"
+_ena=		ena
+_iwlwifi=	iwlwifi
+.if ${MK_SOURCELESS_UCODE} != "no"
+_iwlwififw=	iwlwififw
 .endif
 _ossl=		ossl
 _rtw88=		rtw88
@@ -564,6 +588,13 @@ _mac_priority=	mac_priority
 _mac_seeotheruids= mac_seeotheruids
 _mac_stub=	mac_stub
 _mac_test=	mac_test
+.if ${MK_VERIEXEC} != "no" || defined(ALL_MODULES)
+_mac_veriexec=	mac_veriexec
+_mac_veriexec_sha1= mac_veriexec_sha1
+_mac_veriexec_sha256= mac_veriexec_sha256
+_mac_veriexec_sha384= mac_veriexec_sha384
+_mac_veriexec_sha512= mac_veriexec_sha512
+.endif
 .endif
 
 .if ${MK_NETGRAPH} != "no" || defined(ALL_MODULES)
@@ -610,7 +641,9 @@ _irdma=		irdma
 
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
 	${MACHINE_CPUARCH} == "riscv"
+.if !empty(OPT_FDT)
 _if_cgem=	if_cgem
+.endif
 .endif
 
 # These rely on 64bit atomics
@@ -620,16 +653,12 @@ _mpr=		mpr
 .endif
 
 .if ${MK_TESTS} != "no" || defined(ALL_MODULES)
+SUBDIR+=	ktest
 SUBDIR+=	tests
 .endif
 
-.if ${MK_ZFS} != "no" || (defined(ALL_MODULES)  && ${MACHINE_CPUARCH} != "powerpc")
+.if ${MK_ZFS} != "no" || defined(ALL_MODULES)
 SUBDIR+=	zfs
-.endif
-
-.if ${MACHINE_CPUARCH} != "aarch64" && ${MACHINE_CPUARCH} != "arm" && \
-	${MACHINE_CPUARCH} != "powerpc" && ${MACHINE_CPUARCH} != "riscv"
-_syscons=	syscons
 .endif
 
 .if ${MK_SOURCELESS_UCODE} != "no"
@@ -637,17 +666,24 @@ _cxgb=		cxgb
 .endif
 
 .if ${MACHINE_CPUARCH} == "aarch64"
-_allwinner=	allwinner
 _armv8crypto=	armv8crypto
-_dwwdt=		dwwdt
+_dpaa2=		dpaa2
 _em=		em
+_hyperv=  hyperv
+
+.if !empty(OPT_FDT)
+_allwinner=	allwinner
+_dwwdt=		dwwdt
 _enetc=		enetc
 _felix=		felix
 _rockchip=	rockchip
 .endif
+.endif
 
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm"
+.if !empty(OPT_FDT)
 _sdhci_fdt=	sdhci_fdt
+.endif
 _e6000sw=	e6000sw
 _neta=		neta
 .endif
@@ -668,6 +704,7 @@ _cpufreq=	cpufreq
 _dpms=		dpms
 _em=		em
 _et=		et
+_ftgpio=	ftgpio
 _ftwd=		ftwd
 _exca=		exca
 _igc=		igc
@@ -683,18 +720,17 @@ _mgb=		mgb
 _nctgpio=	nctgpio
 _ntb=		ntb
 _ocs_fc=	ocs_fc
+_p2sb=		p2sb
 _qat=		qat
 _qatfw=		qatfw
 _qat_c2xxx=	qat_c2xxx
 _qat_c2xxxfw=	qat_c2xxxfw
-.if ${MK_OFED} != "no" || defined(ALL_MODULES)
-_rdma=		rdma
-.endif
 _safe=		safe
 _speaker=	speaker
 _splash=	splash
-_p2sb=		p2sb
+_syscons=	syscons
 _wbwd=		wbwd
+_wdatwd=	wdatwd
 
 _aac=		aac
 _aacraid=	aacraid
@@ -768,6 +804,7 @@ _x86bios=	x86bios
 .if ${MACHINE_CPUARCH} == "amd64"
 _amdgpio=	amdgpio
 _ccp=		ccp
+_enic=		enic
 _iavf=		iavf
 _ioat=		ioat
 _ixl=		ixl
@@ -798,12 +835,6 @@ _vmm=		vmm
 # XXX some of these can move now, but are untested on other architectures.
 _3dfx=		3dfx
 _3dfx_linux=	3dfx_linux
-.if ${MK_SOURCELESS_HOST} != "no"
-_ce=		ce
-.endif
-.if ${MK_SOURCELESS_HOST} != "no"
-_cp=		cp
-.endif
 _glxiic=	glxiic
 _glxsb=		glxsb
 _pcfclock=	pcfclock
@@ -831,18 +862,16 @@ _nvme=		nvme
 .endif
 
 .if ${MACHINE_ARCH:Mpowerpc64*} != ""
-_ipmi=		ipmi
 _ixl=		ixl
 _nvram=		opal_nvram
 .endif
+
 .if ${MACHINE_CPUARCH} == "powerpc" && ${MACHINE_ARCH} != "powerpcspe"
 # Don't build powermac_nvram for powerpcspe, it's never supported.
 _nvram+=	powermac_nvram
 .endif
 
-.endif
-
-.if ${MACHINE_ARCH:Marmv[67]*} != "" || ${MACHINE_CPUARCH} == "aarch64"
+.if ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "aarch64"
 _bcm283x_clkman=  bcm283x_clkman
 _bcm283x_pwm=  bcm283x_pwm
 .endif
@@ -858,6 +887,8 @@ SUBDIR+=${MODULES_EXTRA}
 .for reject in ${WITHOUT_MODULES}
 SUBDIR:= ${SUBDIR:N${reject}}
 .endfor
+
+.endif # MODULES_OVERRIDE -- Keep last
 
 # Calling kldxref(8) for each module is expensive.
 .if !defined(NO_XREF)

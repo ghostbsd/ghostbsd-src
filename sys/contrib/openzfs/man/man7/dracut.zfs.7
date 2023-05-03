@@ -1,6 +1,6 @@
 .\" SPDX-License-Identifier: 0BSD
 .\"
-.Dd April 4, 2022
+.Dd March 28, 2023
 .Dt DRACUT.ZFS 7
 .Os
 .
@@ -28,13 +28,13 @@ zfs-import-scan.service \(da                       \(da           | zfs-import-c
                  zfs-import.target \(-> dracut-pre-mount.service
                         |          \(ua            |
                         | dracut-zfs-generator  |
-                        |  ____________________/|
+                        | _____________________/|
                         |/                      \(da
-                        |                   sysroot.mount \(<-\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em dracut-zfs-generator
-                        |                       |                                        \(da   |
-                        |                       \(da            sysroot-{usr,etc,lib,&c.}.mount |
-                        |             initrd-root-fs.target \(<-\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em or                 \(da
-                        |                       |              zfs-nonroot-necessities.service
+                        |                   sysroot.mount \(<-\(em\(em\(em dracut-zfs-generator
+                        |                       |
+                        |                       \(da
+                        |             initrd-root-fs.target \(<-\(em zfs-nonroot-necessities.service
+                        |                       |                                 |
                         |                       \(da                                 |
                         \(da             dracut-mount.service                        |
        zfs-snapshot-bootfs.service              |                                 |
@@ -42,7 +42,7 @@ zfs-import-scan.service \(da                       \(da           | zfs-import-c
                         \(da                       …                                 |
        zfs-rollback-bootfs.service              |                                 |
                         |                       \(da                                 |
-                        |               sysroot-usr.mount \(<-\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em/
+                        |          /sysroot/{usr,etc,lib,&c.} \(<-\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em\(em/
                         |                       |
                         |                       \(da
                         |                initrd-fs.target
@@ -71,7 +71,8 @@ module.
 .Pp
 Booting into a ZFS dataset requires
 .Sy mountpoint Ns = Ns Pa /
-to be set on the dataset containing the root filesystem (henceforth "the boot dataset") and at the very least either the
+to be set on the dataset containing the root filesystem (henceforth "the boot
+dataset") and at the very least either the
 .Sy bootfs
 property to be set to that dataset, or the
 .Sy root=
@@ -86,7 +87,8 @@ matching
 globs are deemed essential and will be mounted as well.
 .Pp
 .Xr zfs-mount-generator 8
-is recommended for proper functioning of the system afterward (correct mount properties, remounting, &c.).
+is recommended for proper functioning of the system afterward (correct mount
+properties, remounting, &c.).
 .
 .Sh CMDLINE
 .Ss Standard
@@ -122,7 +124,8 @@ cf.\&
 .Sx Temporary Mount Point Properties
 in
 .Xr zfsprops 7 .
-These properties will not last, since all filesystems will be re-mounted from the real root.
+These properties will not last, since all filesystems will be re-mounted from
+the real root.
 .
 .It Sy debug
 If specified,
@@ -263,7 +266,8 @@ Does nothing on
 .Nm systemd
 systems
 .Pq if Pa dracut-zfs-generator No succeeded .
-Otherwise, loads encryption key for the boot dataset from the console or via plymouth.
+Otherwise, loads encryption key for the boot dataset from the console or via
+plymouth.
 It may not work at all!
 .El
 .

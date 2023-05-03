@@ -32,7 +32,8 @@ SRCS+=	assert.c debug.c errstring.c exc.c heap.c match.c rpool.c \
 	wbuf.c wsetup.c string.c stringf.c \
 	xtrap.c strto.c test.c strcasecmp.c strrevcmp.c \
 	signal.c clock.c config.c sem.c shm.c mbdb.c strexit.c cf.c ldap.c \
-	niprop.c mpeix.c memstat.c util.c inet6_ntop.c notify.c
+	niprop.c mpeix.c memstat.c util.c inet6_ntop.c notify.c \
+	ilenx.c xleni.c utf8_valid.c uxtext_unquote.c lowercase.c strcaseeq.c
 CLEANFILES+=sm_os.h
 
 INTERNALLIB=
@@ -41,3 +42,5 @@ sm_os.h: ${SENDMAIL_DIR}/include/sm/os/sm_os_freebsd.h .NOMETA
 	ln -sf ${.ALLSRC} ${.TARGET}
 
 .include <bsd.lib.mk>
+
+CWARNFLAGS+= ${NO_WDEPRECATED_NON_PROTOTYPE}

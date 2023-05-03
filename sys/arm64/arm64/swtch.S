@@ -80,9 +80,17 @@ ENTRY(cpu_throw)
 
 	/* This returns the thread pointer so no need to save it */
 	bl	ptrauth_switch
+#ifdef PERTHREAD_SSP
+	mov	x19, x0
+#endif
 	/* This returns the thread pcb */
 	bl	pmap_switch
 	mov	x4, x0
+#ifdef PERTHREAD_SSP
+	/* Update the per-thread stack canary pointer. */
+	add	x19, x19, #(TD_MD_CANARY)
+	msr	sp_el0, x19
+#endif
 
 	/* If we are single stepping, enable it */
 	ldr	w5, [x4, #PCB_FLAGS]
@@ -94,12 +102,12 @@ ENTRY(cpu_throw)
 	msr	tpidr_el0, x6
 	ldr	x6, [x4, #PCB_TPIDRRO]
 	msr	tpidrro_el0, x6
-	ldp	x19, x20, [x4, #PCB_REGS + 19 * 8]
-	ldp	x21, x22, [x4, #PCB_REGS + 21 * 8]
-	ldp	x23, x24, [x4, #PCB_REGS + 23 * 8]
-	ldp	x25, x26, [x4, #PCB_REGS + 25 * 8]
-	ldp	x27, x28, [x4, #PCB_REGS + 27 * 8]
-	ldp	x29, lr, [x4, #PCB_REGS + 29 * 8]
+	ldp	x19, x20, [x4, #PCB_REGS + (PCB_X19 + 0) * 8]
+	ldp	x21, x22, [x4, #PCB_REGS + (PCB_X19 + 2) * 8]
+	ldp	x23, x24, [x4, #PCB_REGS + (PCB_X19 + 4) * 8]
+	ldp	x25, x26, [x4, #PCB_REGS + (PCB_X19 + 6) * 8]
+	ldp	x27, x28, [x4, #PCB_REGS + (PCB_X19 + 8) * 8]
+	ldp	x29, lr, [x4, #PCB_REGS + (PCB_X19 + 10) * 8]
 
 	ret
 END(cpu_throw)
@@ -119,12 +127,12 @@ ENTRY(cpu_switch)
 	ldr	x4, [x0, #TD_PCB]
 
 	/* Store the callee-saved registers */
-	stp	x19, x20, [x4, #PCB_REGS + 19 * 8]
-	stp	x21, x22, [x4, #PCB_REGS + 21 * 8]
-	stp	x23, x24, [x4, #PCB_REGS + 23 * 8]
-	stp	x25, x26, [x4, #PCB_REGS + 25 * 8]
-	stp	x27, x28, [x4, #PCB_REGS + 27 * 8]
-	stp	x29, lr, [x4, #PCB_REGS + 29 * 8]
+	stp	x19, x20, [x4, #PCB_REGS + (PCB_X19 + 0) * 8]
+	stp	x21, x22, [x4, #PCB_REGS + (PCB_X19 + 2) * 8]
+	stp	x23, x24, [x4, #PCB_REGS + (PCB_X19 + 4) * 8]
+	stp	x25, x26, [x4, #PCB_REGS + (PCB_X19 + 6) * 8]
+	stp	x27, x28, [x4, #PCB_REGS + (PCB_X19 + 8) * 8]
+	stp	x29, lr, [x4, #PCB_REGS + (PCB_X19 + 10) * 8]
 	/* And the old stack pointer */
 	mov	x5, sp
 	mrs	x6, tpidrro_el0
@@ -159,6 +167,11 @@ ENTRY(cpu_switch)
 	mov	x2, x21
 	mov	x1, x20
 	mov	x0, x19
+#ifdef PERTHREAD_SSP
+	/* Update the per-thread stack canary pointer. */
+	add	x20, x20, #(TD_MD_CANARY)
+	msr	sp_el0, x20
+#endif
 
 	/*
 	 * Release the old thread.
@@ -183,14 +196,13 @@ ENTRY(cpu_switch)
 	msr	tpidr_el0, x6
 	ldr	x6, [x4, #PCB_TPIDRRO]
 	msr	tpidrro_el0, x6
-	ldp	x19, x20, [x4, #PCB_REGS + 19 * 8]
-	ldp	x21, x22, [x4, #PCB_REGS + 21 * 8]
-	ldp	x23, x24, [x4, #PCB_REGS + 23 * 8]
-	ldp	x25, x26, [x4, #PCB_REGS + 25 * 8]
-	ldp	x27, x28, [x4, #PCB_REGS + 27 * 8]
-	ldp	x29, lr, [x4, #PCB_REGS + 29 * 8]
+	ldp	x19, x20, [x4, #PCB_REGS + (PCB_X19 + 0) * 8]
+	ldp	x21, x22, [x4, #PCB_REGS + (PCB_X19 + 2) * 8]
+	ldp	x23, x24, [x4, #PCB_REGS + (PCB_X19 + 4) * 8]
+	ldp	x25, x26, [x4, #PCB_REGS + (PCB_X19 + 6) * 8]
+	ldp	x27, x28, [x4, #PCB_REGS + (PCB_X19 + 8) * 8]
+	ldp	x29, lr, [x4, #PCB_REGS + (PCB_X19 + 10) * 8]
 
-	str	xzr, [x4, #PCB_REGS + 18 * 8]
 	ret
 END(cpu_switch)
 
@@ -245,12 +257,12 @@ END(fork_trampoline)
 
 ENTRY(savectx)
 	/* Store the callee-saved registers */
-	stp	x19, x20, [x0, #PCB_REGS + 19 * 8]
-	stp	x21, x22, [x0, #PCB_REGS + 21 * 8]
-	stp	x23, x24, [x0, #PCB_REGS + 23 * 8]
-	stp	x25, x26, [x0, #PCB_REGS + 25 * 8]
-	stp	x27, x28, [x0, #PCB_REGS + 27 * 8]
-	stp	x29, lr, [x0, #PCB_REGS + 29 * 8]
+	stp	x19, x20, [x0, #PCB_REGS + (PCB_X19 + 0) * 8]
+	stp	x21, x22, [x0, #PCB_REGS + (PCB_X19 + 2) * 8]
+	stp	x23, x24, [x0, #PCB_REGS + (PCB_X19 + 4) * 8]
+	stp	x25, x26, [x0, #PCB_REGS + (PCB_X19 + 6) * 8]
+	stp	x27, x28, [x0, #PCB_REGS + (PCB_X19 + 8) * 8]
+	stp	x29, lr, [x0, #PCB_REGS + (PCB_X19 + 10) * 8]
 	/* And the old stack pointer */
 	mov	x5, sp
 	mrs	x6, tpidrro_el0

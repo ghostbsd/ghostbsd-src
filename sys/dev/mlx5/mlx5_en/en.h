@@ -107,7 +107,6 @@
 #define	MLX5E_PARAMS_DEFAULT_RX_CQ_MODERATION_PKTS      0x20
 #define	MLX5E_PARAMS_DEFAULT_TX_CQ_MODERATION_USEC      0x10
 #define	MLX5E_PARAMS_DEFAULT_TX_CQ_MODERATION_PKTS      0x20
-#define	MLX5E_PARAMS_DEFAULT_MIN_RX_WQES                0x80
 #define	MLX5E_PARAMS_DEFAULT_RX_HASH_LOG_TBL_SZ         0x7
 #define	MLX5E_CACHELINE_SIZE CACHE_LINE_SIZE
 #define	MLX5E_HW2SW_MTU(hwmtu) \
@@ -676,7 +675,6 @@ struct mlx5e_params {
 	u16	rx_cq_moderation_pkts;
 	u16	tx_cq_moderation_usec;
 	u16	tx_cq_moderation_pkts;
-	u16	min_rx_wqes;
 	bool	hw_lro_en;
 	bool	cqe_zipping_en;
 	u32	lro_wqe_sz;
@@ -770,7 +768,7 @@ struct mlx5e_rq {
 	u32	wqe_sz;
 	u32	nsegs;
 	struct mlx5e_rq_mbuf *mbuf;
-	struct ifnet *ifp;
+	if_t	ifp;
 	struct mlx5e_cq cq;
 	struct lro_ctrl lro;
 	volatile int enabled;
@@ -959,7 +957,6 @@ struct mlx5_flow_rule;
 
 struct mlx5e_eth_addr_info {
 	u8	addr [ETH_ALEN + 2];
-	u32	tt_vec;
 	/* flow table rule per traffic type */
 	struct mlx5_flow_rule	*ft_rule[MLX5E_NUM_TT];
 };
@@ -1114,7 +1111,7 @@ struct mlx5e_priv {
 	struct work_struct set_rx_mode_work;
 	MLX5_DECLARE_DOORBELL_LOCK(doorbell_lock)
 
-	struct ifnet *ifp;
+	if_t	ifp;
 	struct sysctl_ctx_list sysctl_ctx;
 	struct sysctl_oid *sysctl_ifnet;
 	struct sysctl_oid *sysctl_hw;
@@ -1200,10 +1197,10 @@ struct mlx5e_eeprom {
 
 bool	mlx5e_do_send_cqe(struct mlx5e_sq *);
 int	mlx5e_get_full_header_size(const struct mbuf *, const struct tcphdr **);
-int	mlx5e_xmit(struct ifnet *, struct mbuf *);
+int	mlx5e_xmit(if_t, struct mbuf *);
 
-int	mlx5e_open_locked(struct ifnet *);
-int	mlx5e_close_locked(struct ifnet *);
+int	mlx5e_open_locked(if_t);
+int	mlx5e_close_locked(if_t);
 
 void	mlx5e_cq_error_event(struct mlx5_core_cq *mcq, int event);
 void	mlx5e_dump_err_cqe(struct mlx5e_cq *, u32, const struct mlx5_err_cqe *);
@@ -1221,14 +1218,14 @@ int	mlx5e_open_flow_rules(struct mlx5e_priv *priv);
 void	mlx5e_close_flow_rules(struct mlx5e_priv *priv);
 void	mlx5e_set_rx_mode_work(struct work_struct *work);
 
-void	mlx5e_vlan_rx_add_vid(void *, struct ifnet *, u16);
-void	mlx5e_vlan_rx_kill_vid(void *, struct ifnet *, u16);
+void	mlx5e_vlan_rx_add_vid(void *, if_t, u16);
+void	mlx5e_vlan_rx_kill_vid(void *, if_t, u16);
 void	mlx5e_enable_vlan_filter(struct mlx5e_priv *priv);
 void	mlx5e_disable_vlan_filter(struct mlx5e_priv *priv);
 
-void	mlx5e_vxlan_start(void *arg, struct ifnet *ifp, sa_family_t family,
+void	mlx5e_vxlan_start(void *arg, if_t ifp, sa_family_t family,
 	    u_int port);
-void	mlx5e_vxlan_stop(void *arg, struct ifnet *ifp, sa_family_t family,
+void	mlx5e_vxlan_stop(void *arg, if_t ifp, sa_family_t family,
 	    u_int port);
 int	mlx5e_add_all_vxlan_rules(struct mlx5e_priv *priv);
 void	mlx5e_del_all_vxlan_rules(struct mlx5e_priv *priv);

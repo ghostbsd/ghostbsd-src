@@ -129,18 +129,18 @@ int debugger_on_panic = 0;
 int debugger_on_panic = 1;
 #endif
 SYSCTL_INT(_debug, OID_AUTO, debugger_on_panic,
-    CTLFLAG_RWTUN | CTLFLAG_SECURE,
-    &debugger_on_panic, 0, "Run debugger on kernel panic");
+    CTLFLAG_RWTUN, &debugger_on_panic, 0,
+    "Run debugger on kernel panic");
 
 static bool debugger_on_recursive_panic = false;
 SYSCTL_BOOL(_debug, OID_AUTO, debugger_on_recursive_panic,
-    CTLFLAG_RWTUN | CTLFLAG_SECURE,
-    &debugger_on_recursive_panic, 0, "Run debugger on recursive kernel panic");
+    CTLFLAG_RWTUN, &debugger_on_recursive_panic, 0,
+    "Run debugger on recursive kernel panic");
 
 int debugger_on_trap = 0;
 SYSCTL_INT(_debug, OID_AUTO, debugger_on_trap,
-    CTLFLAG_RWTUN | CTLFLAG_SECURE,
-    &debugger_on_trap, 0, "Run debugger on kernel trap before panic");
+    CTLFLAG_RWTUN, &debugger_on_trap, 0,
+    "Run debugger on kernel trap before panic");
 
 #ifdef KDB_TRACE
 static int trace_on_panic = 1;
@@ -244,8 +244,8 @@ MTX_SYSINIT(dumper_configs, &dumpconf_list_lk, "dumper config list", MTX_DEF);
 static TAILQ_HEAD(dumpconflist, dumperinfo) dumper_configs =
     TAILQ_HEAD_INITIALIZER(dumper_configs);
 
-/* Context information for dump-debuggers. */
-static struct pcb dumppcb;		/* Registers. */
+/* Context information for dump-debuggers, saved by the dump_savectx() macro. */
+struct pcb dumppcb;			/* Registers. */
 lwpid_t dumptid;			/* Thread ID. */
 
 static struct cdevsw reroot_cdevsw = {
@@ -270,8 +270,6 @@ shutdown_conf(void *unused)
 	    SHUTDOWN_PRI_LAST + 100);
 	EVENTHANDLER_REGISTER(shutdown_final, shutdown_panic, NULL,
 	    SHUTDOWN_PRI_LAST + 100);
-	EVENTHANDLER_REGISTER(shutdown_final, shutdown_reset, NULL,
-	    SHUTDOWN_PRI_LAST + 200);
 }
 
 SYSINIT(shutdown_conf, SI_SUB_INTRINSIC, SI_ORDER_ANY, shutdown_conf, NULL);
@@ -392,17 +390,6 @@ print_uptime(void)
 		f = 1;
 	}
 	printf("%lds\n", (long)ts.tv_sec);
-}
-
-/*
- * Set up a context that can be extracted from the dump.
- */
-void
-dump_savectx(void)
-{
-
-	savectx(&dumppcb);
-	dumptid = curthread->td_tid;
 }
 
 int
@@ -547,6 +534,12 @@ kern_reboot(int howto)
 		boottrace_dump_console();
 
 	EVENTHANDLER_INVOKE(shutdown_final, howto);
+
+	/*
+	 * Call this directly so that reset is attempted even if shutdown
+	 * handlers are not yet registered.
+	 */
+	shutdown_reset(NULL, howto);
 
 	for(;;) ;	/* safety against shutdown_reset not working */
 	/* NOTREACHED */

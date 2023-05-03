@@ -25,6 +25,7 @@
  * Copyright (c) 2021-2022 Tino Reichardt <milky-zfs@mcmilk.de>
  */
 
+#include <sys/simd.h>
 #include <sys/zfs_context.h>
 #include <sys/blake3.h>
 
@@ -189,9 +190,7 @@ static void chunk_state_update(const blake3_ops_t *ops,
 		input_len -= BLAKE3_BLOCK_LEN;
 	}
 
-	size_t take = chunk_state_fill_buf(ctx, input, input_len);
-	input += take;
-	input_len -= take;
+	chunk_state_fill_buf(ctx, input, input_len);
 }
 
 static output_t chunk_state_output(const blake3_chunk_state_t *ctx)
@@ -278,7 +277,7 @@ static size_t compress_parents_parallel(const blake3_ops_t *ops,
     const uint8_t *child_chaining_values, size_t num_chaining_values,
     const uint32_t key[8], uint8_t flags, uint8_t *out)
 {
-	const uint8_t *parents_array[MAX_SIMD_DEGREE_OR_2];
+	const uint8_t *parents_array[MAX_SIMD_DEGREE_OR_2] = {0};
 	size_t parents_array_len = 0;
 
 	while (num_chaining_values - (2 * parents_array_len) >= 2) {
@@ -434,7 +433,7 @@ static void hasher_init_base(BLAKE3_CTX *ctx, const uint32_t key[8],
 	memcpy(ctx->key, key, BLAKE3_KEY_LEN);
 	chunk_state_init(&ctx->chunk, key, flags);
 	ctx->cv_stack_len = 0;
-	ctx->ops = blake3_impl_get_ops();
+	ctx->ops = blake3_get_ops();
 }
 
 /*

@@ -158,7 +158,7 @@ __FBSDID("$FreeBSD$");
 #define HN_LRO_LENLIM_MULTIRX_DEF	(12 * ETHERMTU)
 #define HN_LRO_LENLIM_DEF		(25 * ETHERMTU)
 /* YYY 2*MTU is a bit rough, but should be good enough. */
-#define HN_LRO_LENLIM_MIN(ifp)		(2 * (ifp)->if_mtu)
+#define HN_LRO_LENLIM_MIN(ifp)		(2 * if_getmtu(ifp))
 
 #define HN_LRO_ACKCNT_DEF		1
 
@@ -247,7 +247,7 @@ struct hn_rxinfo {
 
 struct hn_rxvf_setarg {
 	struct hn_rx_ring	*rxr;
-	struct ifnet		*vf_ifp;
+	if_t			vf_ifp;
 };
 
 #define HN_RXINFO_VLAN			0x0001
@@ -270,29 +270,29 @@ static void			hn_chan_callback(struct vmbus_channel *,
 				    void *);
 
 static void			hn_init(void *);
-static int			hn_ioctl(struct ifnet *, u_long, caddr_t);
+static int			hn_ioctl(if_t, u_long, caddr_t);
 #ifdef HN_IFSTART_SUPPORT
-static void			hn_start(struct ifnet *);
+static void			hn_start(if_t);
 #endif
-static int			hn_transmit(struct ifnet *, struct mbuf *);
-static void			hn_xmit_qflush(struct ifnet *);
-static int			hn_ifmedia_upd(struct ifnet *);
-static void			hn_ifmedia_sts(struct ifnet *,
+static int			hn_transmit(if_t, struct mbuf *);
+static void			hn_xmit_qflush(if_t);
+static int			hn_ifmedia_upd(if_t);
+static void			hn_ifmedia_sts(if_t,
 				    struct ifmediareq *);
 
-static void			hn_ifnet_event(void *, struct ifnet *, int);
-static void			hn_ifaddr_event(void *, struct ifnet *);
-static void			hn_ifnet_attevent(void *, struct ifnet *);
-static void			hn_ifnet_detevent(void *, struct ifnet *);
-static void			hn_ifnet_lnkevent(void *, struct ifnet *, int);
+static void			hn_ifnet_event(void *, if_t, int);
+static void			hn_ifaddr_event(void *, if_t);
+static void			hn_ifnet_attevent(void *, if_t);
+static void			hn_ifnet_detevent(void *, if_t);
+static void			hn_ifnet_lnkevent(void *, if_t, int);
 
 static bool			hn_ismyvf(const struct hn_softc *,
-				    const struct ifnet *);
+				    const if_t);
 static void			hn_rxvf_change(struct hn_softc *,
-				    struct ifnet *, bool);
-static void			hn_rxvf_set(struct hn_softc *, struct ifnet *);
+				    if_t, bool);
+static void			hn_rxvf_set(struct hn_softc *, if_t);
 static void			hn_rxvf_set_task(void *, int);
-static void			hn_xpnt_vf_input(struct ifnet *, struct mbuf *);
+static void			hn_xpnt_vf_input(if_t, struct mbuf *);
 static int			hn_xpnt_vf_iocsetflags(struct hn_softc *);
 static int			hn_xpnt_vf_iocsetcaps(struct hn_softc *,
 				    struct ifreq *);
@@ -325,17 +325,11 @@ static void			hn_nvs_handle_rxbuf(struct hn_rx_ring *,
 static void			hn_nvs_ack_rxbuf(struct hn_rx_ring *,
 				    struct vmbus_channel *, uint64_t);
 
-#if __FreeBSD_version >= 1100099
 static int			hn_lro_lenlim_sysctl(SYSCTL_HANDLER_ARGS);
 static int			hn_lro_ackcnt_sysctl(SYSCTL_HANDLER_ARGS);
-#endif
 static int			hn_trust_hcsum_sysctl(SYSCTL_HANDLER_ARGS);
 static int			hn_chim_size_sysctl(SYSCTL_HANDLER_ARGS);
-#if __FreeBSD_version < 1100095
-static int			hn_rx_stat_int_sysctl(SYSCTL_HANDLER_ARGS);
-#else
 static int			hn_rx_stat_u64_sysctl(SYSCTL_HANDLER_ARGS);
-#endif
 static int			hn_rx_stat_ulong_sysctl(SYSCTL_HANDLER_ARGS);
 static int			hn_tx_stat_ulong_sysctl(SYSCTL_HANDLER_ARGS);
 static int			hn_tx_conf_int_sysctl(SYSCTL_HANDLER_ARGS);
@@ -422,9 +416,9 @@ static void			hn_destroy_tx_data(struct hn_softc *);
 static void			hn_txdesc_dmamap_destroy(struct hn_txdesc *);
 static void			hn_txdesc_gc(struct hn_tx_ring *,
 				    struct hn_txdesc *);
-static int			hn_encap(struct ifnet *, struct hn_tx_ring *,
+static int			hn_encap(if_t, struct hn_tx_ring *,
 				    struct hn_txdesc *, struct mbuf **);
-static int			hn_txpkt(struct ifnet *, struct hn_tx_ring *,
+static int			hn_txpkt(if_t, struct hn_tx_ring *,
 				    struct hn_txdesc *);
 static void			hn_set_chim_size(struct hn_softc *, int);
 static void			hn_set_tso_maxsize(struct hn_softc *, int, int);
@@ -432,7 +426,7 @@ static bool			hn_tx_ring_pending(struct hn_tx_ring *);
 static void			hn_tx_ring_qflush(struct hn_tx_ring *);
 static void			hn_resume_tx(struct hn_softc *, int);
 static void			hn_set_txagg(struct hn_softc *);
-static void			*hn_try_txagg(struct ifnet *,
+static void			*hn_try_txagg(if_t,
 				    struct hn_tx_ring *, struct hn_txdesc *,
 				    int);
 static int			hn_get_txswq_depth(const struct hn_tx_ring *);
@@ -526,11 +520,9 @@ SYSCTL_INT(_hw_hn, OID_AUTO, direct_tx_size, CTLFLAG_RDTUN,
 
 /* # of LRO entries per RX ring */
 #if defined(INET) || defined(INET6)
-#if __FreeBSD_version >= 1100095
 static int			hn_lro_entry_count = HN_LROENT_CNT_DEF;
 SYSCTL_INT(_hw_hn, OID_AUTO, lro_entry_count, CTLFLAG_RDTUN,
     &hn_lro_entry_count, 0, "LRO entry count");
-#endif
 #endif
 
 static int			hn_tx_taskq_cnt = 1;
@@ -578,11 +570,9 @@ SYSCTL_INT(_hw_hn, OID_AUTO, tx_swq_depth, CTLFLAG_RDTUN,
     &hn_tx_swq_depth, 0, "Depth of IFQ or BUFRING");
 
 /* Enable sorted LRO, and the depth of the per-channel mbuf queue */
-#if __FreeBSD_version >= 1100095
 static u_int			hn_lro_mbufq_depth = 0;
 SYSCTL_UINT(_hw_hn, OID_AUTO, lro_mbufq_depth, CTLFLAG_RDTUN,
     &hn_lro_mbufq_depth, 0, "Depth of LRO mbuf queue");
-#endif
 
 /* Packet transmission aggregation size limit */
 static int			hn_tx_agg_size = -1;
@@ -627,7 +617,7 @@ static struct taskqueue		**hn_tx_taskque;/* shared TX taskqueues */
 
 static struct rmlock		hn_vfmap_lock;
 static int			hn_vfmap_size;
-static struct ifnet		**hn_vfmap;
+static if_t			*hn_vfmap;
 
 #ifndef RSS
 static const uint8_t
@@ -665,7 +655,6 @@ DRIVER_MODULE(hn, vmbus, hn_driver, 0, 0);
 MODULE_VERSION(hn, 1);
 MODULE_DEPEND(hn, vmbus, 1, 1, 1);
 
-#if __FreeBSD_version >= 1100099
 static void
 hn_set_lro_lenlim(struct hn_softc *sc, int lenlim)
 {
@@ -674,7 +663,6 @@ hn_set_lro_lenlim(struct hn_softc *sc, int lenlim)
 	for (i = 0; i < sc->hn_rx_ring_cnt; ++i)
 		sc->hn_rx_ring[i].hn_lro.lro_length_lim = lenlim;
 }
-#endif
 
 static int
 hn_txpkt_sglist(struct hn_tx_ring *txr, struct hn_txdesc *txd)
@@ -935,7 +923,7 @@ hn_set_rxfilter(struct hn_softc *sc, uint32_t filter)
 static int
 hn_rxfilter_config(struct hn_softc *sc)
 {
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 	uint32_t filter;
 
 	HN_LOCK_ASSERT(sc);
@@ -945,15 +933,15 @@ hn_rxfilter_config(struct hn_softc *sc)
 	 * its RX filter is configured, so stick the synthetic device in
 	 * the promiscous mode.
 	 */
-	if ((ifp->if_flags & IFF_PROMISC) || (sc->hn_flags & HN_FLAG_RXVF)) {
+	if ((if_getflags(ifp) & IFF_PROMISC) || (sc->hn_flags & HN_FLAG_RXVF)) {
 		filter = NDIS_PACKET_TYPE_PROMISCUOUS;
 	} else {
 		filter = NDIS_PACKET_TYPE_DIRECTED;
-		if (ifp->if_flags & IFF_BROADCAST)
+		if (if_getflags(ifp) & IFF_BROADCAST)
 			filter |= NDIS_PACKET_TYPE_BROADCAST;
 		/* TODO: support multicast list */
-		if ((ifp->if_flags & IFF_ALLMULTI) ||
-		    !CK_STAILQ_EMPTY(&ifp->if_multiaddrs))
+		if ((if_getflags(ifp) & IFF_ALLMULTI) ||
+		    !if_maddr_empty(ifp))
 			filter |= NDIS_PACKET_TYPE_ALL_MULTICAST;
 	}
 	return (hn_set_rxfilter(sc, filter));
@@ -1110,16 +1098,16 @@ hn_rss_ind_fixup(struct hn_softc *sc)
 }
 
 static int
-hn_ifmedia_upd(struct ifnet *ifp __unused)
+hn_ifmedia_upd(if_t ifp __unused)
 {
 
 	return EOPNOTSUPP;
 }
 
 static void
-hn_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
+hn_ifmedia_sts(if_t ifp, struct ifmediareq *ifmr)
 {
-	struct hn_softc *sc = ifp->if_softc;
+	struct hn_softc *sc = if_getsoftc(ifp);
 
 	ifmr->ifm_status = IFM_AVALID;
 	ifmr->ifm_active = IFM_ETHER;
@@ -1141,7 +1129,7 @@ hn_rxvf_set_task(void *xarg, int pending __unused)
 }
 
 static void
-hn_rxvf_set(struct hn_softc *sc, struct ifnet *vf_ifp)
+hn_rxvf_set(struct hn_softc *sc, if_t vf_ifp)
 {
 	struct hn_rx_ring *rxr;
 	struct hn_rxvf_setarg arg;
@@ -1166,40 +1154,40 @@ hn_rxvf_set(struct hn_softc *sc, struct ifnet *vf_ifp)
 }
 
 static bool
-hn_ismyvf(const struct hn_softc *sc, const struct ifnet *ifp)
+hn_ismyvf(const struct hn_softc *sc, const if_t ifp)
 {
-	const struct ifnet *hn_ifp;
+	if_t hn_ifp;
 
 	hn_ifp = sc->hn_ifp;
 
 	if (ifp == hn_ifp)
 		return (false);
 
-	if (ifp->if_alloctype != IFT_ETHER)
+	if (if_getalloctype(ifp) != IFT_ETHER)
 		return (false);
 
 	/* Ignore lagg/vlan interfaces */
-	if (strcmp(ifp->if_dname, "lagg") == 0 ||
-	    strcmp(ifp->if_dname, "vlan") == 0)
+	if (strcmp(if_getdname(ifp), "lagg") == 0 ||
+	    strcmp(if_getdname(ifp), "vlan") == 0)
 		return (false);
 
 	/*
-	 * During detach events ifp->if_addr might be NULL.
+	 * During detach events if_getifaddr(ifp) might be NULL.
 	 * Make sure the bcmp() below doesn't panic on that:
 	 */
-	if (ifp->if_addr == NULL || hn_ifp->if_addr == NULL)
+	if (if_getifaddr(ifp) == NULL || if_getifaddr(hn_ifp) == NULL)
 		return (false);
 
-	if (bcmp(IF_LLADDR(ifp), IF_LLADDR(hn_ifp), ETHER_ADDR_LEN) != 0)
+	if (bcmp(if_getlladdr(ifp), if_getlladdr(hn_ifp), ETHER_ADDR_LEN) != 0)
 		return (false);
 
 	return (true);
 }
 
 static void
-hn_rxvf_change(struct hn_softc *sc, struct ifnet *ifp, bool rxvf)
+hn_rxvf_change(struct hn_softc *sc, if_t ifp, bool rxvf)
 {
-	struct ifnet *hn_ifp;
+	if_t hn_ifp;
 
 	HN_LOCK(sc);
 
@@ -1221,7 +1209,7 @@ hn_rxvf_change(struct hn_softc *sc, struct ifnet *ifp, bool rxvf)
 			goto out;
 
 		sc->hn_flags &= ~HN_FLAG_RXVF;
-		if (hn_ifp->if_drv_flags & IFF_DRV_RUNNING)
+		if (if_getdrvflags(hn_ifp) & IFF_DRV_RUNNING)
 			hn_rxfilter_config(sc);
 		else
 			hn_set_rxfilter(sc, NDIS_PACKET_TYPE_NONE);
@@ -1243,19 +1231,19 @@ hn_rxvf_change(struct hn_softc *sc, struct ifnet *ifp, bool rxvf)
 		hn_resume_mgmt(sc);
 	}
 
-	devctl_notify("HYPERV_NIC_VF", hn_ifp->if_xname,
+	devctl_notify("HYPERV_NIC_VF", if_name(hn_ifp),
 	    rxvf ? "VF_UP" : "VF_DOWN", NULL);
 
 	if (bootverbose) {
 		if_printf(hn_ifp, "datapath is switched %s %s\n",
-		    rxvf ? "to" : "from", ifp->if_xname);
+		    rxvf ? "to" : "from", if_name(ifp));
 	}
 out:
 	HN_UNLOCK(sc);
 }
 
 static void
-hn_ifnet_event(void *arg, struct ifnet *ifp, int event)
+hn_ifnet_event(void *arg, if_t ifp, int event)
 {
 
 	if (event != IFNET_EVENT_UP && event != IFNET_EVENT_DOWN)
@@ -1264,16 +1252,16 @@ hn_ifnet_event(void *arg, struct ifnet *ifp, int event)
 }
 
 static void
-hn_ifaddr_event(void *arg, struct ifnet *ifp)
+hn_ifaddr_event(void *arg, if_t ifp)
 {
 
-	hn_rxvf_change(arg, ifp, ifp->if_flags & IFF_UP);
+	hn_rxvf_change(arg, ifp, if_getflags(ifp) & IFF_UP);
 }
 
 static int
 hn_xpnt_vf_iocsetcaps(struct hn_softc *sc, struct ifreq *ifr)
 {
-	struct ifnet *ifp, *vf_ifp;
+	if_t ifp, vf_ifp;
 	uint64_t tmp;
 	int error;
 
@@ -1285,9 +1273,9 @@ hn_xpnt_vf_iocsetcaps(struct hn_softc *sc, struct ifreq *ifr)
 	 * Fix up requested capabilities w/ supported capabilities,
 	 * since the supported capabilities could have been changed.
 	 */
-	ifr->ifr_reqcap &= ifp->if_capabilities;
+	ifr->ifr_reqcap &= if_getcapabilities(ifp);
 	/* Pass SIOCSIFCAP to VF. */
-	error = vf_ifp->if_ioctl(vf_ifp, SIOCSIFCAP, (caddr_t)ifr);
+	error = ifhwioctl(SIOCSIFCAP, vf_ifp, (caddr_t)ifr, curthread);
 
 	/*
 	 * NOTE:
@@ -1298,31 +1286,31 @@ hn_xpnt_vf_iocsetcaps(struct hn_softc *sc, struct ifreq *ifr)
 	/*
 	 * Merge VF's enabled capabilities.
 	 */
-	ifp->if_capenable = vf_ifp->if_capenable & ifp->if_capabilities;
+	if_setcapenable(ifp, if_getcapenable(vf_ifp) & if_getcapabilities(ifp));
 
-	tmp = vf_ifp->if_hwassist & HN_CSUM_IP_HWASSIST(sc);
-	if (ifp->if_capenable & IFCAP_TXCSUM)
-		ifp->if_hwassist |= tmp;
+	tmp = if_gethwassist(vf_ifp) & HN_CSUM_IP_HWASSIST(sc);
+	if (if_getcapenable(ifp) & IFCAP_TXCSUM)
+		if_sethwassistbits(ifp, tmp, 0);
 	else
-		ifp->if_hwassist &= ~tmp;
+		if_sethwassistbits(ifp, 0, tmp);
 
-	tmp = vf_ifp->if_hwassist & HN_CSUM_IP6_HWASSIST(sc);
-	if (ifp->if_capenable & IFCAP_TXCSUM_IPV6)
-		ifp->if_hwassist |= tmp;
+	tmp = if_gethwassist(vf_ifp) & HN_CSUM_IP6_HWASSIST(sc);
+	if (if_getcapenable(ifp) & IFCAP_TXCSUM_IPV6)
+		if_sethwassistbits(ifp, tmp, 0);
 	else
-		ifp->if_hwassist &= ~tmp;
+		if_sethwassistbits(ifp, 0, tmp);
 
-	tmp = vf_ifp->if_hwassist & CSUM_IP_TSO;
-	if (ifp->if_capenable & IFCAP_TSO4)
-		ifp->if_hwassist |= tmp;
+	tmp = if_gethwassist(vf_ifp) & CSUM_IP_TSO;
+	if (if_getcapenable(ifp) & IFCAP_TSO4)
+		if_sethwassistbits(ifp, tmp, 0);
 	else
-		ifp->if_hwassist &= ~tmp;
+		if_sethwassistbits(ifp, 0, tmp);
 
-	tmp = vf_ifp->if_hwassist & CSUM_IP6_TSO;
-	if (ifp->if_capenable & IFCAP_TSO6)
-		ifp->if_hwassist |= tmp;
+	tmp = if_gethwassist(vf_ifp) & CSUM_IP6_TSO;
+	if (if_getcapenable(ifp) & IFCAP_TSO6)
+		if_sethwassistbits(ifp, tmp, 0);
 	else
-		ifp->if_hwassist &= ~tmp;
+		if_sethwassistbits(ifp, 0, tmp);
 
 	return (error);
 }
@@ -1330,48 +1318,48 @@ hn_xpnt_vf_iocsetcaps(struct hn_softc *sc, struct ifreq *ifr)
 static int
 hn_xpnt_vf_iocsetflags(struct hn_softc *sc)
 {
-	struct ifnet *vf_ifp;
+	if_t vf_ifp;
 	struct ifreq ifr;
 
 	HN_LOCK_ASSERT(sc);
 	vf_ifp = sc->hn_vf_ifp;
 
 	memset(&ifr, 0, sizeof(ifr));
-	strlcpy(ifr.ifr_name, vf_ifp->if_xname, sizeof(ifr.ifr_name));
-	ifr.ifr_flags = vf_ifp->if_flags & 0xffff;
-	ifr.ifr_flagshigh = vf_ifp->if_flags >> 16;
-	return (vf_ifp->if_ioctl(vf_ifp, SIOCSIFFLAGS, (caddr_t)&ifr));
+	strlcpy(ifr.ifr_name, if_name(vf_ifp), sizeof(ifr.ifr_name));
+	ifr.ifr_flags = if_getflags(vf_ifp) & 0xffff;
+	ifr.ifr_flagshigh = if_getflags(vf_ifp) >> 16;
+	return (ifhwioctl(SIOCSIFFLAGS, vf_ifp, (caddr_t)&ifr, curthread));
 }
 
 static void
 hn_xpnt_vf_saveifflags(struct hn_softc *sc)
 {
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 	int allmulti = 0;
 
 	HN_LOCK_ASSERT(sc);
 
 	/* XXX vlan(4) style mcast addr maintenance */
-	if (!CK_STAILQ_EMPTY(&ifp->if_multiaddrs))
+	if (!if_maddr_empty(ifp))
 		allmulti = IFF_ALLMULTI;
 
 	/* Always set the VF's if_flags */
-	sc->hn_vf_ifp->if_flags = ifp->if_flags | allmulti;
+	if_setflags(sc->hn_vf_ifp, if_getflags(ifp) | allmulti);
 }
 
 static void
-hn_xpnt_vf_input(struct ifnet *vf_ifp, struct mbuf *m)
+hn_xpnt_vf_input(if_t vf_ifp, struct mbuf *m)
 {
 	struct rm_priotracker pt;
-	struct ifnet *hn_ifp = NULL;
+	if_t hn_ifp = NULL;
 	struct mbuf *mn;
 
 	/*
 	 * XXX racy, if hn(4) ever detached.
 	 */
 	rm_rlock(&hn_vfmap_lock, &pt);
-	if (vf_ifp->if_index < hn_vfmap_size)
-		hn_ifp = hn_vfmap[vf_ifp->if_index];
+	if (if_getindex(vf_ifp) < hn_vfmap_size)
+		hn_ifp = hn_vfmap[if_getindex(vf_ifp)];
 	rm_runlock(&hn_vfmap_lock, &pt);
 
 	if (hn_ifp != NULL) {
@@ -1384,7 +1372,7 @@ hn_xpnt_vf_input(struct ifnet *vf_ifp, struct mbuf *m)
 			/*
 			 * Update VF stats.
 			 */
-			if ((vf_ifp->if_capenable & IFCAP_HWSTATS) == 0) {
+			if ((if_getcapenable(vf_ifp) & IFCAP_HWSTATS) == 0) {
 				if_inc_counter(vf_ifp, IFCOUNTER_IBYTES,
 				    mn->m_pkthdr.len);
 			}
@@ -1406,7 +1394,7 @@ hn_xpnt_vf_input(struct ifnet *vf_ifp, struct mbuf *m)
 		/*
 		 * Go through hn(4)'s if_input.
 		 */
-		hn_ifp->if_input(hn_ifp, m);
+		if_input(hn_ifp, m);
 	} else {
 		/*
 		 * In the middle of the transition; free this
@@ -1424,16 +1412,14 @@ hn_xpnt_vf_input(struct ifnet *vf_ifp, struct mbuf *m)
 static void
 hn_mtu_change_fixup(struct hn_softc *sc)
 {
-	struct ifnet *ifp;
+	if_t ifp;
 
 	HN_LOCK_ASSERT(sc);
 	ifp = sc->hn_ifp;
 
-	hn_set_tso_maxsize(sc, hn_tso_maxlen, ifp->if_mtu);
-#if __FreeBSD_version >= 1100099
+	hn_set_tso_maxsize(sc, hn_tso_maxlen, if_getmtu(ifp));
 	if (sc->hn_rx_ring[0].hn_lro.lro_length_lim < HN_LRO_LENLIM_MIN(ifp))
 		hn_set_lro_lenlim(sc, HN_LRO_LENLIM_MIN(ifp));
-#endif
 }
 
 static uint32_t
@@ -1497,7 +1483,7 @@ hn_rss_mbuf_hash(struct hn_softc *sc, uint32_t mbuf_hash)
 static void
 hn_vf_rss_fixup(struct hn_softc *sc, bool reconf)
 {
-	struct ifnet *ifp, *vf_ifp;
+	if_t ifp, vf_ifp;
 	struct ifrsshash ifrh;
 	struct ifrsskey ifrk;
 	int error;
@@ -1505,7 +1491,7 @@ hn_vf_rss_fixup(struct hn_softc *sc, bool reconf)
 
 	HN_LOCK_ASSERT(sc);
 	KASSERT(sc->hn_flags & HN_FLAG_SYNTH_ATTACHED,
-	    ("%s: synthetic parts are not attached", sc->hn_ifp->if_xname));
+	    ("%s: synthetic parts are not attached", if_name(sc->hn_ifp)));
 
 	if (sc->hn_rx_ring_inuse == 1) {
 		/* No RSS on synthetic parts; done. */
@@ -1524,21 +1510,21 @@ hn_vf_rss_fixup(struct hn_softc *sc, bool reconf)
 	 * supported.
 	 */
 	memset(&ifrk, 0, sizeof(ifrk));
-	strlcpy(ifrk.ifrk_name, vf_ifp->if_xname, sizeof(ifrk.ifrk_name));
-	error = vf_ifp->if_ioctl(vf_ifp, SIOCGIFRSSKEY, (caddr_t)&ifrk);
+	strlcpy(ifrk.ifrk_name, if_name(vf_ifp), sizeof(ifrk.ifrk_name));
+	error = ifhwioctl(SIOCGIFRSSKEY, vf_ifp, (caddr_t)&ifrk, curthread);
 	if (error) {
 		if_printf(ifp, "%s SIOCGIFRSSKEY failed: %d\n",
-		    vf_ifp->if_xname, error);
+		    if_name(vf_ifp), error);
 		goto done;
 	}
 	if (ifrk.ifrk_func != RSS_FUNC_TOEPLITZ) {
 		if_printf(ifp, "%s RSS function %u is not Toeplitz\n",
-		    vf_ifp->if_xname, ifrk.ifrk_func);
+		    if_name(vf_ifp), ifrk.ifrk_func);
 		goto done;
 	}
 	if (ifrk.ifrk_keylen != NDIS_HASH_KEYSIZE_TOEPLITZ) {
 		if_printf(ifp, "%s invalid RSS Toeplitz key length %d\n",
-		    vf_ifp->if_xname, ifrk.ifrk_keylen);
+		    if_name(vf_ifp), ifrk.ifrk_keylen);
 		goto done;
 	}
 
@@ -1546,16 +1532,16 @@ hn_vf_rss_fixup(struct hn_softc *sc, bool reconf)
 	 * Extract VF's RSS hash.  Only Toeplitz is supported.
 	 */
 	memset(&ifrh, 0, sizeof(ifrh));
-	strlcpy(ifrh.ifrh_name, vf_ifp->if_xname, sizeof(ifrh.ifrh_name));
-	error = vf_ifp->if_ioctl(vf_ifp, SIOCGIFRSSHASH, (caddr_t)&ifrh);
+	strlcpy(ifrh.ifrh_name, if_name(vf_ifp), sizeof(ifrh.ifrh_name));
+	error = ifhwioctl(SIOCGIFRSSHASH, vf_ifp, (caddr_t)&ifrh, curthread);
 	if (error) {
 		if_printf(ifp, "%s SIOCGRSSHASH failed: %d\n",
-		    vf_ifp->if_xname, error);
+		    if_name(vf_ifp), error);
 		goto done;
 	}
 	if (ifrh.ifrh_func != RSS_FUNC_TOEPLITZ) {
 		if_printf(ifp, "%s RSS function %u is not Toeplitz\n",
-		    vf_ifp->if_xname, ifrh.ifrh_func);
+		    if_name(vf_ifp), ifrh.ifrh_func);
 		goto done;
 	}
 
@@ -1563,7 +1549,7 @@ hn_vf_rss_fixup(struct hn_softc *sc, bool reconf)
 	if ((ifrh.ifrh_types & my_types) == 0) {
 		/* This disables RSS; ignore it then */
 		if_printf(ifp, "%s intersection of RSS types failed.  "
-		    "VF %#x, mine %#x\n", vf_ifp->if_xname,
+		    "VF %#x, mine %#x\n", if_name(vf_ifp),
 		    ifrh.ifrh_types, my_types);
 		goto done;
 	}
@@ -1664,7 +1650,7 @@ hn_vf_rss_restore(struct hn_softc *sc)
 
 	HN_LOCK_ASSERT(sc);
 	KASSERT(sc->hn_flags & HN_FLAG_SYNTH_ATTACHED,
-	    ("%s: synthetic parts are not attached", sc->hn_ifp->if_xname));
+	    ("%s: synthetic parts are not attached", if_name(sc->hn_ifp)));
 
 	if (sc->hn_rx_ring_inuse == 1)
 		goto done;
@@ -1691,7 +1677,7 @@ done:
 static void
 hn_xpnt_vf_setready(struct hn_softc *sc)
 {
-	struct ifnet *ifp, *vf_ifp;
+	if_t ifp, vf_ifp;
 	struct ifreq ifr;
 
 	HN_LOCK_ASSERT(sc);
@@ -1706,10 +1692,10 @@ hn_xpnt_vf_setready(struct hn_softc *sc)
 	/*
 	 * Save information for restoration.
 	 */
-	sc->hn_saved_caps = ifp->if_capabilities;
-	sc->hn_saved_tsomax = ifp->if_hw_tsomax;
-	sc->hn_saved_tsosegcnt = ifp->if_hw_tsomaxsegcount;
-	sc->hn_saved_tsosegsz = ifp->if_hw_tsomaxsegsize;
+	sc->hn_saved_caps = if_getcapabilities(ifp);
+	sc->hn_saved_tsomax = if_gethwtsomax(ifp);
+	sc->hn_saved_tsosegcnt = if_gethwtsomaxsegcount(ifp);
+	sc->hn_saved_tsosegsz = if_gethwtsomaxsegsize(ifp);
 
 	/*
 	 * Intersect supported/enabled capabilities.
@@ -1717,41 +1703,41 @@ hn_xpnt_vf_setready(struct hn_softc *sc)
 	 * NOTE:
 	 * if_hwassist is not changed here.
 	 */
-	ifp->if_capabilities &= vf_ifp->if_capabilities;
-	ifp->if_capenable &= ifp->if_capabilities;
+	if_setcapabilitiesbit(ifp, 0, if_getcapabilities(vf_ifp));
+	if_setcapenablebit(ifp, 0, if_getcapabilities(ifp));
 
 	/*
 	 * Fix TSO settings.
 	 */
-	if (ifp->if_hw_tsomax > vf_ifp->if_hw_tsomax)
-		ifp->if_hw_tsomax = vf_ifp->if_hw_tsomax;
-	if (ifp->if_hw_tsomaxsegcount > vf_ifp->if_hw_tsomaxsegcount)
-		ifp->if_hw_tsomaxsegcount = vf_ifp->if_hw_tsomaxsegcount;
-	if (ifp->if_hw_tsomaxsegsize > vf_ifp->if_hw_tsomaxsegsize)
-		ifp->if_hw_tsomaxsegsize = vf_ifp->if_hw_tsomaxsegsize;
+	if (if_gethwtsomax(ifp) > if_gethwtsomax(vf_ifp))
+		if_sethwtsomax(ifp, if_gethwtsomax(vf_ifp));
+	if (if_gethwtsomaxsegcount(ifp) > if_gethwtsomaxsegcount(vf_ifp))
+		if_sethwtsomaxsegcount(ifp, if_gethwtsomaxsegcount(vf_ifp));
+	if (if_gethwtsomaxsegsize(ifp) > if_gethwtsomaxsegsize(vf_ifp))
+		if_sethwtsomaxsegsize(ifp, if_gethwtsomaxsegsize(vf_ifp));
 
 	/*
 	 * Change VF's enabled capabilities.
 	 */
 	memset(&ifr, 0, sizeof(ifr));
-	strlcpy(ifr.ifr_name, vf_ifp->if_xname, sizeof(ifr.ifr_name));
-	ifr.ifr_reqcap = ifp->if_capenable;
+	strlcpy(ifr.ifr_name, if_name(vf_ifp), sizeof(ifr.ifr_name));
+	ifr.ifr_reqcap = if_getcapenable(ifp);
 	hn_xpnt_vf_iocsetcaps(sc, &ifr);
 
-	if (ifp->if_mtu != ETHERMTU) {
+	if (if_getmtu(ifp) != ETHERMTU) {
 		int error;
 
 		/*
 		 * Change VF's MTU.
 		 */
 		memset(&ifr, 0, sizeof(ifr));
-		strlcpy(ifr.ifr_name, vf_ifp->if_xname, sizeof(ifr.ifr_name));
-		ifr.ifr_mtu = ifp->if_mtu;
-		error = vf_ifp->if_ioctl(vf_ifp, SIOCSIFMTU, (caddr_t)&ifr);
+		strlcpy(ifr.ifr_name, if_name(vf_ifp), sizeof(ifr.ifr_name));
+		ifr.ifr_mtu = if_getmtu(ifp);
+		error = ifhwioctl(SIOCSIFMTU, vf_ifp, (caddr_t)&ifr, curthread);
 		if (error) {
 			if_printf(ifp, "%s SIOCSIFMTU %u failed\n",
-			    vf_ifp->if_xname, ifp->if_mtu);
-			if (ifp->if_mtu > ETHERMTU) {
+			    if_name(vf_ifp), if_getmtu(ifp));
+			if (if_getmtu(ifp) > ETHERMTU) {
 				if_printf(ifp, "change MTU to %d\n", ETHERMTU);
 
 				/*
@@ -1760,7 +1746,7 @@ hn_xpnt_vf_setready(struct hn_softc *sc)
 				 * failure of the adjustment will cause us
 				 * infinite headache.
 				 */
-				ifp->if_mtu = ETHERMTU;
+				if_setmtu(ifp, ETHERMTU);
 				hn_mtu_change_fixup(sc);
 			}
 		}
@@ -1829,22 +1815,22 @@ hn_xpnt_vf_init(struct hn_softc *sc)
 	HN_LOCK_ASSERT(sc);
 
 	KASSERT((sc->hn_xvf_flags & HN_XVFFLAG_ENABLED) == 0,
-	    ("%s: transparent VF was enabled", sc->hn_ifp->if_xname));
+	    ("%s: transparent VF was enabled", if_name(sc->hn_ifp)));
 
 	if (bootverbose) {
 		if_printf(sc->hn_ifp, "try bringing up %s\n",
-		    sc->hn_vf_ifp->if_xname);
+		    if_name(sc->hn_vf_ifp));
 	}
 
 	/*
 	 * Bring the VF up.
 	 */
 	hn_xpnt_vf_saveifflags(sc);
-	sc->hn_vf_ifp->if_flags |= IFF_UP;
+	if_setflagbits(sc->hn_ifp, IFF_UP, 0);
 	error = hn_xpnt_vf_iocsetflags(sc);
 	if (error) {
 		if_printf(sc->hn_ifp, "bringing up %s failed: %d\n",
-		    sc->hn_vf_ifp->if_xname, error);
+		    if_name(sc->hn_vf_ifp), error);
 		return;
 	}
 
@@ -1884,13 +1870,13 @@ hn_xpnt_vf_init_taskfunc(void *xsc, int pending __unused)
 		hn_xpnt_vf_setready(sc);
 	}
 
-	if (sc->hn_ifp->if_drv_flags & IFF_DRV_RUNNING) {
+	if (if_getdrvflags(sc->hn_ifp) & IFF_DRV_RUNNING) {
 		/*
 		 * Delayed VF initialization.
 		 */
 		if (bootverbose) {
 			if_printf(sc->hn_ifp, "delayed initialize %s\n",
-			    sc->hn_vf_ifp->if_xname);
+			    if_name(sc->hn_vf_ifp));
 		}
 		hn_xpnt_vf_init(sc);
 	}
@@ -1899,7 +1885,7 @@ done:
 }
 
 static void
-hn_ifnet_attevent(void *xsc, struct ifnet *ifp)
+hn_ifnet_attevent(void *xsc, if_t ifp)
 {
 	struct hn_softc *sc = xsc;
 
@@ -1913,47 +1899,48 @@ hn_ifnet_attevent(void *xsc, struct ifnet *ifp)
 
 	if (sc->hn_vf_ifp != NULL) {
 		if_printf(sc->hn_ifp, "%s was attached as VF\n",
-		    sc->hn_vf_ifp->if_xname);
+		    if_name(sc->hn_vf_ifp));
 		goto done;
 	}
 
-	if (hn_xpnt_vf && ifp->if_start != NULL) {
+	if (hn_xpnt_vf && if_getstartfn(ifp) != NULL) {
 		/*
 		 * ifnet.if_start is _not_ supported by transparent
 		 * mode VF; mainly due to the IFF_DRV_OACTIVE flag.
 		 */
 		if_printf(sc->hn_ifp, "%s uses if_start, which is unsupported "
-		    "in transparent VF mode.\n", ifp->if_xname);
+		    "in transparent VF mode.\n", if_name(sc->hn_vf_ifp));
+
 		goto done;
 	}
 
 	rm_wlock(&hn_vfmap_lock);
 
-	if (ifp->if_index >= hn_vfmap_size) {
-		struct ifnet **newmap;
+	if (if_getindex(ifp) >= hn_vfmap_size) {
+		if_t *newmap;
 		int newsize;
 
-		newsize = ifp->if_index + HN_VFMAP_SIZE_DEF;
-		newmap = malloc(sizeof(struct ifnet *) * newsize, M_DEVBUF,
+		newsize = if_getindex(ifp) + HN_VFMAP_SIZE_DEF;
+		newmap = malloc(sizeof(if_t) * newsize, M_DEVBUF,
 		    M_WAITOK | M_ZERO);
 
 		memcpy(newmap, hn_vfmap,
-		    sizeof(struct ifnet *) * hn_vfmap_size);
+		    sizeof(if_t) * hn_vfmap_size);
 		free(hn_vfmap, M_DEVBUF);
 		hn_vfmap = newmap;
 		hn_vfmap_size = newsize;
 	}
-	KASSERT(hn_vfmap[ifp->if_index] == NULL,
+	KASSERT(hn_vfmap[if_getindex(ifp)] == NULL,
 	    ("%s: ifindex %d was mapped to %s",
-	     ifp->if_xname, ifp->if_index, hn_vfmap[ifp->if_index]->if_xname));
-	hn_vfmap[ifp->if_index] = sc->hn_ifp;
+	     if_name(ifp), if_getindex(ifp), if_name(hn_vfmap[if_getindex(ifp)])));
+	hn_vfmap[if_getindex(ifp)] = sc->hn_ifp;
 
 	rm_wunlock(&hn_vfmap_lock);
 
 	/* NOTE: hn_vf_lock for hn_transmit()/hn_qflush() */
 	rm_wlock(&sc->hn_vf_lock);
 	KASSERT((sc->hn_xvf_flags & HN_XVFFLAG_ENABLED) == 0,
-	    ("%s: transparent VF was enabled", sc->hn_ifp->if_xname));
+	    ("%s: transparent VF was enabled", if_name(sc->hn_ifp)));
 	sc->hn_vf_ifp = ifp;
 	rm_wunlock(&sc->hn_vf_lock);
 
@@ -1964,8 +1951,8 @@ hn_ifnet_attevent(void *xsc, struct ifnet *ifp)
 		 * Install if_input for vf_ifp, which does vf_ifp -> hn_ifp.
 		 * Save vf_ifp's current if_input for later restoration.
 		 */
-		sc->hn_vf_input = ifp->if_input;
-		ifp->if_input = hn_xpnt_vf_input;
+		sc->hn_vf_input = if_getinputfn(ifp);
+		if_setinputfn(ifp, hn_xpnt_vf_input);
 
 		/*
 		 * Stop link status management; use the VF's.
@@ -1986,7 +1973,7 @@ done:
 }
 
 static void
-hn_ifnet_detevent(void *xsc, struct ifnet *ifp)
+hn_ifnet_detevent(void *xsc, if_t ifp)
 {
 	struct hn_softc *sc = xsc;
 
@@ -2015,8 +2002,8 @@ hn_ifnet_detevent(void *xsc, struct ifnet *ifp)
 		HN_LOCK(sc);
 
 		KASSERT(sc->hn_vf_input != NULL, ("%s VF input is not saved",
-		    sc->hn_ifp->if_xname));
-		ifp->if_input = sc->hn_vf_input;
+		    if_name(sc->hn_ifp)));
+		if_setinputfn(ifp, sc->hn_vf_input);
 		sc->hn_vf_input = NULL;
 
 		if ((sc->hn_flags & HN_FLAG_SYNTH_ATTACHED) &&
@@ -2027,7 +2014,7 @@ hn_ifnet_detevent(void *xsc, struct ifnet *ifp)
 			/*
 			 * The VF was ready; restore some settings.
 			 */
-			sc->hn_ifp->if_capabilities = sc->hn_saved_caps;
+			if_setcapabilities(ifp, sc->hn_saved_caps);
 			/*
 			 * NOTE:
 			 * There is _no_ need to fixup if_capenable and
@@ -2036,10 +2023,10 @@ hn_ifnet_detevent(void *xsc, struct ifnet *ifp)
 			 * if_capabilites and the synthetic device's
 			 * if_capabilites.
 			 */
-			sc->hn_ifp->if_hw_tsomax = sc->hn_saved_tsomax;
-			sc->hn_ifp->if_hw_tsomaxsegcount =
-			    sc->hn_saved_tsosegcnt;
-			sc->hn_ifp->if_hw_tsomaxsegsize = sc->hn_saved_tsosegsz;
+			if_sethwtsomax(ifp, sc->hn_saved_tsomax);
+			if_sethwtsomaxsegcount(sc->hn_ifp,
+			    sc->hn_saved_tsosegcnt);
+			if_sethwtsomaxsegsize(ifp, sc->hn_saved_tsosegsz);
 		}
 
 		if (sc->hn_flags & HN_FLAG_SYNTH_ATTACHED) {
@@ -2061,14 +2048,14 @@ hn_ifnet_detevent(void *xsc, struct ifnet *ifp)
 
 	rm_wlock(&hn_vfmap_lock);
 
-	KASSERT(ifp->if_index < hn_vfmap_size,
-	    ("ifindex %d, vfmapsize %d", ifp->if_index, hn_vfmap_size));
-	if (hn_vfmap[ifp->if_index] != NULL) {
-		KASSERT(hn_vfmap[ifp->if_index] == sc->hn_ifp,
+	KASSERT(if_getindex(ifp) < hn_vfmap_size,
+	    ("ifindex %d, vfmapsize %d", if_getindex(ifp), hn_vfmap_size));
+	if (hn_vfmap[if_getindex(ifp)] != NULL) {
+		KASSERT(hn_vfmap[if_getindex(ifp)] == sc->hn_ifp,
 		    ("%s: ifindex %d was mapped to %s",
-		     ifp->if_xname, ifp->if_index,
-		     hn_vfmap[ifp->if_index]->if_xname));
-		hn_vfmap[ifp->if_index] = NULL;
+		     if_name(ifp), if_getindex(ifp),
+		     if_name(hn_vfmap[if_getindex(ifp)])));
+		hn_vfmap[if_getindex(ifp)] = NULL;
 	}
 
 	rm_wunlock(&hn_vfmap_lock);
@@ -2077,12 +2064,48 @@ done:
 }
 
 static void
-hn_ifnet_lnkevent(void *xsc, struct ifnet *ifp, int link_state)
+hn_ifnet_lnkevent(void *xsc, if_t ifp, int link_state)
 {
 	struct hn_softc *sc = xsc;
 
 	if (sc->hn_vf_ifp == ifp)
 		if_link_state_change(sc->hn_ifp, link_state);
+}
+
+static int
+hn_tsomax_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct hn_softc *sc = arg1;
+	unsigned int tsomax;
+	int error;
+
+	tsomax = if_gethwtsomax(sc->hn_ifp);
+	error = sysctl_handle_int(oidp, &tsomax, 0, req);
+	return error;
+}
+
+static int
+hn_tsomaxsegcnt_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct hn_softc *sc = arg1;
+	unsigned int tsomaxsegcnt;
+	int error;
+
+	tsomaxsegcnt = if_gethwtsomaxsegcount(sc->hn_ifp);
+	error = sysctl_handle_int(oidp, &tsomaxsegcnt, 0, req);
+	return error;
+}
+
+static int
+hn_tsomaxsegsz_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct hn_softc *sc = arg1;
+	unsigned int tsomaxsegsz;
+	int error;
+
+	tsomaxsegsz = if_gethwtsomaxsegsize(sc->hn_ifp);
+	error = sysctl_handle_int(oidp, &tsomaxsegsz, 0, req);
+	return error;
 }
 
 static int
@@ -2103,7 +2126,7 @@ hn_attach(device_t dev)
 	struct sysctl_oid_list *child;
 	struct sysctl_ctx_list *ctx;
 	uint8_t eaddr[ETHER_ADDR_LEN];
-	struct ifnet *ifp = NULL;
+	if_t ifp = NULL;
 	int error, ring_cnt, tx_ring_cnt;
 	uint32_t mtu;
 
@@ -2170,7 +2193,7 @@ hn_attach(device_t dev)
 	 * ether_ifattach().
 	 */
 	ifp = sc->hn_ifp = if_alloc(IFT_ETHER);
-	ifp->if_softc = sc;
+	if_setsoftc(ifp, sc);
 	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
 
 	/*
@@ -2268,7 +2291,6 @@ hn_attach(device_t dev)
 	else if (bootverbose)
 		device_printf(dev, "RNDIS mtu %u\n", mtu);
 
-#if __FreeBSD_version >= 1100099
 	if (sc->hn_rx_ring_inuse > 1) {
 		/*
 		 * Reduce TCP segment aggregation limit for multiple
@@ -2276,7 +2298,6 @@ hn_attach(device_t dev)
 		 */
 		hn_set_lro_lenlim(sc, HN_LRO_LENLIM_MULTIRX_DEF);
 	}
-#endif
 
 	/*
 	 * Fixup TX/RX stuffs after synthetic parts are attached.
@@ -2297,14 +2318,15 @@ hn_attach(device_t dev)
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "hwassist",
 	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
 	    hn_hwassist_sysctl, "A", "hwassist");
-	SYSCTL_ADD_UINT(ctx, child, OID_AUTO, "tso_max",
-	    CTLFLAG_RD, &ifp->if_hw_tsomax, 0, "max TSO size");
-	SYSCTL_ADD_UINT(ctx, child, OID_AUTO, "tso_maxsegcnt",
-	    CTLFLAG_RD, &ifp->if_hw_tsomaxsegcount, 0,
-	    "max # of TSO segments");
-	SYSCTL_ADD_UINT(ctx, child, OID_AUTO, "tso_maxsegsz",
-	    CTLFLAG_RD, &ifp->if_hw_tsomaxsegsize, 0,
-	    "max size of TSO segment");
+	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "tso_max",
+	    CTLTYPE_UINT | CTLFLAG_RD, sc, 0, hn_tsomax_sysctl,
+	    "IU", "max TSO size");
+	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "tso_maxsegcnt",
+	    CTLTYPE_UINT | CTLFLAG_RD, sc, 0, hn_tsomaxsegcnt_sysctl,
+	    "IU", "max # of TSO segments");
+	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "tso_maxsegsz",
+	    CTLTYPE_UINT | CTLFLAG_RD, sc, 0, hn_tsomaxsegsz_sysctl,
+	    "IU", "max size of TSO segment");
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "rxfilter",
 	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
 	    hn_rxfilter_sysctl, "A", "rxfilter");
@@ -2386,60 +2408,59 @@ hn_attach(device_t dev)
 	 * Setup the ifnet for this interface.
 	 */
 
-	ifp->if_baudrate = IF_Gbps(10);
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
-	ifp->if_ioctl = hn_ioctl;
-	ifp->if_init = hn_init;
+	if_setbaudrate(ifp, IF_Gbps(10));
+	if_setflags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
+	if_setioctlfn(ifp, hn_ioctl);
+	if_setinitfn(ifp, hn_init);
 #ifdef HN_IFSTART_SUPPORT
 	if (hn_use_if_start) {
 		int qdepth = hn_get_txswq_depth(&sc->hn_tx_ring[0]);
 
-		ifp->if_start = hn_start;
-		IFQ_SET_MAXLEN(&ifp->if_snd, qdepth);
-		ifp->if_snd.ifq_drv_maxlen = qdepth - 1;
-		IFQ_SET_READY(&ifp->if_snd);
+		if_setstartfn(ifp, hn_start);
+		if_setsendqlen(ifp, qdepth);
+		if_setsendqready(ifp);
 	} else
 #endif
 	{
-		ifp->if_transmit = hn_transmit;
-		ifp->if_qflush = hn_xmit_qflush;
+		if_settransmitfn(ifp, hn_transmit);
+		if_setqflushfn(ifp, hn_xmit_qflush);
 	}
 
-	ifp->if_capabilities |= IFCAP_RXCSUM | IFCAP_LRO | IFCAP_LINKSTATE;
+	if_setcapabilitiesbit(ifp, IFCAP_RXCSUM | IFCAP_LRO | IFCAP_LINKSTATE, 0);
 #ifdef foo
 	/* We can't diff IPv6 packets from IPv4 packets on RX path. */
-	ifp->if_capabilities |= IFCAP_RXCSUM_IPV6;
+	if_setcapabilitiesbit(ifp, IFCAP_RXCSUM_IPV6, 0);
 #endif
 	if (sc->hn_caps & HN_CAP_VLAN) {
 		/* XXX not sure about VLAN_MTU. */
-		ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING | IFCAP_VLAN_MTU;
+		if_setcapabilitiesbit(ifp, IFCAP_VLAN_HWTAGGING | IFCAP_VLAN_MTU, 0);
 	}
 
-	ifp->if_hwassist = sc->hn_tx_ring[0].hn_csum_assist;
-	if (ifp->if_hwassist & HN_CSUM_IP_MASK)
-		ifp->if_capabilities |= IFCAP_TXCSUM;
-	if (ifp->if_hwassist & HN_CSUM_IP6_MASK)
-		ifp->if_capabilities |= IFCAP_TXCSUM_IPV6;
+	if_sethwassist(ifp, sc->hn_tx_ring[0].hn_csum_assist);
+	if (if_gethwassist(ifp) & HN_CSUM_IP_MASK)
+		if_setcapabilitiesbit(ifp, IFCAP_TXCSUM, 0);
+	if (if_gethwassist(ifp) & HN_CSUM_IP6_MASK)
+		if_setcapabilitiesbit(ifp, IFCAP_TXCSUM_IPV6, 0);
 	if (sc->hn_caps & HN_CAP_TSO4) {
-		ifp->if_capabilities |= IFCAP_TSO4;
-		ifp->if_hwassist |= CSUM_IP_TSO;
+		if_setcapabilitiesbit(ifp, IFCAP_TSO4, 0);
+		if_sethwassistbits(ifp, CSUM_IP_TSO, 0);
 	}
 	if (sc->hn_caps & HN_CAP_TSO6) {
-		ifp->if_capabilities |= IFCAP_TSO6;
-		ifp->if_hwassist |= CSUM_IP6_TSO;
+		if_setcapabilitiesbit(ifp, IFCAP_TSO6, 0);
+		if_sethwassistbits(ifp, CSUM_IP6_TSO, 0);
 	}
 
 	/* Enable all available capabilities by default. */
-	ifp->if_capenable = ifp->if_capabilities;
+	if_setcapenable(ifp, if_getcapabilities(ifp));
 
 	/*
 	 * Disable IPv6 TSO and TXCSUM by default, they still can
 	 * be enabled through SIOCSIFCAP.
 	 */
-	ifp->if_capenable &= ~(IFCAP_TXCSUM_IPV6 | IFCAP_TSO6);
-	ifp->if_hwassist &= ~(HN_CSUM_IP6_MASK | CSUM_IP6_TSO);
+	if_setcapenablebit(ifp, 0, (IFCAP_TXCSUM_IPV6 | IFCAP_TSO6));
+	if_sethwassistbits(ifp, 0, (HN_CSUM_IP6_MASK | CSUM_IP6_TSO));
 
-	if (ifp->if_capabilities & (IFCAP_TSO6 | IFCAP_TSO4)) {
+	if (if_getcapabilities(ifp) & (IFCAP_TSO6 | IFCAP_TSO4)) {
 		/*
 		 * Lock hn_set_tso_maxsize() to simplify its
 		 * internal logic.
@@ -2447,23 +2468,23 @@ hn_attach(device_t dev)
 		HN_LOCK(sc);
 		hn_set_tso_maxsize(sc, hn_tso_maxlen, ETHERMTU);
 		HN_UNLOCK(sc);
-		ifp->if_hw_tsomaxsegcount = HN_TX_DATA_SEGCNT_MAX;
-		ifp->if_hw_tsomaxsegsize = PAGE_SIZE;
+		if_sethwtsomaxsegcount(ifp, HN_TX_DATA_SEGCNT_MAX);
+		if_sethwtsomaxsegsize(ifp, PAGE_SIZE);
 	}
 
 	ether_ifattach(ifp, eaddr);
 
-	if ((ifp->if_capabilities & (IFCAP_TSO6 | IFCAP_TSO4)) && bootverbose) {
+	if ((if_getcapabilities(ifp) & (IFCAP_TSO6 | IFCAP_TSO4)) && bootverbose) {
 		if_printf(ifp, "TSO segcnt %u segsz %u\n",
-		    ifp->if_hw_tsomaxsegcount, ifp->if_hw_tsomaxsegsize);
+		    if_gethwtsomaxsegcount(ifp), if_gethwtsomaxsegsize(ifp));
 	}
 	if (mtu < ETHERMTU) {
-		if_printf(ifp, "fixup mtu %u -> %u\n", ifp->if_mtu, mtu);
-		ifp->if_mtu = mtu;
+
+		if_setmtu(ifp, mtu);
 	}
 
 	/* Inform the upper layer about the long frame support. */
-	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
+	if_setifheaderlen(ifp, sizeof(struct ether_vlan_header));
 
 	/*
 	 * Kick off link status check.
@@ -2504,7 +2525,7 @@ static int
 hn_detach(device_t dev)
 {
 	struct hn_softc *sc = device_get_softc(dev);
-	struct ifnet *ifp = sc->hn_ifp, *vf_ifp;
+	if_t ifp = sc->hn_ifp, vf_ifp;
 
 	if (sc->hn_xact != NULL && vmbus_chan_is_revoked(sc->hn_prichan)) {
 		/*
@@ -2537,7 +2558,7 @@ hn_detach(device_t dev)
 	if (device_is_attached(dev)) {
 		HN_LOCK(sc);
 		if (sc->hn_flags & HN_FLAG_SYNTH_ATTACHED) {
-			if (ifp->if_drv_flags & IFF_DRV_RUNNING)
+			if (if_getdrvflags(ifp) & IFF_DRV_RUNNING)
 				hn_stop(sc, true);
 			/*
 			 * NOTE:
@@ -2948,7 +2969,7 @@ hn_rndis_pktinfo_append(struct rndis_packet_msg *pkt, size_t pktsize,
 }
 
 static __inline int
-hn_flush_txagg(struct ifnet *ifp, struct hn_tx_ring *txr)
+hn_flush_txagg(if_t ifp, struct hn_tx_ring *txr)
 {
 	struct hn_txdesc *txd;
 	struct mbuf *m;
@@ -2989,7 +3010,7 @@ hn_flush_txagg(struct ifnet *ifp, struct hn_tx_ring *txr)
 }
 
 static void *
-hn_try_txagg(struct ifnet *ifp, struct hn_tx_ring *txr, struct hn_txdesc *txd,
+hn_try_txagg(if_t ifp, struct hn_tx_ring *txr, struct hn_txdesc *txd,
     int pktsize)
 {
 	void *chim;
@@ -3062,7 +3083,7 @@ hn_try_txagg(struct ifnet *ifp, struct hn_tx_ring *txr, struct hn_txdesc *txd,
  * If this function fails, then both txd and m_head0 will be freed.
  */
 static int
-hn_encap(struct ifnet *ifp, struct hn_tx_ring *txr, struct hn_txdesc *txd,
+hn_encap(if_t ifp, struct hn_tx_ring *txr, struct hn_txdesc *txd,
     struct mbuf **m_head0)
 {
 	bus_dma_segment_t segs[HN_TX_DATA_SEGCNT_MAX];
@@ -3275,12 +3296,12 @@ done:
  * associated w/ the txd will _not_ be freed.
  */
 static int
-hn_txpkt(struct ifnet *ifp, struct hn_tx_ring *txr, struct hn_txdesc *txd)
+hn_txpkt(if_t ifp, struct hn_tx_ring *txr, struct hn_txdesc *txd)
 {
 	int error, send_failed = 0, has_bpf;
 
 again:
-	has_bpf = bpf_peers_present(ifp->if_bpf);
+	has_bpf = bpf_peers_present(if_getbpf(ifp));
 	if (has_bpf) {
 		/*
 		 * Make sure that this txd and any aggregated txds are not
@@ -3421,12 +3442,10 @@ hv_m_append(struct mbuf *m0, int len, c_caddr_t cp)
 static __inline int
 hn_lro_rx(struct lro_ctrl *lc, struct mbuf *m)
 {
-#if __FreeBSD_version >= 1100095
 	if (hn_lro_mbufq_depth) {
 		tcp_lro_queue_mbuf(lc, m);
 		return 0;
 	}
-#endif
 	return tcp_lro_rx(lc, m, 0);
 }
 #endif
@@ -3434,7 +3453,7 @@ hn_lro_rx(struct lro_ctrl *lc, struct mbuf *m)
 static int
 hn_rxpkt(struct hn_rx_ring *rxr)
 {
-	struct ifnet *ifp, *hn_ifp = rxr->hn_ifp;
+	if_t ifp, hn_ifp = rxr->hn_ifp;
 	struct mbuf *m_new, *n;
 	int size, do_lro = 0, do_csum = 1, is_vf = 0;
 	int hash_type = M_HASHTYPE_NONE;
@@ -3454,7 +3473,7 @@ hn_rxpkt(struct hn_rx_ring *rxr)
 		is_vf = 1;
 	}
 
-	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0) {
+	if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0) {
 		/*
 		 * NOTE:
 		 * See the NOTE of hn_rndis_init_fixat().  This
@@ -3516,7 +3535,7 @@ hn_rxpkt(struct hn_rx_ring *rxr)
 
 	m_new->m_pkthdr.rcvif = ifp;
 
-	if (__predict_false((hn_ifp->if_capenable & IFCAP_RXCSUM) == 0))
+	if (__predict_false((if_getcapenable(hn_ifp) & IFCAP_RXCSUM) == 0))
 		do_csum = 0;
 
 	/* receive side checksum offload */
@@ -3722,7 +3741,7 @@ hn_rxpkt(struct hn_rx_ring *rxr)
 	}
 	rxr->hn_pkts++;
 
-	if ((hn_ifp->if_capenable & IFCAP_LRO) && do_lro) {
+	if ((if_getcapenable(hn_ifp) & IFCAP_LRO) && do_lro) {
 #if defined(INET) || defined(INET6)
 		struct lro_ctrl *lro = &rxr->hn_lro;
 
@@ -3735,17 +3754,17 @@ hn_rxpkt(struct hn_rx_ring *rxr)
 		}
 #endif
 	}
-	ifp->if_input(ifp, m_new);
+	if_input(ifp, m_new);
 
 	return (0);
 }
 
 static int
-hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
+hn_ioctl(if_t ifp, u_long cmd, caddr_t data)
 {
-	struct hn_softc *sc = ifp->if_softc;
+	struct hn_softc *sc = if_getsoftc(ifp);
 	struct ifreq *ifr = (struct ifreq *)data, ifr_vf;
-	struct ifnet *vf_ifp;
+	if_t vf_ifp;
 	int mask, error = 0;
 	struct ifrsskey *ifrk;
 	struct ifrsshash *ifrh;
@@ -3772,7 +3791,7 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 		}
 
-		if (ifp->if_mtu == ifr->ifr_mtu) {
+		if (if_getmtu(ifp) == ifr->ifr_mtu) {
 			HN_UNLOCK(sc);
 			break;
 		}
@@ -3780,14 +3799,14 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		if (hn_xpnt_vf_isready(sc)) {
 			vf_ifp = sc->hn_vf_ifp;
 			ifr_vf = *ifr;
-			strlcpy(ifr_vf.ifr_name, vf_ifp->if_xname,
+			strlcpy(ifr_vf.ifr_name, if_name(vf_ifp),
 			    sizeof(ifr_vf.ifr_name));
-			error = vf_ifp->if_ioctl(vf_ifp, SIOCSIFMTU,
-			    (caddr_t)&ifr_vf);
+			error = ifhwioctl(SIOCSIFMTU,vf_ifp, 
+			    (caddr_t)&ifr_vf, curthread);
 			if (error) {
 				HN_UNLOCK(sc);
 				if_printf(ifp, "%s SIOCSIFMTU %d failed: %d\n",
-				    vf_ifp->if_xname, ifr->ifr_mtu, error);
+				    if_name(vf_ifp), ifr->ifr_mtu, error);
 				break;
 			}
 		}
@@ -3829,7 +3848,7 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			if_printf(ifp, "fixup mtu %d -> %u\n",
 			    ifr->ifr_mtu, mtu);
 		}
-		ifp->if_mtu = mtu;
+		if_setmtu(ifp, mtu);
 
 		/*
 		 * Synthetic parts' reattach may change the chimney
@@ -3873,8 +3892,8 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		if (hn_xpnt_vf_isready(sc))
 			hn_xpnt_vf_saveifflags(sc);
 
-		if (ifp->if_flags & IFF_UP) {
-			if (ifp->if_drv_flags & IFF_DRV_RUNNING) {
+		if (if_getflags(ifp) & IFF_UP) {
+			if (if_getdrvflags(ifp) & IFF_DRV_RUNNING) {
 				/*
 				 * Caller meight hold mutex, e.g.
 				 * bpf; use busy-wait for the RNDIS
@@ -3890,10 +3909,10 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				hn_init_locked(sc);
 			}
 		} else {
-			if (ifp->if_drv_flags & IFF_DRV_RUNNING)
+			if (if_getdrvflags(ifp) & IFF_DRV_RUNNING)
 				hn_stop(sc, false);
 		}
-		sc->hn_if_flags = ifp->if_flags;
+		sc->hn_if_flags = if_getflags(ifp);
 
 		HN_UNLOCK(sc);
 		break;
@@ -3903,7 +3922,7 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 		if (hn_xpnt_vf_isready(sc)) {
 			ifr_vf = *ifr;
-			strlcpy(ifr_vf.ifr_name, sc->hn_vf_ifp->if_xname,
+			strlcpy(ifr_vf.ifr_name, if_name(sc->hn_vf_ifp),
 			    sizeof(ifr_vf.ifr_name));
 			error = hn_xpnt_vf_iocsetcaps(sc, &ifr_vf);
 			HN_UNLOCK(sc);
@@ -3914,49 +3933,49 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		 * Fix up requested capabilities w/ supported capabilities,
 		 * since the supported capabilities could have been changed.
 		 */
-		mask = (ifr->ifr_reqcap & ifp->if_capabilities) ^
-		    ifp->if_capenable;
+		mask = (ifr->ifr_reqcap & if_getcapabilities(ifp)) ^
+		    if_getcapenable(ifp);
 
 		if (mask & IFCAP_TXCSUM) {
-			ifp->if_capenable ^= IFCAP_TXCSUM;
-			if (ifp->if_capenable & IFCAP_TXCSUM)
-				ifp->if_hwassist |= HN_CSUM_IP_HWASSIST(sc);
+			if_togglecapenable(ifp, IFCAP_TXCSUM);
+			if (if_getcapenable(ifp) & IFCAP_TXCSUM)
+				if_sethwassistbits(ifp, HN_CSUM_IP_HWASSIST(sc), 0);
 			else
-				ifp->if_hwassist &= ~HN_CSUM_IP_HWASSIST(sc);
+				if_sethwassistbits(ifp, 0, HN_CSUM_IP_HWASSIST(sc));
 		}
 		if (mask & IFCAP_TXCSUM_IPV6) {
-			ifp->if_capenable ^= IFCAP_TXCSUM_IPV6;
-			if (ifp->if_capenable & IFCAP_TXCSUM_IPV6)
-				ifp->if_hwassist |= HN_CSUM_IP6_HWASSIST(sc);
+			if_togglecapenable(ifp, IFCAP_TXCSUM_IPV6);
+			if (if_getcapenable(ifp) & IFCAP_TXCSUM_IPV6)
+				if_sethwassistbits(ifp, HN_CSUM_IP6_HWASSIST(sc), 0);
 			else
-				ifp->if_hwassist &= ~HN_CSUM_IP6_HWASSIST(sc);
+				if_sethwassistbits(ifp, 0, HN_CSUM_IP6_HWASSIST(sc));
 		}
 
 		/* TODO: flip RNDIS offload parameters for RXCSUM. */
 		if (mask & IFCAP_RXCSUM)
-			ifp->if_capenable ^= IFCAP_RXCSUM;
+			if_togglecapenable(ifp, IFCAP_RXCSUM);
 #ifdef foo
 		/* We can't diff IPv6 packets from IPv4 packets on RX path. */
 		if (mask & IFCAP_RXCSUM_IPV6)
-			ifp->if_capenable ^= IFCAP_RXCSUM_IPV6;
+			if_togglecapenable(ifp, IFCAP_RXCSUM_IPV6);
 #endif
 
 		if (mask & IFCAP_LRO)
-			ifp->if_capenable ^= IFCAP_LRO;
+			if_togglecapenable(ifp, IFCAP_LRO);
 
 		if (mask & IFCAP_TSO4) {
-			ifp->if_capenable ^= IFCAP_TSO4;
-			if (ifp->if_capenable & IFCAP_TSO4)
-				ifp->if_hwassist |= CSUM_IP_TSO;
+			if_togglecapenable(ifp, IFCAP_TSO4);
+			if (if_getcapenable(ifp) & IFCAP_TSO4)
+				if_sethwassistbits(ifp, CSUM_IP_TSO, 0);
 			else
-				ifp->if_hwassist &= ~CSUM_IP_TSO;
+				if_sethwassistbits(ifp, 0, CSUM_IP_TSO);
 		}
 		if (mask & IFCAP_TSO6) {
-			ifp->if_capenable ^= IFCAP_TSO6;
-			if (ifp->if_capenable & IFCAP_TSO6)
-				ifp->if_hwassist |= CSUM_IP6_TSO;
+			if_togglecapenable(ifp, IFCAP_TSO6);
+			if (if_getcapenable(ifp) & IFCAP_TSO6)
+				if_sethwassistbits(ifp, CSUM_IP6_TSO, 0);
 			else
-				ifp->if_hwassist &= ~CSUM_IP6_TSO;
+				if_sethwassistbits(ifp, 0, CSUM_IP6_TSO);
 		}
 
 		HN_UNLOCK(sc);
@@ -3970,7 +3989,7 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			HN_UNLOCK(sc);
 			break;
 		}
-		if (ifp->if_drv_flags & IFF_DRV_RUNNING) {
+		if (if_getdrvflags(ifp) & IFF_DRV_RUNNING) {
 			/*
 			 * Multicast uses mutex; use busy-wait for
 			 * the RNDIS reply.
@@ -3984,11 +4003,11 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		if (hn_xpnt_vf_isready(sc)) {
 			int old_if_flags;
 
-			old_if_flags = sc->hn_vf_ifp->if_flags;
+			old_if_flags = if_getflags(sc->hn_vf_ifp);
 			hn_xpnt_vf_saveifflags(sc);
 
 			if ((sc->hn_xvf_flags & HN_XVFFLAG_ENABLED) &&
-			    ((old_if_flags ^ sc->hn_vf_ifp->if_flags) &
+			    ((old_if_flags ^ if_getflags(sc->hn_vf_ifp)) &
 			     IFF_ALLMULTI))
 				error = hn_xpnt_vf_iocsetflags(sc);
 		}
@@ -4006,11 +4025,11 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			 * replace the ifr_name.
 			 */
 			vf_ifp = sc->hn_vf_ifp;
-			strlcpy(ifr->ifr_name, vf_ifp->if_xname,
+			strlcpy(ifr->ifr_name, if_name(vf_ifp),
 			    sizeof(ifr->ifr_name));
-			error = vf_ifp->if_ioctl(vf_ifp, cmd, data);
+			error = ifhwioctl(cmd, vf_ifp, data, curthread);
 			/* Restore the ifr_name. */
-			strlcpy(ifr->ifr_name, ifp->if_xname,
+			strlcpy(ifr->ifr_name, if_name(ifp),
 			    sizeof(ifr->ifr_name));
 			HN_UNLOCK(sc);
 			break;
@@ -4066,7 +4085,7 @@ hn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 static void
 hn_stop(struct hn_softc *sc, bool detaching)
 {
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 	int i;
 
 	HN_LOCK_ASSERT(sc);
@@ -4075,14 +4094,14 @@ hn_stop(struct hn_softc *sc, bool detaching)
 	    ("synthetic parts were not attached"));
 
 	/* Clear RUNNING bit ASAP. */
-	atomic_clear_int(&ifp->if_drv_flags, IFF_DRV_RUNNING);
+	if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
 
 	/* Disable polling. */
 	hn_polling(sc, 0);
 
 	if (sc->hn_xvf_flags & HN_XVFFLAG_ENABLED) {
 		KASSERT(sc->hn_vf_ifp != NULL,
-		    ("%s: VF is not attached", ifp->if_xname));
+		    ("%s: VF is not attached", if_name(ifp)));
 
 		/* Mark transparent mode VF as disabled. */
 		hn_xpnt_vf_setdisable(sc, false /* keep hn_vf_ifp */);
@@ -4098,7 +4117,7 @@ hn_stop(struct hn_softc *sc, bool detaching)
 		 * Bring the VF down.
 		 */
 		hn_xpnt_vf_saveifflags(sc);
-		sc->hn_vf_ifp->if_flags &= ~IFF_UP;
+		if_setflagbits(ifp, 0, IFF_UP);
 		hn_xpnt_vf_iocsetflags(sc);
 	}
 
@@ -4106,7 +4125,7 @@ hn_stop(struct hn_softc *sc, bool detaching)
 	hn_suspend_data(sc);
 
 	/* Clear OACTIVE bit. */
-	atomic_clear_int(&ifp->if_drv_flags, IFF_DRV_OACTIVE);
+	if_setdrvflagbits(ifp, 0, IFF_DRV_OACTIVE);
 	for (i = 0; i < sc->hn_tx_ring_inuse; ++i)
 		sc->hn_tx_ring[i].hn_oactive = 0;
 
@@ -4121,7 +4140,7 @@ hn_stop(struct hn_softc *sc, bool detaching)
 static void
 hn_init_locked(struct hn_softc *sc)
 {
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 	int i;
 
 	HN_LOCK_ASSERT(sc);
@@ -4129,14 +4148,14 @@ hn_init_locked(struct hn_softc *sc)
 	if ((sc->hn_flags & HN_FLAG_SYNTH_ATTACHED) == 0)
 		return;
 
-	if (ifp->if_drv_flags & IFF_DRV_RUNNING)
+	if (if_getdrvflags(ifp) & IFF_DRV_RUNNING)
 		return;
 
 	/* Configure RX filter */
 	hn_rxfilter_config(sc);
 
 	/* Clear OACTIVE bit. */
-	atomic_clear_int(&ifp->if_drv_flags, IFF_DRV_OACTIVE);
+	if_setdrvflagbits(ifp, 0, IFF_DRV_OACTIVE);
 	for (i = 0; i < sc->hn_tx_ring_inuse; ++i)
 		sc->hn_tx_ring[i].hn_oactive = 0;
 
@@ -4149,7 +4168,7 @@ hn_init_locked(struct hn_softc *sc)
 	}
 
 	/* Everything is ready; unleash! */
-	atomic_set_int(&ifp->if_drv_flags, IFF_DRV_RUNNING);
+	if_setdrvflagbits(ifp, IFF_DRV_RUNNING, 0);
 
 	/* Re-enable polling if requested. */
 	if (sc->hn_pollhz > 0)
@@ -4165,8 +4184,6 @@ hn_init(void *xsc)
 	hn_init_locked(sc);
 	HN_UNLOCK(sc);
 }
-
-#if __FreeBSD_version >= 1100099
 
 static int
 hn_lro_lenlim_sysctl(SYSCTL_HANDLER_ARGS)
@@ -4222,8 +4239,6 @@ hn_lro_ackcnt_sysctl(SYSCTL_HANDLER_ARGS)
 	return 0;
 }
 
-#endif
-
 static int
 hn_trust_hcsum_sysctl(SYSCTL_HANDLER_ARGS)
 {
@@ -4272,33 +4287,6 @@ hn_chim_size_sysctl(SYSCTL_HANDLER_ARGS)
 	return 0;
 }
 
-#if __FreeBSD_version < 1100095
-static int
-hn_rx_stat_int_sysctl(SYSCTL_HANDLER_ARGS)
-{
-	struct hn_softc *sc = arg1;
-	int ofs = arg2, i, error;
-	struct hn_rx_ring *rxr;
-	uint64_t stat;
-
-	stat = 0;
-	for (i = 0; i < sc->hn_rx_ring_cnt; ++i) {
-		rxr = &sc->hn_rx_ring[i];
-		stat += *((int *)((uint8_t *)rxr + ofs));
-	}
-
-	error = sysctl_handle_64(oidp, &stat, 0, req);
-	if (error || req->newptr == NULL)
-		return error;
-
-	/* Zero out this stat. */
-	for (i = 0; i < sc->hn_rx_ring_cnt; ++i) {
-		rxr = &sc->hn_rx_ring[i];
-		*((int *)((uint8_t *)rxr + ofs)) = 0;
-	}
-	return 0;
-}
-#else
 static int
 hn_rx_stat_u64_sysctl(SYSCTL_HANDLER_ARGS)
 {
@@ -4324,8 +4312,6 @@ hn_rx_stat_u64_sysctl(SYSCTL_HANDLER_ARGS)
 	}
 	return 0;
 }
-
-#endif
 
 static int
 hn_rx_stat_ulong_sysctl(SYSCTL_HANDLER_ARGS)
@@ -4507,7 +4493,7 @@ hn_polling_sysctl(SYSCTL_HANDLER_ARGS)
 	HN_LOCK(sc);
 	if (sc->hn_pollhz != pollhz) {
 		sc->hn_pollhz = pollhz;
-		if ((sc->hn_ifp->if_drv_flags & IFF_DRV_RUNNING) &&
+		if ((if_getdrvflags(sc->hn_ifp) & IFF_DRV_RUNNING) &&
 		    (sc->hn_flags & HN_FLAG_SYNTH_ATTACHED))
 			hn_polling(sc, sc->hn_pollhz);
 	}
@@ -4550,7 +4536,7 @@ hn_hwassist_sysctl(SYSCTL_HANDLER_ARGS)
 	uint32_t hwassist;
 
 	HN_LOCK(sc);
-	hwassist = sc->hn_ifp->if_hwassist;
+	hwassist = if_gethwassist(sc->hn_ifp);
 	HN_UNLOCK(sc);
 	snprintf(assist_str, sizeof(assist_str), "%b", hwassist, CSUM_BITS);
 	return sysctl_handle_string(oidp, assist_str, sizeof(assist_str), req);
@@ -4717,13 +4703,13 @@ hn_vf_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct hn_softc *sc = arg1;
 	char vf_name[IFNAMSIZ + 1];
-	struct ifnet *vf_ifp;
+	if_t vf_ifp;
 
 	HN_LOCK(sc);
 	vf_name[0] = '\0';
 	vf_ifp = sc->hn_vf_ifp;
 	if (vf_ifp != NULL)
-		snprintf(vf_name, sizeof(vf_name), "%s", vf_ifp->if_xname);
+		snprintf(vf_name, sizeof(vf_name), "%s", if_name(vf_ifp));
 	HN_UNLOCK(sc);
 	return sysctl_handle_string(oidp, vf_name, sizeof(vf_name), req);
 }
@@ -4733,13 +4719,13 @@ hn_rxvf_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct hn_softc *sc = arg1;
 	char vf_name[IFNAMSIZ + 1];
-	struct ifnet *vf_ifp;
+	if_t vf_ifp;
 
 	HN_LOCK(sc);
 	vf_name[0] = '\0';
 	vf_ifp = sc->hn_rx_ring[0].hn_rxvf_ifp;
 	if (vf_ifp != NULL)
-		snprintf(vf_name, sizeof(vf_name), "%s", vf_ifp->if_xname);
+		snprintf(vf_name, sizeof(vf_name), "%s", if_name(vf_ifp));
 	HN_UNLOCK(sc);
 	return sysctl_handle_string(oidp, vf_name, sizeof(vf_name), req);
 }
@@ -4765,7 +4751,7 @@ hn_vflist_sysctl(SYSCTL_HANDLER_ARGS)
 	first = true;
 	for (i = 0; i < hn_vfmap_size; ++i) {
 		struct epoch_tracker et;
-		struct ifnet *ifp;
+		if_t ifp;
 
 		if (hn_vfmap[i] == NULL)
 			continue;
@@ -4774,9 +4760,9 @@ hn_vflist_sysctl(SYSCTL_HANDLER_ARGS)
 		ifp = ifnet_byindex(i);
 		if (ifp != NULL) {
 			if (first)
-				sbuf_printf(sb, "%s", ifp->if_xname);
+				sbuf_printf(sb, "%s", if_name(ifp));
 			else
-				sbuf_printf(sb, " %s", ifp->if_xname);
+				sbuf_printf(sb, " %s", if_name(ifp));
 			first = false;
 		}
 		NET_EPOCH_EXIT(et);
@@ -4810,7 +4796,7 @@ hn_vfmap_sysctl(SYSCTL_HANDLER_ARGS)
 	first = true;
 	for (i = 0; i < hn_vfmap_size; ++i) {
 		struct epoch_tracker et;
-		struct ifnet *ifp, *hn_ifp;
+		if_t ifp, hn_ifp;
 
 		hn_ifp = hn_vfmap[i];
 		if (hn_ifp == NULL)
@@ -4820,11 +4806,11 @@ hn_vfmap_sysctl(SYSCTL_HANDLER_ARGS)
 		ifp = ifnet_byindex(i);
 		if (ifp != NULL) {
 			if (first) {
-				sbuf_printf(sb, "%s:%s", ifp->if_xname,
-				    hn_ifp->if_xname);
+				sbuf_printf(sb, "%s:%s", if_name(ifp),
+				    if_name(hn_ifp));
 			} else {
-				sbuf_printf(sb, " %s:%s", ifp->if_xname,
-				    hn_ifp->if_xname);
+				sbuf_printf(sb, " %s:%s", if_name(ifp),
+				    if_name(hn_ifp));
 			}
 			first = false;
 		}
@@ -4986,9 +4972,7 @@ hn_create_rx_data(struct hn_softc *sc, int ring_cnt)
 	struct sysctl_ctx_list *ctx;
 	device_t dev = sc->hn_dev;
 #if defined(INET) || defined(INET6)
-#if __FreeBSD_version >= 1100095
 	int lroent_cnt;
-#endif
 #endif
 	int i;
 
@@ -5015,13 +4999,11 @@ hn_create_rx_data(struct hn_softc *sc, int ring_cnt)
 	    M_DEVBUF, M_WAITOK | M_ZERO);
 
 #if defined(INET) || defined(INET6)
-#if __FreeBSD_version >= 1100095
 	lroent_cnt = hn_lro_entry_count;
 	if (lroent_cnt < TCP_LRO_ENTRIES)
 		lroent_cnt = TCP_LRO_ENTRIES;
 	if (bootverbose)
 		device_printf(dev, "LRO: entry count %d\n", lroent_cnt);
-#endif
 #endif	/* INET || INET6 */
 
 	ctx = device_get_sysctl_ctx(dev);
@@ -5061,17 +5043,10 @@ hn_create_rx_data(struct hn_softc *sc, int ring_cnt)
 		 * Initialize LRO.
 		 */
 #if defined(INET) || defined(INET6)
-#if __FreeBSD_version >= 1100095
 		tcp_lro_init_args(&rxr->hn_lro, sc->hn_ifp, lroent_cnt,
 		    hn_lro_mbufq_depth);
-#else
-		tcp_lro_init(&rxr->hn_lro);
-		rxr->hn_lro.ifp = sc->hn_ifp;
-#endif
-#if __FreeBSD_version >= 1100099
 		rxr->hn_lro.lro_length_lim = HN_LRO_LENLIM_DEF;
 		rxr->hn_lro.lro_ackcnt_lim = HN_LRO_ACKCNT_DEF;
-#endif
 #endif	/* INET || INET6 */
 
 		if (sc->hn_rx_sysctl_tree != NULL) {
@@ -5122,26 +5097,17 @@ hn_create_rx_data(struct hn_softc *sc, int ring_cnt)
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "lro_queued",
 	    CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_MPSAFE | CTLFLAG_STATS , sc,
 	    __offsetof(struct hn_rx_ring, hn_lro.lro_queued),
-#if __FreeBSD_version < 1100095
-	    hn_rx_stat_int_sysctl,
-#else
 	    hn_rx_stat_u64_sysctl,
-#endif
 	    "LU", "LRO queued");
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "lro_flushed",
 	    CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_MPSAFE | CTLFLAG_STATS , sc,
 	    __offsetof(struct hn_rx_ring, hn_lro.lro_flushed),
-#if __FreeBSD_version < 1100095
-	    hn_rx_stat_int_sysctl,
-#else
 	    hn_rx_stat_u64_sysctl,
-#endif
 	    "LU", "LRO flushed");
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "lro_tried",
 	    CTLTYPE_ULONG | CTLFLAG_RW | CTLFLAG_MPSAFE | CTLFLAG_STATS , sc,
 	    __offsetof(struct hn_rx_ring, hn_lro_tried),
 	    hn_rx_stat_ulong_sysctl, "LU", "# of LRO tries");
-#if __FreeBSD_version >= 1100099
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "lro_length_lim",
 	    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
 	    hn_lro_lenlim_sysctl, "IU",
@@ -5150,7 +5116,6 @@ hn_create_rx_data(struct hn_softc *sc, int ring_cnt)
 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
 	    hn_lro_ackcnt_sysctl, "I",
 	    "Max # of ACKs to be aggregated by LRO");
-#endif
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "trust_hosttcp",
 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, HN_TRUST_HCSUM_TCP,
 	    hn_trust_hcsum_sysctl, "I",
@@ -5635,13 +5600,13 @@ hn_set_chim_size(struct hn_softc *sc, int chim_size)
 static void
 hn_set_tso_maxsize(struct hn_softc *sc, int tso_maxlen, int mtu)
 {
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 	u_int hw_tsomax;
 	int tso_minlen;
 
 	HN_LOCK_ASSERT(sc);
 
-	if ((ifp->if_capabilities & (IFCAP_TSO4 | IFCAP_TSO6)) == 0)
+	if ((if_getcapabilities(ifp) & (IFCAP_TSO4 | IFCAP_TSO6)) == 0)
 		return;
 
 	KASSERT(sc->hn_ndis_tso_sgmin >= 2,
@@ -5661,12 +5626,12 @@ hn_set_tso_maxsize(struct hn_softc *sc, int tso_maxlen, int mtu)
 	hw_tsomax = tso_maxlen - (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN);
 
 	if (hn_xpnt_vf_isready(sc)) {
-		if (hw_tsomax > sc->hn_vf_ifp->if_hw_tsomax)
-			hw_tsomax = sc->hn_vf_ifp->if_hw_tsomax;
+		if (hw_tsomax > if_gethwtsomax(sc->hn_vf_ifp))
+			hw_tsomax = if_gethwtsomax(sc->hn_vf_ifp);
 	}
-	ifp->if_hw_tsomax = hw_tsomax;
+	if_sethwtsomax(ifp, hw_tsomax);
 	if (bootverbose)
-		if_printf(ifp, "TSO size max %u\n", ifp->if_hw_tsomax);
+		if_printf(ifp, "TSO size max %u\n", if_gethwtsomax(ifp));
 }
 
 static void
@@ -5761,7 +5726,7 @@ static int
 hn_start_locked(struct hn_tx_ring *txr, int len)
 {
 	struct hn_softc *sc = txr->hn_sc;
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 	int sched = 0;
 
 	KASSERT(hn_use_if_start,
@@ -5773,16 +5738,16 @@ hn_start_locked(struct hn_tx_ring *txr, int len)
 	if (__predict_false(txr->hn_suspended))
 		return (0);
 
-	if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) !=
+	if ((if_getdrvflags(ifp) & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) !=
 	    IFF_DRV_RUNNING)
 		return (0);
 
-	while (!IFQ_DRV_IS_EMPTY(&ifp->if_snd)) {
+	while (!if_sendq_empty(ifp)) {
 		struct hn_txdesc *txd;
 		struct mbuf *m_head;
 		int error;
 
-		IFQ_DRV_DEQUEUE(&ifp->if_snd, m_head);
+		m_head = if_dequeue(ifp);
 		if (m_head == NULL)
 			break;
 
@@ -5792,7 +5757,7 @@ hn_start_locked(struct hn_tx_ring *txr, int len)
 			 * dispatch this packet sending (and sending of any
 			 * following up packets) to tx taskqueue.
 			 */
-			IFQ_DRV_PREPEND(&ifp->if_snd, m_head);
+			if_sendq_prepend(ifp, m_head);
 			sched = 1;
 			break;
 		}
@@ -5817,8 +5782,8 @@ hn_start_locked(struct hn_tx_ring *txr, int len)
 		txd = hn_txdesc_get(txr);
 		if (txd == NULL) {
 			txr->hn_no_txdescs++;
-			IFQ_DRV_PREPEND(&ifp->if_snd, m_head);
-			atomic_set_int(&ifp->if_drv_flags, IFF_DRV_OACTIVE);
+			if_sendq_prepend(ifp, m_head);
+			if_setdrvflagbits(ifp, IFF_DRV_OACTIVE, 0);
 			break;
 		}
 
@@ -5836,8 +5801,8 @@ hn_start_locked(struct hn_tx_ring *txr, int len)
 				    ("pending mbuf for aggregating txdesc"));
 				error = hn_flush_txagg(ifp, txr);
 				if (__predict_false(error)) {
-					atomic_set_int(&ifp->if_drv_flags,
-					    IFF_DRV_OACTIVE);
+					if_setdrvflagbits(ifp,
+					    IFF_DRV_OACTIVE, 0);
 					break;
 				}
 			} else {
@@ -5845,9 +5810,9 @@ hn_start_locked(struct hn_tx_ring *txr, int len)
 				error = hn_txpkt(ifp, txr, txd);
 				if (__predict_false(error)) {
 					/* txd is freed, but m_head is not */
-					IFQ_DRV_PREPEND(&ifp->if_snd, m_head);
-					atomic_set_int(&ifp->if_drv_flags,
-					    IFF_DRV_OACTIVE);
+					if_sendq_prepend(ifp, m_head);
+					if_setdrvflagbits(ifp,
+					    IFF_DRV_OACTIVE, 0);
 					break;
 				}
 			}
@@ -5869,9 +5834,9 @@ hn_start_locked(struct hn_tx_ring *txr, int len)
 }
 
 static void
-hn_start(struct ifnet *ifp)
+hn_start(if_t ifp)
 {
-	struct hn_softc *sc = ifp->if_softc;
+	struct hn_softc *sc = if_getsoftc(ifp);
 	struct hn_tx_ring *txr = &sc->hn_tx_ring[0];
 
 	if (txr->hn_sched_tx)
@@ -5895,7 +5860,7 @@ hn_start_txeof_taskfunc(void *xtxr, int pending __unused)
 	struct hn_tx_ring *txr = xtxr;
 
 	mtx_lock(&txr->hn_tx_lock);
-	atomic_clear_int(&txr->hn_sc->hn_ifp->if_drv_flags, IFF_DRV_OACTIVE);
+	if_setdrvflagbits(txr->hn_sc->hn_ifp, 0, IFF_DRV_OACTIVE);
 	hn_start_locked(txr, 0);
 	mtx_unlock(&txr->hn_tx_lock);
 }
@@ -5904,7 +5869,7 @@ static void
 hn_start_txeof(struct hn_tx_ring *txr)
 {
 	struct hn_softc *sc = txr->hn_sc;
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 
 	KASSERT(txr == &sc->hn_tx_ring[0], ("not the first TX ring"));
 
@@ -5914,7 +5879,7 @@ hn_start_txeof(struct hn_tx_ring *txr)
 	if (mtx_trylock(&txr->hn_tx_lock)) {
 		int sched;
 
-		atomic_clear_int(&ifp->if_drv_flags, IFF_DRV_OACTIVE);
+		if_setdrvflagbits(ifp, 0, IFF_DRV_OACTIVE);
 		sched = hn_start_locked(txr, txr->hn_direct_tx_size);
 		mtx_unlock(&txr->hn_tx_lock);
 		if (sched) {
@@ -5929,7 +5894,7 @@ do_sched:
 		 * flag again with the hn_tx_lock to avoid possible
 		 * races.
 		 */
-		atomic_clear_int(&ifp->if_drv_flags, IFF_DRV_OACTIVE);
+		if_setdrvflagbits(ifp, 0, IFF_DRV_OACTIVE);
 		taskqueue_enqueue(txr->hn_tx_taskq, &txr->hn_txeof_task);
 	}
 }
@@ -5940,7 +5905,7 @@ static int
 hn_xmit(struct hn_tx_ring *txr, int len)
 {
 	struct hn_softc *sc = txr->hn_sc;
-	struct ifnet *ifp = sc->hn_ifp;
+	if_t ifp = sc->hn_ifp;
 	struct mbuf *m_head;
 	int sched = 0;
 
@@ -5954,7 +5919,7 @@ hn_xmit(struct hn_tx_ring *txr, int len)
 	if (__predict_false(txr->hn_suspended))
 		return (0);
 
-	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0 || txr->hn_oactive)
+	if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0 || txr->hn_oactive)
 		return (0);
 
 	while ((m_head = drbr_peek(ifp, txr->hn_mbuf_br)) != NULL) {
@@ -6030,9 +5995,9 @@ hn_xmit(struct hn_tx_ring *txr, int len)
 }
 
 static int
-hn_transmit(struct ifnet *ifp, struct mbuf *m)
+hn_transmit(if_t ifp, struct mbuf *m)
 {
-	struct hn_softc *sc = ifp->if_softc;
+	struct hn_softc *sc = if_getsoftc(ifp);
 	struct hn_tx_ring *txr;
 	int error, idx = 0;
 
@@ -6048,7 +6013,7 @@ hn_transmit(struct ifnet *ifp, struct mbuf *m)
 			omcast = (m->m_flags & M_MCAST) != 0;
 
 			if (sc->hn_xvf_flags & HN_XVFFLAG_ACCBPF) {
-				if (bpf_peers_present(ifp->if_bpf)) {
+				if (bpf_peers_present(if_getbpf(ifp))) {
 					m_bpf = m_copypacket(m, M_NOWAIT);
 					if (m_bpf == NULL) {
 						/*
@@ -6062,7 +6027,7 @@ hn_transmit(struct ifnet *ifp, struct mbuf *m)
 				ETHER_BPF_MTAP(ifp, m);
 			}
 
-			error = sc->hn_vf_ifp->if_transmit(sc->hn_vf_ifp, m);
+			error = if_transmit(sc->hn_vf_ifp, m);
 			rm_runlock(&sc->hn_vf_lock, &pt);
 
 			if (m_bpf != NULL) {
@@ -6184,9 +6149,9 @@ hn_tx_ring_qflush(struct hn_tx_ring *txr)
 }
 
 static void
-hn_xmit_qflush(struct ifnet *ifp)
+hn_xmit_qflush(if_t ifp)
 {
-	struct hn_softc *sc = ifp->if_softc;
+	struct hn_softc *sc = if_getsoftc(ifp);
 	struct rm_priotracker pt;
 	int i;
 
@@ -6196,7 +6161,7 @@ hn_xmit_qflush(struct ifnet *ifp)
 
 	rm_rlock(&sc->hn_vf_lock, &pt);
 	if (sc->hn_xvf_flags & HN_XVFFLAG_ENABLED)
-		sc->hn_vf_ifp->if_qflush(sc->hn_vf_ifp);
+		if_qflush(sc->hn_vf_ifp);
 	rm_runlock(&sc->hn_vf_lock, &pt);
 }
 
@@ -6948,7 +6913,7 @@ hn_suspend(struct hn_softc *sc)
 	 * device is receiving packets, so the data path of the
 	 * synthetic device must be suspended.
 	 */
-	if ((sc->hn_ifp->if_drv_flags & IFF_DRV_RUNNING) ||
+	if ((if_getdrvflags(sc->hn_ifp) & IFF_DRV_RUNNING) ||
 	    (sc->hn_flags & HN_FLAG_RXVF))
 		hn_suspend_data(sc);
 	hn_suspend_mgmt(sc);
@@ -7043,7 +7008,7 @@ hn_resume(struct hn_softc *sc)
 	 * device have to receive packets, so the data path of the
 	 * synthetic device must be resumed.
 	 */
-	if ((sc->hn_ifp->if_drv_flags & IFF_DRV_RUNNING) ||
+	if ((if_getdrvflags(sc->hn_ifp) & IFF_DRV_RUNNING) ||
 	    (sc->hn_flags & HN_FLAG_RXVF))
 		hn_resume_data(sc);
 
@@ -7062,7 +7027,7 @@ hn_resume(struct hn_softc *sc)
 	 * Re-enable polling if this interface is running and
 	 * the polling is requested.
 	 */
-	if ((sc->hn_ifp->if_drv_flags & IFF_DRV_RUNNING) && sc->hn_pollhz > 0)
+	if ((if_getdrvflags(sc->hn_ifp) & IFF_DRV_RUNNING) && sc->hn_pollhz > 0)
 		hn_polling(sc, sc->hn_pollhz);
 }
 
@@ -7460,9 +7425,9 @@ hn_rndis_rxpkt(struct hn_rx_ring *rxr, const void *data, int dlen)
 	}
 
 	if (hdr->rm_type == REMOTE_NDIS_INDICATE_STATUS_MSG)
-		hn_rndis_rx_status(rxr->hn_ifp->if_softc, data, dlen);
+		hn_rndis_rx_status(if_getsoftc(rxr->hn_ifp), data, dlen);
 	else
-		hn_rndis_rx_ctrl(rxr->hn_ifp->if_softc, data, dlen);
+		hn_rndis_rx_ctrl(if_getsoftc(rxr->hn_ifp), data, dlen);
 }
 
 static void
@@ -7604,7 +7569,7 @@ static void
 hn_chan_callback(struct vmbus_channel *chan, void *xrxr)
 {
 	struct hn_rx_ring *rxr = xrxr;
-	struct hn_softc *sc = rxr->hn_ifp->if_softc;
+	struct hn_softc *sc = if_getsoftc(rxr->hn_ifp);
 
 	for (;;) {
 		struct vmbus_chanpkt_hdr *pkt = rxr->hn_pktbuf;
@@ -7694,7 +7659,7 @@ hn_sysinit(void *arg __unused)
 	 */
 	rm_init_flags(&hn_vfmap_lock, "hn_vfmap", RM_SLEEPABLE);
 	hn_vfmap_size = HN_VFMAP_SIZE_DEF;
-	hn_vfmap = malloc(sizeof(struct ifnet *) * hn_vfmap_size, M_DEVBUF,
+	hn_vfmap = malloc(sizeof(if_t) * hn_vfmap_size, M_DEVBUF,
 	    M_WAITOK | M_ZERO);
 
 	/*

@@ -55,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_clone.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
@@ -2504,7 +2505,7 @@ vxlan_encap4(struct vxlan_softc *sc, const union vxlan_sockaddr *fvxlsa,
 	struct ip *ip;
 	struct in_addr srcaddr, dstaddr;
 	uint16_t srcport, dstport;
-	int len, mcast, error;
+	int plen, mcast, error;
 	struct route route, *ro;
 	struct sockaddr_in *sin;
 	uint32_t csum_flags;
@@ -2517,6 +2518,7 @@ vxlan_encap4(struct vxlan_softc *sc, const union vxlan_sockaddr *fvxlsa,
 	dstaddr = fvxlsa->in4.sin_addr;
 	dstport = fvxlsa->in4.sin_port;
 
+	plen = m->m_pkthdr.len;
 	M_PREPEND(m, sizeof(struct ip) + sizeof(struct vxlanudphdr),
 	    M_NOWAIT);
 	if (m == NULL) {
@@ -2524,11 +2526,9 @@ vxlan_encap4(struct vxlan_softc *sc, const union vxlan_sockaddr *fvxlsa,
 		return (ENOBUFS);
 	}
 
-	len = m->m_pkthdr.len;
-
 	ip = mtod(m, struct ip *);
 	ip->ip_tos = 0;
-	ip->ip_len = htons(len);
+	ip->ip_len = htons(m->m_pkthdr.len);
 	ip->ip_off = 0;
 	ip->ip_ttl = sc->vxl_ttl;
 	ip->ip_p = IPPROTO_UDP;
@@ -2594,7 +2594,7 @@ vxlan_encap4(struct vxlan_softc *sc, const union vxlan_sockaddr *fvxlsa,
 	error = ip_output(m, NULL, ro, 0, sc->vxl_im4o, NULL);
 	if (error == 0) {
 		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
-		if_inc_counter(ifp, IFCOUNTER_OBYTES, len);
+		if_inc_counter(ifp, IFCOUNTER_OBYTES, plen);
 		if (mcast != 0)
 			if_inc_counter(ifp, IFCOUNTER_OMCASTS, 1);
 	} else
@@ -2616,7 +2616,7 @@ vxlan_encap6(struct vxlan_softc *sc, const union vxlan_sockaddr *fvxlsa,
 	struct ip6_hdr *ip6;
 	const struct in6_addr *srcaddr, *dstaddr;
 	uint16_t srcport, dstport;
-	int len, mcast, error;
+	int plen, mcast, error;
 	struct route_in6 route, *ro;
 	struct sockaddr_in6 *sin6;
 	uint32_t csum_flags;
@@ -2629,14 +2629,13 @@ vxlan_encap6(struct vxlan_softc *sc, const union vxlan_sockaddr *fvxlsa,
 	dstaddr = &fvxlsa->in6.sin6_addr;
 	dstport = fvxlsa->in6.sin6_port;
 
+	plen = m->m_pkthdr.len;
 	M_PREPEND(m, sizeof(struct ip6_hdr) + sizeof(struct vxlanudphdr),
 	    M_NOWAIT);
 	if (m == NULL) {
 		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		return (ENOBUFS);
 	}
-
-	len = m->m_pkthdr.len;
 
 	ip6 = mtod(m, struct ip6_hdr *);
 	ip6->ip6_flow = 0;		/* BMV: Keep in forwarding entry? */
@@ -2712,7 +2711,7 @@ vxlan_encap6(struct vxlan_softc *sc, const union vxlan_sockaddr *fvxlsa,
 	error = ip6_output(m, NULL, ro, 0, sc->vxl_im6o, NULL, NULL);
 	if (error == 0) {
 		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
-		if_inc_counter(ifp, IFCOUNTER_OBYTES, len);
+		if_inc_counter(ifp, IFCOUNTER_OBYTES, plen);
 		if (mcast != 0)
 			if_inc_counter(ifp, IFCOUNTER_OMCASTS, 1);
 	} else
@@ -2894,6 +2893,7 @@ vxlan_input(struct vxlan_socket *vso, uint32_t vni, struct mbuf **m0,
 		m->m_pkthdr.csum_data = 0;
 	}
 
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 	(*ifp->if_input)(ifp, m);
 	*m0 = NULL;
 	error = 0;

@@ -168,7 +168,7 @@ smmu_fdt_attach(device_t dev)
 	LIST_INIT(&unit->domain_list);
 
 	/* Use memory start address as an xref. */
-	sc->xref = bus_get_resource_start(dev, SYS_RES_MEMORY, 0);
+	sc->xref = OF_xref_from_node(node);
 
 	err = iommu_register(iommu);
 	if (err) {
@@ -176,7 +176,7 @@ smmu_fdt_attach(device_t dev)
 		return (ENXIO);
 	}
 
-	OF_device_register_xref(OF_xref_from_node(node), dev);
+	OF_device_register_xref(sc->xref, dev);
 
 	return (0);
 
@@ -202,7 +202,5 @@ static device_method_t smmu_fdt_methods[] = {
 DEFINE_CLASS_1(smmu, smmu_fdt_driver, smmu_fdt_methods,
     sizeof(struct smmu_softc), smmu_driver);
 
-static devclass_t smmu_fdt_devclass;
-
-EARLY_DRIVER_MODULE(smmu, simplebus, smmu_fdt_driver, smmu_fdt_devclass,
-    0, 0, BUS_PASS_INTERRUPT + BUS_PASS_ORDER_MIDDLE);
+EARLY_DRIVER_MODULE(smmu, simplebus, smmu_fdt_driver, 0, 0,
+    BUS_PASS_INTERRUPT + BUS_PASS_ORDER_MIDDLE);

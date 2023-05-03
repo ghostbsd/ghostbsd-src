@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2015, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2022 by Pawel Jakub Dawidek
  */
 
 
@@ -494,11 +495,8 @@ zfs_log_symlink(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
 	zil_itx_assign(zilog, itx, tx);
 }
 
-/*
- * Handles TX_RENAME transactions.
- */
-void
-zfs_log_rename(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype, znode_t *sdzp,
+static void
+do_zfs_log_rename(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype, znode_t *sdzp,
     const char *sname, znode_t *tdzp, const char *dname, znode_t *szp)
 {
 	itx_t *itx;
@@ -521,11 +519,90 @@ zfs_log_rename(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype, znode_t *sdzp,
 }
 
 /*
+ * Handles TX_RENAME transactions.
+ */
+void
+zfs_log_rename(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype, znode_t *sdzp,
+    const char *sname, znode_t *tdzp, const char *dname, znode_t *szp)
+{
+	txtype |= TX_RENAME;
+	do_zfs_log_rename(zilog, tx, txtype, sdzp, sname, tdzp, dname, szp);
+}
+
+/*
+ * Handles TX_RENAME_EXCHANGE transactions.
+ */
+void
+zfs_log_rename_exchange(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
+    znode_t *sdzp, const char *sname, znode_t *tdzp, const char *dname,
+    znode_t *szp)
+{
+	txtype |= TX_RENAME_EXCHANGE;
+	do_zfs_log_rename(zilog, tx, txtype, sdzp, sname, tdzp, dname, szp);
+}
+
+/*
+ * Handles TX_RENAME_WHITEOUT transactions.
+ *
+ * Unfortunately we cannot reuse do_zfs_log_rename because we we need to call
+ * zfs_mknode() on replay which requires stashing bits as with TX_CREATE.
+ */
+void
+zfs_log_rename_whiteout(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
+    znode_t *sdzp, const char *sname, znode_t *tdzp, const char *dname,
+    znode_t *szp, znode_t *wzp)
+{
+	itx_t *itx;
+	lr_rename_whiteout_t *lr;
+	size_t snamesize = strlen(sname) + 1;
+	size_t dnamesize = strlen(dname) + 1;
+
+	if (zil_replaying(zilog, tx))
+		return;
+
+	txtype |= TX_RENAME_WHITEOUT;
+	itx = zil_itx_create(txtype, sizeof (*lr) + snamesize + dnamesize);
+	lr = (lr_rename_whiteout_t *)&itx->itx_lr;
+	lr->lr_rename.lr_sdoid = sdzp->z_id;
+	lr->lr_rename.lr_tdoid = tdzp->z_id;
+
+	/*
+	 * RENAME_WHITEOUT will create an entry at the source znode, so we need
+	 * to store the same data that the equivalent call to zfs_log_create()
+	 * would.
+	 */
+	lr->lr_wfoid = wzp->z_id;
+	LR_FOID_SET_SLOTS(lr->lr_wfoid, wzp->z_dnodesize >> DNODE_SHIFT);
+	(void) sa_lookup(wzp->z_sa_hdl, SA_ZPL_GEN(ZTOZSB(wzp)), &lr->lr_wgen,
+	    sizeof (uint64_t));
+	(void) sa_lookup(wzp->z_sa_hdl, SA_ZPL_CRTIME(ZTOZSB(wzp)),
+	    lr->lr_wcrtime, sizeof (uint64_t) * 2);
+	lr->lr_wmode = wzp->z_mode;
+	lr->lr_wuid = (uint64_t)KUID_TO_SUID(ZTOUID(wzp));
+	lr->lr_wgid = (uint64_t)KGID_TO_SGID(ZTOGID(wzp));
+
+	/*
+	 * This rdev will always be makdevice(0, 0) but because the ZIL log and
+	 * replay code needs to be platform independent (and there is no
+	 * platform independent makdev()) we need to copy the one created
+	 * during the rename operation.
+	 */
+	(void) sa_lookup(wzp->z_sa_hdl, SA_ZPL_RDEV(ZTOZSB(wzp)), &lr->lr_wrdev,
+	    sizeof (lr->lr_wrdev));
+
+	memcpy((char *)(lr + 1), sname, snamesize);
+	memcpy((char *)(lr + 1) + snamesize, dname, dnamesize);
+	itx->itx_oid = szp->z_id;
+
+	zil_itx_assign(zilog, itx, tx);
+}
+
+/*
  * zfs_log_write() handles TX_WRITE transactions. The specified callback is
  * called as soon as the write is on stable storage (be it via a DMU sync or a
  * ZIL commit).
  */
-static long zfs_immediate_write_sz = 32768;
+static int64_t zfs_immediate_write_sz = 32768;
 
 void
 zfs_log_write(zilog_t *zilog, dmu_tx_t *tx, int txtype,
@@ -815,5 +892,54 @@ zfs_log_acl(zilog_t *zilog, dmu_tx_t *tx, znode_t *zp,
 	zil_itx_assign(zilog, itx, tx);
 }
 
-ZFS_MODULE_PARAM(zfs, zfs_, immediate_write_sz, LONG, ZMOD_RW,
+/*
+ * Handles TX_CLONE_RANGE transactions.
+ */
+void
+zfs_log_clone_range(zilog_t *zilog, dmu_tx_t *tx, int txtype, znode_t *zp,
+    uint64_t off, uint64_t len, uint64_t blksz, const blkptr_t *bps,
+    size_t nbps)
+{
+	itx_t *itx;
+	lr_clone_range_t *lr;
+	uint64_t partlen, max_log_data;
+	size_t i, partnbps;
+
+	if (zil_replaying(zilog, tx) || zp->z_unlinked)
+		return;
+
+	max_log_data = zil_max_log_data(zilog, sizeof (lr_clone_range_t));
+
+	while (nbps > 0) {
+		partnbps = MIN(nbps, max_log_data / sizeof (bps[0]));
+		partlen = 0;
+		for (i = 0; i < partnbps; i++) {
+			partlen += BP_GET_LSIZE(&bps[i]);
+		}
+		partlen = MIN(partlen, len);
+
+		itx = zil_itx_create(txtype,
+		    sizeof (*lr) + sizeof (bps[0]) * partnbps);
+		lr = (lr_clone_range_t *)&itx->itx_lr;
+		lr->lr_foid = zp->z_id;
+		lr->lr_offset = off;
+		lr->lr_length = partlen;
+		lr->lr_blksz = blksz;
+		lr->lr_nbps = partnbps;
+		memcpy(lr->lr_bps, bps, sizeof (bps[0]) * partnbps);
+
+		itx->itx_sync = (zp->z_sync_cnt != 0);
+
+		zil_itx_assign(zilog, itx, tx);
+
+		bps += partnbps;
+		ASSERT3U(nbps, >=, partnbps);
+		nbps -= partnbps;
+		off += partlen;
+		ASSERT3U(len, >=, partlen);
+		len -= partlen;
+	}
+}
+
+ZFS_MODULE_PARAM(zfs, zfs_, immediate_write_sz, S64, ZMOD_RW,
 	"Largest data block to write to zil");

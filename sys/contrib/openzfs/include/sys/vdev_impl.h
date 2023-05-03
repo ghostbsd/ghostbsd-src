@@ -277,6 +277,7 @@ struct vdev {
 	kthread_t	*vdev_open_thread; /* thread opening children	*/
 	kthread_t	*vdev_validate_thread; /* thread validating children */
 	uint64_t	vdev_crtxg;	/* txg when top-level was added */
+	uint64_t	vdev_root_zap;
 
 	/*
 	 * Top-level vdev state.
@@ -299,6 +300,7 @@ struct vdev {
 	uint64_t	vdev_islog;	/* is an intent log device	*/
 	uint64_t	vdev_noalloc;	/* device is passivated?	*/
 	uint64_t	vdev_removing;	/* device is being removed?	*/
+	uint64_t	vdev_failfast;	/* device failfast setting	*/
 	boolean_t	vdev_ishole;	/* is a hole in the namespace	*/
 	uint64_t	vdev_top_zap;
 	vdev_alloc_bias_t vdev_alloc_bias; /* metaslab allocation bias	*/
@@ -328,6 +330,7 @@ struct vdev {
 	list_node_t	vdev_trim_node;
 	kmutex_t	vdev_autotrim_lock;
 	kcondvar_t	vdev_autotrim_cv;
+	kcondvar_t	vdev_autotrim_kick_cv;
 	kthread_t	*vdev_autotrim_thread;
 	/* Protects vdev_trim_thread and vdev_trim_state. */
 	kmutex_t	vdev_trim_lock;
@@ -468,6 +471,14 @@ struct vdev {
 	zfs_ratelimit_t vdev_delay_rl;
 	zfs_ratelimit_t vdev_deadman_rl;
 	zfs_ratelimit_t vdev_checksum_rl;
+
+	/*
+	 * Checksum and IO thresholds for tuning ZED
+	 */
+	uint64_t	vdev_checksum_n;
+	uint64_t	vdev_checksum_t;
+	uint64_t	vdev_io_n;
+	uint64_t	vdev_io_t;
 };
 
 #define	VDEV_PAD_SIZE		(8 << 10)
@@ -649,8 +660,8 @@ uint64_t vdev_best_ashift(uint64_t logical, uint64_t a, uint64_t b);
 /*
  * Vdev ashift optimization tunables
  */
-extern uint64_t zfs_vdev_min_auto_ashift;
-extern uint64_t zfs_vdev_max_auto_ashift;
+extern uint_t zfs_vdev_min_auto_ashift;
+extern uint_t zfs_vdev_max_auto_ashift;
 int param_set_min_auto_ashift(ZFS_MODULE_PARAM_ARGS);
 int param_set_max_auto_ashift(ZFS_MODULE_PARAM_ARGS);
 

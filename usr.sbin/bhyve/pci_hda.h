@@ -46,12 +46,14 @@
 /*
  * HDA Debug Log
  */
-#define DEBUG_HDA			1
 #if DEBUG_HDA == 1
 extern FILE *dbg;
 #define DPRINTF(fmt, arg...)						\
 do {fprintf(dbg, "%s-%d: " fmt "\n", __func__, __LINE__, ##arg);		\
 fflush(dbg); } while (0)
+#ifndef DEBUG_HDA_FILE
+#define DEBUG_HDA_FILE "/tmp/bhyve_hda.log"
+#endif
 #else
 #define DPRINTF(fmt, arg...)
 #endif
@@ -65,7 +67,7 @@ struct hda_codec_inst {
 	uint8_t cad;
 	struct hda_codec_class *codec;
 	struct hda_softc *hda;
-	struct hda_ops *hops;
+	const struct hda_ops *hops;
 	void *priv;
 };
 
@@ -84,9 +86,9 @@ struct hda_ops {
 	int (*response)(struct hda_codec_inst *hci, uint32_t response,
 		uint8_t unsol);
 	int (*transfer)(struct hda_codec_inst *hci, uint8_t stream,
-		uint8_t dir, void *buf, size_t count);
+		uint8_t dir, uint8_t *buf, size_t count);
 };
 
-#define HDA_EMUL_SET(x)		DATA_SET(hda_codec_class_set, x);
+#define HDA_EMUL_SET(x)		DATA_SET(hda_codec_class_set, x)
 
 #endif	/* _HDA_EMUL_H_ */

@@ -53,7 +53,6 @@ MAN=	acct.5 \
 	periodic.conf.5 \
 	phones.5 \
 	portindex.5 \
-	portsnap.conf.5 \
 	procfs.5 \
 	protocols.5 \
 	quota.user.5 \
@@ -70,6 +69,7 @@ MAN=	acct.5 \
 	style.Makefile.5 \
 	style.mdoc.5 \
 	sysctl.conf.5 \
+	tarfs.5 \
 	tmpfs.5 \
 	unionfs.5
 
@@ -102,7 +102,7 @@ MAN+=	freebsd-update.conf.5
 .endif
 
 .if ${MK_HESIOD} != "no"
-MAN+=	hesiod.conf.5 
+MAN+=	hesiod.conf.5
 .endif
 
 .if ${MK_PF} != "no"
