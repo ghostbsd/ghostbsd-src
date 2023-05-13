@@ -224,6 +224,10 @@ struct ieee80211_chanctx_conf {
 	uint8_t					drv_priv[0] __aligned(CACHE_LINE_SIZE);
 };
 
+struct ieee80211_rate_status {
+	struct rate_info			rate_idx;
+};
+
 #define	WLAN_MEMBERSHIP_LEN			(8)
 #define	WLAN_USER_POSITION_LEN			(16)
 
@@ -557,15 +561,12 @@ struct ieee80211_rx_status {
 	uint8_t				rate_idx;
 };
 
-struct ieee80211_tx_rate_status {
-};
-
 struct ieee80211_tx_status {
 	struct ieee80211_sta		*sta;
 	struct ieee80211_tx_info	*info;
 
 	u8				n_rates;
-	struct ieee80211_tx_rate_status	*rates;
+	struct ieee80211_rate_status	*rates;
 
 	struct sk_buff			*skb;
 	struct list_head		*free_list;
@@ -609,6 +610,11 @@ struct ieee80211_sta_txpwr {
 	short				power;
 };
 
+struct ieee80211_sta_agg {
+	/* XXX TODO */
+	int max_amsdu_len;
+};
+
 struct ieee80211_link_sta {
 	uint32_t				supp_rates[NUM_NL80211_BANDS];
 	struct ieee80211_sta_ht_cap		ht_cap;
@@ -617,6 +623,8 @@ struct ieee80211_link_sta {
 	struct ieee80211_sta_he_6ghz_capa	he_6ghz_capa;
 	uint8_t					rx_nss;
 	enum ieee80211_sta_rx_bw		bandwidth;
+	enum ieee80211_smps_mode		smps_mode;
+	struct ieee80211_sta_agg		agg;
 	struct ieee80211_sta_txpwr		txpwr;
 };
 
@@ -682,6 +690,7 @@ enum ieee80211_vif_driver_flags {
 struct ieee80211_vif_cfg {
 	uint16_t				aid;
 	bool					assoc;
+	bool					ps;
 	int					arp_addr_cnt;
 	uint32_t				arp_addr_list[IEEE80211_BSS_ARP_ADDR_LIST_LEN];		/* big endian */
 };
@@ -971,7 +980,9 @@ void linuxkpi_ieee80211_iffree(struct ieee80211_hw *);
 void linuxkpi_set_ieee80211_dev(struct ieee80211_hw *, char *);
 int linuxkpi_ieee80211_ifattach(struct ieee80211_hw *);
 void linuxkpi_ieee80211_ifdetach(struct ieee80211_hw *);
+void linuxkpi_ieee80211_unregister_hw(struct ieee80211_hw *);
 struct ieee80211_hw * linuxkpi_wiphy_to_ieee80211_hw(struct wiphy *);
+void linuxkpi_ieee80211_restart_hw(struct ieee80211_hw *);
 void linuxkpi_ieee80211_iterate_interfaces(
     struct ieee80211_hw *hw, enum ieee80211_iface_iter flags,
     void(*iterfunc)(void *, uint8_t *, struct ieee80211_vif *),
@@ -990,7 +1001,7 @@ void linuxkpi_ieee80211_iterate_stations_atomic(struct ieee80211_hw *,
 void linuxkpi_ieee80211_scan_completed(struct ieee80211_hw *,
     struct cfg80211_scan_info *);
 void linuxkpi_ieee80211_rx(struct ieee80211_hw *, struct sk_buff *,
-    struct ieee80211_sta *, struct napi_struct *);
+    struct ieee80211_sta *, struct napi_struct *, struct list_head *);
 uint8_t linuxkpi_ieee80211_get_tid(struct ieee80211_hdr *, bool);
 struct ieee80211_sta *linuxkpi_ieee80211_find_sta(struct ieee80211_vif *,
     const u8 *);
@@ -1017,6 +1028,16 @@ void linuxkpi_ieee80211_beacon_loss(struct ieee80211_vif *);
 struct sk_buff *linuxkpi_ieee80211_probereq_get(struct ieee80211_hw *,
     uint8_t *, uint8_t *, size_t, size_t);
 void linuxkpi_ieee80211_tx_status(struct ieee80211_hw *, struct sk_buff *);
+void linuxkpi_ieee80211_tx_status_ext(struct ieee80211_hw *,
+    struct ieee80211_tx_status *);
+void linuxkpi_ieee80211_stop_queues(struct ieee80211_hw *);
+void linuxkpi_ieee80211_wake_queues(struct ieee80211_hw *);
+void linuxkpi_ieee80211_stop_queue(struct ieee80211_hw *, int);
+void linuxkpi_ieee80211_wake_queue(struct ieee80211_hw *, int);
+void linuxkpi_ieee80211_txq_schedule_start(struct ieee80211_hw *, uint8_t);
+struct ieee80211_txq *linuxkpi_ieee80211_next_txq(struct ieee80211_hw *, uint8_t);
+void linuxkpi_ieee80211_schedule_txq(struct ieee80211_hw *,
+    struct ieee80211_txq *, bool);
 
 /* -------------------------------------------------------------------------- */
 
@@ -1101,14 +1122,11 @@ ieee80211_register_hw(struct ieee80211_hw *hw)
 	return (error);
 }
 
-static __inline void
+static inline void
 ieee80211_unregister_hw(struct ieee80211_hw *hw)
 {
 
-	wiphy_unregister(hw->wiphy);
-	linuxkpi_ieee80211_ifdetach(hw);
-
-	IMPROVE();
+	linuxkpi_ieee80211_unregister_hw(hw);
 }
 
 static __inline struct ieee80211_hw *
@@ -1117,6 +1135,13 @@ wiphy_to_ieee80211_hw(struct wiphy *wiphy)
 
 	return (linuxkpi_wiphy_to_ieee80211_hw(wiphy));
 }
+
+static inline void
+ieee80211_restart_hw(struct ieee80211_hw *hw)
+{
+	linuxkpi_ieee80211_restart_hw(hw);
+}
+
 
 /* -------------------------------------------------------------------------- */
 
@@ -1325,6 +1350,17 @@ ieee80211_is_any_nullfunc(__le16 fc)
 	return (ieee80211_is_nullfunc(fc) || ieee80211_is_qos_nullfunc(fc));
 }
 
+static inline bool
+ieee80211_is_pspoll(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_PS_POLL | IEEE80211_FC0_TYPE_CTL);
+
+	return (fc == v);
+}
+
 static __inline bool
 ieee80211_vif_is_mesh(struct ieee80211_vif *vif)
 {
@@ -1341,13 +1377,6 @@ ieee80211_is_frag(struct ieee80211_hdr *hdr)
 
 static __inline bool
 ieee80211_is_first_frag(__le16 fc)
-{
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_is_pspoll(__le16 fc)
 {
 	TODO();
 	return (false);
@@ -1453,28 +1482,93 @@ ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
     struct sk_buff *skb, struct napi_struct *napi)
 {
 
-	linuxkpi_ieee80211_rx(hw, skb, sta, napi);
+	linuxkpi_ieee80211_rx(hw, skb, sta, napi, NULL);
+}
+
+static __inline void
+ieee80211_rx_list(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
+    struct sk_buff *skb, struct list_head *list)
+{
+
+	linuxkpi_ieee80211_rx(hw, skb, sta, NULL, list);
 }
 
 static __inline void
 ieee80211_rx_ni(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 
-	linuxkpi_ieee80211_rx(hw, skb, NULL, NULL);
+	linuxkpi_ieee80211_rx(hw, skb, NULL, NULL, NULL);
 }
 
 static __inline void
 ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 
-	linuxkpi_ieee80211_rx(hw, skb, NULL, NULL);
+	linuxkpi_ieee80211_rx(hw, skb, NULL, NULL, NULL);
 }
 
 static __inline void
 ieee80211_rx(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 
-	linuxkpi_ieee80211_rx(hw, skb, NULL, NULL);
+	linuxkpi_ieee80211_rx(hw, skb, NULL, NULL, NULL);
+}
+
+/* -------------------------------------------------------------------------- */
+
+static inline void
+ieee80211_stop_queues(struct ieee80211_hw *hw)
+{
+	linuxkpi_ieee80211_stop_queues(hw);
+}
+
+static inline void
+ieee80211_wake_queues(struct ieee80211_hw *hw)
+{
+	linuxkpi_ieee80211_wake_queues(hw);
+}
+
+static inline void
+ieee80211_stop_queue(struct ieee80211_hw *hw, int qnum)
+{
+	linuxkpi_ieee80211_stop_queue(hw, qnum);
+}
+
+static inline void
+ieee80211_wake_queue(struct ieee80211_hw *hw, int qnum)
+{
+	linuxkpi_ieee80211_wake_queue(hw, qnum);
+}
+
+static inline void
+ieee80211_schedule_txq(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
+{
+	linuxkpi_ieee80211_schedule_txq(hw, txq, true);
+}
+
+static inline void
+ieee80211_return_txq(struct ieee80211_hw *hw, struct ieee80211_txq *txq,
+    bool withoutpkts)
+{
+	linuxkpi_ieee80211_schedule_txq(hw, txq, true);
+}
+
+static inline void
+ieee80211_txq_schedule_start(struct ieee80211_hw *hw, uint8_t ac)
+{
+	linuxkpi_ieee80211_txq_schedule_start(hw, ac);
+}
+
+static inline void
+ieee80211_txq_schedule_end(struct ieee80211_hw *hw, uint8_t ac)
+{
+	/* DO_NADA; */
+}
+
+static inline struct ieee80211_txq *
+ieee80211_next_txq(struct ieee80211_hw *hw, uint8_t ac)
+{
+	return (linuxkpi_ieee80211_next_txq(hw, ac));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1791,18 +1885,6 @@ ieee80211_tdls_oper_request(struct ieee80211_vif *vif, uint8_t *addr,
 }
 
 static __inline void
-ieee80211_stop_queues(struct ieee80211_hw *hw)
-{
-	TODO();
-}
-
-static __inline void
-ieee80211_wake_queues(struct ieee80211_hw *hw)
-{
-	TODO();
-}
-
-static __inline void
 wiphy_rfkill_set_hw_state(struct wiphy *wiphy, bool state)
 {
 	TODO();
@@ -1819,12 +1901,6 @@ ieee80211_free_txskb(struct ieee80211_hw *hw, struct sk_buff *skb)
 	 * it from normal low values flying around in net80211 ("ETX").
 	 */
 	linuxkpi_ieee80211_free_txskb(hw, skb, 0x455458);
-}
-
-static __inline void
-ieee80211_restart_hw(struct ieee80211_hw *hw)
-{
-	TODO();
 }
 
 static __inline void
@@ -1972,13 +2048,6 @@ ieee80211_sta_set_buffered(struct ieee80211_sta *sta, uint8_t tid, bool t)
 }
 
 static __inline void
-ieee80211_tx_status(struct ieee80211_hw *hw, struct sk_buff *skb)
-{
-
-	linuxkpi_ieee80211_tx_status(hw, skb);
-}
-
-static __inline void
 ieee80211_get_key_rx_seq(struct ieee80211_key_conf *keyconf, uint8_t tid,
     struct ieee80211_key_seq *seq)
 {
@@ -2102,15 +2171,10 @@ ieee80211_queue_work(struct ieee80211_hw *hw, struct work_struct *w)
 }
 
 static __inline void
-ieee80211_stop_queue(struct ieee80211_hw *hw, uint16_t q)
+ieee80211_tx_status(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
-	TODO();
-}
 
-static __inline void
-ieee80211_wake_queue(struct ieee80211_hw *hw, uint16_t q)
-{
-	TODO();
+	linuxkpi_ieee80211_tx_status(hw, skb);
 }
 
 static __inline void
@@ -2125,6 +2189,14 @@ ieee80211_tx_status_ni(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	IMPROVE();
 	ieee80211_tx_status(hw, skb);
+}
+
+static __inline void
+ieee80211_tx_status_ext(struct ieee80211_hw *hw,
+    struct ieee80211_tx_status *txstat)
+{
+
+	linuxkpi_ieee80211_tx_status_ext(hw, txstat);
 }
 
 static __inline void
@@ -2172,13 +2244,6 @@ SET_IEEE80211_PERM_ADDR	(struct ieee80211_hw *hw, uint8_t *addr)
 {
 
 	ether_addr_copy(hw->wiphy->perm_addr, addr);
-}
-
-static __inline uint8_t *
-ieee80211_bss_get_ie(struct cfg80211_bss *bss, uint32_t eid)
-{
-	TODO();
-	return (NULL);
 }
 
 static __inline void
@@ -2234,41 +2299,6 @@ ieee80211_sta_register_airtime(struct ieee80211_sta *sta,
 {
 	TODO();
 }
-
-
-static __inline void
-ieee80211_txq_schedule_start(struct ieee80211_hw *hw, uint8_t ac)
-{
-	TODO();
-}
-
-static __inline void
-ieee80211_txq_schedule_end(struct ieee80211_hw *hw, uint8_t ac)
-{
-	/* DO_NADA; */
-}
-
-static __inline struct ieee80211_txq *
-ieee80211_next_txq(struct ieee80211_hw *hw, uint8_t ac)
-{
-
-	TODO();
-	return (NULL);
-}
-
-static __inline void
-ieee80211_schedule_txq(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
-{
-	TODO();
-}
-
-static __inline void
-ieee80211_return_txq(struct ieee80211_hw *hw, struct ieee80211_txq *txq,
-    bool withoutpkts)
-{
-	TODO();
-}
-
 
 static __inline void
 ieee80211_beacon_set_cntdwn(struct ieee80211_vif *vif, u8 counter)
@@ -2346,27 +2376,6 @@ ieee80211_get_tx_rates(struct ieee80211_vif *vif, struct ieee80211_sta *sta,
 }
 
 static __inline void
-ieee80211_rx_list(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
-    struct sk_buff *skb, struct list_head *list)
-{
-	TODO();
-}
-
-static __inline void
-ieee80211_tx_status_ext(struct ieee80211_hw *hw,
-    struct ieee80211_tx_status *txstat)
-{
-	TODO();
-}
-
-static __inline const struct element *
-ieee80211_bss_get_elem(struct cfg80211_bss *bss, uint32_t eid)
-{
-	TODO();
-	return (NULL);
-}
-
-static __inline void
 ieee80211_color_change_finish(struct ieee80211_vif *vif)
 {
 	TODO();
@@ -2399,7 +2408,6 @@ static __inline void
 ieee80211_resume_disconnect(struct ieee80211_vif *vif)
 {
         TODO();
-        return;
 }
 
 static __inline int
@@ -2415,7 +2423,6 @@ ieee80211_get_tkip_p1k_iv(struct ieee80211_key_conf *key,
     uint32_t iv32, uint16_t *p1k)
 {
         TODO();
-        return;
 }
 
 static __inline struct ieee80211_key_conf *
@@ -2431,14 +2438,12 @@ ieee80211_gtk_rekey_notify(struct ieee80211_vif *vif, const uint8_t *bssid,
     const uint8_t *replay_ctr, gfp_t gfp)
 {
         TODO();
-        return;
 }
 
 static __inline void
 ieee80211_remove_key(struct ieee80211_key_conf *key)
 {
         TODO();
-        return;
 }
 
 static __inline void
@@ -2446,7 +2451,6 @@ ieee80211_set_key_rx_seq(struct ieee80211_key_conf *key, int tid,
     struct ieee80211_key_seq *seq)
 {
         TODO();
-        return;
 }
 
 static __inline void
@@ -2454,7 +2458,6 @@ ieee80211_report_wowlan_wakeup(struct ieee80211_vif *vif,
     struct cfg80211_wowlan_wakeup *wakeup, gfp_t gfp)
 {
         TODO();
-        return;
 }
 
 static __inline void

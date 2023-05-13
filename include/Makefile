@@ -9,10 +9,11 @@ PACKAGE=runtime
 CLEANFILES= osreldate.h version
 SUBDIR= arpa protocols rpcsvc rpc xlocale
 SUBDIR_PARALLEL=
-INCS=	a.out.h ar.h assert.h bitstring.h complex.h cpio.h _ctype.h ctype.h \
+INCS=	a.out.h ar.h assert.h bitstring.h byteswap.h \
+	complex.h cpio.h _ctype.h ctype.h \
 	db.h \
-	dirent.h dlfcn.h elf.h elf-hints.h err.h fmtmsg.h fnmatch.h fstab.h \
-	fts.h ftw.h getopt.h glob.h grp.h \
+	dirent.h dlfcn.h elf.h elf-hints.h endian.h err.h fmtmsg.h fnmatch.h \
+	fstab.h fts.h ftw.h getopt.h glob.h grp.h \
 	ieeefp.h ifaddrs.h \
 	inttypes.h iso646.h kenv.h langinfo.h libgen.h limits.h link.h \
 	locale.h malloc.h malloc_np.h memory.h monetary.h mpool.h mqueue.h \
@@ -40,7 +41,7 @@ LHDRS=	aio.h errno.h fcntl.h linker_set.h poll.h stdatomic.h stdint.h \
 	syslog.h ucontext.h
 
 LDIRS=	geom net net80211 netgraph netinet netinet6 \
-	netipsec netsmb nfs nfsclient nfsserver sys vm
+	netipsec netlink netsmb nfs nfsclient nfsserver sys vm
 
 LSUBDIRS=	dev/acpica dev/agp dev/an dev/ciss dev/filemon dev/firewire \
 	dev/hwpmc dev/hyperv \
@@ -58,6 +59,7 @@ LSUBDIRS=	dev/acpica dev/agp dev/an dev/ciss dev/filemon dev/firewire \
 	netinet/cc \
 	netinet/netdump \
 	netinet/tcp_stacks \
+	netlink/route \
 	security/mac_biba security/mac_bsdextended security/mac_lomac \
 	security/mac_mls security/mac_partition \
 	security/mac_veriexec \

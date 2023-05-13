@@ -73,10 +73,7 @@
 
     $ git diff --diff-filter=M vendor/openssh/X.YpZ HEAD:crypto/openssh
 
-    Files that have modifications relative to the vendor code, and
-    only those files, must have the svn:keywords property set to
-    FreeBSD=%H and be listed in the 'keywords' file created by the
-    pre-merge script.
+    Review the diff for any unexpected changes.
 
 12) Run the configure script:
 
@@ -132,7 +129,6 @@
       - X11Forwarding defaults to "yes".
       - PasswordAuthentication defaults to "no".
       - VersionAddendum defaults to "FreeBSD-YYYYMMDD".
-      - PrivilegeSeparation defaults to "sandbox".
       - UseDNS defaults to "yes".
 
 2) Modified client-side defaults
@@ -140,7 +136,6 @@
    We've modified some configuration defaults in ssh:
 
       - CheckHostIP defaults to "no".
-      - VerifyHostKeyDNS defaults to "yes" if built with LDNS.
       - VersionAddendum defaults to "FreeBSD-YYYYMMDD".
 
 3) Canonic host names

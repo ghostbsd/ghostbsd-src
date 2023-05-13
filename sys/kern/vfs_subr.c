@@ -99,6 +99,10 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_kern.h>
 #include <vm/uma.h>
 
+#if defined(DEBUG_VFS_LOCKS) && (!defined(INVARIANTS) || !defined(WITNESS))
+#error DEBUG_VFS_LOCKS requires INVARIANTS and WITNESS
+#endif
+
 #ifdef DDB
 #include <ddb/ddb.h>
 #endif
@@ -1231,8 +1235,7 @@ restart:
 		vn_finished_write(mp);
 		done++;
 next_iter_unlocked:
-		if (should_yield())
-			kern_yield(PRI_USER);
+		maybe_yield();
 		mtx_lock(&vnode_list_mtx);
 		goto restart;
 next_iter:
@@ -2648,6 +2651,9 @@ sync_vnode(struct synclist *slp, struct bufobj **bo, struct thread *td)
 		mtx_lock(&sync_mtx);
 		return (*bo == LIST_FIRST(slp));
 	}
+	MPASSERT(mp == NULL || (curthread->td_pflags & TDP_IGNSUSP) != 0 ||
+	    (mp->mnt_kern_flag & MNTK_SUSPENDED) == 0, mp,
+	    ("suspended mp syncing vp %p", vp));
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	(void) VOP_FSYNC(vp, MNT_LAZY, td);
 	VOP_UNLOCK(vp);
@@ -5057,6 +5063,7 @@ static struct vop_vector sync_vnodeops = {
 	.vop_bypass =	VOP_EOPNOTSUPP,
 	.vop_close =	sync_close,		/* close */
 	.vop_fsync =	sync_fsync,		/* fsync */
+	.vop_getwritemount = vop_stdgetwritemount,
 	.vop_inactive =	sync_inactive,	/* inactive */
 	.vop_need_inactive = vop_stdneed_inactive, /* need_inactive */
 	.vop_reclaim =	sync_reclaim,	/* reclaim */
@@ -5523,13 +5530,16 @@ assert_vi_unlocked(struct vnode *vp, const char *str)
 void
 assert_vop_locked(struct vnode *vp, const char *str)
 {
-	int locked;
-
 	if (KERNEL_PANICKED() || vp == NULL)
 		return;
 
-	locked = VOP_ISLOCKED(vp);
+#ifdef WITNESS
+	if ((vp->v_irflag & VIRF_CROSSMP) == 0 &&
+	    witness_is_owned(&vp->v_vnlock->lock_object) == -1)
+#else
+	int locked = VOP_ISLOCKED(vp);
 	if (locked == 0 || locked == LK_EXCLOTHER)
+#endif
 		vfs_badlock("is not locked but should be", str, vp);
 }
 
@@ -5539,7 +5549,12 @@ assert_vop_unlocked(struct vnode *vp, const char *str)
 	if (KERNEL_PANICKED() || vp == NULL)
 		return;
 
+#ifdef WITNESS
+	if ((vp->v_irflag & VIRF_CROSSMP) == 0 &&
+	    witness_is_owned(&vp->v_vnlock->lock_object) == 1)
+#else
 	if (VOP_ISLOCKED(vp) == LK_EXCLUSIVE)
+#endif
 		vfs_badlock("is locked but should not be", str, vp);
 }
 
@@ -6428,77 +6443,6 @@ filt_vfsvnode(struct knote *kn, long hint)
 	return (res);
 }
 
-/*
- * Returns whether the directory is empty or not.
- * If it is empty, the return value is 0; otherwise
- * the return value is an error value (which may
- * be ENOTEMPTY).
- */
-int
-vfs_emptydir(struct vnode *vp)
-{
-	struct uio uio;
-	struct iovec iov;
-	struct dirent *dirent, *dp, *endp;
-	int error, eof;
-
-	error = 0;
-	eof = 0;
-
-	ASSERT_VOP_LOCKED(vp, "vfs_emptydir");
-	VNASSERT(vp->v_type == VDIR, vp, ("vp is not a directory"));
-
-	dirent = malloc(sizeof(struct dirent), M_TEMP, M_WAITOK);
-	iov.iov_base = dirent;
-	iov.iov_len = sizeof(struct dirent);
-
-	uio.uio_iov = &iov;
-	uio.uio_iovcnt = 1;
-	uio.uio_offset = 0;
-	uio.uio_resid = sizeof(struct dirent);
-	uio.uio_segflg = UIO_SYSSPACE;
-	uio.uio_rw = UIO_READ;
-	uio.uio_td = curthread;
-
-	while (eof == 0 && error == 0) {
-		error = VOP_READDIR(vp, &uio, curthread->td_ucred, &eof,
-		    NULL, NULL);
-		if (error != 0)
-			break;
-		endp = (void *)((uint8_t *)dirent +
-		    sizeof(struct dirent) - uio.uio_resid);
-		for (dp = dirent; dp < endp;
-		     dp = (void *)((uint8_t *)dp + GENERIC_DIRSIZ(dp))) {
-			if (dp->d_type == DT_WHT)
-				continue;
-			if (dp->d_namlen == 0)
-				continue;
-			if (dp->d_type != DT_DIR &&
-			    dp->d_type != DT_UNKNOWN) {
-				error = ENOTEMPTY;
-				break;
-			}
-			if (dp->d_namlen > 2) {
-				error = ENOTEMPTY;
-				break;
-			}
-			if (dp->d_namlen == 1 &&
-			    dp->d_name[0] != '.') {
-				error = ENOTEMPTY;
-				break;
-			}
-			if (dp->d_namlen == 2 &&
-			    dp->d_name[1] != '.') {
-				error = ENOTEMPTY;
-				break;
-			}
-			uio.uio_resid = sizeof(struct dirent);
-		}
-	}
-	free(dirent, M_TEMP);
-	return (error);
-}
-
 int
 vfs_read_dirent(struct vop_readdir_args *ap, struct dirent *dp, off_t off)
 {
@@ -6702,8 +6646,7 @@ __mnt_vnode_next_all(struct vnode **mvp, struct mount *mp)
 {
 	struct vnode *vp;
 
-	if (should_yield())
-		kern_yield(PRI_USER);
+	maybe_yield();
 	MNT_ILOCK(mp);
 	KASSERT((*mvp)->v_mount == mp, ("marker vnode mount list mismatch"));
 	for (vp = TAILQ_NEXT(*mvp, v_nmntvnodes); vp != NULL;
@@ -6918,8 +6861,7 @@ __mnt_vnode_next_lazy(struct vnode **mvp, struct mount *mp, mnt_lazy_cb_t *cb,
     void *cbarg)
 {
 
-	if (should_yield())
-		kern_yield(PRI_USER);
+	maybe_yield();
 	mtx_lock(&mp->mnt_listmtx);
 	return (mnt_vnode_next_lazy(mvp, mp, cb, cbarg));
 }

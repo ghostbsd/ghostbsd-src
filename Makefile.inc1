@@ -137,9 +137,9 @@ TARGET_ABI=	gnueabi
 .endif
 .endif
 MACHINE_ABI?=	unknown
-MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${MACHINE_ABI}-freebsd13.1
+MACHINE_TRIPLE?=${MACHINE_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${MACHINE_ABI}-freebsd13.2
 TARGET_ABI?=	unknown
-TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${TARGET_ABI}-freebsd13.1
+TARGET_TRIPLE?=	${TARGET_ARCH:S/amd64/x86_64/:C/[hs]f$//:S/mipsn32/mips64/}-${TARGET_ABI}-freebsd13.2
 KNOWN_ARCHES?=	aarch64/arm64 \
 		amd64 \
 		armv6/arm \
@@ -1324,10 +1324,6 @@ __installcheck_sh_check: .PHONY
 #
 # Required install tools to be saved in a scratch dir for safety.
 #
-.if ${MK_ZONEINFO} != "no"
-_zoneinfo=	zic tzsetup
-.endif
-
 .if !defined(CROSSBUILD_HOST)
 _sysctl=sysctl
 .endif
@@ -1335,13 +1331,18 @@ _sysctl=sysctl
 ITOOLS=	[ awk cap_mkdb cat chflags chmod chown cmp cp \
 	date echo egrep find grep id install ${_install-info} \
 	ln make mkdir mtree mv pwd_mkdb \
-	rm sed services_mkdb sh sort strip ${_sysctl} test true uname wc \
-	${_zoneinfo} ${LOCAL_ITOOLS}
+	rm sed services_mkdb sh sort strip ${_sysctl} test true uname wc
+
+.if ${MK_ZONEINFO} != "no"
+ITOOLS+=tzsetup
+.endif
 
 # Needed for share/man
 .if ${MK_MAN_UTILS} != "no"
 ITOOLS+=makewhatis
 .endif
+
+ITOOLS+=${LOCAL_ITOOLS}
 
 #
 # distributeworld
@@ -1375,7 +1376,7 @@ distributeworld installworld stageworld: _installcheck_world .PHONY
 		if progpath=`env PATH=${TMPPATH} which $$prog`; then \
 			echo $$progpath; \
 		else \
-			echo "Required tool $$prog not found in PATH ($$PATH)." >&2; \
+			echo "Required tool $$prog not found in PATH ("${TMPPATH:Q}")." >&2; \
 			exit 1; \
 		fi; \
 	    done); \
@@ -2222,6 +2223,11 @@ _strfile=	usr.bin/fortune/strfile
 # C source for loader built in font (8x16.c).
 _vtfontcvt=	usr.bin/vtfontcvt
 
+# zic is used to compile timezone data
+.if ${MK_ZONEINFO} != "no"
+_zic=		usr.sbin/zic
+.endif
+
 # If we are not building the bootstrap because BOOTSTRAPPING is sufficient
 # we symlink the host version to $WORLDTMP instead. By doing this we can also
 # detect when a bootstrap tool is being used without the required MK_FOO.
@@ -2343,7 +2349,8 @@ _clang_tblgen= \
 	usr.bin/clang/llvm-tblgen
 .if ${MK_CLANG_BOOTSTRAP} != "no" || ${MK_CLANG} != "no" || \
     ${MK_LLDB} != "no"
-_clang_tblgen+=	usr.bin/clang/clang-tblgen
+_clang_tblgen+=	lib/clang/libclangminimal
+_clang_tblgen+= usr.bin/clang/clang-tblgen
 .endif
 .if ${MK_LLDB} != "no"
 _clang_tblgen+=	usr.bin/clang/lldb-tblgen
@@ -2437,8 +2444,9 @@ _basic_bootstrap_tools+=usr.bin/jot
 _basic_bootstrap_tools+=sbin/md5
 .endif
 
+# tzsetup is needed as an install tool
 .if ${MK_ZONEINFO} != "no"
-_basic_bootstrap_tools+=usr.sbin/zic usr.sbin/tzsetup
+_basic_bootstrap_tools+=usr.sbin/tzsetup
 .endif
 
 .if defined(BOOTSTRAP_ALL_TOOLS)
@@ -2525,6 +2533,7 @@ bootstrap-tools: ${_bt}-links .PHONY
     ${_localedef} \
     ${_mkcsmapper} \
     ${_mkesdb} \
+    ${_zic} \
     ${LOCAL_BSTOOL_DIRS}
 ${_bt}-${_tool}: ${_bt}-links .PHONY .MAKE
 	${_+_}@${ECHODIR} "===> ${_tool} (obj,all,install)"; \
@@ -2904,7 +2913,7 @@ _prereq_libs+= lib/libssp_nonshared
 _startup_libs=	lib/csu
 _startup_libs+=	lib/libc
 _startup_libs+=	lib/libc_nonshared
-.if ${MK_LIBCPLUSPLUS} != "no"
+.if ${MK_CXX} != "no"
 _startup_libs+=	lib/libcxxrt
 .endif
 
@@ -2913,7 +2922,7 @@ _startup_libs+=	lib/libgcc_eh lib/libgcc_s
 
 lib/libgcc_s__L: lib/libc__L
 lib/libgcc_s__L: lib/libc_nonshared__L
-.if ${MK_LIBCPLUSPLUS} != "no"
+.if ${MK_CXX} != "no"
 lib/libcxxrt__L: lib/libgcc_s__L
 .endif
 
@@ -2962,7 +2971,7 @@ gnu/lib/libdialog__L: lib/msun__L lib/ncurses/ncurses__L
 _prebuild_libs+= lib/libregex
 .endif
 
-.if ${MK_LIBCPLUSPLUS} != "no"
+.if ${MK_CXX} != "no"
 _prebuild_libs+= lib/libc++
 .endif
 
@@ -3128,7 +3137,7 @@ lib/libradius__L: lib/libmd__L
 
 lib/libproc__L: \
     ${_cddl_lib_libctf:D${_cddl_lib_libctf}__L} lib/libelf__L lib/librtld_db__L lib/libutil__L
-.if ${MK_CXX} != "no" && ${MK_LIBCPLUSPLUS} != "no"
+.if ${MK_CXX} != "no"
 lib/libproc__L: lib/libcxxrt__L
 .endif
 

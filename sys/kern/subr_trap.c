@@ -188,7 +188,7 @@ userret(struct thread *td, struct trapframe *frame)
 		KASSERT(0, ("userret: Returning with sleep disabled"));
 	}
 	KASSERT(td->td_pinned == 0 || (td->td_pflags & TDP_CALLCHAIN) != 0,
-	    ("userret: Returning with with pinned thread"));
+	    ("userret: Returning with pinned thread"));
 	KASSERT(td->td_vp_reserved == NULL,
 	    ("userret: Returning with preallocated vnode"));
 	KASSERT((td->td_flags & (TDF_SBDRY | TDF_SEINTR | TDF_SERESTART)) == 0,
@@ -214,7 +214,7 @@ ast(struct trapframe *framep)
 {
 	struct thread *td;
 	struct proc *p;
-	int flags, sig;
+	int flags, old_boundary, sig;
 	bool resched_sigs;
 
 	td = curthread;
@@ -330,12 +330,15 @@ ast(struct trapframe *framep)
 	    !SIGISEMPTY(p->p_siglist)) {
 		sigfastblock_fetch(td);
 		PROC_LOCK(p);
+		old_boundary = ~TDB_BOUNDARY | (td->td_dbgflags & TDB_BOUNDARY);
+		td->td_dbgflags |= TDB_BOUNDARY;
 		mtx_lock(&p->p_sigacts->ps_mtx);
 		while ((sig = cursig(td)) != 0) {
 			KASSERT(sig >= 0, ("sig %d", sig));
 			postsig(sig);
 		}
 		mtx_unlock(&p->p_sigacts->ps_mtx);
+		td->td_dbgflags &= old_boundary;
 		PROC_UNLOCK(p);
 		resched_sigs = true;
 	} else {

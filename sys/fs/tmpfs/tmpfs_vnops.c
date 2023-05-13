@@ -222,11 +222,18 @@ tmpfs_lookup1(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 		cache_enter(dvp, *vpp, cnp);
 
 out:
+#ifdef INVARIANTS
 	/*
 	 * If there were no errors, *vpp cannot be null and it must be
 	 * locked.
 	 */
-	MPASS(IFF(error == 0, *vpp != NULLVP && VOP_ISLOCKED(*vpp)));
+	if (error == 0) {
+		MPASS(*vpp != NULLVP);
+		ASSERT_VOP_LOCKED(*vpp, __func__);
+	} else {
+		MPASS(*vpp == NULL);
+	}
+#endif
 
 	return (error);
 }
@@ -444,7 +451,6 @@ tmpfs_stat(struct vop_stat_args *v)
 {
 	struct vnode *vp = v->a_vp;
 	struct stat *sb = v->a_sb;
-	vm_object_t obj;
 	struct tmpfs_node *node;
 	int error;
 
@@ -477,10 +483,19 @@ tmpfs_stat(struct vop_stat_args *v)
 	sb->st_flags = node->tn_flags;
 	sb->st_gen = node->tn_gen;
 	if (vp->v_type == VREG) {
-		obj = node->tn_reg.tn_aobj;
-		sb->st_blocks = (u_quad_t)obj->resident_page_count * PAGE_SIZE;
-	} else
+#ifdef __ILP32__
+		vm_object_t obj = node->tn_reg.tn_aobj;
+
+		/* Handle torn read */
+		VM_OBJECT_RLOCK(obj);
+#endif
+		sb->st_blocks = ptoa(node->tn_reg.tn_pages);
+#ifdef __ILP32__
+		VM_OBJECT_RUNLOCK(obj);
+#endif
+	} else {
 		sb->st_blocks = node->tn_size;
+	}
 	sb->st_blocks /= S_BLKSIZE;
 	return (vop_stat_helper_post(v, error));
 }
@@ -490,7 +505,6 @@ tmpfs_getattr(struct vop_getattr_args *v)
 {
 	struct vnode *vp = v->a_vp;
 	struct vattr *vap = v->a_vap;
-	vm_object_t obj;
 	struct tmpfs_node *node;
 
 	node = VP_TO_TMPFS_NODE(vp);
@@ -513,12 +527,20 @@ tmpfs_getattr(struct vop_getattr_args *v)
 	vap->va_gen = node->tn_gen;
 	vap->va_flags = node->tn_flags;
 	vap->va_rdev = (vp->v_type == VBLK || vp->v_type == VCHR) ?
-		node->tn_rdev : NODEV;
+	    node->tn_rdev : NODEV;
 	if (vp->v_type == VREG) {
-		obj = node->tn_reg.tn_aobj;
-		vap->va_bytes = (u_quad_t)obj->resident_page_count * PAGE_SIZE;
-	} else
+#ifdef __ILP32__
+		vm_object_t obj = node->tn_reg.tn_aobj;
+
+		VM_OBJECT_RLOCK(obj);
+#endif
+		vap->va_bytes = ptoa(node->tn_reg.tn_pages);
+#ifdef __ILP32__
+		VM_OBJECT_RUNLOCK(obj);
+#endif
+	} else {
 		vap->va_bytes = node->tn_size;
+	}
 	vap->va_filerev = 0;
 
 	return (0);
@@ -534,7 +556,6 @@ tmpfs_setattr(struct vop_setattr_args *v)
 
 	int error;
 
-	MPASS(VOP_ISLOCKED(vp));
 	ASSERT_VOP_IN_SEQC(vp);
 
 	error = 0;
@@ -576,8 +597,6 @@ tmpfs_setattr(struct vop_setattr_args *v)
 	 * from tmpfs_update.
 	 */
 	tmpfs_update(vp);
-
-	MPASS(VOP_ISLOCKED(vp));
 
 	return (error);
 }
@@ -708,8 +727,6 @@ tmpfs_fsync(struct vop_fsync_args *v)
 {
 	struct vnode *vp = v->a_vp;
 
-	MPASS(VOP_ISLOCKED(vp));
-
 	tmpfs_check_mtime(vp);
 	tmpfs_update(vp);
 
@@ -727,9 +744,6 @@ tmpfs_remove(struct vop_remove_args *v)
 	struct tmpfs_mount *tmp;
 	struct tmpfs_node *dnode;
 	struct tmpfs_node *node;
-
-	MPASS(VOP_ISLOCKED(dvp));
-	MPASS(VOP_ISLOCKED(vp));
 
 	if (vp->v_type == VDIR) {
 		error = EISDIR;
@@ -779,7 +793,6 @@ tmpfs_link(struct vop_link_args *v)
 	struct tmpfs_dirent *de;
 	struct tmpfs_node *node;
 
-	MPASS(VOP_ISLOCKED(dvp));
 	MPASS(cnp->cn_flags & HASBUF);
 	MPASS(dvp != vp); /* XXX When can this be false? */
 	node = VP_TO_TMPFS_NODE(vp);
@@ -971,8 +984,6 @@ tmpfs_rename(struct vop_rename_args *v)
 	int error;
 	bool want_seqc_end;
 
-	MPASS(VOP_ISLOCKED(tdvp));
-	MPASS(IMPLIES(tvp != NULL, VOP_ISLOCKED(tvp)));
 	MPASS(fcnp->cn_flags & HASBUF);
 	MPASS(tcnp->cn_flags & HASBUF);
 
@@ -1286,9 +1297,6 @@ tmpfs_rmdir(struct vop_rmdir_args *v)
 	struct tmpfs_mount *tmp;
 	struct tmpfs_node *dnode;
 	struct tmpfs_node *node;
-
-	MPASS(VOP_ISLOCKED(dvp));
-	MPASS(VOP_ISLOCKED(vp));
 
 	tmp = VFS_TO_TMPFS(dvp->v_mount);
 	dnode = VP_TO_TMPFS_DIR(dvp);

@@ -219,6 +219,7 @@ tcp_output(struct tcpcb *tp)
 	int tso, mtu;
 	struct tcpopt to;
 	struct udphdr *udp = NULL;
+	struct tcp_log_buffer *lgb;
 	unsigned int wanted_cookie = 0;
 	unsigned int dont_sendalot = 0;
 #if 0
@@ -1429,31 +1430,16 @@ send:
 	hhook_run_tcp_est_out(tp, th, &to, len, tso);
 #endif
 
-#ifdef TCPDEBUG
-	/*
-	 * Trace.
-	 */
-	if (so->so_options & SO_DEBUG) {
-		u_short save = 0;
-#ifdef INET6
-		if (!isipv6)
-#endif
-		{
-			save = ipov->ih_len;
-			ipov->ih_len = htons(m->m_pkthdr.len /* - hdrlen + (th->th_off << 2) */);
-		}
-		tcp_trace(TA_OUTPUT, tp->t_state, tp, mtod(m, void *), th, 0);
-#ifdef INET6
-		if (!isipv6)
-#endif
-		ipov->ih_len = save;
-	}
-#endif /* TCPDEBUG */
 	TCP_PROBE3(debug__output, tp, th, m);
 
 	/* We're getting ready to send; log now. */
-	TCP_LOG_EVENT(tp, th, &so->so_rcv, &so->so_snd, TCP_LOG_OUT, ERRNO_UNK,
-	    len, NULL, false);
+	/* XXXMT: We are not honoring verbose logging. */
+	if (tp->t_logstate != TCP_LOG_STATE_OFF)
+		lgb = tcp_log_event_(tp, th, &so->so_rcv, &so->so_snd,
+		    TCP_LOG_OUT, ERRNO_UNK, len, NULL, false, NULL, NULL, 0,
+		    NULL);
+	else
+		lgb = NULL;
 
 	/*
 	 * Fill in IP length and desired time to live and
@@ -1496,6 +1482,10 @@ send:
 		/* Save packet, if requested. */
 		tcp_pcap_add(th, m, &(tp->t_outpkts));
 #endif
+#ifdef TCPDEBUG
+		if (so->so_options & SO_DEBUG)
+			tcp_trace(TA_OUTPUT, tp->t_state, tp, (void *)ip6, th, 0);
+#endif /* TCPDEBUG */
 
 		/* TODO: IPv6 IP6TOS_ECT bit on */
 		error = ip6_output(m, tp->t_inpcb->in6p_outputopts,
@@ -1543,6 +1533,10 @@ send:
 	/* Save packet, if requested. */
 	tcp_pcap_add(th, m, &(tp->t_outpkts));
 #endif
+#ifdef TCPDEBUG
+	if (so->so_options & SO_DEBUG)
+		tcp_trace(TA_OUTPUT, tp->t_state, tp, (void *)ip, th, 0);
+#endif /* TCPDEBUG */
 
 	error = ip_output(m, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
 	    ((so->so_options & SO_DONTROUTE) ? IP_ROUTETOIF : 0), 0,
@@ -1553,6 +1547,10 @@ send:
     }
 #endif /* INET */
 
+	if (lgb != NULL) {
+		lgb->tlb_errno = error;
+		lgb = NULL;
+	}
 out:
 	if (error == 0)
 		tcp_account_for_send(tp, len, (tp->snd_nxt != tp->snd_max), 0, hw_tls);
@@ -1666,10 +1664,6 @@ timer:
 		    tcp_clean_dsack_blocks(tp);
 	}
 	if (error) {
-		/* Record the error. */
-		TCP_LOG_EVENT(tp, NULL, &so->so_rcv, &so->so_snd, TCP_LOG_OUT,
-		    error, 0, NULL, false);
-
 		/*
 		 * We know that the packet was lost, so back out the
 		 * sequence number advance, if any.

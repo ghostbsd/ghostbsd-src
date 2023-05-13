@@ -454,6 +454,7 @@ MBUF_STRESS_TEST
 MROUTING		opt_mrouting.h
 NFSLOCKD
 PCBGROUP		opt_pcbgroup.h
+NETLINK
 PF_DEFAULT_TO_DROP	opt_pf.h
 ROUTE_MPATH		opt_route.h
 ROUTETABLES		opt_route.h
@@ -502,7 +503,6 @@ NETGRAPH
 NETGRAPH_DEBUG		opt_netgraph.h
 NETGRAPH_ASYNC		opt_netgraph.h
 NETGRAPH_ATMLLC		opt_netgraph.h
-NETGRAPH_ATM_ATMPIF	opt_netgraph.h
 NETGRAPH_BLUETOOTH	opt_netgraph.h
 NETGRAPH_BLUETOOTH_BT3C	opt_netgraph.h
 NETGRAPH_BLUETOOTH_H4	opt_netgraph.h
@@ -557,7 +557,6 @@ NETGRAPH_VJC		opt_netgraph.h
 NETGRAPH_VLAN		opt_netgraph.h
 
 # NgATM options
-NGATM_ATM		opt_netgraph.h
 NGATM_ATMBASE		opt_netgraph.h
 NGATM_SSCOP		opt_netgraph.h
 NGATM_SSCFU		opt_netgraph.h

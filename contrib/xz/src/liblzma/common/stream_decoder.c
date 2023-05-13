@@ -12,6 +12,7 @@
 
 #include "stream_decoder.h"
 #include "block_decoder.h"
+#include "index.h"
 
 
 typedef struct {
@@ -164,7 +165,7 @@ stream_decode(void *coder_ptr, const lzma_allocator *allocator,
 
 		if (coder->pos == 0) {
 			// Detect if it's Index.
-			if (in[*in_pos] == 0x00) {
+			if (in[*in_pos] == INDEX_INDICATOR) {
 				coder->sequence = SEQ_INDEX;
 				break;
 			}
@@ -243,9 +244,7 @@ stream_decode(void *coder_ptr, const lzma_allocator *allocator,
 
 		// Free the allocated filter options since they are needed
 		// only to initialize the Block decoder.
-		for (size_t i = 0; i < LZMA_FILTERS_MAX; ++i)
-			lzma_free(filters[i].options, allocator);
-
+		lzma_filters_free(filters, allocator);
 		coder->block_options.filters = NULL;
 
 		// Check if memory usage calculation and Block decoder

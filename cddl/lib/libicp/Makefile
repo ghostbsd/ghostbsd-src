@@ -2,7 +2,7 @@
 
 .PATH: ${SRCTOP}/sys/contrib/openzfs/module/icp
 
-PACKAGE=	utilities
+PACKAGE=	zfs
 LIB=	icp
 LIBADD=
 
@@ -93,5 +93,7 @@ CFLAGS.aesni-gcm-x86_64.S+= -DLOCORE
 CFLAGS.ghash-x86_64.S+= -DLOCORE
 CFLAGS.sha256_impl.S+= -DLOCORE
 CFLAGS.sha512_impl.S+= -DLOCORE
+
+LDFLAGS.bfd+= -Wl,-znoexecstack
 
 .include <bsd.lib.mk>

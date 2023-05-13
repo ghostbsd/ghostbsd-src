@@ -2,6 +2,7 @@
 #	@(#)Makefile	8.1 (Berkeley) 6/2/93
 
 .include <src.opts.mk>
+.include <bsd.linker.mk>
 
 PACKAGE=rescue
 MAN=
@@ -12,6 +13,12 @@ MK_SSP=	no
 MK_PIE=	no
 NO_SHARED=	yes
 CRUNCH_BUILDOPTS+=	MK_PIE=no NO_SHARED=yes
+
+# lld >= 16 became more strict about multiply defined symbols. Since there are
+# many of those in crunchgen'd programs, turn off the check.
+.if ${LINKER_TYPE} == "lld" && ${LINKER_VERSION} >= 160000
+LDFLAGS+=	-Wl,--allow-multiple-definition
+.endif
 
 PROG=	rescue
 BINDIR?=/rescue
@@ -198,10 +205,13 @@ CRUNCH_PROGS_usr.bin+= zstd
 CRUNCH_ALIAS_zstd= unzstd zstdcat zstdmt
 CRUNCH_LIBS+=	${LDADD_zstd}
 
+CRUNCH_PROGS_usr.bin+=	fetch
+CRUNCH_LIBS+=	-lfetch
+
 CRUNCH_PROGS_usr.bin+= tar
 CRUNCH_LIBS+= -larchive
 .if ${MK_OPENSSL} != "no"
-CRUNCH_LIBS+= -lcrypto
+CRUNCH_LIBS+= -lssl -lcrypto
 .endif
 CRUNCH_LIBS+= -lmd
 

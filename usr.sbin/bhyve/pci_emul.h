@@ -35,6 +35,7 @@
 #include <sys/queue.h>
 #include <sys/kernel.h>
 #include <sys/nv.h>
+#include <sys/pciio.h>
 #include <sys/_pthreadtypes.h>
 
 #include <dev/pci/pcireg.h>
@@ -54,8 +55,7 @@ struct pci_devemu {
 	const char      *pe_emu;	/* Name of device emulation */
 
 	/* instance creation */
-	int       (*pe_init)(struct vmctx *, struct pci_devinst *,
-			     nvlist_t *);
+	int       (*pe_init)(struct pci_devinst *, nvlist_t *);
 	int	(*pe_legacy_config)(nvlist_t *, const char *);
 	const char *pe_alias;
 
@@ -63,28 +63,24 @@ struct pci_devemu {
 	void	(*pe_write_dsdt)(struct pci_devinst *);
 
 	/* config space read/write callbacks */
-	int	(*pe_cfgwrite)(struct vmctx *ctx, int vcpu,
-			       struct pci_devinst *pi, int offset,
+	int	(*pe_cfgwrite)(struct pci_devinst *pi, int offset,
 			       int bytes, uint32_t val);
-	int	(*pe_cfgread)(struct vmctx *ctx, int vcpu,
-			      struct pci_devinst *pi, int offset,
+	int	(*pe_cfgread)(struct pci_devinst *pi, int offset,
 			      int bytes, uint32_t *retval);
 
 	/* BAR read/write callbacks */
-	void      (*pe_barwrite)(struct vmctx *ctx, int vcpu,
-				 struct pci_devinst *pi, int baridx,
+	void      (*pe_barwrite)(struct pci_devinst *pi, int baridx,
 				 uint64_t offset, int size, uint64_t value);
-	uint64_t  (*pe_barread)(struct vmctx *ctx, int vcpu,
-				struct pci_devinst *pi, int baridx,
+	uint64_t  (*pe_barread)(struct pci_devinst *pi, int baridx,
 				uint64_t offset, int size);
 
-	void	(*pe_baraddr)(struct vmctx *ctx, struct pci_devinst *pi,
+	void	(*pe_baraddr)(struct pci_devinst *pi,
 			      int baridx, int enabled, uint64_t address);
 
 	/* Save/restore device state */
 	int	(*pe_snapshot)(struct vm_snapshot_meta *meta);
-	int	(*pe_pause)(struct vmctx *ctx, struct pci_devinst *pi);
-	int	(*pe_resume)(struct vmctx *ctx, struct pci_devinst *pi);
+	int	(*pe_pause)(struct pci_devinst *pi);
+	int	(*pe_resume)(struct pci_devinst *pi);
 
 };
 #define PCI_EMUL_SET(x)   DATA_SET(pci_devemu_set, x);
@@ -113,7 +109,7 @@ struct msix_table_entry {
 	uint32_t	vector_control;
 } __packed;
 
-/* 
+/*
  * In case the structure is modified to hold extra information, use a define
  * for the size that should be emulated.
  */
@@ -159,7 +155,7 @@ struct pci_devinst {
 		int	table_count;
 		uint32_t pba_offset;
 		int	pba_size;
-		int	function_mask; 	
+		int	function_mask;
 		struct msix_table_entry *table;	/* allocated at runtime */
 		uint8_t *mapped_addr;
 		size_t	mapped_size;
@@ -232,6 +228,8 @@ typedef void (*pci_lintr_cb)(int b, int s, int pin, int pirq_pin,
 
 int	init_pci(struct vmctx *ctx);
 void	pci_callback(void);
+uint32_t pci_config_read_reg(const struct pcisel *host_sel, nvlist_t *nvl,
+	    uint32_t reg, uint8_t size, uint32_t def);
 int	pci_emul_alloc_bar(struct pci_devinst *pdi, int idx,
 	    enum pcibar_type type, uint64_t size);
 int 	pci_emul_alloc_rom(struct pci_devinst *const pdi, const uint64_t size,
@@ -266,25 +264,25 @@ uint64_t pci_ecfg_base(void);
 int	pci_bus_configured(int bus);
 #ifdef BHYVE_SNAPSHOT
 int	pci_snapshot(struct vm_snapshot_meta *meta);
-int	pci_pause(struct vmctx *ctx, const char *dev_name);
-int	pci_resume(struct vmctx *ctx, const char *dev_name);
+int	pci_pause(const char *dev_name);
+int	pci_resume(const char *dev_name);
 #endif
 
-static __inline void 
+static __inline void
 pci_set_cfgdata8(struct pci_devinst *pi, int offset, uint8_t val)
 {
 	assert(offset <= PCI_REGMAX);
 	*(uint8_t *)(pi->pi_cfgdata + offset) = val;
 }
 
-static __inline void 
+static __inline void
 pci_set_cfgdata16(struct pci_devinst *pi, int offset, uint16_t val)
 {
 	assert(offset <= (PCI_REGMAX - 1) && (offset & 1) == 0);
 	*(uint16_t *)(pi->pi_cfgdata + offset) = val;
 }
 
-static __inline void 
+static __inline void
 pci_set_cfgdata32(struct pci_devinst *pi, int offset, uint32_t val)
 {
 	assert(offset <= (PCI_REGMAX - 3) && (offset & 3) == 0);

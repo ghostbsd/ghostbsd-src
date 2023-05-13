@@ -62,6 +62,8 @@
         ..
         test
         ..
+        timeout
+        ..
     ..
     cddl
         lib
@@ -263,6 +265,8 @@
         rc.d
         ..
     ..
+    examples
+    ..
     games
     ..
     gnu
@@ -420,6 +424,8 @@
     libexec
         atf
             atf-check
+            ..
+            atf-pytest-wrapper
             ..
             atf-sh
             ..
@@ -803,6 +809,8 @@
         mqueue
         ..
         net
+            routing
+            ..
         ..
         netgraph
         ..
@@ -815,6 +823,8 @@
         netipsec
             tunnel
             ..
+        ..
+        netlink
         ..
         netmap
         ..
@@ -1081,8 +1091,6 @@
         tail
         ..
         tar
-        ..
-        timeout
         ..
         tr
         ..

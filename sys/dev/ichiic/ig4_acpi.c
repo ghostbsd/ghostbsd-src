@@ -61,6 +61,7 @@ static char *ig4iic_ids[] = {
 	"808622C1",
 	"AMDI0510",
 	"AMDI0010",
+	"AMD0010",
 	"APMC0D0F",
 	NULL
 };
@@ -107,7 +108,7 @@ ig4iic_acpi_attach(device_t dev)
 		ig4iic_acpi_detach(dev);
 		return (ENXIO);
 	}
-	sc->platform_attached = 1;
+	sc->platform_attached = true;
 
 	error = ig4iic_attach(sc);
 	if (error)
@@ -126,7 +127,7 @@ ig4iic_acpi_detach(device_t dev)
 		error = ig4iic_detach(sc);
 		if (error)
 			return (error);
-		sc->platform_attached = 0;
+		sc->platform_attached = false;
 	}
 
 	if (sc->intr_res) {
@@ -193,3 +194,4 @@ static driver_t ig4iic_acpi_driver = {
 DRIVER_MODULE_ORDERED(ig4iic, acpi, ig4iic_acpi_driver, ig4iic_devclass, 0, 0,
     SI_ORDER_ANY);
 MODULE_DEPEND(ig4iic, acpi, 1, 1, 1);
+ACPI_PNP_INFO(ig4iic_ids);

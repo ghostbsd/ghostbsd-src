@@ -158,6 +158,7 @@ static int options;
 #define	F_SWEEP		0x200000
 #define	F_WAITTIME	0x400000
 #define	F_IP_VLAN_PCP	0x800000
+#define	F_DOT		0x1000000
 
 /*
  * MAX_DUP_CHK is the number of bits in received table, i.e. the maximum
@@ -176,7 +177,9 @@ static int srecv;		/* receive socket file descriptor */
 static u_char outpackhdr[IP_MAXPACKET], *outpack;
 static char BBELL = '\a';	/* characters written for MISSED and AUDIBLE */
 static char BSPACE = '\b';	/* characters written for flood */
-static char DOT = '.';
+static const char *DOT = ".";
+static size_t DOTlen = 1;
+static size_t DOTidx = 0;
 static char *hostname;
 static char *shostname;
 static int ident;		/* process id to identify our packets */
@@ -303,6 +306,13 @@ ping(int argc, char *const *argv)
 	outpack = outpackhdr + sizeof(struct ip);
 	while ((ch = getopt(argc, argv, PING4OPTS)) != -1) {
 		switch(ch) {
+		case '.':
+			options |= F_DOT;
+			if (optarg != NULL) {
+				DOT = optarg;
+				DOTlen = strlen(optarg);
+			}
+			break;
 		case '4':
 			/* This option is processed in main(). */
 			break;
@@ -340,6 +350,7 @@ ping(int argc, char *const *argv)
 				err(EX_NOPERM, "-f flag");
 			}
 			options |= F_FLOOD;
+			options |= F_DOT;
 			setbuf(stdout, (char *)NULL);
 			break;
 		case 'G': /* Maximum packet size for ping sweep */
@@ -1117,8 +1128,8 @@ pinger(void)
 	}
 	ntransmitted++;
 	sntransmitted++;
-	if (!(options & F_QUIET) && options & F_FLOOD)
-		(void)write(STDOUT_FILENO, &DOT, 1);
+	if (!(options & F_QUIET) && options & F_DOT)
+		(void)write(STDOUT_FILENO, &DOT[DOTidx++ % DOTlen], 1);
 }
 
 /*
@@ -1139,7 +1150,7 @@ pr_pack(char *buf, ssize_t cc, struct sockaddr_in *from, struct timespec *tv)
 	ssize_t icmp_data_raw_len;
 	double triptime;
 	int dupflag, i, j, recv_len;
-	uint8_t hlen;
+	int8_t hlen;
 	uint16_t seq;
 	static int old_rrlen;
 	static char old_rr[MAX_IPOPTLEN];
@@ -1160,7 +1171,7 @@ pr_pack(char *buf, ssize_t cc, struct sockaddr_in *from, struct timespec *tv)
 	hlen = (l & 0x0f) << 2;
 
 	/* Reject IP packets with a short header */
-	if (hlen < sizeof(struct ip)) {
+	if (hlen < (int8_t) sizeof(struct ip)) {
 		if (options & F_VERBOSE)
 			warn("IHL too short (%d bytes) from %s", hlen,
 			     inet_ntoa(from->sin_addr));
@@ -1238,7 +1249,7 @@ pr_pack(char *buf, ssize_t cc, struct sockaddr_in *from, struct timespec *tv)
 			return;
 		}
 
-		if (options & F_FLOOD)
+		if (options & F_DOT)
 			(void)write(STDOUT_FILENO, &BSPACE, 1);
 		else {
 			(void)printf("%zd bytes from %s: icmp_seq=%u", cc,
@@ -1412,7 +1423,7 @@ pr_pack(char *buf, ssize_t cc, struct sockaddr_in *from, struct timespec *tv)
 			}
 			if (i == old_rrlen
 			    && !bcmp((char *)cp, old_rr, i)
-			    && !(options & F_FLOOD)) {
+			    && !(options & F_DOT)) {
 				(void)printf("\t(same route)");
 				hlen -= i;
 				cp += i;
@@ -1447,7 +1458,7 @@ pr_pack(char *buf, ssize_t cc, struct sockaddr_in *from, struct timespec *tv)
 			(void)printf("\nunknown option %x", *cp);
 			break;
 		}
-	if (!(options & F_FLOOD)) {
+	if (!(options & F_DOT)) {
 		(void)putchar('\n');
 		(void)fflush(stdout);
 	}
@@ -1663,7 +1674,7 @@ pr_iph(struct ip *ip)
 	int hlen;
 
 	hlen = ip->ip_hl << 2;
-	cp = (u_char *)ip + 20;		/* point to options */
+	cp = (u_char *)ip + sizeof(struct ip);		/* point to options */
 
 	(void)printf("Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src      Dst\n");
 	(void)printf(" %1x  %1x  %02x %04x %04x",
@@ -1679,7 +1690,7 @@ pr_iph(struct ip *ip)
 	memcpy(&ina, &ip->ip_dst.s_addr, sizeof ina);
 	(void)printf(" %s ", inet_ntoa(ina));
 	/* dump any option bytes */
-	while (hlen-- > 20) {
+	while (hlen-- > (int)sizeof(struct ip)) {
 		(void)printf("%02x", *cp++);
 	}
 	(void)putchar('\n');
@@ -1699,7 +1710,7 @@ pr_addr(struct in_addr ina)
 	if (options & F_NUMERIC)
 		return inet_ntoa(ina);
 
-	hp = cap_gethostbyaddr(capdns, (char *)&ina, 4, AF_INET);
+	hp = cap_gethostbyaddr(capdns, (char *)&ina, sizeof(ina), AF_INET);
 
 	if (hp == NULL)
 		return inet_ntoa(ina);

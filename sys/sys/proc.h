@@ -251,7 +251,7 @@ struct thread {
 	u_char		td_lend_user_pri; /* (t) Lend user pri. */
 	u_char		td_allocdomain;	/* (b) NUMA domain backing this struct thread. */
 
-/* Cleared during fork1() */
+/* Cleared during fork1(), thread_create(), or kthread_add(). */
 #define	td_startzero td_flags
 	int		td_flags;	/* (t) TDF_* flags. */
 	int		td_inhibitors;	/* (t) Why can not run. */
@@ -316,7 +316,7 @@ struct thread {
 	u_int		td_ucredref;	/* (k) references on td_realucred */
 #define	td_endzero td_sigmask
 
-/* Copied during fork1() or create_thread(). */
+/* Copied during fork1(), thread_create(), or kthread_add(). */
 #define	td_startcopy td_endzero
 	sigset_t	td_sigmask;	/* (c) Current signal mask. */
 	u_char		td_rqindex;	/* (t) Run queue index. */
@@ -337,7 +337,7 @@ struct thread {
 #define	td_endcopy td_pcb
 
 /*
- * Fields that must be manually set in fork1() or create_thread()
+ * Fields that must be manually set in fork1(), thread_create(), kthread_add(),
  * or already have been set in the allocator, constructor, etc.
  */
 	struct pcb	*td_pcb;	/* (k) Kernel VA of pcb and kstack. */
@@ -376,7 +376,7 @@ struct thread {
 	int		td_oncpu;	/* (t) Which cpu we are on. */
 	void		*td_lkpi_task;	/* LinuxKPI task struct pointer */
 	int		td_pmcpend;
-	void		*td_coredump;	/* (c) coredump request. */
+	void		*td_remotereq;	/* (c) dbg remote request. */
 	off_t		td_ktr_io_lim;	/* (k) limit for ktrace file size */
 #ifdef EPOCH_TRACE
 	SLIST_HEAD(, epoch_tracker) td_epochs;
@@ -487,7 +487,9 @@ do {									\
 #define	TDB_FSTP	0x00001000 /* The thread is PT_ATTACH leader */
 #define	TDB_STEP	0x00002000 /* (x86) PSL_T set for PT_STEP */
 #define	TDB_SSWITCH	0x00004000 /* Suspended in ptracestop */
-#define	TDB_COREDUMPRQ	0x00008000 /* Coredump request */
+#define	TDB_BOUNDARY	0x00008000 /* ptracestop() at boundary */
+#define	TDB_COREDUMPREQ	0x00010000 /* Coredump request */
+#define	TDB_SCREMOTEREQ	0x00020000 /* Remote syscall request */
 
 /*
  * "Private" flags kept in td_pflags:
@@ -727,6 +729,7 @@ struct proc {
 	char		*p_binname;	/* (b) Binary hardlink name. */
 	void		*p_elf_brandinfo; /* (x) Elf_Brandinfo, NULL for
 						 non ELF binaries. */
+	sbintime_t	p_umtx_min_timeout;
 };
 
 #define	p_session	p_pgrp->pg_session
@@ -1146,7 +1149,7 @@ void	sess_hold(struct session *);
 void	sess_release(struct session *);
 int	setrunnable(struct thread *, int);
 void	setsugid(struct proc *p);
-int	should_yield(void);
+bool	should_yield(void);
 int	sigonstack(size_t sp);
 void	stopevent(struct proc *, u_int, u_int);
 struct	thread *tdfind(lwpid_t, pid_t);

@@ -5767,7 +5767,7 @@ rack_start_hpts_timer(struct tcp_rack *rack, struct tcpcb *tp, uint32_t cts,
 		 * (or now) pacing time set. We want to
 		 * slow down the processing of sacks by some
 		 * amount (if it is an attacker). Set the default
-		 * slot for attackers in place (unless the orginal
+		 * slot for attackers in place (unless the original
 		 * interval is longer). Its stored in
 		 * micro-seconds, so lets convert to msecs.
 		 */
@@ -7737,8 +7737,6 @@ tcp_rack_xmit_timer_commit(struct tcp_rack *rack, struct tcpcb *tp)
 		tp->t_rttvar += (delta >> 3);
 		if (tp->t_rttvar <= 0)
 			tp->t_rttvar = 1;
-		if (tp->t_rttbest > tp->t_srtt + tp->t_rttvar)
-			tp->t_rttbest = tp->t_srtt + tp->t_rttvar;
 	} else {
 		/*
 		 * No rtt measurement yet - use the unsmoothed rtt. Set the
@@ -7747,7 +7745,6 @@ tcp_rack_xmit_timer_commit(struct tcp_rack *rack, struct tcpcb *tp)
 		 */
 		tp->t_srtt = rtt;
 		tp->t_rttvar = rtt >> 1;
-		tp->t_rttbest = tp->t_srtt + tp->t_rttvar;
 	}
 	rack->rc_srtt_measure_made = 1;
 	KMOD_TCPSTAT_INC(tcps_rttupdated);
@@ -8067,7 +8064,7 @@ rack_log_sack_passed(struct tcpcb *tp,
 	TAILQ_FOREACH_REVERSE_FROM(nrsm, &rack->r_ctl.rc_tmap,
 	    rack_head, r_tnext) {
 		if (nrsm == rsm) {
-			/* Skip orginal segment he is acked */
+			/* Skip original segment he is acked */
 			continue;
 		}
 		if (nrsm->r_flags & RACK_ACKED) {
@@ -9718,7 +9715,7 @@ rack_adjust_sendmap(struct tcp_rack *rack, struct sockbuf *sb, tcp_seq snd_una)
 	 * beginning mbuf must be adjusted to the correct
 	 * offset. This must be called with:
 	 * 1) The socket buffer locked
-	 * 2) snd_una adjusted to its new postion.
+	 * 2) snd_una adjusted to its new position.
 	 *
 	 * Note that (2) implies rack_ack_received has also
 	 * been called.
@@ -12283,19 +12280,13 @@ rack_init(struct tcpcb *tp)
 		rsm->r_tim_lastsent[0] = rack_to_usec_ts(&rack->r_ctl.act_rcv_time);
 		rsm->r_rtr_cnt = 1;
 		rsm->r_rtr_bytes = 0;
-		if (tp->t_flags & TF_SENTFIN) {
-			rsm->r_end = tp->snd_max - 1;
+		if (tp->t_flags & TF_SENTFIN)
 			rsm->r_flags |= RACK_HAS_FIN;
-		} else {
-			rsm->r_end = tp->snd_max;
-		}
-		if (tp->snd_una == tp->iss) {
-			/* The data space is one beyond snd_una */
+		if ((tp->snd_una == tp->iss) &&
+		    !TCPS_HAVEESTABLISHED(tp->t_state))
 			rsm->r_flags |= RACK_HAS_SYN;
-			rsm->r_start = tp->iss;
-			rsm->r_end = rsm->r_start + (tp->snd_max - tp->snd_una);
-		} else
-			rsm->r_start = tp->snd_una;
+		rsm->r_start = tp->snd_una;
+		rsm->r_end = tp->snd_max;
 		rsm->r_dupack = 0;
 		if (rack->rc_inp->inp_socket->so_snd.sb_mb != NULL) {
 			rsm->m = sbsndmbuf(&rack->rc_inp->inp_socket->so_snd, 0, &rsm->soff);

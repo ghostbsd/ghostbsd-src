@@ -69,7 +69,7 @@ SUBDIR=	\
 	${_bxe} \
 	${_bios} \
 	${_blake2} \
-	bnxt \
+	${_bnxt} \
 	bridgestp \
 	bwi \
 	bwn \
@@ -104,6 +104,7 @@ SUBDIR=	\
 	dc \
 	dcons \
 	dcons_crom \
+	${_dpaa2} \
 	${_dpdk_lpm4} \
 	${_dpdk_lpm6} \
 	${_dpms} \
@@ -149,6 +150,7 @@ SUBDIR=	\
 	${_ichwd} \
 	${_ice} \
 	${_ice_ddp} \
+	${_irdma} \
 	${_ida} \
 	if_bridge \
 	${_if_cgem} \
@@ -270,6 +272,7 @@ SUBDIR=	\
 	my \
 	${_nctgpio} \
 	${_ndis} \
+	netlink \
 	${_netgraph} \
 	${_nfe} \
 	nfscl \
@@ -426,6 +429,11 @@ SUBDIR+=	dtrace
 .endif
 .endif
 SUBDIR+=	opensolaris
+.endif
+
+# Requires bus_space_read_8
+.if ${MACHINE_ARCH} != "i386"
+_bnxt=		bnxt
 .endif
 
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
@@ -612,6 +620,11 @@ _ice=		ice
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ice_ddp=	ice_ddp
 .endif
+.if ${MK_OFED} != "no" || defined(ALL_MODULES)
+.if ${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no"
+_irdma=		irdma
+.endif
+.endif
 .endif
 
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
@@ -658,6 +671,7 @@ _cxgb=		cxgb
 .if ${MACHINE_CPUARCH} == "aarch64"
 _allwinner=	allwinner
 _armv8crypto=	armv8crypto
+_dpaa2=		dpaa2
 _dwwdt=		dwwdt
 _em=		em
 _rockchip=	rockchip

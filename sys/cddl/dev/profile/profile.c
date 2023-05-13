@@ -108,7 +108,7 @@
 /*
  * This value is bogus just to make module compilable on powerpc
  */
-#define	PROF_ARTIFICIAL_FRAMES	3
+#define	PROF_ARTIFICIAL_FRAMES	8
 #endif
 
 struct profile_probe_percpu;
@@ -127,8 +127,7 @@ struct profile_probe_percpu;
 #endif
 
 #ifdef __riscv
-/* TODO: verify */
-#define	PROF_ARTIFICIAL_FRAMES	10
+#define	PROF_ARTIFICIAL_FRAMES	12
 #endif
 
 typedef struct profile_probe {

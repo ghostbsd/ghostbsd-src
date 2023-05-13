@@ -268,6 +268,7 @@ struct rt_msghdr {
 
 #define RTM_VERSION	5	/* Up the ante and ignore older versions */
 
+#ifndef NETLINK_COMPAT
 /*
  * Message types.
  *
@@ -300,6 +301,8 @@ struct rt_msghdr {
 #define	RTM_IFANNOUNCE	0x11	/* (5) iface arrival/departure */
 #define	RTM_IEEE80211	0x12	/* (5) IEEE80211 wireless event */
 
+#endif /* NETLINK_COMPAT*/
+
 /*
  * Bitmask values for rtm_inits and rmx_locks.
  */
@@ -313,6 +316,8 @@ struct rt_msghdr {
 #define RTV_RTTVAR	0x80	/* init or lock _rttvar */
 #define RTV_WEIGHT	0x100	/* init or lock _weight */
 
+#ifndef NETLINK_COMPAT
+
 /*
  * Bitmask values for rtm_addrs.
  */
@@ -324,6 +329,8 @@ struct rt_msghdr {
 #define RTA_IFA		0x20	/* interface addr sockaddr present */
 #define RTA_AUTHOR	0x40	/* sockaddr for author of redirect */
 #define RTA_BRD		0x80	/* for NEWADDR, broadcast or p-p dest addr */
+
+#endif /* NETLINK_COMPAT*/
 
 /*
  * Index offsets for sockaddr array for alternate internal encoding.
@@ -415,15 +422,16 @@ struct ifmultiaddr;
 struct rib_head;
 
 void	 rt_ieee80211msg(struct ifnet *, int, void *, size_t);
-void	 rt_ifannouncemsg(struct ifnet *, int);
 void	 rt_ifmsg(struct ifnet *);
+void	 rt_ifmsg_14(struct ifnet *, int);
 void	 rt_missmsg(int, struct rt_addrinfo *, int, int);
 void	 rt_missmsg_fib(int, struct rt_addrinfo *, int, int, int);
 int	 rt_addrmsg(int, struct ifaddr *, int);
 int	 rt_routemsg(int, struct rtentry *, struct nhop_object *, int);
 int	 rt_routemsg_info(int, struct rt_addrinfo *, int);
 void	 rt_newmaddrmsg(int, struct ifmultiaddr *);
-void 	 rt_maskedcopy(struct sockaddr *, struct sockaddr *, struct sockaddr *);
+void 	 rt_maskedcopy(const struct sockaddr *, struct sockaddr *,
+	    const struct sockaddr *);
 struct rib_head *rt_table_init(int, int, u_int);
 void	rt_table_destroy(struct rib_head *);
 u_int	rt_tables_get_gen(uint32_t table, sa_family_t family);

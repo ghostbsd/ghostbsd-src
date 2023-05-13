@@ -376,6 +376,8 @@ in6_pcbladdr(struct inpcb *inp, struct sockaddr_in6 *sin6,
 	NET_EPOCH_EXIT(et);
 	if (error)
 		return (error);
+	if (IN6_IS_ADDR_UNSPECIFIED(&in6a))
+		return (EHOSTUNREACH);
 
 	/*
 	 * Do not update this earlier, in case we return with an error.
@@ -500,7 +502,8 @@ in6_pcbdisconnect(struct inpcb *inp)
 	INP_WLOCK_ASSERT(inp);
 	INP_HASH_WLOCK_ASSERT(inp->inp_pcbinfo);
 
-	bzero((caddr_t)&inp->in6p_faddr, sizeof(inp->in6p_faddr));
+	memset(&inp->in6p_laddr, 0, sizeof(inp->in6p_laddr));
+	memset(&inp->in6p_faddr, 0, sizeof(inp->in6p_faddr));
 	inp->inp_fport = 0;
 	/* clear flowinfo - draft-itojun-ipv6-flowlabel-api-00 */
 	inp->inp_flow &= ~IPV6_FLOWLABEL_MASK;

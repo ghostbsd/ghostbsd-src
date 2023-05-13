@@ -41,6 +41,11 @@ MK_DEBUG_FILES=	no
 .if ${MK_BIND_NOW} != "no"
 LDFLAGS+= -Wl,-znow
 .endif
+.if ${MK_RELRO} == "no"
+LDFLAGS+= -Wl,-znorelro
+.else
+LDFLAGS+= -Wl,-zrelro
+.endif
 .if ${MK_PIE} != "no"
 # Static PIE is not yet supported/tested.
 .if !defined(NO_SHARED) || ${NO_SHARED:tl} == "no"
@@ -261,11 +266,7 @@ _EXTRADEPEND:
 .else
 	echo ${PROG_FULL}: ${LIBC} ${DPADD} >> ${DEPENDFILE}
 .if defined(PROG_CXX)
-.if ${COMPILER_TYPE} == "clang" && empty(CXXFLAGS:M-stdlib=libstdc++)
 	echo ${PROG_FULL}: ${LIBCPLUSPLUS} >> ${DEPENDFILE}
-.else
-	echo ${PROG_FULL}: ${LIBSTDCPLUSPLUS} >> ${DEPENDFILE}
-.endif
 .endif
 .endif
 .endif	# !defined(NO_EXTRADEPEND)

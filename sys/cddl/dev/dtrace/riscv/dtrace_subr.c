@@ -63,6 +63,8 @@ typedef struct dtrace_invop_hdlr {
 
 dtrace_invop_hdlr_t *dtrace_invop_hdlr;
 
+static int match_opcode(uint32_t insn, int match, int mask);
+
 int
 dtrace_invop(uintptr_t addr, struct trapframe *frame)
 {
@@ -196,9 +198,7 @@ dtrace_trap(struct trapframe *frame, u_int type)
 	 * flag is cleared and finally re-scheduling is enabled.
 	 *
 	 * Check if DTrace has enabled 'no-fault' mode:
-	 *
 	 */
-
 	if ((cpu_core[curcpu].cpuc_dtrace_flags & CPU_DTRACE_NOFAULT) != 0) {
 		/*
 		 * There are only a couple of trap types that are expected.
@@ -208,15 +208,19 @@ dtrace_trap(struct trapframe *frame, u_int type)
 		case SCAUSE_LOAD_ACCESS_FAULT:
 		case SCAUSE_STORE_ACCESS_FAULT:
 		case SCAUSE_INST_ACCESS_FAULT:
+		case SCAUSE_INST_PAGE_FAULT:
+		case SCAUSE_LOAD_PAGE_FAULT:
+		case SCAUSE_STORE_PAGE_FAULT:
 			/* Flag a bad address. */
 			cpu_core[curcpu].cpuc_dtrace_flags |= CPU_DTRACE_BADADDR;
-			cpu_core[curcpu].cpuc_dtrace_illval = 0;
+			cpu_core[curcpu].cpuc_dtrace_illval = frame->tf_stval;
 
 			/*
 			 * Offset the instruction pointer to the instruction
 			 * following the one causing the fault.
 			 */
-			frame->tf_sepc += 4;
+			frame->tf_sepc +=
+			    dtrace_instr_size((uint8_t *)frame->tf_sepc);
 
 			return (1);
 		default:

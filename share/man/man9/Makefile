@@ -340,7 +340,6 @@ MAN=	accept_filter.9 \
 	vaccess.9 \
 	vaccess_acl_nfs4.9 \
 	vaccess_acl_posix1e.9 \
-	vcount.9 \
 	vflush.9 \
 	VFS.9 \
 	vfs_busy.9 \
@@ -927,7 +926,8 @@ MLINKS+=cpuset.9 CPUSET_T_INITIALIZER.9 \
 	cpuset.9 CPU_OR_ATOMIC.9 \
 	cpuset.9 CPU_COPY_STORE_REL.9
 MLINKS+=critical_enter.9 critical.9 \
-	critical_enter.9 critical_exit.9
+	critical_enter.9 critical_exit.9 \
+	critical_enter.9 CRITICAL_ASSERT.9
 MLINKS+=crypto_asym.9 crypto_kdispatch.9 \
 	crypto_asym.9 crypto_kdone.9 \
 	crypto_asym.9 crypto_kregister.9 \
@@ -1040,6 +1040,15 @@ MLINKS+=domain.9 DOMAIN_SET.9 \
 	domain.9 pffinddomain.9 \
 	domain.9 pffindproto.9 \
 	domain.9 pffindtype.9
+MLINKS+=dpcpu.9 DPCPU_DECLARE.9 \
+	dpcpu.9 DPCPU_DEFINE.9 \
+	dpcpu.9 DPCPU_DEFINE_STATIC.9 \
+	dpcpu.9 DPCPU_GET.9 \
+	dpcpu.9 DPCPU_ID_PTR.9 \
+	dpcpu.9 DPCPU_ID_GET.9 \
+	dpcpu.9 DPCPU_ID_SET.9 \
+	dpcpu.9 DPCPU_PTR.9 \
+	dpcpu.9 DPCPU_SET.9
 MLINKS+=drbr.9 drbr_free.9 \
 	drbr.9 drbr_enqueue.9 \
 	drbr.9 drbr_dequeue.9 \
@@ -1329,6 +1338,7 @@ MLINKS+=intr_event.9 intr_event_add_handler.9 \
 	intr_event.9 intr_event_handle.9 \
 	intr_event.9 intr_event_remove_handler.9 \
 	intr_event.9 intr_priority.9
+MLINKS+=KASSERT.9 MPASS.9
 MLINKS+=kernacc.9 useracc.9
 MLINKS+=kernel_mount.9 free_mntarg.9 \
 	kernel_mount.9 kernel_vmount.9 \
@@ -1719,7 +1729,8 @@ MLINKS+=osd.9 osd_call.9 \
 	osd.9 osd_reserve.9 \
 	osd.9 osd_set.9 \
 	osd.9 osd_set_reserved.9
-MLINKS+=panic.9 vpanic.9
+MLINKS+=panic.9 vpanic.9 \
+	panic.9 KERNEL_PANICKED.9
 MLINKS+=PCBGROUP.9 in_pcbgroup_byhash.9 \
 	PCBGROUP.9 in_pcbgroup_byinpcb.9 \
 	PCBGROUP.9 in_pcbgroup_destroy.9 \
@@ -1803,7 +1814,9 @@ MLINKS+=pmap_resident_count.9 pmap_wired_count.9
 MLINKS+=pmap_zero_page.9 pmap_zero_area.9
 MLINKS+=printf.9 log.9 \
 	printf.9 tprintf.9 \
-	printf.9 uprintf.9
+	printf.9 uprintf.9 \
+	printf.9 vlog.9 \
+	printf.9 vprintf.9
 MLINKS+=priv.9 priv_check.9 \
 	priv.9 priv_check_cred.9
 MLINKS+=prng.9 prng32.9 \
@@ -2310,7 +2323,6 @@ MLINKS+=usbdi.9 usbd_do_request.9 \
 	usbdi.9 usb_fifo_softc.9 \
 	usbdi.9 usb_fifo_wakeup.9
 .endif
-MLINKS+=vcount.9 count_dev.9
 MLINKS+=vfsconf.9 vfs_modevent.9 \
 	vfsconf.9 vfs_register.9 \
 	vfsconf.9 vfs_unregister.9

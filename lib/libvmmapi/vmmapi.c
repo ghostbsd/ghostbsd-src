@@ -143,6 +143,15 @@ err:
 }
 
 void
+vm_close(struct vmctx *vm)
+{
+	assert(vm != NULL);
+
+	close(vm->fd);
+	free(vm);
+}
+
+void
 vm_destroy(struct vmctx *vm)
 {
 	assert(vm != NULL);
@@ -498,14 +507,11 @@ vm_rev_map_gpa(struct vmctx *ctx, void *addr)
 	return ((vm_paddr_t)-1);
 }
 
-/* TODO: maximum size for vmname */
-int
-vm_get_name(struct vmctx *ctx, char *buf, size_t max_len)
+const char *
+vm_get_name(struct vmctx *ctx)
 {
 
-	if (strlcpy(buf, ctx->name, max_len) >= max_len)
-		return (EINVAL);
-	return (0);
+	return (ctx->name);
 }
 
 size_t
@@ -1174,13 +1180,21 @@ vcpu_reset(struct vmctx *vmctx, int vcpu)
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_RIP, rip)) != 0)
 		goto done;
 
+	/*
+	 * According to Intels Software Developer Manual CR0 should be
+	 * initialized with CR0_ET | CR0_NW | CR0_CD but that crashes some
+	 * guests like Windows.
+	 */
 	cr0 = CR0_NE;
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_CR0, cr0)) != 0)
 		goto done;
 
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_CR2, zero)) != 0)
+		goto done;
+
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_CR3, zero)) != 0)
 		goto done;
-	
+
 	cr4 = 0;
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_CR4, cr4)) != 0)
 		goto done;
@@ -1243,6 +1257,9 @@ vcpu_reset(struct vmctx *vmctx, int vcpu)
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_GS, sel)) != 0)
 		goto done;
 
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_EFER, zero)) != 0)
+		goto done;
+
 	/* General purpose registers */
 	rdx = 0xf00;
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_RAX, zero)) != 0)
@@ -1260,6 +1277,22 @@ vcpu_reset(struct vmctx *vmctx, int vcpu)
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_RBP, zero)) != 0)
 		goto done;
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_RSP, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R8, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R9, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R10, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R11, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R12, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R13, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R14, zero)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_R15, zero)) != 0)
 		goto done;
 
 	/* GDTR, IDTR */
@@ -1301,7 +1334,16 @@ vcpu_reset(struct vmctx *vmctx, int vcpu)
 	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_LDTR, 0)) != 0)
 		goto done;
 
-	/* XXX cr2, debug registers */
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_DR6,
+		 0xffff0ff0)) != 0)
+		goto done;
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_DR7, 0x400)) !=
+	    0)
+		goto done;
+
+	if ((error = vm_set_register(vmctx, vcpu, VM_REG_GUEST_INTR_SHADOW,
+		 zero)) != 0)
+		goto done;
 
 	error = 0;
 done:
@@ -1426,14 +1468,17 @@ vm_copy_setup(struct vmctx *ctx, int vcpu, struct vm_guest_paging *paging,
 }
 
 void
-vm_copy_teardown(struct vmctx *ctx __unused, int vcpu __unused,
-    struct iovec *iov __unused, int iovcnt __unused)
+vm_copy_teardown(struct iovec *iov __unused, int iovcnt __unused)
 {
+	/*
+	 * Intentionally empty.  This is used by the instruction
+	 * emulation code shared with the kernel.  The in-kernel
+	 * version of this is non-empty.
+	 */
 }
 
 void
-vm_copyin(struct vmctx *ctx __unused, int vcpu __unused, struct iovec *iov,
-    void *vp, size_t len)
+vm_copyin(struct iovec *iov, void *vp, size_t len)
 {
 	const char *src;
 	char *dst;
@@ -1453,8 +1498,7 @@ vm_copyin(struct vmctx *ctx __unused, int vcpu __unused, struct iovec *iov,
 }
 
 void
-vm_copyout(struct vmctx *ctx __unused, int vcpu __unused, const void *vp,
-    struct iovec *iov, size_t len)
+vm_copyout(const void *vp, struct iovec *iov, size_t len)
 {
 	const char *src;
 	char *dst;
@@ -1627,9 +1671,8 @@ vm_rtc_gettime(struct vmctx *ctx, time_t *secs)
 }
 
 int
-vm_restart_instruction(void *arg, int vcpu)
+vm_restart_instruction(struct vmctx *ctx, int vcpu)
 {
-	struct vmctx *ctx = arg;
 
 	return (ioctl(ctx->fd, VM_RESTART_INSTRUCTION, &vcpu));
 }
@@ -1710,7 +1753,8 @@ static const cap_ioctl_t vm_ioctl_cmds[] = { VM_RUN, VM_SUSPEND, VM_REINIT,
     VM_ACTIVATE_CPU, VM_GET_CPUS, VM_SUSPEND_CPU, VM_RESUME_CPU,
     VM_SET_INTINFO, VM_GET_INTINFO,
     VM_RTC_WRITE, VM_RTC_READ, VM_RTC_SETTIME, VM_RTC_GETTIME,
-    VM_RESTART_INSTRUCTION, VM_SET_TOPOLOGY, VM_GET_TOPOLOGY
+    VM_RESTART_INSTRUCTION, VM_SET_TOPOLOGY, VM_GET_TOPOLOGY,
+    VM_SNAPSHOT_REQ, VM_RESTORE_TIME
 };
 
 int

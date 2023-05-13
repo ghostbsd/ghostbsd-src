@@ -410,7 +410,6 @@ cc_conn_init(struct tcpcb *tp)
 
 	if (tp->t_srtt == 0 && (rtt = metrics.rmx_rtt)) {
 		tp->t_srtt = rtt;
-		tp->t_rttbest = tp->t_srtt + TCP_RTT_SCALE;
 		TCPSTAT_INC(tcps_usedrtt);
 		if (metrics.rmx_rttvar) {
 			tp->t_rttvar = metrics.rmx_rttvar;
@@ -716,6 +715,8 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 		 * Note that packets with unspecified IPv6 destination is
 		 * already dropped in ip6_input.
 		 */
+		KASSERT(!IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_dst),
+		    ("%s: unspecified destination v6 address", __func__));
 		if (IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)) {
 			/* XXX stat */
 			goto drop;
@@ -782,6 +783,12 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 	skip_csum:
 		if (th->th_sum && (port == 0)) {
 			TCPSTAT_INC(tcps_rcvbadsum);
+			goto drop;
+		}
+		KASSERT(ip->ip_dst.s_addr != INADDR_ANY,
+		    ("%s: unspecified destination v4 address", __func__));
+		if (__predict_false(ip->ip_src.s_addr == INADDR_ANY)) {
+			/* XXX stat */
 			goto drop;
 		}
 	}
@@ -1554,7 +1561,18 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	 */
 	u_char tcp_saveipgen[IP6_HDR_LEN];
 	struct tcphdr tcp_savetcp;
-	short ostate = 0;
+	short ostate;
+
+	if (so->so_options & SO_DEBUG) {
+		ostate = tp->t_state;
+#ifdef INET6
+		if (mtod(m, struct ip *)->ip_v == 6)
+			bcopy(mtod(m, char *), (char *)tcp_saveipgen, sizeof(struct ip6_hdr));
+		else
+#endif
+			bcopy(mtod(m, char *), (char *)tcp_saveipgen, sizeof(struct ip));
+		tcp_savetcp = *th;
+	}
 #endif
 	thflags = th->th_flags;
 	inc = &tp->t_inpcb->inp_inc;
@@ -3642,8 +3660,6 @@ tcp_xmit_timer(struct tcpcb *tp, int rtt)
 		delta -= tp->t_rttvar >> (TCP_RTTVAR_SHIFT - TCP_DELTA_SHIFT);
 		if ((tp->t_rttvar += delta) <= 0)
 			tp->t_rttvar = 1;
-		if (tp->t_rttbest > tp->t_srtt + tp->t_rttvar)
-		    tp->t_rttbest = tp->t_srtt + tp->t_rttvar;
 	} else {
 		/*
 		 * No rtt measurement yet - use the unsmoothed rtt.
@@ -3652,7 +3668,6 @@ tcp_xmit_timer(struct tcpcb *tp, int rtt)
 		 */
 		tp->t_srtt = rtt << TCP_RTT_SHIFT;
 		tp->t_rttvar = rtt << (TCP_RTTVAR_SHIFT - 1);
-		tp->t_rttbest = tp->t_srtt + tp->t_rttvar;
 	}
 	tp->t_rtttime = 0;
 	tp->t_rxtshift = 0;

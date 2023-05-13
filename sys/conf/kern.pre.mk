@@ -246,10 +246,8 @@ CDDL_CFLAGS=	\
 	-Wno-duplicate-decl-specifier \
 	-Wno-missing-braces \
 	-Wno-missing-prototypes \
-	-Wno-nested-externs \
 	-Wno-parentheses \
 	-Wno-pointer-arith \
-	-Wno-redundant-decls \
 	-Wno-strict-prototypes \
 	-Wno-switch \
 	-Wno-undef \
@@ -297,6 +295,11 @@ DTRACE_ASM_CFLAGS=	-x assembler-with-cpp -DLOCORE ${DTRACE_CFLAGS}
 DTRACE_C=	${CC} -c ${DTRACE_CFLAGS}	${WERROR} ${PROF} ${.IMPSRC}
 DTRACE_S=	${CC} -c ${DTRACE_ASM_CFLAGS}	${WERROR} ${.IMPSRC}
 
+# zlib code supports systems that are quite old, but will fix this issue once C2x gets radified.
+# see https://github.com/madler/zlib/issues/633 for details
+ZLIB_CFLAGS=	-Wno-cast-qual ${NO_WDEPRECATED_NON_PROTOTYPE} -Wno-strict-prototypes
+ZLIB_C=		${CC} -c ${CFLAGS} ${WERROR} ${ZLIB_CFLAGS} ${.IMPSRC}
+
 # Special flags for managing the compat compiles for DTrace/FBT
 FBT_CFLAGS=	-DBUILDING_DTRACE -nostdinc -I$S/cddl/dev/fbt/${MACHINE_CPUARCH} -I$S/cddl/dev/fbt ${CDDL_CFLAGS} -I$S/cddl/compat/opensolaris -I$S/cddl/contrib/opensolaris/uts/common  
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
@@ -320,7 +323,7 @@ LINUXKPI_C=		${NORMAL_C} ${LINUXKPI_INCLUDES}
 # Infiniband C flags.  Correct include paths and omit errors that linux
 # does not honor.
 OFEDINCLUDES=	-I$S/ofed/include -I$S/ofed/include/uapi ${LINUXKPI_INCLUDES}
-OFEDNOERR=	-Wno-cast-qual -Wno-pointer-arith -Wno-redundant-decls
+OFEDNOERR=	-Wno-cast-qual -Wno-pointer-arith
 OFEDCFLAGS=	${CFLAGS:N-I*} -DCONFIG_INFINIBAND_USER_MEM \
 		${OFEDINCLUDES} ${CFLAGS:M-I*} ${OFEDNOERR}
 OFED_C_NOIMP=	${CC} -c -o ${.TARGET} ${OFEDCFLAGS} ${WERROR} ${PROF}
@@ -386,5 +389,5 @@ MKMODULESENV+=	__MPATH="${__MPATH}"
 
 # Detect kernel config options that force stack frames to be turned on.
 DDB_ENABLED!=	grep DDB opt_ddb.h || true ; echo
-DTR_ENABLED!=	grep KDTRACE_FRAME opt_kdtrace.h || true ; echo
+DTRACE_ENABLED!=grep KDTRACE_FRAME opt_kdtrace.h || true ; echo
 HWPMC_ENABLED!=	grep HWPMC opt_hwpmc_hooks.h || true ; echo

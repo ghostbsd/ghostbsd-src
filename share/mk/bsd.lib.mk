@@ -77,6 +77,11 @@ TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
 .if ${MK_BIND_NOW} != "no"
 LDFLAGS+= -Wl,-znow
 .endif
+.if ${MK_RELRO} == "no"
+LDFLAGS+= -Wl,-znorelro
+.else
+LDFLAGS+= -Wl,-zrelro
+.endif
 .if ${MK_RETPOLINE} != "no"
 .if ${COMPILER_FEATURES:Mretpoline} && ${LINKER_FEATURES:Mretpoline}
 CFLAGS+= -mretpoline
@@ -251,6 +256,13 @@ SHLIB_NAME_FULL=${SHLIB_NAME}
 .if !empty(VERSION_MAP)
 ${SHLIB_NAME_FULL}:	${VERSION_MAP}
 LDFLAGS+=	-Wl,--version-script=${VERSION_MAP}
+
+# lld >= 16 turned on --no-undefined-version by default, but we have several
+# symbols in our version maps that may or may not exist, depending on
+# compile-time defines.
+.if ${LINKER_TYPE} == "lld" && ${LINKER_VERSION} >= 160000
+LDFLAGS+=	-Wl,--undefined-version
+.endif
 .endif
 
 .if defined(LIB) && !empty(LIB) || defined(SHLIB_NAME)

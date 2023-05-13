@@ -2257,7 +2257,8 @@ unlock_and_done:
 
 			INP_WLOCK_RECHECK(inp);
 			if (optval >= 0)
-				tcp_pcap_set_sock_max(TCP_PCAP_OUT ?
+				tcp_pcap_set_sock_max(
+					(sopt->sopt_name == TCP_PCAP_OUT) ?
 					&(tp->t_outpkts) : &(tp->t_inpkts),
 					optval);
 			else
@@ -2494,7 +2495,8 @@ unhold:
 #ifdef TCPPCAP
 		case TCP_PCAP_OUT:
 		case TCP_PCAP_IN:
-			optval = tcp_pcap_get_sock_max(TCP_PCAP_OUT ?
+			optval = tcp_pcap_get_sock_max(
+					(sopt->sopt_name == TCP_PCAP_OUT) ?
 					&(tp->t_outpkts) : &(tp->t_inpkts));
 			INP_WUNLOCK(inp);
 			error = sooptcopyout(sopt, &optval, sizeof optval);
@@ -2919,9 +2921,8 @@ db_print_tcpcb(struct tcpcb *tp, const char *name, int indent)
 	    tp->t_rxtcur, tp->t_maxseg, tp->t_srtt);
 
 	db_print_indent(indent);
-	db_printf("t_rttvar: %d   t_rxtshift: %d   t_rttmin: %u   "
-	    "t_rttbest: %u\n", tp->t_rttvar, tp->t_rxtshift, tp->t_rttmin,
-	    tp->t_rttbest);
+	db_printf("t_rttvar: %d   t_rxtshift: %d   t_rttmin: %u\n",
+	    tp->t_rttvar, tp->t_rxtshift, tp->t_rttmin);
 
 	db_print_indent(indent);
 	db_printf("t_rttupdated: %lu   max_sndwnd: %u   t_softerror: %d\n",

@@ -3,7 +3,7 @@
 #
 # Warning flags for compiling the kernel and components of the kernel:
 #
-CWARNFLAGS?=	-Wall -Wredundant-decls -Wnested-externs -Wstrict-prototypes \
+CWARNFLAGS?=	-Wall -Wstrict-prototypes \
 		-Wmissing-prototypes -Wpointer-arith -Wcast-qual \
 		-Wundef -Wno-pointer-sign ${FORMAT_EXTENSIONS} \
 		-Wmissing-include-dirs -fdiagnostics-show-option \
@@ -28,6 +28,9 @@ NO_WTAUTOLOGICAL_POINTER_COMPARE= -Wno-tautological-pointer-compare
 .if ${COMPILER_VERSION} >= 100000
 NO_WMISLEADING_INDENTATION=	-Wno-misleading-indentation
 .endif
+.if ${COMPILER_VERSION} >= 130000
+NO_WUNUSED_BUT_SET_VARIABLE=	-Wno-unused-but-set-variable
+.endif
 .if ${COMPILER_VERSION} >= 140000
 NO_WBITWISE_INSTEAD_OF_LOGICAL=	-Wno-bitwise-instead-of-logical
 .endif
@@ -44,6 +47,16 @@ CWARNEXTRA+=	-Wno-error=shift-negative-value
 CWARNEXTRA+=	-Wno-address-of-packed-member
 .if ${COMPILER_VERSION} >= 130000
 CWARNFLAGS+=	-Wno-error=unused-but-set-variable
+.endif
+.if ${COMPILER_VERSION} >= 150000
+# Clang 15 has much more aggressive diagnostics about inconsistently declared
+# array parameters, K&R prototypes, mismatched prototypes, and unused-but-set
+# variables. Make these non-fatal for the time being.
+CWARNEXTRA+=	-Wno-error=array-parameter
+CWARNEXTRA+=	-Wno-error=deprecated-non-prototype
+CWARNEXTRA+=	-Wno-error=strict-prototypes
+CWARNEXTRA+=	-Wno-error=unused-but-set-variable
+NO_WDEPRECATED_NON_PROTOTYPE=-Wno-deprecated-non-prototype
 .endif
 .endif	# clang
 
@@ -77,6 +90,13 @@ CWARNEXTRA+=	-Wno-error=packed-not-aligned
 .if ${COMPILER_VERSION} >= 90100
 CWARNEXTRA+=	-Wno-address-of-packed-member			\
 		-Wno-error=alloca-larger-than=
+.if ${COMPILER_VERSION} >= 120100
+CWARNEXTRA+=	-Wno-error=nonnull				\
+		-Wno-dangling-pointer				\
+		-Wno-zero-length-bounds
+NO_WINFINITE_RECURSION=	-Wno-infinite-recursion
+NO_WSTRINGOP_OVERREAD=	-Wno-stringop-overread
+.endif
 .endif
 
 # GCC produces false positives for functions that switch on an
@@ -91,7 +111,8 @@ CWARNFLAGS+=	-Wno-format-zero-length
 # to be disabled.  WARNING: format checking is disabled in this case.
 .if ${MK_FORMAT_EXTENSIONS} == "no"
 FORMAT_EXTENSIONS=	-Wno-format
-.elif ${COMPILER_TYPE} == "clang"
+.elif ${COMPILER_TYPE} == "clang" || \
+    (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 120100)
 FORMAT_EXTENSIONS=	-D__printf__=__freebsd_kprintf__
 .else
 FORMAT_EXTENSIONS=	-fformat-extensions
@@ -198,7 +219,8 @@ CFLAGS.gcc+=	-mno-spe
 # Use dot symbols (or, better, the V2 ELF ABI) on powerpc64 to make
 # DDB happy. ELFv2, if available, has some other efficiency benefits.
 #
-.if ${MACHINE_ARCH:Mpowerpc64*} != ""
+.if ${MACHINE_ARCH:Mpowerpc64*} != "" && \
+    ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} < 160000
 CFLAGS+=	-mabi=elfv2
 .endif
 

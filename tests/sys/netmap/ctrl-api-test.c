@@ -27,6 +27,16 @@
  * $FreeBSD$
  */
 
+/*
+ * This program contains a suite of unit tests for the netmap control device.
+ *
+ * On FreeBSD, you can run these tests with Kyua once installed in the system:
+ *     # kyua test -k /usr/tests/sys/netmap/Kyuafile
+ *
+ * On Linux, you can run them directly:
+ *     # ./ctrl-api-test
+ */
+
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -974,15 +984,33 @@ infinite_options(struct TestContext *ctx)
 {
 	struct nmreq_option opt;
 
-	printf("Testing infinite list of options on %s\n", ctx->ifname_ext);
+	printf("Testing infinite list of options on %s (invalid options)\n", ctx->ifname_ext);
 
-	opt.nro_reqtype = 1234;
+	memset(&opt, 0, sizeof(opt));
+	opt.nro_reqtype = NETMAP_REQ_OPT_MAX + 1;
 	push_option(&opt, ctx);
 	opt.nro_next = (uintptr_t)&opt;
 	if (port_register_hwall(ctx) >= 0)
 		return -1;
 	clear_options(ctx);
 	return (errno == EMSGSIZE ? 0 : -1);
+}
+
+static int
+infinite_options2(struct TestContext *ctx)
+{
+	struct nmreq_option opt;
+
+	printf("Testing infinite list of options on %s (valid options)\n", ctx->ifname_ext);
+
+	memset(&opt, 0, sizeof(opt));
+	opt.nro_reqtype = NETMAP_REQ_OPT_CSB;
+	push_option(&opt, ctx);
+	opt.nro_next = (uintptr_t)&opt;
+	if (port_register_hwall(ctx) >= 0)
+		return -1;
+	clear_options(ctx);
+	return (errno == EINVAL ? 0 : -1);
 }
 
 #ifdef CONFIG_NETMAP_EXTMEM
@@ -1745,6 +1773,7 @@ static struct mytest tests[] = {
 	decltest(vale_polling_enable_disable),
 	decltest(unsupported_option),
 	decltest(infinite_options),
+	decltest(infinite_options2),
 #ifdef CONFIG_NETMAP_EXTMEM
 	decltest(extmem_option),
 	decltest(bad_extmem_option),

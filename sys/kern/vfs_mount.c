@@ -618,6 +618,10 @@ vfs_mount_destroy(struct mount *mp)
 #endif
 	if (mp->mnt_opt != NULL)
 		vfs_freeopts(mp->mnt_opt);
+	if (mp->mnt_export != NULL) {
+		vfs_free_addrlist(mp->mnt_export);
+		free(mp->mnt_export, M_MOUNT);
+	}
 	crfree(mp->mnt_cred);
 	uma_zfree(mount_zone, mp);
 }
@@ -781,6 +785,8 @@ vfs_donmount(struct thread *td, uint64_t fsflags, struct uio *fsoptions)
 			fsflags |= MNT_SYNCHRONOUS;
 		else if (strcmp(opt->name, "union") == 0)
 			fsflags |= MNT_UNION;
+		else if (strcmp(opt->name, "export") == 0)
+			fsflags |= MNT_EXPORTED;
 		else if (strcmp(opt->name, "automounted") == 0) {
 			fsflags |= MNT_AUTOMOUNTED;
 			do_freeopt = 1;
@@ -960,10 +966,20 @@ vfs_domount_first(
 		error = priv_check_cred(td->td_ucred, PRIV_VFS_ADMIN);
 	if (error == 0)
 		error = vinvalbuf(vp, V_SAVE, 0, 0);
-	if (error == 0 && vp->v_type != VDIR)
-		error = ENOTDIR;
+	if (vfsp->vfc_flags & VFCF_FILEMOUNT) {
+		if (error == 0 && vp->v_type != VDIR && vp->v_type != VREG)
+			error = EINVAL;
+		/*
+		 * For file mounts, ensure that there is only one hardlink to the file.
+		 */
+		if (error == 0 && vp->v_type == VREG && va.va_nlink != 1)
+			error = EINVAL;
+	} else {
+		if (error == 0 && vp->v_type != VDIR)
+			error = ENOTDIR;
+	}
 	if (error == 0 && (fsflags & MNT_EMPTYDIR) != 0)
-		error = vfs_emptydir(vp);
+		error = vn_dir_check_empty(vp);
 	if (error == 0) {
 		VI_LOCK(vp);
 		if ((vp->v_iflag & VI_MOUNT) == 0 && vp->v_mountedhere == NULL)
@@ -1374,22 +1390,39 @@ vfs_domount(
 	/*
 	 * Get vnode to be covered or mount point's vnode in case of MNT_UPDATE.
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNODE1,
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNODE1 | WANTPARENT,
 	    UIO_SYSSPACE, fspath, td);
 	error = namei(&nd);
 	if (error != 0)
 		return (error);
-	NDFREE(&nd, NDF_ONLY_PNBUF);
 	vp = nd.ni_vp;
+	/*
+	 * Don't allow stacking file mounts to work around problems with the way
+	 * that namei sets nd.ni_dvp to vp_crossmp for these.
+	 */
+	if (vp->v_type == VREG)
+		fsflags |= MNT_NOCOVER;
 	if ((fsflags & MNT_UPDATE) == 0) {
 		if ((vp->v_vflag & VV_ROOT) != 0 &&
 		    (fsflags & MNT_NOCOVER) != 0) {
 			vput(vp);
-			return (EBUSY);
+			error = EBUSY;
+			goto out;
 		}
 		pathbuf = malloc(MNAMELEN, M_TEMP, M_WAITOK);
 		strcpy(pathbuf, fspath);
-		error = vn_path_to_global_path(td, vp, pathbuf, MNAMELEN);
+		/*
+		 * Note: we allow any vnode type here. If the path sanity check
+		 * succeeds, the type will be validated in vfs_domount_first
+		 * above.
+		 */
+		if (vp->v_type == VDIR)
+			error = vn_path_to_global_path(td, vp, pathbuf,
+			    MNAMELEN);
+		else
+			error = vn_path_to_global_path_hardlink(td, vp,
+			    nd.ni_dvp, pathbuf, MNAMELEN,
+			    nd.ni_cnd.cn_nameptr, nd.ni_cnd.cn_namelen);
 		if (error == 0) {
 			error = vfs_domount_first(td, vfsp, pathbuf, vp,
 			    fsflags, optlist);
@@ -1397,6 +1430,10 @@ vfs_domount(
 		free(pathbuf, M_TEMP);
 	} else
 		error = vfs_domount_update(td, vp, fsflags, optlist);
+
+out:
+	NDFREE(&nd, NDF_ONLY_PNBUF);
+	vrele(nd.ni_dvp);
 
 	return (error);
 }

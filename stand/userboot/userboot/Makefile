@@ -6,6 +6,9 @@ LOADER_CD9660_SUPPORT?=	no
 LOADER_EXT2FS_SUPPORT?=	no
 PIC=yes
 
+# Note: -nostdlib needs to be added to LDFLAGS before including defs.mk
+LDFLAGS+=	-nostdlib -Wl,-Bsymbolic
+
 .include <bsd.init.mk>
 
 SHLIB_NAME=	userboot_${LOADER_INTERP}.so
@@ -29,17 +32,19 @@ SRCS+=		main.c
 SRCS+=		userboot_cons.c
 SRCS+=		userboot_disk.c
 SRCS+=		vers.c
-SRCS+=		gfx_fb.c
+SRCS+=		gfx_fb_stub.c
 
 CFLAGS+=	-Wall
 CFLAGS+=	-I${BOOTSRC}/userboot
+
+.if ${MK_LOADER_ZFS} != "no"
 CFLAGS.main.c+=	-I${BOOTSRC}/libsa/zfs
 CFLAGS.main.c+=	-I${SYSDIR}/contrib/openzfs/include
 CFLAGS.main.c+=	-I${SYSDIR}/contrib/openzfs/include/os/freebsd/zfs
-CFLAGS.gfx_fb.c+= -I$(SRCTOP)/sys/teken -I${SRCTOP}/contrib/pnglite
-CWARNFLAGS.main.c += -Wno-implicit-function-declaration
+.endif
 
-LDFLAGS+=	-nostdlib -Wl,-Bsymbolic
+CWARNFLAGS.main.c += -Wno-implicit-function-declaration
+CFLAGS.gfx_fb_stub.c += -I${SRCTOP}/contrib/pnglite -I${SRCTOP}/sys/teken
 
 NEWVERSWHAT=	"User boot ${LOADER_INTERP}" ${MACHINE_CPUARCH}
 VERSION_FILE=	${.CURDIR}/../userboot/version
@@ -52,6 +57,8 @@ LINKS+=		${BINDIR}/${SHLIB_NAME} ${BINDIR}/userboot.so
 CFLAGS+=	-DUSERBOOT_ZFS_SUPPORT
 HAVE_ZFS=yes
 .endif
+
+HELP_FILENAME=	loader.help.userboot
 
 # Always add MI sources
 .include	"${BOOTSRC}/loader.mk"

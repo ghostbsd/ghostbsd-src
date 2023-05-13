@@ -1338,6 +1338,8 @@ in_pcbladdr(struct inpcb *inp, struct in_addr *faddr, struct in_addr *laddr,
 	}
 
 done:
+	if (error == 0 && laddr->s_addr == INADDR_ANY)
+		return (EHOSTUNREACH);
 	return (error);
 }
 
@@ -1499,6 +1501,7 @@ in_pcbdisconnect(struct inpcb *inp)
 	INP_WLOCK_ASSERT(inp);
 	INP_HASH_WLOCK_ASSERT(inp->inp_pcbinfo);
 
+	inp->inp_laddr.s_addr = INADDR_ANY;
 	inp->inp_faddr.s_addr = INADDR_ANY;
 	inp->inp_fport = 0;
 	in_pcbrehash(inp);

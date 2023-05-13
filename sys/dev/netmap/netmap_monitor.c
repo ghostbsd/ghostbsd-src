@@ -458,6 +458,9 @@ netmap_monitor_stop(struct netmap_adapter *na)
 			struct netmap_zmon_list *z = &kring->zmon_list[t];
 			u_int j;
 
+			if (nm_monitor_none(kring))
+				continue;
+
 			for (j = 0; j < kring->n_monitors; j++) {
 				struct netmap_kring *mkring =
 					kring->monitors[j];
@@ -470,6 +473,8 @@ netmap_monitor_stop(struct netmap_adapter *na)
 				}
 				kring->monitors[j] = NULL;
 			}
+			kring->n_monitors = 0;
+			nm_monitor_dealloc(kring);
 
 			if (!nm_is_zmon(na)) {
 				/* we are the head of at most one list */
@@ -482,20 +487,17 @@ netmap_monitor_stop(struct netmap_adapter *na)
 					/* let the monitor forget about us */
 					netmap_adapter_put(next->priv.np_na); /* nop if null */
 					next->priv.np_na = NULL;
+					/* drop the additional ref taken in netmap_monitor_add() */
+					netmap_adapter_put(zkring->zmon_list[t].prev->na);
 				}
-				/* orhpan the zmon list */
+				/* orphan the zmon list */
 				if (z->next != NULL)
 					z->next->zmon_list[t].prev = NULL;
 				z->next = NULL;
 				z->prev = NULL;
 			}
 
-			if (!nm_monitor_none(kring)) {
-
-				kring->n_monitors = 0;
-				nm_monitor_dealloc(kring);
-				nm_monitor_restore_callbacks(kring);
-			}
+			nm_monitor_restore_callbacks(kring);
 		}
 	}
 }
@@ -601,7 +603,7 @@ netmap_zmon_parent_sync(struct netmap_kring *kring, int flags, enum txrx tx)
 	mring = mkring->ring;
 	mlim = mkring->nkr_num_slots - 1;
 
-	/* get the relased slots (rel_slots) */
+	/* get the released slots (rel_slots) */
 	if (tx == NR_TX) {
 		beg = kring->nr_hwtail + 1;
 		error = kring->mon_sync(kring, flags);

@@ -283,6 +283,7 @@ struct glob_arg {
 #define OPT_RANDOM_SRC  512
 #define OPT_RANDOM_DST  1024
 #define OPT_PPS_STATS   2048
+#define OPT_UPDATE_CSUM 4096
 	int dev_type;
 #ifndef NO_PCAP
 	pcap_t *p;
@@ -684,6 +685,10 @@ source_hwaddr(const char *ifname, char *buf)
 		return (-1);
 	}
 
+	/* remove 'netmap:' prefix before comparing interfaces */
+	if (!strncmp(ifname, "netmap:", 7))
+		ifname = &ifname[7];
+
 	for (ifap = ifaphead; ifap; ifap = ifap->ifa_next) {
 		struct sockaddr_dl *sdl =
 			(struct sockaddr_dl *)ifap->ifa_addr;
@@ -1001,6 +1006,85 @@ update_addresses(struct pkt *pkt, struct targ *t)
 	else
 		update_ip6(pkt, t);
 }
+
+static void
+update_ip_size(struct pkt *pkt, int size)
+{
+	struct ip ip;
+	struct udphdr udp;
+	uint16_t oiplen, niplen;
+	uint16_t nudplen;
+	uint16_t ip_sum = 0;
+
+	memcpy(&ip, &pkt->ipv4.ip, sizeof(ip));
+	memcpy(&udp, &pkt->ipv4.udp, sizeof(udp));
+
+	oiplen = ntohs(ip.ip_len);
+	niplen = size - sizeof(struct ether_header);
+	ip.ip_len = htons(niplen);
+	nudplen = niplen - sizeof(struct ip);
+	udp.uh_ulen = htons(nudplen);
+	ip_sum = new_udp_sum(ip_sum, oiplen, niplen);
+
+	/* update checksums */
+	if (ip_sum != 0)
+		ip.ip_sum = ~cksum_add(~ip.ip_sum, htons(ip_sum));
+
+	udp.uh_sum = 0;
+	/* Magic: taken from sbin/dhclient/packet.c */
+	udp.uh_sum = wrapsum(
+		checksum(&udp, sizeof(udp),	/* udp header */
+		checksum(pkt->ipv4.body,	/* udp payload */
+		nudplen - sizeof(udp),
+		checksum(&ip.ip_src, /* pseudo header */
+		2 * sizeof(ip.ip_src),
+		IPPROTO_UDP + (u_int32_t)ntohs(udp.uh_ulen)))));
+
+	memcpy(&pkt->ipv4.ip, &ip, sizeof(ip));
+	memcpy(&pkt->ipv4.udp, &udp, sizeof(udp));
+}
+
+static void
+update_ip6_size(struct pkt *pkt, int size)
+{
+	struct ip6_hdr ip6;
+	struct udphdr udp;
+	uint16_t niplen, nudplen;
+	uint32_t csum;
+
+	memcpy(&ip6, &pkt->ipv6.ip, sizeof(ip6));
+	memcpy(&udp, &pkt->ipv6.udp, sizeof(udp));
+
+	nudplen = niplen = size - sizeof(struct ether_header) - sizeof(ip6);
+	ip6.ip6_plen = htons(niplen);
+	udp.uh_ulen = htons(nudplen);
+
+	/* Save part of pseudo header checksum into csum */
+	udp.uh_sum = 0;
+	csum = IPPROTO_UDP << 24;
+	csum = checksum(&csum, sizeof(csum), nudplen);
+	udp.uh_sum = wrapsum(
+		checksum(&udp, sizeof(udp),	/* udp header */
+		checksum(pkt->ipv6.body,	/* udp payload */
+		nudplen - sizeof(udp),
+		checksum(&pkt->ipv6.ip.ip6_src, /* pseudo header */
+		2 * sizeof(pkt->ipv6.ip.ip6_src), csum))));
+
+	memcpy(&pkt->ipv6.ip, &ip6, sizeof(ip6));
+	memcpy(&pkt->ipv6.udp, &udp, sizeof(udp));
+}
+
+static void
+update_size(struct pkt *pkt, struct targ *t, int size)
+{
+	if (t->g->options & OPT_UPDATE_CSUM) {
+		if (t->g->af == AF_INET)
+			update_ip_size(pkt, size);
+		else
+			update_ip6_size(pkt, size);
+	}
+}
+
 /*
  * initialize one packet and prepare for the next one.
  * The copy could be done better instead of repeating it each time.
@@ -1302,7 +1386,7 @@ ping_body(void *data)
 	struct targ *targ = (struct targ *) data;
 	struct pollfd pfd = { .fd = targ->fd, .events = POLLIN };
 	struct netmap_if *nifp = targ->nmd->nifp;
-	int i, m, rx = 0;
+	int i, m;
 	void *frame;
 	int size;
 	struct timespec ts, now, last_print;
@@ -1395,7 +1479,9 @@ ping_body(void *data)
 		}
 #endif /* BUSYWAIT */
 		/* see what we got back */
-		rx = 0;
+#ifdef BUSYWAIT
+		int rx = 0;
+#endif
 		for (i = targ->nmd->first_rx_ring;
 			i <= targ->nmd->last_rx_ring; i++) {
 			ring = NETMAP_RXRING(nifp, i);
@@ -1430,7 +1516,9 @@ ping_body(void *data)
 				buckets[pos]++;
 				/* now store it in a bucket */
 				ring->head = ring->cur = nm_ring_next(ring, ring->head);
+#ifdef BUSYWAIT
 				rx++;
+#endif
 			}
 		}
 		//D("tx %d rx %d", sent, rx);
@@ -1498,7 +1586,7 @@ pong_body(void *data)
 	struct pollfd pfd = { .fd = targ->fd, .events = POLLIN };
 	struct netmap_if *nifp = targ->nmd->nifp;
 	struct netmap_ring *txring, *rxring;
-	int i, rx = 0;
+	int i;
 	uint64_t sent = 0, n = targ->g->npackets;
 
 	if (targ->g->nthreads > 1) {
@@ -1540,7 +1628,6 @@ pong_body(void *data)
 				src = NETMAP_BUF(rxring, slot->buf_idx);
 				//D("got pkt %p of size %d", src, slot->len);
 				rxring->head = rxring->cur = nm_ring_next(rxring, head);
-				rx++;
 				if (txavail == 0)
 					continue;
 				dst = NETMAP_BUF(txring,
@@ -1575,7 +1662,6 @@ pong_body(void *data)
 #ifdef BUSYWAIT
 		ioctl(pfd.fd, NIOCTXSYNC, NULL);
 #endif
-		//D("tx %d rx %d", sent, rx);
 	}
 
 	targ->completed = 1;
@@ -1598,7 +1684,7 @@ sender_body(void *data)
 	uint64_t n = targ->g->npackets / targ->g->nthreads;
 	uint64_t sent = 0;
 	uint64_t event = 0;
-	int options = targ->g->options | OPT_COPY;
+	int options = targ->g->options;
 	struct timespec nexttime = { 0, 0}; // XXX silence compiler
 	int rate_limit = targ->g->tx_rate;
 	struct pkt *pkt = &targ->pkt;
@@ -1672,6 +1758,19 @@ sender_body(void *data)
 			targ->frags++;
 	}
 	D("frags %u frag_size %u", targ->frags, targ->frag_size);
+
+	/* mark all slots of all rings as changed so initial copy will be done */
+	for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
+		uint32_t j;
+		struct netmap_slot *slot;
+
+		txring = NETMAP_TXRING(nifp, i);
+		for (j = 0; j < txring->num_slots; j++) {
+			slot = &txring->slot[j];
+			slot->flags = NS_BUF_CHANGED;
+		}
+	}
+
 	while (!targ->cancel && (n == 0 || sent < n)) {
 		int rv;
 
@@ -1708,10 +1807,6 @@ sender_body(void *data)
 		/*
 		 * scan our queues and send on those with room
 		 */
-		if (options & OPT_COPY && sent > 100000 && !(targ->g->options & OPT_COPY) ) {
-			D("drop copy");
-			options &= ~OPT_COPY;
-		}
 		for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
 			int m;
 			uint64_t limit = rate_limit ?  tosend : targ->g->burst;
@@ -1729,6 +1824,7 @@ sender_body(void *data)
 				size = nrand48(targ->seed) %
 					(targ->g->pkt_size - targ->g->pkt_min_size) +
 					targ->g->pkt_min_size;
+				update_size(pkt, targ, size);
 			}
 			m = send_packets(txring, pkt, frame, size, targ,
 					 limit, options);
@@ -1833,6 +1929,7 @@ receiver_body(void *data)
 	struct netmap_ring *rxring;
 	int i;
 	struct my_ctrs cur;
+	uint64_t n = targ->g->npackets / targ->g->nthreads;
 
 	memset(&cur, 0, sizeof(cur));
 
@@ -1860,7 +1957,7 @@ receiver_body(void *data)
 	/* main loop, exit after 1s silence */
 	clock_gettime(CLOCK_REALTIME_PRECISE, &targ->tic);
     if (targ->g->dev_type == DEV_TAP) {
-	while (!targ->cancel) {
+	while (!targ->cancel && (n == 0 || targ->ctr.pkts < n)) {
 		char buf[MAX_BODYSIZE];
 		/* XXX should we poll ? */
 		i = read(targ->g->main_fd, buf, sizeof(buf));
@@ -1872,7 +1969,7 @@ receiver_body(void *data)
 	}
 #ifndef NO_PCAP
     } else if (targ->g->dev_type == DEV_PCAP) {
-	while (!targ->cancel) {
+	while (!targ->cancel && (n == 0 || targ->ctr.pkts < n)) {
 		/* XXX should we poll ? */
 		pcap_dispatch(targ->g->p, targ->g->burst, receive_pcap,
 			(u_char *)&targ->ctr);
@@ -1883,7 +1980,7 @@ receiver_body(void *data)
 	int dump = targ->g->options & OPT_DUMP;
 
 	nifp = targ->nmd->nifp;
-	while (!targ->cancel) {
+	while (!targ->cancel && (n == 0 || targ->ctr.pkts < n)) {
 		/* Once we started to receive packets, wait at most 1 seconds
 		   before quitting. */
 #ifdef BUSYWAIT
@@ -2512,6 +2609,7 @@ usage(int errcode)
 "				OPT_RANDOM_SRC  512\n"
 "				OPT_RANDOM_DST  1024\n"
 "				OPT_PPS_STATS   2048\n"
+"				OPT_UPDATE_CSUM 4096\n"
 		     "",
 		cmd);
 	exit(errcode);
@@ -3166,7 +3264,7 @@ main(int arc, char **argv)
 
 	if (g.virt_header) {
 		/* Set the virtio-net header length, since the user asked
-		 * for it explicitely. */
+		 * for it explicitly. */
 		set_vnet_hdr_len(&g);
 	} else {
 		/* Check whether the netmap port we opened requires us to send
@@ -3268,8 +3366,8 @@ out:
 		g.tx_period.tv_nsec = g.tx_period.tv_nsec % 1000000000;
 	}
 	if (g.td_type == TD_TYPE_SENDER)
-	    D("Sending %d packets every  %ld.%09ld s",
-			g.burst, g.tx_period.tv_sec, g.tx_period.tv_nsec);
+	    D("Sending %d packets every  %jd.%09ld s",
+			g.burst, (intmax_t)g.tx_period.tv_sec, g.tx_period.tv_nsec);
 	/* Install ^C handler. */
 	global_nthreads = g.nthreads;
 	sigemptyset(&ss);

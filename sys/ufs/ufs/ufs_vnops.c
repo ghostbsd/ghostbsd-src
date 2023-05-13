@@ -1724,6 +1724,10 @@ relock:
 	 */
 	if (doingdirectory && newparent) {
 		/*
+		 * Set the directory depth based on its new parent.
+		 */
+		DIP_SET(fip, i_dirdepth, DIP(tdp, i_dirdepth) + 1);
+		/*
 		 * If tip exists we simply use its link, otherwise we must
 		 * add a new one.
 		 */
@@ -2136,6 +2140,7 @@ ufs_mkdir(
 	ip->i_effnlink = 2;
 	ip->i_nlink = 2;
 	DIP_SET(ip, i_nlink, 2);
+	DIP_SET(ip, i_dirdepth, DIP(dp,i_dirdepth) + 1);
 
 	if (cnp->cn_flags & ISWHITEOUT) {
 		ip->i_flags |= UF_OPAQUE;
@@ -2387,7 +2392,7 @@ ufs_symlink(
 	len = strlen(ap->a_target);
 	if (len < VFSTOUFS(vp->v_mount)->um_maxsymlinklen) {
 		ip = VTOI(vp);
-		bcopy(ap->a_target, SHORTLINK(ip), len);
+		bcopy(ap->a_target, DIP(ip, i_shortlink), len);
 		ip->i_size = len;
 		DIP_SET(ip, i_size, len);
 		UFS_INODE_SET_FLAG(ip, IN_SIZEMOD | IN_CHANGE | IN_UPDATE);
@@ -2528,7 +2533,7 @@ nextentry:
 		error = 0;
 	if (ap->a_ncookies != NULL) {
 		if (error == 0) {
-			ap->a_ncookies -= ncookies;
+			*ap->a_ncookies -= ncookies;
 		} else {
 			free(*ap->a_cookies, M_TEMP);
 			*ap->a_ncookies = 0;
@@ -2557,7 +2562,7 @@ ufs_readlink(
 
 	isize = ip->i_size;
 	if (isize < VFSTOUFS(vp->v_mount)->um_maxsymlinklen)
-		return (uiomove(SHORTLINK(ip), isize, ap->a_uio));
+		return (uiomove(DIP(ip, i_shortlink), isize, ap->a_uio));
 	return (VOP_READ(vp, ap->a_uio, 0, ap->a_cred));
 }
 
@@ -2971,7 +2976,7 @@ ufs_ioctl(struct vop_ioctl_args *ap)
 	vp = ap->a_vp;
 	switch (ap->a_command) {
 	case FIOSEEKDATA:
-		error = vn_lock(vp, LK_SHARED);
+		error = vn_lock(vp, LK_EXCLUSIVE);
 		if (error == 0) {
 			error = ufs_bmap_seekdata(vp, (off_t *)ap->a_data);
 			VOP_UNLOCK(vp);

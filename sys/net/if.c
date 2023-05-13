@@ -703,7 +703,7 @@ if_free_internal(struct ifnet *ifp)
 	for (int i = 0; i < IFCOUNTERS; i++)
 		counter_u64_free(ifp->if_counters[i]);
 
-	free(ifp->if_description, M_IFDESCR);
+	if_freedescr(ifp->if_description);
 	free(ifp->if_hw_addr, M_IFADDR);
 	free(ifp, M_IFNET);
 }
@@ -1006,9 +1006,6 @@ if_attach_internal(struct ifnet *ifp, int vmove, struct if_clone *ifc)
 	EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
 	if (IS_DEFAULT_VNET(curvnet))
 		devctl_notify("IFNET", ifp->if_xname, "ATTACH", NULL);
-
-	/* Announce the interface. */
-	rt_ifannouncemsg(ifp, IFAN_ARRIVAL);
 }
 
 static void
@@ -1182,7 +1179,7 @@ if_detach_internal(struct ifnet *ifp, int vmove, struct if_clone **ifcp)
 	 * which lead to leave group calls, which in turn access the
 	 * belonging ifnet structure:
 	 */
-	epoch_drain_callbacks(net_epoch_preempt);
+	NET_EPOCH_DRAIN_CALLBACKS();
 
 	/*
 	 * In any case (destroy or vmove) detach us from the groups
@@ -1258,8 +1255,6 @@ if_detach_internal(struct ifnet *ifp, int vmove, struct if_clone **ifcp)
 #endif
 	if_purgemaddrs(ifp);
 
-	/* Announce that the interface is gone. */
-	rt_ifannouncemsg(ifp, IFAN_DEPARTURE);
 	EVENTHANDLER_INVOKE(ifnet_departure_event, ifp);
 	if (IS_DEFAULT_VNET(curvnet))
 		devctl_notify("IFNET", ifp->if_xname, "DETACH", NULL);
@@ -1622,14 +1617,13 @@ _if_delgroup_locked(struct ifnet *ifp, struct ifg_list *ifgl,
 	IFNET_WUNLOCK();
 
 	epoch_wait_preempt(net_epoch_preempt);
+	EVENTHANDLER_INVOKE(group_change_event, groupname);
 	if (freeifgl) {
 		EVENTHANDLER_INVOKE(group_detach_event, ifgl->ifgl_group);
 		free(ifgl->ifgl_group, M_TEMP);
 	}
 	free(ifgm, M_TEMP);
 	free(ifgl, M_TEMP);
-
-	EVENTHANDLER_INVOKE(group_change_event, groupname);
 }
 
 /*
@@ -2139,7 +2133,7 @@ ifaof_ifpforaddr(const struct sockaddr *addr, struct ifnet *ifp)
 			continue;
 		}
 		if (ifp->if_flags & IFF_POINTOPOINT) {
-			if (sa_equal(addr, ifa->ifa_dstaddr))
+			if (ifa->ifa_dstaddr && sa_equal(addr, ifa->ifa_dstaddr))
 				goto done;
 		} else {
 			cp = addr->sa_data;
@@ -2228,7 +2222,7 @@ if_unroute(struct ifnet *ifp, int flag, int fam)
 
 	if (ifp->if_carp)
 		(*carp_linkstate_p)(ifp);
-	rt_ifmsg(ifp);
+	rt_ifmsg_14(ifp, IFF_UP);
 }
 
 /*
@@ -2252,7 +2246,7 @@ if_route(struct ifnet *ifp, int flag, int fam)
 	NET_EPOCH_EXIT(et);
 	if (ifp->if_carp)
 		(*carp_linkstate_p)(ifp);
-	rt_ifmsg(ifp);
+	rt_ifmsg_14(ifp, IFF_UP);
 #ifdef INET6
 	in6_if_up(ifp);
 #endif
@@ -2296,7 +2290,7 @@ do_link_state_change(void *arg, int pending)
 	link_state = ifp->if_link_state;
 
 	CURVNET_SET(ifp->if_vnet);
-	rt_ifmsg(ifp);
+	rt_ifmsg_14(ifp, 0);
 	if (ifp->if_vlantrunk != NULL)
 		(*vlan_link_state_p)(ifp);
 
@@ -2492,7 +2486,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 	int new_flags, temp_flags;
 	size_t namelen, onamelen;
 	size_t descrlen;
-	char *descrbuf, *odescrbuf;
+	char *descrbuf;
 	char new_name[IFNAMSIZ];
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
@@ -2579,23 +2573,17 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		else if (ifr_buffer_get_length(ifr) == 0)
 			descrbuf = NULL;
 		else {
-			descrbuf = malloc(ifr_buffer_get_length(ifr),
-			    M_IFDESCR, M_WAITOK | M_ZERO);
+			descrbuf = if_allocdescr(ifr_buffer_get_length(ifr), M_WAITOK);
 			error = copyin(ifr_buffer_get_buffer(ifr), descrbuf,
 			    ifr_buffer_get_length(ifr) - 1);
 			if (error) {
-				free(descrbuf, M_IFDESCR);
+				if_freedescr(descrbuf);
 				break;
 			}
 		}
 
-		sx_xlock(&ifdescr_sx);
-		odescrbuf = ifp->if_description;
-		ifp->if_description = descrbuf;
-		sx_xunlock(&ifdescr_sx);
-
+		if_setdescr(ifp, descrbuf);
 		getmicrotime(&ifp->if_lastchange);
-		free(odescrbuf, M_IFDESCR);
 		break;
 
 	case SIOCGIFFIB:
@@ -2692,8 +2680,6 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		 */
 		ifp->if_flags |= IFF_RENAMING;
 		
-		/* Announce the departure of the interface. */
-		rt_ifannouncemsg(ifp, IFAN_DEPARTURE);
 		EVENTHANDLER_INVOKE(ifnet_departure_event, ifp);
 
 		if_printf(ifp, "changing name to '%s'\n", new_name);
@@ -2722,8 +2708,6 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		IF_ADDR_WUNLOCK(ifp);
 
 		EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
-		/* Announce the return of the interface. */
-		rt_ifannouncemsg(ifp, IFAN_ARRIVAL);
 
 		ifp->if_flags &= ~IFF_RENAMING;
 		break;
@@ -2770,7 +2754,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		error = (*ifp->if_ioctl)(ifp, cmd, data);
 		if (error == 0) {
 			getmicrotime(&ifp->if_lastchange);
-			rt_ifmsg(ifp);
+			rt_ifmsg_14(ifp, 0);
 #ifdef INET
 			DEBUGNET_NOTIFY_MTU(ifp);
 #endif
@@ -3200,7 +3184,7 @@ if_setflag(struct ifnet *ifp, int flag, int pflag, int *refcount, int onswitch)
 	if (error)
 		goto recover;
 	/* Notify userland that interface flags have changed */
-	rt_ifmsg(ifp);
+	rt_ifmsg_14(ifp, flag);
 	return (0);
 
 recover:
@@ -3991,15 +3975,35 @@ if_initname(struct ifnet *ifp, const char *name, int unit)
 		strlcpy(ifp->if_xname, name, IFNAMSIZ);
 }
 
+static int
+if_vlog(struct ifnet *ifp, int pri, const char *fmt, va_list ap)
+{
+	char if_fmt[256];
+
+	snprintf(if_fmt, sizeof(if_fmt), "%s: %s", ifp->if_xname, fmt);
+	vlog(pri, if_fmt, ap);
+	return (0);
+}
+
+
 int
 if_printf(struct ifnet *ifp, const char *fmt, ...)
 {
-	char if_fmt[256];
 	va_list ap;
 
-	snprintf(if_fmt, sizeof(if_fmt), "%s: %s", ifp->if_xname, fmt);
 	va_start(ap, fmt);
-	vlog(LOG_INFO, if_fmt, ap);
+	if_vlog(ifp, LOG_INFO, fmt, ap);
+	va_end(ap);
+	return (0);
+}
+
+int
+if_log(struct ifnet *ifp, int pri, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	if_vlog(ifp, pri, fmt, ap);
 	va_end(ap);
 	return (0);
 }
@@ -4084,7 +4088,7 @@ if_deregister_com_alloc(u_char type)
 	 * fixes issues about late invocation of if_destroy(), which leads
 	 * to memory leak from if_com_alloc[type] allocated if_l2com.
 	 */
-	epoch_drain_callbacks(net_epoch_preempt);
+	NET_EPOCH_DRAIN_CALLBACKS();
 
 	if_com_alloc[type] = NULL;
 	if_com_free[type] = NULL;
@@ -4165,6 +4169,30 @@ int
 if_getcapenable(if_t ifp)
 {
 	return ((struct ifnet *)ifp)->if_capenable;
+}
+
+void
+if_setdescr(if_t ifp, char *descrbuf)
+{
+	sx_xlock(&ifdescr_sx);
+	char *odescrbuf = ifp->if_description;
+	ifp->if_description = descrbuf;
+	sx_xunlock(&ifdescr_sx);
+
+	if_freedescr(odescrbuf);
+}
+
+char *
+if_allocdescr(size_t sz, int malloc_flag)
+{
+	malloc_flag &= (M_WAITOK | M_NOWAIT);
+	return (malloc(sz, M_IFDESCR, M_ZERO | malloc_flag));
+}
+
+void
+if_freedescr(char *descrbuf)
+{
+	free(descrbuf, M_IFDESCR);
 }
 
 /*

@@ -714,7 +714,7 @@ ffs_build_dinode1(struct ufs1_dinode *dinp, dirbuf_t *dbufp, fsnode *cur,
 	} else if (S_ISLNK(cur->type)) {	/* symlink */
 		slen = strlen(cur->symlink);
 		if (slen < UFS1_MAXSYMLINKLEN) {	/* short link */
-			memcpy(dinp->di_db, cur->symlink, slen);
+			memcpy(dinp->di_shortlink, cur->symlink, slen);
 		} else
 			membuf = cur->symlink;
 		dinp->di_size = slen;
@@ -773,7 +773,7 @@ ffs_build_dinode2(struct ufs2_dinode *dinp, dirbuf_t *dbufp, fsnode *cur,
 	} else if (S_ISLNK(cur->type)) {	/* symlink */
 		slen = strlen(cur->symlink);
 		if (slen < UFS2_MAXSYMLINKLEN) {	/* short link */
-			memcpy(dinp->di_db, cur->symlink, slen);
+			memcpy(dinp->di_shortlink, cur->symlink, slen);
 		} else
 			membuf = cur->symlink;
 		dinp->di_size = slen;
@@ -954,7 +954,7 @@ ffs_write_file(union dinode *din, uint32_t ino, void *buf, fsinfo_t *fsopts)
 
 	if (isfile) {
 		fbuf = emalloc(ffs_opts->bsize);
-		if ((ffd = open((char *)buf, O_RDONLY, 0444)) == -1) {
+		if ((ffd = open((char *)buf, O_RDONLY)) == -1) {
 			err(EXIT_FAILURE, "Can't open `%s' for reading", (char *)buf);
 		}
 	} else {
@@ -1002,7 +1002,6 @@ ffs_write_file(union dinode *din, uint32_t ino, void *buf, fsinfo_t *fsopts)
 		errno = bwrite(bp);
 		if (errno != 0)
 			goto bad_ffs_write_file;
-		brelse(bp);
 		if (!isfile)
 			p += chunk;
 	}

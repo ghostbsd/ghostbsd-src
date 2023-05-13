@@ -234,8 +234,8 @@ struct listen_port_info {
  *   |listen_port_list  |
  *   |------------------|
  *            |
- *            |              |-----------|       |-----------|  
- *            |              | port_num:X|       | port_num:X|  
+ *            |              |-----------|       |-----------|
+ *            |              | port_num:X|       | port_num:X|
  *            |--------------|-list------|-------|-list------|-------....
  *                           | lep_list----|     | lep_list----|
  *                           | refcnt    | |     | refcnt    | |
@@ -245,13 +245,13 @@ struct listen_port_info {
  *                                         |                   |
  *                                         |                   |
  *                                         |                   |
- *                                         |                   |         lep1                  lep2         
+ *                                         |                   |         lep1                  lep2
  *                                         |                   |    |----------------|    |----------------|
  *                                         |                   |----| listen_ep_list |----| listen_ep_list |
  *                                         |                        |----------------|    |----------------|
  *                                         |
  *                                         |
- *                                         |        lep1                  lep2         
+ *                                         |        lep1                  lep2
  *                                         |   |----------------|    |----------------|
  *                                         |---| listen_ep_list |----| listen_ep_list |
  *                                             |----------------|    |----------------|
@@ -260,7 +260,7 @@ struct listen_port_info {
  * each TCP port number.
  *
  * Here 'lep1' is always marked as Master lep, because solisten() is always
- * called through first lep. 
+ * called through first lep.
  *
  */
 static struct listen_port_info *
@@ -938,8 +938,7 @@ static inline int c4iw_zero_addr(struct sockaddr *addr)
 	struct in6_addr *ip6;
 
 	if (addr->sa_family == AF_INET)
-		return IN_ZERONET(
-			ntohl(((struct sockaddr_in *)addr)->sin_addr.s_addr));
+		return (((struct sockaddr_in *)addr)->sin_addr.s_addr == 0);
 	else {
 		ip6 = &((struct sockaddr_in6 *) addr)->sin6_addr;
 		return (ip6->s6_addr32[0] | ip6->s6_addr32[1] |
@@ -1118,7 +1117,7 @@ process_socket_event(struct c4iw_ep *ep)
 
 	if (ep->com.state == DEAD) {
 		CTR3(KTR_IW_CXGBE, "%s: Pending socket event discarded "
-			"ep %p ep_state %s", __func__, ep, states[state]); 
+		    "ep %p ep_state %s", __func__, ep, states[state]);
 		return;
 	}
 

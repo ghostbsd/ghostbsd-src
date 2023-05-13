@@ -46,7 +46,7 @@ static char sccsid[] = "@(#)mkfs.c	8.11 (Berkeley) 5/3/95";
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#define	IN_RTLD			/* So we pickup the P_OSREL defines */
+#define _WANT_P_OSREL
 #include <sys/param.h>
 #include <sys/disklabel.h>
 #include <sys/file.h>
@@ -912,8 +912,9 @@ fsinit(time_t utime)
 				    alloc(sblock.fs_fsize, node.dp1.di_mode);
 			node.dp1.di_blocks =
 			    btodb(fragroundup(&sblock, node.dp1.di_size));
-				wtfs(fsbtodb(&sblock, node.dp1.di_db[0]),
-				    sblock.fs_fsize, iobuf);
+			node.dp1.di_dirdepth = 1;
+			wtfs(fsbtodb(&sblock, node.dp1.di_db[0]),
+			    sblock.fs_fsize, iobuf);
 			iput(&node, UFS_ROOTINO + 1);
 		}
 	} else {
@@ -948,8 +949,9 @@ fsinit(time_t utime)
 				    alloc(sblock.fs_fsize, node.dp2.di_mode);
 			node.dp2.di_blocks =
 			    btodb(fragroundup(&sblock, node.dp2.di_size));
-				wtfs(fsbtodb(&sblock, node.dp2.di_db[0]), 
-				    sblock.fs_fsize, iobuf);
+			node.dp2.di_dirdepth = 1;
+			wtfs(fsbtodb(&sblock, node.dp2.di_db[0]), 
+			    sblock.fs_fsize, iobuf);
 			iput(&node, UFS_ROOTINO + 1);
 		}
 	}

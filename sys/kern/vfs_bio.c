@@ -116,7 +116,7 @@ struct bufqueue {
 #define	BQ_ASSERT_LOCKED(bq)	mtx_assert(BQ_LOCKPTR((bq)), MA_OWNED)
 
 struct bufdomain {
-	struct bufqueue	bd_subq[MAXCPU + 1]; /* Per-cpu sub queues + global */
+	struct bufqueue	*bd_subq;
 	struct bufqueue bd_dirtyq;
 	struct bufqueue	*bd_cleanq;
 	struct mtx_padalign bd_run_lock;
@@ -763,6 +763,9 @@ bufspace_daemon_shutdown(void *arg, int howto __unused)
 {
 	struct bufdomain *bd = arg;
 	int error;
+
+	if (KERNEL_PANICKED())
+		return;
 
 	BD_RUN_LOCK(bd);
 	bd->bd_shutdown = true;
@@ -1898,6 +1901,9 @@ bd_init(struct bufdomain *bd)
 {
 	int i;
 
+	/* Per-CPU clean buf queues, plus one global queue. */
+	bd->bd_subq = mallocarray(mp_maxid + 2, sizeof(struct bufqueue),
+	    M_BIOBUF, M_WAITOK | M_ZERO);
 	bd->bd_cleanq = &bd->bd_subq[mp_maxid + 1];
 	bq_init(bd->bd_cleanq, QUEUE_CLEAN, mp_maxid + 1, "bufq clean lock");
 	bq_init(&bd->bd_dirtyq, QUEUE_DIRTY, -1, "bufq dirty lock");
@@ -3403,6 +3409,9 @@ buf_daemon_shutdown(void *arg __unused, int howto __unused)
 {
 	int error;
 
+	if (KERNEL_PANICKED())
+		return;
+
 	mtx_lock(&bdlock);
 	bd_shutdown = true;
 	wakeup(&bd_request);
@@ -4343,8 +4352,9 @@ allocbuf(struct buf *bp, int size)
 	if (bp->b_bcount == size)
 		return (1);
 
-	if (bp->b_kvasize != 0 && bp->b_kvasize < size)
-		panic("allocbuf: buffer too small");
+	KASSERT(bp->b_kvasize == 0 || bp->b_kvasize >= size,
+	    ("allocbuf: buffer too small %p %#x %#x",
+	    bp, bp->b_kvasize, size));
 
 	newbsize = roundup2(size, DEV_BSIZE);
 	if ((bp->b_flags & B_VMIO) == 0) {
@@ -4361,11 +4371,12 @@ allocbuf(struct buf *bp, int size)
 	} else {
 		int desiredpages;
 
-		desiredpages = (size == 0) ? 0 :
+		desiredpages = size == 0 ? 0 :
 		    num_pages((bp->b_offset & PAGE_MASK) + newbsize);
 
-		if (bp->b_flags & B_MALLOC)
-			panic("allocbuf: VMIO buffer can't be malloced");
+		KASSERT((bp->b_flags & B_MALLOC) == 0,
+		    ("allocbuf: VMIO buffer can't be malloced %p", bp));
+
 		/*
 		 * Set B_CACHE initially if buffer is 0 length or will become
 		 * 0-length.

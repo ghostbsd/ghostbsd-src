@@ -145,10 +145,21 @@ struct ufs2_dinode {
 	u_int32_t	di_flags;	/*  88: Status flags (chflags). */
 	u_int32_t	di_extsize;	/*  92: External attributes size. */
 	ufs2_daddr_t	di_extb[UFS_NXADDR];/* 96: External attributes block. */
-	ufs2_daddr_t	di_db[UFS_NDADDR]; /* 112: Direct disk blocks. */
-	ufs2_daddr_t	di_ib[UFS_NIADDR]; /* 208: Indirect disk blocks. */
+	union {
+		struct {
+			ufs2_daddr_t	di_db /* 112: Direct disk blocks. */
+			    [UFS_NDADDR];
+			ufs2_daddr_t	di_ib /* 208: Indirect disk blocks. */
+			    [UFS_NIADDR];
+		};
+		char	di_shortlink	/* 112: Embedded symbolic link. */
+		    [(UFS_NDADDR + UFS_NIADDR) * sizeof(ufs2_daddr_t)];
+	};
 	u_int64_t	di_modrev;	/* 232: i_modrev for NFSv4 */
-	uint32_t	di_freelink;	/* 240: SUJ: Next unlinked inode. */
+	union {
+		uint32_t di_freelink;	/* 240: SUJ: Next unlinked inode. */
+		uint32_t di_dirdepth;	/* 240: IFDIR: depth from root dir */
+	};
 	uint32_t	di_ckhash;	/* 244: if CK_INODE, its check-hash */
 	uint32_t	di_spare[2];	/* 248: Reserved; currently unused */
 };
@@ -171,7 +182,10 @@ struct ufs2_dinode {
 struct ufs1_dinode {
 	u_int16_t	di_mode;	/*   0: IFMT, permissions; see below. */
 	int16_t		di_nlink;	/*   2: File link count. */
-	uint32_t	di_freelink;	/*   4: SUJ: Next unlinked inode. */
+	union {
+		uint32_t di_freelink;	/*   4: SUJ: Next unlinked inode. */
+		uint32_t di_dirdepth;	/*   4: IFDIR: depth from root dir */
+	};
 	u_int64_t	di_size;	/*   8: File byte count. */
 	int32_t		di_atime;	/*  16: Last access time. */
 	int32_t		di_atimensec;	/*  20: Last access time. */
@@ -179,8 +193,16 @@ struct ufs1_dinode {
 	int32_t		di_mtimensec;	/*  28: Last modified time. */
 	int32_t		di_ctime;	/*  32: Last inode change time. */
 	int32_t		di_ctimensec;	/*  36: Last inode change time. */
-	ufs1_daddr_t	di_db[UFS_NDADDR]; /*  40: Direct disk blocks. */
-	ufs1_daddr_t	di_ib[UFS_NIADDR]; /*  88: Indirect disk blocks. */
+	union {
+		struct {
+			ufs1_daddr_t	di_db /*  40: Direct disk blocks. */
+			    [UFS_NDADDR];
+			ufs1_daddr_t	di_ib /*  88: Indirect disk blocks. */
+			    [UFS_NIADDR];
+		};
+		char	di_shortlink	/*  40: Embedded symbolic link. */
+		    [(UFS_NDADDR + UFS_NIADDR) * sizeof(ufs1_daddr_t)];
+	};
 	u_int32_t	di_flags;	/* 100: Status flags (chflags). */
 	u_int32_t	di_blocks;	/* 104: Blocks actually held. */
 	u_int32_t	di_gen;		/* 108: Generation number. */

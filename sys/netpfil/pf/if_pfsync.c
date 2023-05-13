@@ -102,12 +102,16 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp_fsm.h>
 #include <netinet/tcp_seq.h>
 
+#include <netinet/ip6.h>
+#include <netinet6/ip6_var.h>
+
 #define PFSYNC_MINPKT ( \
 	sizeof(struct ip) + \
 	sizeof(struct pfsync_header) + \
 	sizeof(struct pfsync_subheader) )
 
 struct pfsync_bucket;
+struct pfsync_softc;
 
 struct pfsync_pkt {
 	struct ip *ip;
@@ -170,6 +174,7 @@ static void	pfsync_q_ins(struct pf_kstate *, int, bool);
 static void	pfsync_q_del(struct pf_kstate *, bool, struct pfsync_bucket *);
 
 static void	pfsync_update_state(struct pf_kstate *);
+static void	pfsync_tx(struct pfsync_softc *, struct mbuf *);
 
 struct pfsync_upd_req_item {
 	TAILQ_ENTRY(pfsync_upd_req_item)	ur_entry;
@@ -179,14 +184,11 @@ struct pfsync_upd_req_item {
 struct pfsync_deferral {
 	struct pfsync_softc		*pd_sc;
 	TAILQ_ENTRY(pfsync_deferral)	pd_entry;
-	u_int				pd_refs;
 	struct callout			pd_tmo;
 
 	struct pf_kstate		*pd_st;
 	struct mbuf			*pd_m;
 };
-
-struct pfsync_sofct;
 
 struct pfsync_bucket
 {
@@ -293,6 +295,7 @@ static int	pfsyncioctl(struct ifnet *, u_long, caddr_t);
 
 static int	pfsync_defer(struct pf_kstate *, struct mbuf *);
 static void	pfsync_undefer(struct pfsync_deferral *, int);
+static void	pfsync_undefer_state_locked(struct pf_kstate *, int);
 static void	pfsync_undefer_state(struct pf_kstate *, int);
 static void	pfsync_defer_tmo(void *);
 
@@ -391,7 +394,7 @@ pfsync_clone_destroy(struct ifnet *ifp)
 {
 	struct pfsync_softc *sc = ifp->if_softc;
 	struct pfsync_bucket *b;
-	int c;
+	int c, ret;
 
 	for (c = 0; c < pfsync_buckets; c++) {
 		b = &sc->sc_buckets[c];
@@ -400,22 +403,23 @@ pfsync_clone_destroy(struct ifnet *ifp)
 		 * cleared by pfsync_uninit(), and we have only to
 		 * drain callouts.
 		 */
+		PFSYNC_BUCKET_LOCK(b);
 		while (b->b_deferred > 0) {
 			struct pfsync_deferral *pd =
 			    TAILQ_FIRST(&b->b_deferrals);
 
-			TAILQ_REMOVE(&b->b_deferrals, pd, pd_entry);
-			b->b_deferred--;
-			if (callout_stop(&pd->pd_tmo) > 0) {
-				pf_release_state(pd->pd_st);
-				m_freem(pd->pd_m);
-				free(pd, M_PFSYNC);
+			ret = callout_stop(&pd->pd_tmo);
+			PFSYNC_BUCKET_UNLOCK(b);
+			if (ret > 0) {
+				pfsync_undefer(pd, 1);
 			} else {
-				pd->pd_refs++;
 				callout_drain(&pd->pd_tmo);
-				free(pd, M_PFSYNC);
 			}
+			PFSYNC_BUCKET_LOCK(b);
 		}
+		MPASS(b->b_deferred == 0);
+		MPASS(TAILQ_EMPTY(&b->b_deferrals));
+		PFSYNC_BUCKET_UNLOCK(b);
 
 		callout_drain(&b->b_tmo);
 	}
@@ -598,7 +602,11 @@ pfsync_state_import(struct pfsync_state *sp, u_int8_t flags)
 	if (!(flags & PFSYNC_SI_IOCTL)) {
 		st->state_flags &= ~PFSTATE_NOSYNC;
 		if (st->state_flags & PFSTATE_ACK) {
+			struct pfsync_bucket *b = pfsync_get_bucket(sc, st);
+			PFSYNC_BUCKET_LOCK(b);
 			pfsync_q_ins(st, PFSYNC_S_IACK, true);
+			PFSYNC_BUCKET_UNLOCK(b);
+
 			pfsync_push_all(sc);
 		}
 	}
@@ -1771,7 +1779,6 @@ pfsync_defer(struct pf_kstate *st, struct mbuf *m)
 	st->state_flags |= PFSTATE_ACK;
 
 	pd->pd_sc = sc;
-	pd->pd_refs = 0;
 	pd->pd_st = st;
 	pf_ref_state(st);
 	pd->pd_m = m;
@@ -1822,17 +1829,22 @@ pfsync_defer_tmo(void *arg)
 
 	PFSYNC_BUCKET_LOCK_ASSERT(b);
 
-	NET_EPOCH_ENTER(et);
-	CURVNET_SET(m->m_pkthdr.rcvif->if_vnet);
-
 	TAILQ_REMOVE(&b->b_deferrals, pd, pd_entry);
 	b->b_deferred--;
 	pd->pd_st->state_flags &= ~PFSTATE_ACK;	/* XXX: locking! */
-	if (pd->pd_refs == 0)
-		free(pd, M_PFSYNC);
 	PFSYNC_BUCKET_UNLOCK(b);
+	free(pd, M_PFSYNC);
 
-	ip_output(m, NULL, NULL, 0, NULL, NULL);
+	if (sc->sc_sync_if == NULL) {
+		pf_release_state(st);
+		m_freem(m);
+		return;
+	}
+
+	NET_EPOCH_ENTER(et);
+	CURVNET_SET(sc->sc_sync_if->if_vnet);
+
+	pfsync_tx(sc, m);
 
 	pf_release_state(st);
 
@@ -1841,26 +1853,35 @@ pfsync_defer_tmo(void *arg)
 }
 
 static void
-pfsync_undefer_state(struct pf_kstate *st, int drop)
+pfsync_undefer_state_locked(struct pf_kstate *st, int drop)
 {
 	struct pfsync_softc *sc = V_pfsyncif;
 	struct pfsync_deferral *pd;
 	struct pfsync_bucket *b = pfsync_get_bucket(sc, st);
 
-	PFSYNC_BUCKET_LOCK(b);
+	PFSYNC_BUCKET_LOCK_ASSERT(b);
 
 	TAILQ_FOREACH(pd, &b->b_deferrals, pd_entry) {
 		 if (pd->pd_st == st) {
 			if (callout_stop(&pd->pd_tmo) > 0)
 				pfsync_undefer(pd, drop);
 
-			PFSYNC_BUCKET_UNLOCK(b);
 			return;
 		}
 	}
-	PFSYNC_BUCKET_UNLOCK(b);
 
 	panic("%s: unable to find deferred state", __func__);
+}
+
+static void
+pfsync_undefer_state(struct pf_kstate *st, int drop)
+{
+	struct pfsync_softc *sc = V_pfsyncif;
+	struct pfsync_bucket *b = pfsync_get_bucket(sc, st);
+
+	PFSYNC_BUCKET_LOCK(b);
+	pfsync_undefer_state_locked(st, drop);
+	PFSYNC_BUCKET_UNLOCK(b);
 }
 
 static struct pfsync_bucket*
@@ -1881,7 +1902,7 @@ pfsync_update_state(struct pf_kstate *st)
 	PFSYNC_BUCKET_LOCK(b);
 
 	if (st->state_flags & PFSTATE_ACK)
-		pfsync_undefer_state(st, 0);
+		pfsync_undefer_state_locked(st, 0);
 	if (st->state_flags & PFSTATE_NOSYNC) {
 		if (st->sync_state != PFSYNC_S_NONE)
 			pfsync_q_del(st, true, b);
@@ -2024,7 +2045,7 @@ pfsync_delete_state(struct pf_kstate *st)
 
 	PFSYNC_BUCKET_LOCK(b);
 	if (st->state_flags & PFSTATE_ACK)
-		pfsync_undefer_state(st, 1);
+		pfsync_undefer_state_locked(st, 1);
 	if (st->state_flags & PFSTATE_NOSYNC) {
 		if (st->sync_state != PFSYNC_S_NONE)
 			pfsync_q_del(st, true, b);
@@ -2316,6 +2337,55 @@ pfsync_push_all(struct pfsync_softc *sc)
 }
 
 static void
+pfsync_tx(struct pfsync_softc *sc, struct mbuf *m)
+{
+	struct ip *ip;
+	int af, error = 0;
+
+	ip = mtod(m, struct ip *);
+	MPASS(ip->ip_v == IPVERSION || ip->ip_v == (IPV6_VERSION >> 4));
+
+	af = ip->ip_v == IPVERSION ? AF_INET : AF_INET6;
+
+	/*
+	 * We distinguish between a deferral packet and our
+	 * own pfsync packet based on M_SKIP_FIREWALL
+	 * flag. This is XXX.
+	 */
+	switch (af) {
+#ifdef INET
+	case AF_INET:
+		if (m->m_flags & M_SKIP_FIREWALL) {
+			error = ip_output(m, NULL, NULL, 0,
+			    NULL, NULL);
+		} else {
+			error = ip_output(m, NULL, NULL,
+			    IP_RAWOUTPUT, &sc->sc_imo, NULL);
+		}
+		break;
+#endif
+#ifdef INET6
+	case AF_INET6:
+		if (m->m_flags & M_SKIP_FIREWALL) {
+			error = ip6_output(m, NULL, NULL, 0,
+			    NULL, NULL, NULL);
+		} else {
+			MPASS(false);
+			/* We don't support pfsync over IPv6. */
+			/*error = ip6_output(m, NULL, NULL,
+			    IP_RAWOUTPUT, &sc->sc_imo6, NULL);*/
+		}
+		break;
+#endif
+	}
+
+	if (error == 0)
+		V_pfsyncstats.pfsyncs_opackets++;
+	else
+		V_pfsyncstats.pfsyncs_oerrors++;
+}
+
+static void
 pfsyncintr(void *arg)
 {
 	struct epoch_tracker et;
@@ -2342,18 +2412,7 @@ pfsyncintr(void *arg)
 			n = m->m_nextpkt;
 			m->m_nextpkt = NULL;
 
-			/*
-			 * We distinguish between a deferral packet and our
-			 * own pfsync packet based on M_SKIP_FIREWALL
-			 * flag. This is XXX.
-			 */
-			if (m->m_flags & M_SKIP_FIREWALL)
-				ip_output(m, NULL, NULL, 0, NULL, NULL);
-			else if (ip_output(m, NULL, NULL, IP_RAWOUTPUT, &sc->sc_imo,
-			    NULL) == 0)
-				V_pfsyncstats.pfsyncs_opackets++;
-			else
-				V_pfsyncstats.pfsyncs_oerrors++;
+			pfsync_tx(sc, m);
 		}
 	}
 	CURVNET_RESTORE();

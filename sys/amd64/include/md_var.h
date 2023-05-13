@@ -54,6 +54,7 @@ extern vm_paddr_t KERNend;
 
 extern bool efi_boot;
 
+struct	__mcontext;
 struct	savefpu;
 struct	sysentvec;
 
@@ -66,6 +67,7 @@ void	amd64_bsp_ist_init(struct pcpu *pc);
 void	amd64_syscall(struct thread *td, int traced);
 void	amd64_syscall_ret_flush_l1d(int error);
 void	amd64_syscall_ret_flush_l1d_recalc(void);
+void	cpu_init_small_core(void);
 void	doreti_iret(void) __asm(__STRING(doreti_iret));
 void	doreti_iret_fault(void) __asm(__STRING(doreti_iret_fault));
 void	flush_l1d_sw_abi(void);
@@ -88,5 +90,9 @@ void	set_top_of_stack_td(struct thread *td);
 struct savefpu *get_pcb_user_save_td(struct thread *td);
 struct savefpu *get_pcb_user_save_pcb(struct pcb *pcb);
 void	pci_early_quirks(void);
+void	get_fpcontext(struct thread *td, struct __mcontext *mcp,
+	    char **xfpusave, size_t *xfpusave_len);
+int	set_fpcontext(struct thread *td, struct __mcontext *mcp,
+	    char *xfpustate, size_t xfpustate_len);
 
 #endif /* !_MACHINE_MD_VAR_H_ */

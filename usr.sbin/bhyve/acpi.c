@@ -107,6 +107,30 @@ struct basl_fio {
 	if (fflush(x) != 0) goto err_exit;
 
 /*
+ * A list for additional ACPI devices like a TPM.
+ */
+struct acpi_device_list_entry {
+	SLIST_ENTRY(acpi_device_list_entry) chain;
+	const struct acpi_device *dev;
+};
+static SLIST_HEAD(acpi_device_list,
+    acpi_device_list_entry) acpi_devices = SLIST_HEAD_INITIALIZER(acpi_devices);
+
+int
+acpi_tables_add_device(const struct acpi_device *const dev)
+{
+	struct acpi_device_list_entry *const entry = calloc(1, sizeof(*entry));
+	if (entry == NULL) {
+		return (ENOMEM);
+	}
+
+	entry->dev = dev;
+	SLIST_INSERT_HEAD(&acpi_devices, entry, chain);
+
+	return (0);
+}
+
+/*
  * Helper routines for writing to the DSDT from other modules.
  */
 void
@@ -218,6 +242,11 @@ basl_fwrite_dsdt(FILE *fp)
 	dsdt_line("  }");
 
 	vmgenc_write_dsdt();
+
+	const struct acpi_device_list_entry *entry;
+	SLIST_FOREACH(entry, &acpi_devices, chain) {
+		BASL_EXEC(acpi_device_write_dsdt(entry->dev));
+	}
 
 	dsdt_line("}");
 
@@ -342,7 +371,7 @@ basl_compile(struct vmctx *ctx, int (*fwrite_section)(FILE *))
 			fmt = basl_verbose_iasl ?
 				"%s -p %s %s" :
 				"/bin/sh -c \"%s -p %s %s\" 1> /dev/null";
-				
+
 			snprintf(iaslbuf, sizeof(iaslbuf),
 				 fmt,
 				 BHYVE_ASL_COMPILER,
@@ -373,7 +402,7 @@ basl_make_templates(void)
 	err = 0;
 
 	/*
-	 * 
+	 *
 	 */
 	if ((tmpdir = getenv("BHYVE_TMPDIR")) == NULL || *tmpdir == '\0' ||
 	    (tmpdir = getenv("TMPDIR")) == NULL || *tmpdir == '\0') {
@@ -693,6 +722,37 @@ build_rsdt(struct vmctx *const ctx)
 }
 
 static int
+build_spcr(struct vmctx *const ctx)
+{
+	ACPI_TABLE_SPCR spcr;
+	struct basl_table *table;
+
+	BASL_EXEC(basl_table_create(&table, ctx, ACPI_SIG_SPCR,
+	    BASL_TABLE_ALIGNMENT));
+
+	memset(&spcr, 0, sizeof(spcr));
+	BASL_EXEC(basl_table_append_header(table, ACPI_SIG_SPCR, 1, 1));
+	spcr.InterfaceType = ACPI_DBG2_16550_COMPATIBLE;
+	basl_fill_gas(&spcr.SerialPort, ACPI_ADR_SPACE_SYSTEM_IO, 8, 0,
+	    ACPI_GAS_ACCESS_WIDTH_LEGACY, 0x3F8);
+	spcr.InterruptType = ACPI_SPCR_INTERRUPT_TYPE_8259;
+	spcr.PcInterrupt = 4;
+	spcr.BaudRate = ACPI_SPCR_BAUD_RATE_115200;
+	spcr.Parity = ACPI_SPCR_PARITY_NO_PARITY;
+	spcr.StopBits = ACPI_SPCR_STOP_BITS_1;
+	spcr.FlowControl = 3; /* RTS/CTS | DCD */
+	spcr.TerminalType = ACPI_SPCR_TERMINAL_TYPE_VT_UTF8;
+	BASL_EXEC(basl_table_append_content(table, &spcr, sizeof(spcr)));
+
+	BASL_EXEC(basl_table_append_pointer(rsdt, ACPI_SIG_SPCR,
+	    ACPI_RSDT_ENTRY_SIZE));
+	BASL_EXEC(basl_table_append_pointer(xsdt, ACPI_SIG_SPCR,
+	    ACPI_XSDT_ENTRY_SIZE));
+
+	return (0);
+}
+
+static int
 build_xsdt(struct vmctx *const ctx)
 {
 	BASL_EXEC(
@@ -749,6 +809,14 @@ acpi_build(struct vmctx *ctx, int ncpu)
 	BASL_EXEC(build_hpet(ctx));
 	BASL_EXEC(build_mcfg(ctx));
 	BASL_EXEC(build_facs(ctx));
+	BASL_EXEC(build_spcr(ctx));
+
+	/* Build ACPI device-specific tables such as a TPM2 table. */
+	const struct acpi_device_list_entry *entry;
+	SLIST_FOREACH(entry, &acpi_devices, chain) {
+		BASL_EXEC(acpi_device_build_table(entry->dev));
+	}
+
 	BASL_EXEC(build_dsdt(ctx));
 
 	BASL_EXEC(basl_finish());

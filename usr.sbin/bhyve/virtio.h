@@ -171,6 +171,22 @@
 #define	VIRTIO_DEV_SCSI		0x1004
 #define	VIRTIO_DEV_RANDOM	0x1005
 #define	VIRTIO_DEV_9P		0x1009
+#define VIRTIO_DEV_INPUT	0x1052
+
+/*
+ * PCI revision IDs
+ */
+#define VIRTIO_REV_INPUT	1
+
+/*
+ * PCI subvendor IDs
+ */
+#define VIRTIO_SUBVEN_INPUT	0x108E
+
+/*
+ * PCI subdevice IDs
+ */
+#define VIRTIO_SUBDEV_INPUT	0x1100
 
 /* From section 2.3, "Virtqueue Configuration", of the virtio specification */
 static inline int
@@ -179,7 +195,6 @@ vring_size_aligned(u_int qsz)
 	return (roundup2(vring_size(qsz, VRING_ALIGN), VRING_ALIGN));
 }
 
-struct vmctx;
 struct pci_devinst;
 struct vqueue_info;
 struct vm_snapshot_meta;
@@ -410,13 +425,13 @@ void	vq_relchain_publish(struct vqueue_info *vq);
 void	vq_relchain(struct vqueue_info *vq, uint16_t idx, uint32_t iolen);
 void	vq_endchains(struct vqueue_info *vq, int used_all_avail);
 
-uint64_t vi_pci_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
-		     int baridx, uint64_t offset, int size);
-void	vi_pci_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
-		     int baridx, uint64_t offset, int size, uint64_t value);
+uint64_t vi_pci_read(struct pci_devinst *pi, int baridx, uint64_t offset,
+	    int size);
+void	vi_pci_write(struct pci_devinst *pi, int baridx, uint64_t offset,
+	    int size, uint64_t value);
 #ifdef BHYVE_SNAPSHOT
 int	vi_pci_snapshot(struct vm_snapshot_meta *meta);
-int	vi_pci_pause(struct vmctx *ctx, struct pci_devinst *pi);
-int	vi_pci_resume(struct vmctx *ctx, struct pci_devinst *pi);
+int	vi_pci_pause(struct pci_devinst *pi);
+int	vi_pci_resume(struct pci_devinst *pi);
 #endif
 #endif	/* _BHYVE_VIRTIO_H_ */

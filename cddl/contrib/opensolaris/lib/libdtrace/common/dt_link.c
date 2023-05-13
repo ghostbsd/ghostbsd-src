@@ -572,7 +572,7 @@ dump_elf32(dtrace_hdl_t *dtp, const dof_hdr_t *dof, int fd)
 	} else {
 		shp = &elf_file.shdr[ESHDR_REL];
 		shp->sh_name = 37; /* DTRACE_SHSTRTAB32[37] = ".rel.SUNW_dof" */
-		shp->sh_flags = SHF_ALLOC;
+		shp->sh_flags = 0;
 		shp->sh_type = SHT_REL;
 		shp->sh_entsize = sizeof (de.de_rel[0]);
 		shp->sh_link = ESHDR_SYMTAB;
@@ -715,7 +715,7 @@ dump_elf64(dtrace_hdl_t *dtp, const dof_hdr_t *dof, int fd)
 	} else {
 		shp = &elf_file.shdr[ESHDR_REL];
 		shp->sh_name = 37; /* DTRACE_SHSTRTAB64[37] = ".rel.SUNW_dof" */
-		shp->sh_flags = SHF_ALLOC;
+		shp->sh_flags = 0;
 		shp->sh_type = SHT_RELA;
 		shp->sh_entsize = sizeof (de.de_rel[0]);
 		shp->sh_link = ESHDR_SYMTAB;
@@ -1612,6 +1612,7 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 			 * invocation.
 			 */
 			if (rsym.st_shndx != SHN_ABS) {
+				rsym.st_info = GELF_ST_INFO(STB_WEAK, STT_FUNC);
 				rsym.st_shndx = SHN_ABS;
 				(void) gelf_update_sym(data_sym, ndx, &rsym);
 			}

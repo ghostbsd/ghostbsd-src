@@ -15,6 +15,7 @@ MAN=	bhyve.8 bhyve_config.5
 BHYVE_SYSDIR?=${SRCTOP}
 
 SRCS=	\
+	acpi_device.c		\
 	atkbdc.c		\
 	acpi.c			\
 	audio.c			\
@@ -27,6 +28,7 @@ SRCS=	\
 	console.c		\
 	ctl_util.c		\
 	ctl_scsi_all.c		\
+	e820.c			\
 	fwctl.c			\
 	gdb.c			\
 	hda_codec.c		\
@@ -51,6 +53,7 @@ SRCS=	\
 	pci_virtio_9p.c		\
 	pci_virtio_block.c	\
 	pci_virtio_console.c	\
+	pci_virtio_input.c	\
 	pci_virtio_net.c	\
 	pci_virtio_rnd.c	\
 	pci_virtio_scsi.c	\
@@ -61,6 +64,8 @@ SRCS=	\
 	post.c			\
 	ps2kbd.c		\
 	ps2mouse.c		\
+	qemu_fwcfg.c		\
+	qemu_loader.c		\
 	rfb.c			\
 	rtc.c			\
 	smbiostbl.c		\
@@ -131,7 +136,12 @@ CFLAGS+= -DBHYVE_SNAPSHOT
 CFLAGS+=-DGDB_LOG
 .endif
 
-WARNS?=	2
+# Disable thread safety analysis since it only finds very simple bugs and
+# yields many false positives.
+NO_WTHREAD_SAFETY=
+
+NO_WCAST_ALIGN=
 
 SUBDIR=	kbdlayout
+
 .include <bsd.prog.mk>

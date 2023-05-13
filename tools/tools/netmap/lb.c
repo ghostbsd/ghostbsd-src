@@ -388,7 +388,8 @@ static void sigint_h(int sig)
 	signal(SIGINT, SIG_DFL);
 }
 
-static void usage()
+static void
+usage(void)
 {
 	printf("usage: lb [options]\n");
 	printf("where options are:\n");
@@ -498,7 +499,7 @@ init_groups(void)
  * when the need to drop arises, we roll it back to head.
  */
 struct morefrag {
-	uint16_t last_flag;	/* for intput rings */
+	uint16_t last_flag;	/* for input rings */
 	uint32_t last_hash;	/* for input rings */
 	uint32_t shadow_head;	/* for output rings */
 };
@@ -617,7 +618,6 @@ int main(int argc, char **argv)
 	int ch;
 	uint32_t i;
 	int rv;
-	unsigned int iter = 0;
 	int poll_timeout = 10; /* default */
 
 	glob_arg.ifname[0] = '\0';
@@ -897,7 +897,6 @@ run:
 
 	while (!do_abort) {
 		u_int polli = 0;
-		iter++;
 
 		for (i = 0; i < npipes; ++i) {
 			struct netmap_ring *ring = ports[i].ring;

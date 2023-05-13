@@ -45,10 +45,11 @@
 .Op Cm ,threads= Ar n
 .Oc
 .Sm on
-.Oo Fl G
+.Oo
 .Sm off
+.Fl G\~
 .Oo Ar w Oc
-.Oo Ar bind_address: Oc
+.Oo Ar bind_address Cm \&: Oc
 .Ar port
 .Sm on
 .Oc
@@ -59,8 +60,8 @@
 .Ar lpcdev Op Cm \&, Ar conf
 .Sm on
 .Oc
-.Oo Fl m
 .Sm off
+.Oo Fl m\~
 .Ar memsize
 .Oo
 .Cm K | Cm k | Cm M | Cm m | Cm G | Cm g | Cm T | Cm t
@@ -147,7 +148,7 @@ This is intended for debug purposes.
 .It Fl G Xo
 .Sm off
 .Oo Ar w Oc
-.Oo Ar bind_address: Oc
+.Oo Ar bind_address Cm \&: Oc
 .Ar port
 .Sm on
 .Xc
@@ -199,7 +200,9 @@ and
 .Cm com4 ,
 the boot ROM device
 .Cm bootrom ,
-and the debug/test device
+the
+.Cm fwcfg
+type and the debug/test device
 .Cm pc-testdev .
 .Pp
 The possible values for the
@@ -329,6 +332,8 @@ Virtio RNG interface.
 Virtio console interface, which exposes multiple ports
 to the guest in the form of simple char devices for simple IO
 between the guest and host userspaces.
+.It Cm virtio-input
+Virtio input interface.
 .It Cm ahci
 AHCI controller attached to arbitrary devices.
 .It Cm ahci-cd
@@ -342,7 +347,7 @@ PCI 16550 serial device.
 .It Cm lpc
 LPC PCI-ISA bridge with COM1, COM2, COM3, and COM4 16550 serial ports,
 a boot ROM, and,
-optionally, the debug/test device.
+optionally, a fwcfg type and the debug/test device.
 The LPC bridge emulation can only be configured on bus 0.
 .It Cm fbuf
 Raw framebuffer device attached to VNC server.
@@ -517,6 +522,29 @@ address space, and any modifications the guest makes will be saved
 to that file.
 .El
 .Pp
+Fwcfg types:
+.Bl -tag -width 10n
+.It Ar fwcfg
+The fwcfg interface is used to pass information such as the CPU count or ACPI tables to the guest firmware.
+Supported values are
+.Ql bhyve
+and
+.Ql qemu .
+Due to backward compatibility reasons,
+.Ql bhyve
+is the default option.
+When
+.Ql bhyve
+is used, bhyve's fwctl interface is used.
+It currently reports only the CPU count to the guest firmware.
+The
+.Ql qemu
+option uses QEMU's fwcfg interface.
+This interface is widely used and allows user-defined information to be passed to the guest.
+It is used for passing the CPU count, ACPI tables, a boot order and many other things to the guest.
+Some operating systems such as Fedora CoreOS can be configured by qemu's fwcfg interface as well.
+.El
+.Pp
 Pass-through device backends:
 .Sm off
 .Bl -bullet
@@ -589,6 +617,14 @@ feature, nor the console port
 resize at present.
 .It
 Emergency write is advertised, but no-op at present.
+.El
+.Pp
+Virtio input device backends:
+.Bl -tag -width 10n
+.It Ar /dev/input/eventX
+Send input events of
+.Ar /dev/input/eventX
+to guest by VirtIO Input Interface.
 .El
 .Pp
 Framebuffer devices backends:

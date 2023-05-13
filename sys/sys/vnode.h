@@ -248,6 +248,7 @@ struct xvnode {
 #define	VIRF_PGREAD	0x0002	/* Direct reads from the page cache are permitted,
 				   never cleared once set */
 #define	VIRF_MOUNTPOINT	0x0004	/* This vnode is mounted on */
+#define	VIRF_CROSSMP	0x0010	/* Cross-mp vnode, no locking */
 
 #define	VI_TEXT_REF	0x0001	/* Text ref grabbed use ref */
 #define	VI_MOUNT	0x0002	/* Mount in progress */
@@ -704,6 +705,9 @@ struct vnode *
 int	vn_commname(struct vnode *vn, char *buf, u_int buflen);
 int	vn_path_to_global_path(struct thread *td, struct vnode *vp,
 	    char *path, u_int pathlen);
+int	vn_path_to_global_path_hardlink(struct thread *td, struct vnode *vp,
+	    struct vnode *dvp, char *path, u_int pathlen, const char *leaf_name,
+	    size_t leaf_length);
 int	vaccess(enum vtype type, mode_t file_mode, uid_t file_uid,
 	    gid_t file_gid, accmode_t accmode, struct ucred *cred);
 int	vaccess_vexec_smr(mode_t file_mode, uid_t file_uid, gid_t file_gid,
@@ -1092,8 +1096,11 @@ void vfs_hash_remove(struct vnode *vp);
 
 int vfs_kqfilter(struct vop_kqfilter_args *);
 struct dirent;
+int vn_dir_next_dirent(struct vnode *vp, struct thread *td,
+    char *dirbuf, size_t dirbuflen,
+    struct dirent **dpp, size_t *len, off_t *off, int *eofflag);
+int vn_dir_check_empty(struct vnode *vp);
 int vfs_read_dirent(struct vop_readdir_args *ap, struct dirent *dp, off_t off);
-int vfs_emptydir(struct vnode *vp);
 
 int vfs_unixify_accmode(accmode_t *accmode);
 

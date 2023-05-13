@@ -2027,7 +2027,7 @@ zfs_version_print(void)
  * Return 1 if the user requested ANSI color output, and our terminal supports
  * it.  Return 0 for no color.
  */
-static int
+int
 use_color(void)
 {
 	static int use_color = -1;
@@ -2073,31 +2073,38 @@ use_color(void)
 }
 
 /*
- * color_start() and color_end() are used for when you want to colorize a block
- * of text.  For example:
+ * The functions color_start() and color_end() are used for when you want
+ * to colorize a block of text.
  *
- * color_start(ANSI_RED_FG)
+ * For example:
+ * color_start(ANSI_RED)
  * printf("hello");
  * printf("world");
  * color_end();
  */
 void
-color_start(char *color)
+color_start(const char *color)
 {
-	if (use_color())
-		printf("%s", color);
+	if (color && use_color()) {
+		fputs(color, stdout);
+		fflush(stdout);
+	}
 }
 
 void
 color_end(void)
 {
-	if (use_color())
-		printf(ANSI_RESET);
+	if (use_color()) {
+		fputs(ANSI_RESET, stdout);
+		fflush(stdout);
+	}
 }
 
-/* printf() with a color.  If color is NULL, then do a normal printf. */
+/*
+ * printf() with a color. If color is NULL, then do a normal printf.
+ */
 int
-printf_color(char *color, char *format, ...)
+printf_color(const char *color, char *format, ...)
 {
 	va_list aptr;
 	int rc;

@@ -97,6 +97,7 @@ SRCS+=	__getosreldate.c \
 	isinf.c \
 	isnan.c \
 	jrand48.c \
+	kqueue1.c \
 	lcong48.c \
 	libc_dlopen.c \
 	lockf.c \
@@ -175,6 +176,8 @@ SRCS+=	__getosreldate.c \
 	wordexp.c
 
 CFLAGS.arc4random.c= -I${SRCTOP}/sys -I${SRCTOP}/sys/crypto/chacha20
+
+CFLAGS.sysconf.c= -I${SRCTOP}/contrib/tzcode
 
 CFLAGS.dlfcn.c= ${RTLD_HDRS}
 CFLAGS.tls.c= ${RTLD_HDRS}

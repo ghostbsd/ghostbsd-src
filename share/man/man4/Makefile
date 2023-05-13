@@ -70,6 +70,7 @@ MAN=	aac.4 \
 	axe.4 \
 	axge.4 \
 	bce.4 \
+	bcm5974.4 \
 	bcma.4 \
 	bfe.4 \
 	bge.4 \
@@ -168,6 +169,7 @@ MAN=	aac.4 \
 	gdb.4 \
 	gem.4 \
 	genet.4 \
+	genetlink.4 \
 	geom.4 \
 	geom_linux_lvm.4 \
 	geom_map.4 \
@@ -213,6 +215,7 @@ MAN=	aac.4 \
 	icmp.4 \
 	icmp6.4 \
 	ida.4 \
+	ietp.4 \
 	if_ipsec.4 \
 	iflib.4 \
 	ifmib.4 \
@@ -270,6 +273,7 @@ MAN=	aac.4 \
 	ktls.4 \
 	ktr.4 \
 	kue.4 \
+	${_kvmclock.4} \
 	lagg.4 \
 	le.4 \
 	led.4 \
@@ -338,6 +342,7 @@ MAN=	aac.4 \
 	netgdb.4 \
 	netgraph.4 \
 	netintro.4 \
+	netlink.4 \
 	netmap.4 \
 	${_nfe.4} \
 	${_nfsmb.4} \
@@ -472,6 +477,7 @@ MAN=	aac.4 \
 	rl.4 \
 	rndtest.4 \
 	route.4 \
+	rtnetlink.4 \
 	rtsx.4 \
 	rtw88.4 \
 	rtw88fw.4 \
@@ -841,6 +847,7 @@ _igc.4=		igc.4
 _imcsmb.4=	imcsmb.4
 _io.4=		io.4
 _itwd.4=	itwd.4
+_kvmclock.4=	kvmclock.4
 _mgb.4=		mgb.4
 _nda.4=		nda.4
 _ndis.4=	ndis.4

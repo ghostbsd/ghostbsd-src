@@ -33,10 +33,13 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/types.h>
-#include <sys/sysctl.h>
+#include <sys/cpuset.h>
 #include <sys/errno.h>
 #include <sys/mman.h>
-#include <sys/cpuset.h>
+#include <sys/nv.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+#include <sys/un.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,11 +60,12 @@ __FBSDID("$FreeBSD$");
 #include <machine/vmm_dev.h>
 #include <vmmapi.h>
 
-#include <sys/socket.h>
-#include <sys/un.h>
-
 #include "amd/vmcb.h"
 #include "intel/vmcs.h"
+
+#ifdef BHYVE_SNAPSHOT
+#include "snapshot.h"
+#endif
 
 #define	MB	(1UL << 20)
 #define	GB	(1UL << 30)
@@ -69,9 +73,6 @@ __FBSDID("$FreeBSD$");
 #define	REQ_ARG		required_argument
 #define	NO_ARG		no_argument
 #define	OPT_ARG		optional_argument
-
-#define CHECKPOINT_RUN_DIR "/var/run/bhyve/checkpoint"
-#define MAX_VMNAME 100
 
 static const char *progname;
 
@@ -85,8 +86,7 @@ usage(bool cpu_intel)
 	"       [--create]\n"
 	"       [--destroy]\n"
 #ifdef BHYVE_SNAPSHOT
-	"       [--checkpoint=<filename>]\n"
-	"       [--suspend=<filename>]\n"
+	"       [--checkpoint=<filename> | --suspend=<filename>]\n"
 #endif
 	"       [--get-all]\n"
 	"       [--get-stats]\n"
@@ -293,12 +293,11 @@ static int set_desc_ldtr, get_desc_ldtr;
 static int set_cs, set_ds, set_es, set_fs, set_gs, set_ss, set_tr, set_ldtr;
 static int get_cs, get_ds, get_es, get_fs, get_gs, get_ss, get_tr, get_ldtr;
 static int set_x2apic_state, get_x2apic_state;
-enum x2apic_state x2apic_state;
+static enum x2apic_state x2apic_state;
 static int unassign_pptdev, bus, slot, func;
 static int run;
 static int get_cpu_topology;
 #ifdef BHYVE_SNAPSHOT
-static int vm_checkpoint_opt;
 static int vm_suspend_opt;
 #endif
 
@@ -315,7 +314,6 @@ static int get_pinbased_ctls, get_procbased_ctls, get_procbased_ctls2;
 static int get_eptp, get_io_bitmap, get_tsc_offset;
 static int get_vmcs_entry_interruption_info;
 static int get_vmcs_interruptibility;
-uint32_t vmcs_entry_interruption_info;
 static int get_vmcs_gpa, get_vmcs_gla;
 static int get_exception_bitmap;
 static int get_cr0_mask, get_cr0_shadow;
@@ -496,8 +494,8 @@ dump_intel_msr_pm(const char *bitmap, int vcpu)
 static int
 dump_msr_bitmap(int vcpu, uint64_t addr, bool cpu_intel)
 {
+	char *bitmap;
 	int error, fd, map_size;
-	const char *bitmap;
 
 	error = -1;
 	bitmap = MAP_FAILED;
@@ -647,25 +645,20 @@ print_intinfo(const char *banner, uint64_t info)
 static bool
 cpu_vendor_intel(void)
 {
-	u_int regs[4];
-	char cpu_vendor[13];
+	u_int regs[4], v[3];
 
 	do_cpuid(0, regs);
-	((u_int *)&cpu_vendor)[0] = regs[1];
-	((u_int *)&cpu_vendor)[1] = regs[3];
-	((u_int *)&cpu_vendor)[2] = regs[2];
-	cpu_vendor[12] = '\0';
+	v[0] = regs[1];
+	v[1] = regs[3];
+	v[2] = regs[2];
 
-	if (strcmp(cpu_vendor, "AuthenticAMD") == 0) {
-		return (false);
-	} else if (strcmp(cpu_vendor, "HygonGenuine") == 0) {
-		return (false);
-	} else if (strcmp(cpu_vendor, "GenuineIntel") == 0) {
+	if (memcmp(v, "GenuineIntel", sizeof(v)) == 0)
 		return (true);
-	} else {
-		fprintf(stderr, "Unknown cpu vendor \"%s\"\n", cpu_vendor);
-		exit(1);
-	}
+	if (memcmp(v, "AuthenticAMD", sizeof(v)) == 0 ||
+	    memcmp(v, "HygonGenuine", sizeof(v)) == 0)
+		return (false);
+	fprintf(stderr, "Unknown cpu vendor \"%s\"\n", (const char *)v);
+	exit(1);
 }
 
 static int
@@ -1681,77 +1674,53 @@ show_memseg(struct vmctx *ctx)
 
 #ifdef BHYVE_SNAPSHOT
 static int
-send_checkpoint_op_req(struct vmctx *ctx, struct checkpoint_op *op)
+send_message(const char *vmname, nvlist_t *nvl)
 {
 	struct sockaddr_un addr;
-	int socket_fd, len, len_sent, total_sent;
-	int err = 0;
-	char vmname_buf[MAX_VMNAME];
+	int err = 0, socket_fd;
 
 	socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if (socket_fd < 0) {
 		perror("Error creating bhyvectl socket");
-		err = -1;
+		err = errno;
 		goto done;
 	}
 
 	memset(&addr, 0, sizeof(struct sockaddr_un));
+	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s%s",
+	    BHYVE_RUN_DIR, vmname);
 	addr.sun_family = AF_UNIX;
+	addr.sun_len = SUN_LEN(&addr);
 
-	err = vm_get_name(ctx, vmname_buf, MAX_VMNAME - 1);
-	if (err != 0) {
-		perror("Failed to get VM name");
+	if (connect(socket_fd, (struct sockaddr *)&addr, addr.sun_len) != 0) {
+		perror("connect() failed");
+		err = errno;
 		goto done;
 	}
 
-	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/%s", CHECKPOINT_RUN_DIR, vmname_buf);
-
-	if (connect(socket_fd, (struct sockaddr *)&addr,
-			sizeof(struct sockaddr_un)) != 0) {
-		perror("Connect to VM socket failed");
-		err = -1;
-		goto done;
+	if (nvlist_send(socket_fd, nvl) < 0) {
+		perror("nvlist_send() failed");
+		err = errno;
 	}
-
-	len = sizeof(*op);
-	total_sent = 0;
-	while ((len_sent = send(socket_fd, (char *)op + total_sent, len - total_sent, 0)) > 0) {
-		total_sent += len_sent;
-	}
-
-	if (len_sent < 0) {
-		perror("Failed to send checkpoint operation request");
-		err = -1;
-	}
-
 done:
-	if (socket_fd > 0)
+	nvlist_destroy(nvl);
+
+	if (socket_fd >= 0)
 		close(socket_fd);
 	return (err);
 }
 
 static int
-send_start_checkpoint(struct vmctx *ctx, const char *checkpoint_file)
+snapshot_request(const char *vmname, const char *file, bool suspend)
 {
-	struct checkpoint_op op;
+	nvlist_t *nvl;
 
-	op.op = START_CHECKPOINT;
-	strncpy(op.snapshot_filename, checkpoint_file, MAX_SNAPSHOT_VMNAME);
-	op.snapshot_filename[MAX_SNAPSHOT_VMNAME - 1] = 0;
+	nvl = nvlist_create(0);
+	nvlist_add_string(nvl, "cmd", "checkpoint");
+	nvlist_add_string(nvl, "filename", file);
+	nvlist_add_bool(nvl, "suspend", suspend);
 
-	return (send_checkpoint_op_req(ctx, &op));
-}
-
-static int
-send_start_suspend(struct vmctx *ctx, const char *suspend_file)
-{
-	struct checkpoint_op op;
-
-	op.op = START_SUSPEND;
-	strncpy(op.snapshot_filename, suspend_file, MAX_SNAPSHOT_VMNAME);
-	op.snapshot_filename[MAX_SNAPSHOT_VMNAME - 1] = 0;
-
-	return (send_checkpoint_op_req(ctx, &op));
+	return (send_message(vmname, nvl));
 }
 #endif
 
@@ -1772,7 +1741,7 @@ main(int argc, char *argv[])
 	struct tm tm;
 	struct option *opts;
 #ifdef BHYVE_SNAPSHOT
-	char *checkpoint_file, *suspend_file;
+	char *checkpoint_file = NULL;
 #endif
 
 	cpu_intel = cpu_vendor_intel();
@@ -1934,12 +1903,12 @@ main(int argc, char *argv[])
 			break;
 #ifdef BHYVE_SNAPSHOT
 		case SET_CHECKPOINT_FILE:
-			vm_checkpoint_opt = 1;
-			checkpoint_file = optarg;
-			break;
 		case SET_SUSPEND_FILE:
-			vm_suspend_opt = 1;
-			suspend_file = optarg;
+			if (checkpoint_file != NULL)
+				usage(cpu_intel);
+
+			checkpoint_file = optarg;
+			vm_suspend_opt = (ch == SET_SUSPEND_FILE);
 			break;
 #endif
 		default:
@@ -2414,11 +2383,8 @@ main(int argc, char *argv[])
 		vm_destroy(ctx);
 
 #ifdef BHYVE_SNAPSHOT
-	if (!error && vm_checkpoint_opt)
-		error = send_start_checkpoint(ctx, checkpoint_file);
-
-	if (!error && vm_suspend_opt)
-		error = send_start_suspend(ctx, suspend_file);
+	if (!error && checkpoint_file)
+		error = snapshot_request(vmname, checkpoint_file, vm_suspend_opt);
 #endif
 
 	free (opts);
