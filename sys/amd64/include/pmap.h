@@ -481,8 +481,8 @@ void	pmap_invalidate_cache_pages(vm_page_t *pages, int count);
 void	pmap_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva);
 void	pmap_force_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva);
 void	pmap_get_mapping(pmap_t pmap, vm_offset_t va, uint64_t *ptr, int *num);
-boolean_t pmap_map_io_transient(vm_page_t *, vm_offset_t *, int, boolean_t);
-void	pmap_unmap_io_transient(vm_page_t *, vm_offset_t *, int, boolean_t);
+bool	pmap_map_io_transient(vm_page_t *, vm_offset_t *, int, bool);
+void	pmap_unmap_io_transient(vm_page_t *, vm_offset_t *, int, bool);
 void	pmap_map_delete(pmap_t, vm_offset_t, vm_offset_t);
 void	pmap_pti_add_kva(vm_offset_t sva, vm_offset_t eva, bool exec);
 void	pmap_pti_remove_kva(vm_offset_t sva, vm_offset_t eva);
@@ -534,6 +534,7 @@ pmap_invlpg(pmap_t pmap, vm_offset_t va)
 }
 #endif /* sys/pcpu.h && machine/cpufunc.h */
 
+#if defined(_SYS_PCPU_H_)
 /* Return pcid for the pmap pmap on current cpu */
 static __inline uint32_t
 pmap_get_pcid(pmap_t pmap)
@@ -544,6 +545,7 @@ pmap_get_pcid(pmap_t pmap)
 	pcidp = zpcpu_get(pmap->pm_pcidp);
 	return (pcidp->pm_pcid);
 }
+#endif /* sys/pcpu.h */
 
 #endif /* _KERNEL */
 

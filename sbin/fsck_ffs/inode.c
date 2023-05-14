@@ -381,8 +381,8 @@ chkrange(ufs2_daddr_t blk, int cnt)
 {
 	int c;
 
-	if (cnt <= 0 || blk <= 0 || blk > maxfsblock ||
-	    cnt - 1 > maxfsblock - blk) {
+	if (cnt <= 0 || blk <= 0 || blk >= maxfsblock ||
+	    cnt > maxfsblock - blk) {
 		if (debug)
 			printf("out of range: blk %ld, offset %i, size %d\n",
 			    (long)blk, (int)fragnum(&sblock, blk), cnt);
@@ -1394,7 +1394,7 @@ retry:
 	cg = ino_to_cg(&sblock, ino);
 	cgbp = cglookup(cg);
 	cgp = cgbp->b_un.b_cg;
-	if (!check_cgmagic(cg, cgbp, 0)) {
+	if (!check_cgmagic(cg, cgbp)) {
 		if (anyino == 0)
 			return (0);
 		request = (cg + 1) * sblock.fs_ipg;

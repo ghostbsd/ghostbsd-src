@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause and BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-3-Clause and BSD-2-Clause
  *
  * Copyright (c) 2002 Networks Associates Technology, Inc.
  * All rights reserved.
@@ -466,7 +466,8 @@ void		cgdirty(struct bufarea *);
 struct bufarea *cglookup(int cg);
 int		changeino(ino_t dir, const char *name, ino_t newnum, int depth);
 void		check_blkcnt(struct inode *ip);
-int		check_cgmagic(int cg, struct bufarea *cgbp, int requestrebuild);
+int		check_cgmagic(int cg, struct bufarea *cgbp);
+void		rebuild_cg(int cg, struct bufarea *cgbp);
 void		check_dirdepth(struct inoinfo *inp);
 int		chkrange(ufs2_daddr_t blk, int cnt);
 void		ckfini(int markclean);
