@@ -219,7 +219,7 @@ SYSCTL_INT(_kern, OID_AUTO, coredump_devctl, CTLFLAG_RW, &coredump_devctl,
 #define	SIGPROP_IGNORE		0x10	/* ignore by default */
 #define	SIGPROP_CONT		0x20	/* continue if suspended */
 
-static int sigproptbl[NSIG] = {
+static const int sigproptbl[NSIG] = {
 	[SIGHUP] =	SIGPROP_KILL,
 	[SIGINT] =	SIGPROP_KILL,
 	[SIGQUIT] =	SIGPROP_KILL | SIGPROP_CORE,
@@ -1744,7 +1744,7 @@ killpg1_sendsig(struct proc *p, bool notself, struct killpg1_ctx *arg)
 
 /*
  * Common code for kill process group/broadcast kill.
- * cp is calling process.
+ * td is the calling thread, as usual.
  */
 static int
 killpg1(struct thread *td, int sig, int pgid, int all, ksiginfo_t *ksi)

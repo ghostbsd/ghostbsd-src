@@ -31,6 +31,8 @@
 
 #include "gssd.h"
 
+#include <net/vnet.h>
+
 MALLOC_DECLARE(M_GSSAPI);
 
 struct _gss_ctx_id_t {
@@ -54,9 +56,22 @@ struct kgss_mech {
 };
 LIST_HEAD(kgss_mech_list, kgss_mech);
 
-extern CLIENT *kgss_gssd_handle;
+/* Macros for VIMAGE. */
+/* Just define the KGSS_VNETxxx() macros as VNETxxx() macros. */
+#define	KGSS_VNET_DEFINE(t, n)		VNET_DEFINE(t, n)
+#define	KGSS_VNET_DEFINE_STATIC(t, n)	VNET_DEFINE_STATIC(t, n)
+#define	KGSS_VNET_DECLARE(t, n)		VNET_DECLARE(t, n)
+#define	KGSS_VNET(n)			VNET(n)
+
+#define	KGSS_CURVNET_SET(n)		CURVNET_SET(n)
+#define	KGSS_CURVNET_SET_QUIET(n)	CURVNET_SET_QUIET(n)
+#define	KGSS_CURVNET_RESTORE()		CURVNET_RESTORE()
+#define	KGSS_TD_TO_VNET(n)		TD_TO_VNET(n)
+
 extern struct mtx kgss_gssd_lock;
 extern struct kgss_mech_list kgss_mechs;
+
+KGSS_VNET_DECLARE(CLIENT *, kgss_gssd_handle);
 
 CLIENT *kgss_gssd_client(void);
 int kgss_oid_equal(const gss_OID oid1, const gss_OID oid2);

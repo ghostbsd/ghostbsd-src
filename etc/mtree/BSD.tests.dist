@@ -886,6 +886,8 @@
     usr.bin
         apply
         ..
+        asa
+        ..
         awk
         ..
         basename
@@ -1095,6 +1097,8 @@
         tr
         ..
         truncate
+        ..
+        tsort
         ..
         units
         ..

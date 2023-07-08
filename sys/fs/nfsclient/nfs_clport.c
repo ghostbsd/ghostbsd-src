@@ -140,6 +140,19 @@ nfscl_nget(struct mount *mntp, struct vnode *dvp, struct nfsfh *nfhp,
 	dnp = VTONFS(dvp);
 	*npp = NULL;
 
+	/*
+	 * If this is the mount point fh and NFSMNTP_FAKEROOT is set, replace
+	 * it with the fake fh.
+	 */
+	if ((nmp->nm_privflag & NFSMNTP_FAKEROOTFH) != 0 &&
+	    nmp->nm_fhsize > 0 && nmp->nm_fhsize == nfhp->nfh_len &&
+	    !NFSBCMP(nmp->nm_fh, nfhp->nfh_fh, nmp->nm_fhsize)) {
+		free(nfhp, M_NFSFH);
+		nfhp = malloc(sizeof(struct nfsfh) + NFSX_FHMAX + 1,
+		    M_NFSFH, M_WAITOK | M_ZERO);
+		nfhp->nfh_len = NFSX_FHMAX + 1;
+	}
+
 	hash = fnv_32_buf(nfhp->nfh_fh, nfhp->nfh_len, FNV1_32_INIT);
 
 	error = vfs_hash_get(mntp, hash, lkflags,
@@ -241,8 +254,9 @@ nfscl_nget(struct mount *mntp, struct vnode *dvp, struct nfsfh *nfhp,
 	 * Are we getting the root? If so, make sure the vnode flags
 	 * are correct 
 	 */
-	if ((nfhp->nfh_len == nmp->nm_fhsize) &&
-	    !bcmp(nfhp->nfh_fh, nmp->nm_fh, nfhp->nfh_len)) {
+	if (nfhp->nfh_len == NFSX_FHMAX + 1 ||
+	    (nfhp->nfh_len == nmp->nm_fhsize &&
+	     !bcmp(nfhp->nfh_fh, nmp->nm_fh, nfhp->nfh_len))) {
 		if (vp->v_type == VNON)
 			vp->v_type = VDIR;
 		vp->v_vflag |= VV_ROOT;
@@ -492,9 +506,15 @@ nfscl_loadattrcache(struct vnode **vpp, struct nfsvattr *nap, void *nvaper,
 		 * this reliably with Clang and .c files during parallel build.
 		 * A pcap revealed packet fragmentation and GETATTR RPC
 		 * responses with wholly wrong fileids.
+		 * For the case where the file handle is a fake one
+		 * generated via the "syskrb5" mount option and
+		 * the old fileid is 2, ignore the test, since this might
+		 * be replacing the fake attributes with correct ones.
 		 */
 		if ((np->n_vattr.na_fileid != 0 &&
-		     np->n_vattr.na_fileid != nap->na_fileid) ||
+		     np->n_vattr.na_fileid != nap->na_fileid &&
+		     (np->n_vattr.na_fileid != 2 || !NFSHASSYSKRB5(nmp) ||
+		      np->n_fhp->nfh_len != NFSX_FHMAX + 1)) ||
 		    force_fid_err) {
 			nfscl_warn_fileid(nmp, &np->n_vattr, nap);
 			error = EIDRM;
@@ -1276,10 +1296,11 @@ nfssvc_nfscl(struct thread *td, struct nfssvc_args *uap)
 	struct mount *mp;
 	struct nfsmount *nmp;
 
+	NFSD_CURVNET_SET(NFSD_TD_TO_VNET(td));
 	if (uap->flag & NFSSVC_CBADDSOCK) {
 		error = copyin(uap->argp, (caddr_t)&nfscbdarg, sizeof(nfscbdarg));
 		if (error)
-			return (error);
+			goto out;
 		/*
 		 * Since we don't know what rights might be required,
 		 * pretend that we need them all. It is better to be too
@@ -1288,10 +1309,11 @@ nfssvc_nfscl(struct thread *td, struct nfssvc_args *uap)
 		error = fget(td, nfscbdarg.sock,
 		    cap_rights_init_one(&rights, CAP_SOCK_CLIENT), &fp);
 		if (error)
-			return (error);
+			goto out;
 		if (fp->f_type != DTYPE_SOCKET) {
 			fdrop(fp, td);
-			return (EPERM);
+			error = EPERM;
+			goto out;
 		}
 		error = nfscbd_addsock(fp);
 		fdrop(fp, td);
@@ -1300,12 +1322,14 @@ nfssvc_nfscl(struct thread *td, struct nfssvc_args *uap)
 			nfscl_enablecallb = 1;
 		}
 	} else if (uap->flag & NFSSVC_NFSCBD) {
-		if (uap->argp == NULL) 
-			return (EINVAL);
+		if (uap->argp == NULL) {
+			error = EINVAL;
+			goto out;
+		}
 		error = copyin(uap->argp, (caddr_t)&nfscbdarg2,
 		    sizeof(nfscbdarg2));
 		if (error)
-			return (error);
+			goto out;
 		error = nfscbd_nfsd(td, &nfscbdarg2);
 	} else if (uap->flag & NFSSVC_DUMPMNTOPTS) {
 		error = copyin(uap->argp, &dumpmntopts, sizeof(dumpmntopts));
@@ -1391,6 +1415,8 @@ nfssvc_nfscl(struct thread *td, struct nfssvc_args *uap)
 	} else {
 		error = EINVAL;
 	}
+out:
+	NFSD_CURVNET_RESTORE();
 	return (error);
 }
 

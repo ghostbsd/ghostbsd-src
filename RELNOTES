@@ -10,6 +10,27 @@ newline.  Entries should be separated by a newline.
 
 Changes to this file should not be MFCed.
 
+0644746d5091:
+	Add a new "syskrb5" mount option for Kerberized NFSv4.1/4.2 mounts.
+	Without this patch, a Kerberized NFSv4.1/4.2 mount must provide
+	a Kerberos credential for the client at mount time.
+	This patch uses a feature of NFSv4.1/4.2 called SP4_NONE, which
+	allows the state maintenance operations to be performed by any
+	authentication mechanism, so that these operations may be done via
+	AUTH_SYS instead of RPCSEC_GSS (KerberosV).  As such, no Kerberos
+	credential is required at mount time.
+	See mount_nfs(8).
+
+b4805d577787 and many others:
+	Add support so that nfsd(8), nfsuserd(8), mountd(8), gssd(8)
+	and rpc.tlsservd(8) can be run in an appropriately configured
+	vnet prison.  The vnet prison must be on its own file system,
+	have the "allow.nfsd" jail parameter set on it and enforce_statfs
+	cannot be set to "0".  Use of UDP and pNFS server configurations
+	are not permitted.  (ie. The nfsd command line options "-u", "-p"
+	and "-m" are not supported.)
+	See jail(8), nfsd(8) and mountd(8).
+
 68e86d5265bc,e58dfd0de589,59f5a5cb724e,6e272a78de36,4c4a4fd4a649,ba2ae2cca63a:
 	sendmail has been updated to the latest upstream version (8.17.1).
 	
