@@ -91,7 +91,7 @@ ffs_snapblkfree(struct fs *fs,
 	ufs2_daddr_t bno,
 	long size,
 	ino_t inum,
-	enum vtype vtype,
+	__enum_uint8(vtype) vtype,
 	struct workhead *wkhd)
 {
 	return (EINVAL);
@@ -207,7 +207,7 @@ ffs_snapshot(struct mount *mp, char *snapfile)
 	long snaplistsize = 0;
 	int32_t *lp;
 	void *space;
-	struct fs *copy_fs = NULL, *fs;
+	struct fs *copy_fs = NULL, *fs, *bpfs;
 	struct thread *td = curthread;
 	struct inode *ip, *xp;
 	struct buf *bp, *nbp, *ibp;
@@ -828,8 +828,10 @@ resumefs:
 	} else {
 		loc = blkoff(fs, fs->fs_sblockloc);
 		copy_fs->fs_fmod = 0;
-		copy_fs->fs_ckhash = ffs_calc_sbhash(copy_fs);
-		bcopy((char *)copy_fs, &nbp->b_data[loc], (u_int)fs->fs_sbsize);
+		bpfs = (struct fs *)&nbp->b_data[loc];
+		bcopy((caddr_t)copy_fs, (caddr_t)bpfs, (u_int)fs->fs_sbsize);
+		ffs_oldfscompat_write(bpfs, ump);
+		bpfs->fs_ckhash = ffs_calc_sbhash(bpfs);
 		bawrite(nbp);
 	}
 	/*
@@ -1753,7 +1755,7 @@ ffs_snapblkfree(struct fs *fs,
 	ufs2_daddr_t bno,
 	long size,
 	ino_t inum,
-	enum vtype vtype,
+	__enum_uint8(vtype) vtype,
 	struct workhead *wkhd)
 {
 	struct buf *ibp, *cbp, *savedcbp = NULL;

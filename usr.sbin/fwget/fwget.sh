@@ -4,9 +4,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright 2023 Beckhoff Automation GmbH & Co. KG
+# Copyright 2023 Bjoern A. Zeeb
 #
 # Redistribution and use in source and binary forms, with or without
-# modification, are permitted providing that the following conditions 
+# modification, are permitted providing that the following conditions
 # are met:
 # 1. Redistributions of source code must retain the above copyright
 #    notice, this list of conditions and the following disclaimer.
@@ -31,7 +32,7 @@
 usage()
 {
 	cat <<EOF
-Usage: `basename $0` [options] [subsystem]
+Usage: $(basename "$0") [options] [subsystem]
 
 Supported subsystems
   pci
@@ -43,14 +44,9 @@ EOF
 	exit 1
 }
 
-log_start()
-{
-	exec 3>&1 4>&2
-}
-
 log()
 {
-	echo $@ 1>&3
+	echo "$@"
 }
 
 log_verbose()
@@ -59,13 +55,27 @@ log_verbose()
 		return
 	fi
 
-	echo $@ 1>&3
+	echo "$@"
+}
+
+addpkg()
+{
+	local _p
+
+	_p=$1
+
+	case "${packages}" in
+	"")	packages="${_p}" ;;
+	*)	# Avoid duplicates.
+		case " ${packages} " in
+		*\ ${_p}\ *) ;;	# duplicate
+		*)	packages="${packages} ${_p}" ;;
+		esac
+	esac
 }
 
 DRY_RUN=n
 VERBOSE=n
-
-log_start
 
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -89,22 +99,27 @@ fi
 
 # Fail early on unsupported subsystem
 for subsystem in ${subsystems}; do
-	if [ ! -f ${LIBEXEC_PATH}/${subsystem} ]; then
+	if [ ! -f "${LIBEXEC_PATH}"/"${subsystem}" ]; then
 		usage
 	fi
-	. ${LIBEXEC_PATH}/${subsystem}
+	. "${LIBEXEC_PATH}"/"${subsystem}"
 done
 
 packages=""
 for subsystem in ${subsystems}; do
-	package=$(${subsystem}_search_packages)
-	
-	packages="${packages} ${package}"
+	"${subsystem}"_search_packages
 done
 
-echo "Needed packages: ${packages}"
+case "${packages}" in
+""|^[[:space:]]*$)
+	echo "No firmware packages to install."
+	exit 0
+	;;
+esac
+
+echo "Needed firmware packages: '${packages}'"
 if [ "${DRY_RUN}" = "y" ]; then
 	exit 0
 fi
 
-pkg install -q ${package}
+pkg install -qy "${packages}"

@@ -1858,7 +1858,7 @@ linker_lookup_file(const char *path, int pathlen, const char *name,
 	const char * const *cpp, *sep;
 	char *result;
 	int error, len, extlen, reclen, flags;
-	enum vtype type;
+	__enum_uint8(vtype) type;
 
 	extlen = 0;
 	for (cpp = linker_ext_list; *cpp; cpp++) {
@@ -2119,7 +2119,7 @@ linker_hwpmc_list_objects(void)
 	i = 0;
 	TAILQ_FOREACH(lf, &linker_files, link) {
 		/* Save the info for this linker file. */
-		kobase[i].pm_file = lf->filename;
+		kobase[i].pm_file = lf->pathname;
 		kobase[i].pm_address = (uintptr_t)lf->address;
 		i++;
 	}

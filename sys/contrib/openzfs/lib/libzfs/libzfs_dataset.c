@@ -1034,6 +1034,7 @@ zfs_valid_proplist(libzfs_handle_t *hdl, zfs_type_t type, nvlist_t *nvl,
 	nvlist_t *ret;
 	int chosen_normal = -1;
 	int chosen_utf = -1;
+	int set_maxbs = 0;
 
 	if (nvlist_alloc(&ret, NV_UNIQUE_NAME, 0) != 0) {
 		(void) no_memory(hdl);
@@ -1252,12 +1253,17 @@ zfs_valid_proplist(libzfs_handle_t *hdl, zfs_type_t type, nvlist_t *nvl,
 				(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
 				goto error;
 			}
+			/* save the ZFS_PROP_RECORDSIZE during create op */
+			if (zpool_hdl == NULL && prop == ZFS_PROP_RECORDSIZE) {
+				set_maxbs = intval;
+			}
 			break;
 		}
 
 		case ZFS_PROP_SPECIAL_SMALL_BLOCKS:
 		{
-			int maxbs = SPA_OLD_MAXBLOCKSIZE;
+			int maxbs =
+			    set_maxbs == 0 ? SPA_OLD_MAXBLOCKSIZE : set_maxbs;
 			char buf[64];
 
 			if (zpool_hdl != NULL) {
@@ -1783,7 +1789,8 @@ zfs_prop_set_list(zfs_handle_t *zhp, nvlist_t *props)
 	nvlist_t *nvl;
 	int nvl_len = 0;
 	int added_resv = 0;
-	zfs_prop_t prop = 0;
+	zfs_prop_t prop;
+	boolean_t nsprop = B_FALSE;
 	nvpair_t *elem;
 
 	(void) snprintf(errbuf, sizeof (errbuf),
@@ -1830,6 +1837,7 @@ zfs_prop_set_list(zfs_handle_t *zhp, nvlist_t *props)
 	    elem = nvlist_next_nvpair(nvl, elem)) {
 
 		prop = zfs_name_to_prop(nvpair_name(elem));
+		nsprop |= zfs_is_namespace_prop(prop);
 
 		assert(cl_idx < nvl_len);
 		/*
@@ -1928,8 +1936,7 @@ zfs_prop_set_list(zfs_handle_t *zhp, nvlist_t *props)
 			 * if one of the options handled by the generic
 			 * Linux namespace layer has been modified.
 			 */
-			if (zfs_is_namespace_prop(prop) &&
-			    zfs_is_mounted(zhp, NULL))
+			if (nsprop && zfs_is_mounted(zhp, NULL))
 				ret = zfs_mount(zhp, MNTOPT_REMOUNT, 0);
 		}
 	}

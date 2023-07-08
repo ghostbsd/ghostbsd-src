@@ -135,6 +135,8 @@
                     ..
                     json
                     ..
+                    kinst
+                    ..
                     lexer
                     ..
                     llquantize
@@ -254,8 +256,6 @@
                 ..
                 amd64
                     arrays
-                    ..
-                    kinst
                     ..
                 ..
             ..
@@ -449,6 +449,8 @@
         growfs
         ..
         ifconfig
+        ..
+        ipfw
         ..
         md5
         ..
@@ -750,6 +752,8 @@
                 ..
             ..
         ..
+        compat32
+        ..
         devrandom
         ..
         dtrace
@@ -898,6 +902,8 @@
     usr.bin
         apply
         ..
+        asa
+        ..
         awk
             bugs-fixed
             ..
@@ -1033,6 +1039,8 @@
         dirname
         ..
         du
+        ..
+        factor
         ..
         file2c
         ..

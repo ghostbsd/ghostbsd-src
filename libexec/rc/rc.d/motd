@@ -39,7 +39,7 @@ motd_start()
 			install -c -o root -g wheel -m ${PERMS} /dev/null "${TEMPLATE}"
 		fi
 	fi
-
+	
 	# Provide compatibility symlink:
 	if [ ! -h "${COMPAT_MOTD}" ]; then
 		ln -sF "${TARGET}" "${COMPAT_MOTD}"

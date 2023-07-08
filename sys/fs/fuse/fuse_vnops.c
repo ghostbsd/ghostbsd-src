@@ -229,8 +229,6 @@ struct vop_vector fuse_vnops = {
 };
 VFS_VOP_VECTOR_REGISTER(fuse_vnops);
 
-uma_zone_t fuse_pbuf_zone;
-
 /* Check permission for extattr operations, much like extattr_check_cred */
 static int
 fuse_extattr_check_cred(struct vnode *vp, int ns, struct ucred *cred,
@@ -1393,7 +1391,7 @@ struct fuse_lookup_alloc_arg {
 	struct fuse_entry_out *feo;
 	struct componentname *cnp;
 	uint64_t nid;
-	enum vtype vtyp;
+	__enum_uint8(vtype) vtyp;
 };
 
 /* Callback for vn_get_ino */
@@ -1441,7 +1439,7 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 	struct fuse_dispatcher fdi;
 	bool did_lookup = false;
 	struct fuse_entry_out *feo = NULL;
-	enum vtype vtyp;	/* vnode type of target */
+	__enum_uint8(vtype) vtyp;	/* vnode type of target */
 
 	uint64_t nid;
 
