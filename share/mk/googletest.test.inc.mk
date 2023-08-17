@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 GTESTS_CXXFLAGS+= -DGTEST_HAS_POSIX_RE=1
 GTESTS_CXXFLAGS+= -DGTEST_HAS_PTHREAD=1
@@ -21,6 +20,6 @@ GTESTS_CXXFLAGS+= -Wno-signed-unsigned-wchar
 # libgmock's, etc, headers.
 CXXFLAGS+=	-I${DESTDIR}${INCLUDEDIR}/private
 
-CXXSTD?=	c++11
+CXXSTD?=	c++14
 
 NO_WTHREAD_SAFETY=

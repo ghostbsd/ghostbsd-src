@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -630,18 +628,6 @@ intr_next_cpu(int domain)
 	return (apic_id);
 }
 
-/* Attempt to bind the specified IRQ to the specified CPU. */
-int
-intr_bind(u_int vector, u_char cpu)
-{
-	struct intsrc *isrc;
-
-	isrc = intr_lookup_source(vector);
-	if (isrc == NULL)
-		return (EINVAL);
-	return (intr_event_bind(isrc->is_event, cpu));
-}
-
 /*
  * Add a CPU to our mask of valid CPUs that can be destinations of
  * interrupts.
@@ -651,7 +637,7 @@ intr_add_cpu(u_int cpu)
 {
 
 	if (cpu >= MAXCPU)
-		panic("%s: Invalid CPU ID", __func__);
+		panic("%s: Invalid CPU ID %u", __func__, cpu);
 	if (bootverbose)
 		printf("INTR: Adding local APIC %d as a target\n",
 		    cpu_apic_ids[cpu]);
