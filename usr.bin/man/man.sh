@@ -1,6 +1,6 @@
 #! /bin/sh
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 #  Copyright (c) 2010 Gordon Tetlow
 #  All rights reserved.
@@ -894,7 +894,7 @@ setup_cattool() {
 	case "$1" in
 	*.bz)	cattool='/usr/bin/bzcat' ;;
 	*.bz2)	cattool='/usr/bin/bzcat' ;;
-	*.gz)	cattool='/usr/bin/zcat' ;;
+	*.gz)	cattool='/usr/bin/gzcat' ;;
 	*.lzma)	cattool='/usr/bin/lzcat' ;;
 	*.xz)	cattool='/usr/bin/xzcat' ;;
 	*.zst)	cattool='/usr/bin/zstdcat' ;;

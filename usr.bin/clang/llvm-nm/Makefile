@@ -7,6 +7,8 @@ PROG_CXX=	llvm-nm
 SRCDIR=		llvm/tools/llvm-nm
 SRCS+=		llvm-nm.cpp
 
+CFLAGS.llvm-nm.cpp+=	-Dllvm_nm_main=main
+
 .include "${SRCTOP}/lib/clang/llvm.pre.mk"
 
 CFLAGS+=	-I${.OBJDIR}
@@ -22,8 +24,6 @@ TGHDRS+=	${INCFILE}
 DEPENDFILES+=	${TGHDRS:C/$/.d/}
 DPSRCS+=	${TGHDRS}
 CLEANFILES+=	${TGHDRS} ${TGHDRS:C/$/.d/}
-
-LIBADD+=	z
 
 .if ${MK_LLVM_BINUTILS} != "no"
 LINKS+=		${BINDIR}/llvm-nm ${BINDIR}/nm

@@ -1,7 +1,7 @@
 /*-
  * CAM IO Scheduler Interface
  *
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015 Netflix, Inc.
  *
@@ -1536,7 +1536,7 @@ cam_iosched_queue_work(struct cam_iosched_softc *isc, struct bio *bp)
 {
 
 	/*
-	 * A BIO_SPEEDUP from the uppper layers means that they have a block
+	 * A BIO_SPEEDUP from the upper layers means that they have a block
 	 * shortage. At the present, this is only sent when we're trying to
 	 * allocate blocks, but have a shortage before giving up. bio_length is
 	 * the size of their shortage. We will complete just enough BIO_DELETEs

@@ -27,8 +27,6 @@ DEPENDFILES+=	${TGHDRS:C/$/.d/}
 DPSRCS+=	${TGHDRS}
 CLEANFILES+=	${TGHDRS} ${TGHDRS:C/$/.d/}
 
-LIBADD+=	z
-
 LINKS=		${BINDIR}/llvm-objcopy ${BINDIR}/llvm-strip
 
 .if ${MK_LLVM_BINUTILS} != "no"

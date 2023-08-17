@@ -56,7 +56,7 @@ ivln2_h  =  1.4426879883e+00, /* 0x3fb8aa00 =16b 1/ln2*/
 ivln2_l  =  7.0526075433e-06; /* 0x36eca570 =1/ln2 tail*/
 
 float
-__ieee754_powf(float x, float y)
+powf(float x, float y)
 {
 	float z,ax,z_h,z_l,p_h,p_l;
 	float y1,t1,t2,r,s,sn,t,u,v,w;
@@ -108,7 +108,7 @@ __ieee754_powf(float x, float y)
 	if(hy==0x40000000) return x*x; /* y is  2 */
 	if(hy==0x3f000000) {	/* y is  0.5 */
 	    if(hx>=0)	/* x >= +0 */
-	    return __ieee754_sqrtf(x);
+	    return sqrtf(x);
 	}
 
 	ax   = fabsf(x);
@@ -136,7 +136,7 @@ __ieee754_powf(float x, float y)
     /* |y| is huge */
 	if(iy>0x4d000000) { /* if |y| > 2**27 */
 	/* over/underflow if x is not close to one */
-	    if(ix<0x3f7ffff7) return (hy<0)? sn*huge*huge:sn*tiny*tiny;
+	    if(ix<0x3f7ffff6) return (hy<0)? sn*huge*huge:sn*tiny*tiny;
 	    if(ix>0x3f800007) return (hy>0)? sn*huge*huge:sn*tiny*tiny;
 	/* now |1-x| is tiny <= 2**-20, suffice to compute
 	   log(x) by x-x^2/2+x^3/3-x^4/4 */

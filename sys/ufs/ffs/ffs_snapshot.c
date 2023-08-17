@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 2000 Marshall Kirk McKusick. All Rights Reserved.
  *
@@ -207,7 +207,7 @@ ffs_snapshot(struct mount *mp, char *snapfile)
 	long snaplistsize = 0;
 	int32_t *lp;
 	void *space;
-	struct fs *copy_fs = NULL, *fs;
+	struct fs *copy_fs = NULL, *fs, *bpfs;
 	struct thread *td = curthread;
 	struct inode *ip, *xp;
 	struct buf *bp, *nbp, *ibp;
@@ -376,7 +376,7 @@ restart:
 	 * touch up the few cylinder groups that changed during
 	 * the suspension period.
 	 */
-	len = roundup2(howmany(fs->fs_ncg, NBBY), sizeof(int));
+	len = roundup2(howmany(fs->fs_ncg, NBBY), sizeof(uint64_t));
 	space = malloc(len, M_DEVBUF, M_WAITOK | M_ZERO);
 	UFS_LOCK(ump);
 	fs->fs_active = space;
@@ -467,7 +467,7 @@ restart:
 	 * Grab a copy of the superblock and its summary information.
 	 * We delay writing it until the suspension is released below.
 	 */
-	copy_fs = malloc((u_long)fs->fs_bsize, M_UFSMNT, M_WAITOK);
+	copy_fs = malloc((uint64_t)fs->fs_bsize, M_UFSMNT, M_WAITOK);
 	bcopy(fs, copy_fs, fs->fs_sbsize);
 	copy_fs->fs_si = malloc(sizeof(struct fs_summary_info), M_UFSMNT,
 	    M_ZERO | M_WAITOK);
@@ -480,7 +480,7 @@ restart:
 	size = blkroundup(fs, fs->fs_cssize);
 	if (fs->fs_contigsumsize > 0)
 		size += fs->fs_ncg * sizeof(int32_t);
-	space = malloc((u_long)size, M_UFSMNT, M_WAITOK);
+	space = malloc((uint64_t)size, M_UFSMNT, M_WAITOK);
 	copy_fs->fs_csp = space;
 	bcopy(fs->fs_csp, copy_fs->fs_csp, fs->fs_cssize);
 	space = (char *)space + fs->fs_cssize;
@@ -493,7 +493,7 @@ restart:
 			brelse(bp);
 			goto resumefs;
 		}
-		bcopy(bp->b_data, space, (u_int)len);
+		bcopy(bp->b_data, space, (uint64_t)len);
 		space = (char *)space + len;
 		bp->b_flags |= B_INVAL | B_NOCACHE;
 		brelse(bp);
@@ -828,8 +828,10 @@ resumefs:
 	} else {
 		loc = blkoff(fs, fs->fs_sblockloc);
 		copy_fs->fs_fmod = 0;
-		copy_fs->fs_ckhash = ffs_calc_sbhash(copy_fs);
-		bcopy((char *)copy_fs, &nbp->b_data[loc], (u_int)fs->fs_sbsize);
+		bpfs = (struct fs *)&nbp->b_data[loc];
+		bcopy((caddr_t)copy_fs, (caddr_t)bpfs, (uint64_t)fs->fs_sbsize);
+		ffs_oldfscompat_write(bpfs, ump);
+		bpfs->fs_ckhash = ffs_calc_sbhash(bpfs);
 		bawrite(nbp);
 	}
 	/*

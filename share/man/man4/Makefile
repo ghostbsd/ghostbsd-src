@@ -84,7 +84,6 @@ MAN=	aac.4 \
 	bnxt.4 \
 	bpf.4 \
 	bridge.4 \
-	bt.4 \
 	bwi.4 \
 	bwn.4 \
 	${_bytgpio.4} \
@@ -306,7 +305,6 @@ MAN=	aac.4 \
 	mdio.4 \
 	me.4 \
 	mem.4 \
-	meteor.4 \
 	mfi.4 \
 	${_mgb.4} \
 	miibus.4 \
@@ -680,7 +678,9 @@ MLINKS+=disc.4 if_disc.4
 MLINKS+=edsc.4 if_edsc.4
 MLINKS+=em.4 if_em.4 \
 	em.4 igb.4 \
-	em.4 if_igb.4
+	em.4 if_igb.4 \
+	em.4 lem.4 \
+	em.4 if_lem.4
 MLINKS+=enc.4 if_enc.4
 MLINKS+=epair.4 if_epair.4
 MLINKS+=et.4 if_et.4

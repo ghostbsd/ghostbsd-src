@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1994-1996 Søren Schmidt
  * All rights reserved.
@@ -94,7 +94,7 @@ typedef struct {
 /*
  * Miscellaneous
  */
-#define LINUX_AT_COUNT		21	/* Count of used aux entry types.
+#define LINUX_AT_COUNT		22	/* Count of used aux entry types.
 					 * Keep this synchronized with
 					 * linux_copyout_auxargs() code.
 					 */

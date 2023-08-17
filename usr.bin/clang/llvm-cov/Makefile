@@ -20,6 +20,4 @@ SRCS+=		TestingSupport.cpp
 SRCS+=		gcov.cpp
 SRCS+=		llvm-cov.cpp
 
-LIBADD+=	z
-
 .include "../llvm.prog.mk"

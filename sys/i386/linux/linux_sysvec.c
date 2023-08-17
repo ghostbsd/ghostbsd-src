@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1994-1996 Søren Schmidt
  * All rights reserved.
@@ -145,6 +145,7 @@ linux32_arch_copyout_auxargs(struct image_params *imgp, Elf_Auxinfo **pos)
 	AUXARGS_ENTRY((*pos), LINUX_AT_SYSINFO_EHDR, linux_vdso_base);
 	AUXARGS_ENTRY((*pos), LINUX_AT_SYSINFO, __kernel_vsyscall);
 	AUXARGS_ENTRY((*pos), LINUX_AT_HWCAP, cpu_feature);
+	AUXARGS_ENTRY((*pos), LINUX_AT_HWCAP2, linux_x86_elf_hwcap2());
 	AUXARGS_ENTRY((*pos), LINUX_AT_PLATFORM, PTROUT(linux_platform));
 }
 

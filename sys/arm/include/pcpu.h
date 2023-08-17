@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Luoqi Chen <luoqi@freebsd.org>
  * All rights reserved.
@@ -36,8 +36,6 @@
 
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
-
-#define	ALT_STACK_SIZE	128
 
 struct vmspace;
 

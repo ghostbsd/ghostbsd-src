@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1995 Søren Schmidt
  * All rights reserved.
@@ -1847,7 +1847,7 @@ cont:
 		if (error != 0)
 			goto bad;
 
-		if (outlen + LINUX_CMSG_LEN(datalen) > maxlen) {
+		if (outlen + LINUX_CMSG_SPACE(datalen) > maxlen) {
 			if (outlen == 0) {
 				error = EMSGSIZE;
 				goto err;
@@ -1866,7 +1866,7 @@ cont:
 			error = copyout(data, outbuf, datalen);
 			if (error == 0) {
 				outbuf += LINUX_CMSG_ALIGN(datalen);
-				outlen += LINUX_CMSG_LEN(datalen);
+				outlen += LINUX_CMSG_SPACE(datalen);
 			}
 		}
 err:

@@ -1,7 +1,7 @@
 /*	$NetBSD: tmpfs_subr.c,v 1.35 2007/07/09 21:10:50 ad Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -1069,7 +1069,7 @@ loop:
 		VI_LOCK(vp);
 		KASSERT(vp->v_object == NULL, ("Not NULL v_object in tmpfs"));
 		vp->v_object = object;
-		vn_irflag_set_locked(vp, VIRF_PGREAD);
+		vn_irflag_set_locked(vp, (tm->tm_pgread ? VIRF_PGREAD : 0));
 		VI_UNLOCK(vp);
 		VM_OBJECT_WUNLOCK(object);
 		break;

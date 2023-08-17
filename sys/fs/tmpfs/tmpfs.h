@@ -1,7 +1,7 @@
 /*	$NetBSD: tmpfs.h,v 1.26 2007/02/22 06:37:00 thorpej Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005, 2006 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -405,6 +405,9 @@ struct tmpfs_mount {
 	bool			tm_nonc;
 	/* Do not update mtime on writes through mmaped areas. */
 	bool			tm_nomtime;
+
+	/* Read from page cache directly. */
+	bool			tm_pgread;
 };
 #define	TMPFS_LOCK(tm) mtx_lock(&(tm)->tm_allnode_lock)
 #define	TMPFS_UNLOCK(tm) mtx_unlock(&(tm)->tm_allnode_lock)

@@ -30,8 +30,6 @@ DEPENDFILES+=	${TGHDRS:C/$/.d/}
 DPSRCS+=	${TGHDRS}
 CLEANFILES+=	${TGHDRS} ${TGHDRS:C/$/.d/}
 
-LIBADD+=	z
-
 LINKS=		${BINDIR}/llvm-objdump ${BINDIR}/objdump
 MLINKS=		llvm-objdump.1 objdump.1
 

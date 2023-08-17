@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2017 Shunsuke Mie
  * Copyright (c) 2018 Leon Dang
@@ -3355,8 +3355,6 @@ pci_nvme_init(struct pci_devinst *pi, nvlist_t *nvl)
 	pci_nvme_aen_init(sc);
 
 	pci_nvme_reset(sc);
-
-	pci_lintr_request(pi);
 
 done:
 	return (error);

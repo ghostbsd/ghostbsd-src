@@ -22,6 +22,4 @@ DEPENDFILES+=	${TGHDRS:C/$/.d/}
 DPSRCS+=	${TGHDRS}
 CLEANFILES+=	${TGHDRS} ${TGHDRS:C/$/.d/}
 
-LIBADD+=	z
-
 .include "../llvm.prog.mk"

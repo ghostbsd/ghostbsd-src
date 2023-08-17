@@ -21,10 +21,10 @@ ATF_TESTS_SH+=	altq \
 		pass_block \
 		pfsync	\
 		proxy \
-		rdr \
 		ridentifier \
 		route_to \
 		rules_counter \
+		sctp \
 		set_skip \
 		set_tos \
 		src_track \
@@ -32,6 +32,8 @@ ATF_TESTS_SH+=	altq \
 		synproxy \
 		table \
 		tos
+
+ATF_TESTS_PYTEST+=	frag6.py
 
 # Tests reuse jail names and so cannot run in parallel.
 TEST_METADATA+=	is_exclusive=true

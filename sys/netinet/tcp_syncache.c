@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 McAfee, Inc.
  * Copyright (c) 2006,2013 Andre Oppermann, Internet Business Solutions AG
@@ -618,18 +618,6 @@ syncache_chkrst(struct in_conninfo *inc, struct tcphdr *th, struct mbuf *m,
 		return;
 	sc = syncache_lookup(inc, &sch);	/* returns locked sch */
 	SCH_LOCK_ASSERT(sch);
-
-	/*
-	 * Any RST to our SYN|ACK must not carry ACK, SYN or FIN flags.
-	 * See RFC 793 page 65, section SEGMENT ARRIVES.
-	 */
-	if (th->th_flags & (TH_ACK|TH_SYN|TH_FIN)) {
-		if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
-			log(LOG_DEBUG, "%s; %s: Spurious RST with ACK, SYN or "
-			    "FIN flag set, segment ignored\n", s, __func__);
-		TCPSTAT_INC(tcps_badrst);
-		goto done;
-	}
 
 	/*
 	 * No corresponding connection was found in syncache.
