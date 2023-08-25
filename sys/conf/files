@@ -3044,6 +3044,8 @@ dev/sdhci/sdhci_pci.c		optional sdhci pci
 dev/sdio/sdio_if.m		optional mmccam
 dev/sdio/sdio_subr.c		optional mmccam
 dev/sdio/sdiob.c		optional mmccam
+dev/sff/sff_if.m		optional sff
+dev/sff/sfp_fdt.c		optional sff fdt
 dev/sge/if_sge.c		optional sge pci
 dev/siis/siis.c			optional siis pci
 dev/sis/if_sis.c		optional sis pci
@@ -3399,6 +3401,7 @@ dev/virtio/mmio/virtio_mmio_if.m	optional	virtio_mmio
 dev/virtio/network/if_vtnet.c		optional	vtnet
 dev/virtio/block/virtio_blk.c		optional	virtio_blk
 dev/virtio/balloon/virtio_balloon.c	optional	virtio_balloon
+dev/virtio/gpu/virtio_gpu.c		optional	virtio_gpu
 dev/virtio/scsi/virtio_scsi.c		optional	virtio_scsi
 dev/virtio/random/virtio_random.c	optional	virtio_random
 dev/virtio/console/virtio_console.c	optional	virtio_console
@@ -3777,6 +3780,7 @@ kern/kern_lockstat.c		optional kdtrace_hooks
 kern/kern_loginclass.c		standard
 kern/kern_malloc.c		standard
 kern/kern_mbuf.c		standard
+kern/kern_membarrier.c		standard
 kern/kern_mib.c			standard
 kern/kern_module.c		standard
 kern/kern_mtxpool.c		standard
@@ -3904,6 +3908,7 @@ kern/sys_pipe.c			standard
 kern/sys_procdesc.c		standard
 kern/sys_process.c		standard
 kern/sys_socket.c		standard
+kern/sys_timerfd.c		standard
 kern/syscalls.c			standard
 kern/sysv_ipc.c			standard
 kern/sysv_msg.c			optional sysvmsg
