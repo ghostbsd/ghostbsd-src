@@ -32,7 +32,7 @@ osrelease_start()
 		ANSI_COLOR="0;31"
 		PRETTY_NAME="GhostBSD $_version"
 		CPE_NAME=cpe:/o:ghostbsd:ghostbsd:$_version_id
-		HOME_URL=https://GhostBSD.org/
+		HOME_URL=https://www.ghostbsd.org/
 		BUG_REPORT_URL=https://github.com/ghostbsd/ghostbsd-src/issues/new/choose
 		CODENAME="ISO-Rolling"
 __EOF__
