@@ -2015,6 +2015,10 @@ OLD_DIRS+=usr/share/examples/uefisign
 OLD_DIRS+=usr/share/examples/ypldap
 .endif
 
+.if ${MK_FDT} == no
+OLD_FILES+=usr/share/man/man8/ofwdump.8.gz
+.endif
+
 .if ${MK_FINGER} == no
 OLD_FILES+=usr/bin/finger
 OLD_FILES+=usr/share/man/man1/finger.1.gz
@@ -6991,9 +6995,11 @@ OLD_FILES+=usr/lib/libprivateatf-c++_p.a
 OLD_FILES+=usr/lib/libprivateatf-c_p.a
 OLD_FILES+=usr/lib/libprivateauditd_p.a
 OLD_FILES+=usr/lib/libprivatebsdstat_p.a
+OLD_FILES+=usr/lib/libprivatecbor_p.a
 OLD_FILES+=usr/lib/libprivatedevdctl_p.a
 OLD_FILES+=usr/lib/libprivateevent_p.a
 OLD_FILES+=usr/lib/libprivateevent1_p.a
+OLD_FILES+=usr/lib/libprivatefido2_p.a
 OLD_FILES+=usr/lib/libprivategmock_main_p.a
 OLD_FILES+=usr/lib/libprivategmock_p.a
 OLD_FILES+=usr/lib/libprivategtest_main_p.a

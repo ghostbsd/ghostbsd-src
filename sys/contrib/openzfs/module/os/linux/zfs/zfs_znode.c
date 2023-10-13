@@ -390,7 +390,6 @@ zfs_inode_destroy(struct inode *ip)
 	mutex_enter(&zfsvfs->z_znodes_lock);
 	if (list_link_active(&zp->z_link_node)) {
 		list_remove(&zfsvfs->z_all_znodes, zp);
-		zfsvfs->z_nr_znodes--;
 	}
 	mutex_exit(&zfsvfs->z_znodes_lock);
 
@@ -415,7 +414,11 @@ zfs_inode_set_ops(zfsvfs_t *zfsvfs, struct inode *ip)
 	switch (ip->i_mode & S_IFMT) {
 	case S_IFREG:
 		ip->i_op = &zpl_inode_operations;
+#ifdef HAVE_VFS_FILE_OPERATIONS_EXTEND
+		ip->i_fop = &zpl_file_operations.kabi_fops;
+#else
 		ip->i_fop = &zpl_file_operations;
+#endif
 		ip->i_mapping->a_ops = &zpl_address_space_operations;
 		break;
 
@@ -455,7 +458,11 @@ zfs_inode_set_ops(zfsvfs_t *zfsvfs, struct inode *ip)
 		/* Assume the inode is a file and attempt to continue */
 		ip->i_mode = S_IFREG | 0644;
 		ip->i_op = &zpl_inode_operations;
+#ifdef HAVE_VFS_FILE_OPERATIONS_EXTEND
+		ip->i_fop = &zpl_file_operations.kabi_fops;
+#else
 		ip->i_fop = &zpl_file_operations;
+#endif
 		ip->i_mapping->a_ops = &zpl_address_space_operations;
 		break;
 	}
@@ -633,7 +640,6 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 
 	mutex_enter(&zfsvfs->z_znodes_lock);
 	list_insert_tail(&zfsvfs->z_all_znodes, zp);
-	zfsvfs->z_nr_znodes++;
 	mutex_exit(&zfsvfs->z_znodes_lock);
 
 	if (links > 0)

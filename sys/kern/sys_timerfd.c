@@ -43,6 +43,7 @@
 #include <sys/queue.h>
 #include <sys/selinfo.h>
 #include <sys/stat.h>
+#include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
@@ -53,13 +54,12 @@
 
 #include <security/audit/audit.h>
 
-#ifdef COMPAT_FREEBSD32
-#include <compat/freebsd32/freebsd32.h>
-#include <compat/freebsd32/freebsd32_proto.h>
-#endif
-
 static MALLOC_DEFINE(M_TIMERFD, "timerfd", "timerfd structures");
-static LIST_HEAD(, timerfd) timerfd_head;
+
+static struct mtx timerfd_list_lock;
+static LIST_HEAD(, timerfd) timerfd_list;
+MTX_SYSINIT(timerfd, &timerfd_list_lock, "timerfd_list_lock", MTX_DEF);
+
 static struct unrhdr64 tfdino_unr;
 
 #define	TFD_NOJUMP	0	/* Realtime clock has not jumped. */
@@ -68,28 +68,36 @@ static struct unrhdr64 tfdino_unr;
 #define	TFD_CANCELED	4	/* Jumped, CANCEL_ON_SET=true. */
 #define	TFD_JUMPED	(TFD_ZREAD | TFD_CANCELED)
 
+/*
+ * One structure allocated per timerfd descriptor.
+ *
+ * Locking semantics:
+ * (t)	locked by tfd_lock mtx
+ * (l)	locked by timerfd_list_lock sx
+ * (c)	const until freeing
+ */
 struct timerfd {
 	/* User specified. */
-	struct itimerspec tfd_time;	/* tfd timer */
-	clockid_t	tfd_clockid;	/* timing base */
-	int		tfd_flags;	/* creation flags */
-	int		tfd_timflags;	/* timer flags */
+	struct itimerspec tfd_time;	/* (t) tfd timer */
+	clockid_t	tfd_clockid;	/* (c) timing base */
+	int		tfd_flags;	/* (c) creation flags */
+	int		tfd_timflags;	/* (t) timer flags */
 
 	/* Used internally. */
-	timerfd_t	tfd_count;	/* expiration count since last read */
-	bool		tfd_expired;	/* true upon initial expiration */
-	struct mtx	tfd_lock;	/* mtx lock */
-	struct callout	tfd_callout;	/* expiration notification */
-	struct selinfo	tfd_sel;	/* I/O alerts */
-	struct timespec	tfd_boottim;	/* cached boottime */
-	int		tfd_jumped;	/* timer jump status */
-	LIST_ENTRY(timerfd) entry;	/* entry in list */
+	timerfd_t	tfd_count;	/* (t) expiration count since read */
+	bool		tfd_expired;	/* (t) true upon initial expiration */
+	struct mtx	tfd_lock;	/* tfd mtx lock */
+	struct callout	tfd_callout;	/* (t) expiration notification */
+	struct selinfo	tfd_sel;	/* (t) I/O alerts */
+	struct timespec	tfd_boottim;	/* (t) cached boottime */
+	int		tfd_jumped;	/* (t) timer jump status */
+	LIST_ENTRY(timerfd) entry;	/* (l) entry in list */
 
 	/* For stat(2). */
-	ino_t		tfd_ino;	/* inode number */
-	struct timespec	tfd_atim;	/* time of last read */
-	struct timespec	tfd_mtim;	/* time of last settime */
-	struct timespec tfd_birthtim;	/* creation time */
+	ino_t		tfd_ino;	/* (c) inode number */
+	struct timespec	tfd_atim;	/* (t) time of last read */
+	struct timespec	tfd_mtim;	/* (t) time of last settime */
+	struct timespec tfd_birthtim;	/* (c) creation time */
 };
 
 static void
@@ -104,6 +112,7 @@ static inline void
 timerfd_getboottime(struct timespec *ts)
 {
 	struct timeval tv;
+
 	getboottime(&tv);
 	TIMEVAL_TO_TIMESPEC(&tv, ts);
 }
@@ -124,8 +133,12 @@ timerfd_jumped(void)
 	struct timerfd *tfd;
 	struct timespec boottime, diff;
 
+	if (LIST_EMPTY(&timerfd_list))
+		return;
+
 	timerfd_getboottime(&boottime);
-	LIST_FOREACH(tfd, &timerfd_head, entry) {
+	mtx_lock(&timerfd_list_lock);
+	LIST_FOREACH(tfd, &timerfd_list, entry) {
 		mtx_lock(&tfd->tfd_lock);
 		if (tfd->tfd_clockid != CLOCK_REALTIME ||
 		    (tfd->tfd_timflags & TFD_TIMER_ABSTIME) == 0 ||
@@ -160,6 +173,7 @@ timerfd_jumped(void)
 		tfd->tfd_boottim = boottime;
 		mtx_unlock(&tfd->tfd_lock);
 	}
+	mtx_unlock(&timerfd_list_lock);
 }
 
 static int
@@ -264,6 +278,8 @@ filt_timerfdread(struct knote *kn, long hint)
 {
 	struct timerfd *tfd = kn->kn_hook;
 
+	mtx_assert(&tfd->tfd_lock, MA_OWNED);
+	kn->kn_data = (int64_t)tfd->tfd_count;
 	return (tfd->tfd_count > 0);
 }
 
@@ -298,13 +314,13 @@ timerfd_stat(struct file *fp, struct stat *sb, struct ucred *active_cred)
 	sb->st_uid = fp->f_cred->cr_uid;
 	sb->st_gid = fp->f_cred->cr_gid;
 	sb->st_blksize = PAGE_SIZE;
-
 	mtx_lock(&tfd->tfd_lock);
-	sb->st_ino = tfd->tfd_ino;
 	sb->st_atim = tfd->tfd_atim;
 	sb->st_mtim = tfd->tfd_mtim;
-	sb->st_birthtim = tfd->tfd_birthtim;
 	mtx_unlock(&tfd->tfd_lock);
+	sb->st_ctim = sb->st_mtim;
+	sb->st_ino = tfd->tfd_ino;
+	sb->st_birthtim = tfd->tfd_birthtim;
 
 	return (0);
 }
@@ -314,11 +330,14 @@ timerfd_close(struct file *fp, struct thread *td)
 {
 	struct timerfd *tfd = fp->f_data;
 
+	mtx_lock(&timerfd_list_lock);
+	LIST_REMOVE(tfd, entry);
+	mtx_unlock(&timerfd_list_lock);
+
 	callout_drain(&tfd->tfd_callout);
 	seldrain(&tfd->tfd_sel);
 	knlist_destroy(&tfd->tfd_sel.si_note);
 	mtx_destroy(&tfd->tfd_lock);
-	LIST_REMOVE(tfd, entry);
 	free(tfd, M_TIMERFD);
 	fp->f_ops = &badfileops;
 
@@ -329,15 +348,12 @@ static int
 timerfd_fill_kinfo(struct file *fp, struct kinfo_file *kif,
     struct filedesc *fdp)
 {
-
 	struct timerfd *tfd = fp->f_data;
 
 	kif->kf_type = KF_TYPE_TIMERFD;
-	mtx_lock(&tfd->tfd_lock);
 	kif->kf_un.kf_timerfd.kf_timerfd_clockid = tfd->tfd_clockid;
 	kif->kf_un.kf_timerfd.kf_timerfd_flags = tfd->tfd_flags;
 	kif->kf_un.kf_timerfd.kf_timerfd_addr = (uintptr_t)tfd;
-	mtx_unlock(&tfd->tfd_lock);
 
 	return (0);
 }
@@ -363,6 +379,7 @@ timerfd_curval(struct timerfd *tfd, struct itimerspec *old_value)
 {
 	struct timespec curr_value;
 
+	mtx_assert(&tfd->tfd_lock, MA_OWNED);
 	*old_value = tfd->tfd_time;
 	if (timespecisset(&tfd->tfd_time.it_value)) {
 		nanouptime(&curr_value);
@@ -408,7 +425,7 @@ kern_timerfd_create(struct thread *td, int clockid, int flags)
 {
 	struct file *fp;
 	struct timerfd *tfd;
-	int error, fd, fflags = 0;
+	int error, fd, fflags;
 
 	AUDIT_ARG_VALUE(clockid);
 	AUDIT_ARG_FFLAGS(flags);
@@ -417,12 +434,18 @@ kern_timerfd_create(struct thread *td, int clockid, int flags)
 		return (EINVAL);
 	if ((flags & ~(TFD_CLOEXEC | TFD_NONBLOCK)) != 0)
 		return (EINVAL);
+
+	fflags = FREAD;
 	if ((flags & TFD_CLOEXEC) != 0)
 		fflags |= O_CLOEXEC;
+	if ((flags & TFD_NONBLOCK) != 0)
+		fflags |= FNONBLOCK;
+
+	error = falloc(td, &fp, &fd, fflags);
+	if (error != 0)
+		return (error);
 
 	tfd = malloc(sizeof(*tfd), M_TIMERFD, M_WAITOK | M_ZERO);
-	if (tfd == NULL)
-		return (ENOMEM);
 	tfd->tfd_clockid = (clockid_t)clockid;
 	tfd->tfd_flags = flags;
 	tfd->tfd_ino = alloc_unr64(&tfdino_unr);
@@ -431,16 +454,12 @@ kern_timerfd_create(struct thread *td, int clockid, int flags)
 	knlist_init_mtx(&tfd->tfd_sel.si_note, &tfd->tfd_lock);
 	timerfd_getboottime(&tfd->tfd_boottim);
 	getnanotime(&tfd->tfd_birthtim);
-	LIST_INSERT_HEAD(&timerfd_head, tfd, entry);
-
-	error = falloc(td, &fp, &fd, fflags);
-	if (error != 0)
-		return (error);
-	fflags = FREAD;
-	if ((flags & TFD_NONBLOCK) != 0)
-		fflags |= FNONBLOCK;
+	mtx_lock(&timerfd_list_lock);
+	LIST_INSERT_HEAD(&timerfd_list, tfd, entry);
+	mtx_unlock(&timerfd_list_lock);
 
 	finit(fp, fflags, DTYPE_TIMERFD, tfd, &timerfdops);
+
 	fdrop(fp, td);
 
 	td->td_retval[0] = fd;
@@ -457,11 +476,11 @@ kern_timerfd_gettime(struct thread *td, int fd, struct itimerspec *curr_value)
 	error = fget(td, fd, &cap_write_rights, &fp);
 	if (error != 0)
 		return (error);
-	tfd = fp->f_data;
-	if (tfd == NULL || fp->f_type != DTYPE_TIMERFD) {
+	if (fp->f_type != DTYPE_TIMERFD) {
 		fdrop(fp, td);
 		return (EINVAL);
 	}
+	tfd = fp->f_data;
 
 	mtx_lock(&tfd->tfd_lock);
 	timerfd_curval(tfd, curr_value);
@@ -489,11 +508,11 @@ kern_timerfd_settime(struct thread *td, int fd, int flags,
 	error = fget(td, fd, &cap_write_rights, &fp);
 	if (error != 0)
 		return (error);
-	tfd = fp->f_data;
-	if (tfd == NULL || fp->f_type != DTYPE_TIMERFD) {
+	if (fp->f_type != DTYPE_TIMERFD) {
 		fdrop(fp, td);
 		return (EINVAL);
 	}
+	tfd = fp->f_data;
 
 	mtx_lock(&tfd->tfd_lock);
 	getnanotime(&tfd->tfd_mtim);
@@ -574,59 +593,3 @@ sys_timerfd_settime(struct thread *td, struct timerfd_settime_args *uap)
 	}
 	return (error);
 }
-
-#ifdef COMPAT_FREEBSD32
-int
-freebsd32_timerfd_gettime(struct thread *td,
-    struct freebsd32_timerfd_gettime_args *uap)
-{
-	struct itimerspec curr_value;
-	struct itimerspec32 curr_value32;
-	int error;
-
-	error = kern_timerfd_gettime(td, uap->fd, &curr_value);
-	if (error == 0) {
-		CP(curr_value, curr_value32, it_value.tv_sec);
-		CP(curr_value, curr_value32, it_value.tv_nsec);
-		CP(curr_value, curr_value32, it_interval.tv_sec);
-		CP(curr_value, curr_value32, it_interval.tv_nsec);
-		error = copyout(&curr_value32, uap->curr_value,
-		    sizeof(curr_value32));
-	}
-
-	return (error);
-}
-
-int
-freebsd32_timerfd_settime(struct thread *td,
-    struct freebsd32_timerfd_settime_args *uap)
-{
-	struct itimerspec new_value, old_value;
-	struct itimerspec32 new_value32, old_value32;
-	int error;
-
-	error = copyin(uap->new_value, &new_value32, sizeof(new_value32));
-	if (error != 0)
-		return (error);
-	CP(new_value32, new_value, it_value.tv_sec);
-	CP(new_value32, new_value, it_value.tv_nsec);
-	CP(new_value32, new_value, it_interval.tv_sec);
-	CP(new_value32, new_value, it_interval.tv_nsec);
-	if (uap->old_value == NULL) {
-		error = kern_timerfd_settime(td, uap->fd, uap->flags,
-		    &new_value, NULL);
-	} else {
-		error = kern_timerfd_settime(td, uap->fd, uap->flags,
-		    &new_value, &old_value);
-		if (error == 0) {
-			CP(old_value, old_value32, it_value.tv_sec);
-			CP(old_value, old_value32, it_value.tv_nsec);
-			CP(old_value, old_value32, it_interval.tv_sec);
-			CP(old_value, old_value32, it_interval.tv_nsec);
-			error = copyout(&old_value32, uap->old_value,
-			    sizeof(old_value32));
-		}
-	}
-	return (error);
-}
-#endif

@@ -217,12 +217,15 @@ nvme_ctrlr_fail(struct nvme_controller *ctrlr)
 {
 	int i;
 
+	/*
+	 * No need to disable queues before failing them. Failing is a superet
+	 * of disabling (though pedantically we'd abort the AERs silently with
+	 * a different error, though when we fail, that hardly matters).
+	 */
 	ctrlr->is_failed = true;
-	nvme_admin_qpair_disable(&ctrlr->adminq);
 	nvme_qpair_fail(&ctrlr->adminq);
 	if (ctrlr->ioq != NULL) {
 		for (i = 0; i < ctrlr->num_io_queues; i++) {
-			nvme_io_qpair_disable(&ctrlr->ioq[i]);
 			nvme_qpair_fail(&ctrlr->ioq[i]);
 		}
 	}
@@ -427,9 +430,11 @@ nvme_ctrlr_hw_reset(struct nvme_controller *ctrlr)
 
 	err = nvme_ctrlr_disable(ctrlr);
 	if (err != 0)
-		return err;
+		goto out;
 
 	err = nvme_ctrlr_enable(ctrlr);
+out:
+
 	TSEXIT();
 	return (err);
 }
@@ -1157,6 +1162,11 @@ nvme_ctrlr_start_config_hook(void *arg)
 
 	TSENTER();
 
+	/*
+	 * Don't call pre/post reset here. We've not yet created the qpairs,
+	 * haven't setup the ISRs, so there's no need to 'drain' them or
+	 * 'exclude' them.
+	 */
 	if (nvme_ctrlr_hw_reset(ctrlr) != 0) {
 fail:
 		nvme_ctrlr_fail(ctrlr);
@@ -1202,15 +1212,6 @@ nvme_ctrlr_reset_task(void *arg, int pending)
 
 	nvme_ctrlr_devctl_log(ctrlr, "RESET", "resetting controller");
 	status = nvme_ctrlr_hw_reset(ctrlr);
-	/*
-	 * Use pause instead of DELAY, so that we yield to any nvme interrupt
-	 *  handlers on this CPU that were blocked on a qpair lock. We want
-	 *  all nvme interrupts completed before proceeding with restarting the
-	 *  controller.
-	 *
-	 * XXX - any way to guarantee the interrupt handlers have quiesced?
-	 */
-	pause("nvmereset", hz / 10);
 	if (status == 0)
 		nvme_ctrlr_start(ctrlr, true);
 	else
@@ -1333,8 +1334,9 @@ nvme_ctrlr_passthrough_cmd(struct nvme_controller *ctrlr,
 		mtx_sleep(pt, mtx, PRIBIO, "nvme_pt", 0);
 	mtx_unlock(mtx);
 
-err:
 	if (buf != NULL) {
+		vunmapbuf(buf);
+err:
 		uma_zfree(pbuf_zone, buf);
 		PRELE(curproc);
 	}
@@ -1699,15 +1701,6 @@ nvme_ctrlr_resume(struct nvme_controller *ctrlr)
 
 	if (nvme_ctrlr_hw_reset(ctrlr) != 0)
 		goto fail;
-#ifdef NVME_2X_RESET
-	/*
-	 * Prior to FreeBSD 13.1, FreeBSD's nvme driver reset the hardware twice
-	 * to get it into a known good state. However, the hardware's state is
-	 * good and we don't need to do this for proper functioning.
-	 */
-	if (nvme_ctrlr_hw_reset(ctrlr) != 0)
-		goto fail;
-#endif
 
 	/*
 	 * Now that we've reset the hardware, we can restart the controller. Any

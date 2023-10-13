@@ -115,7 +115,7 @@ cpu_fetch_syscall_args(struct thread *td)
 	}
 
 	if (__predict_false(sa->code >= p->p_sysent->sv_size))
-		sa->callp = &p->p_sysent->sv_table[0];
+		sa->callp = &nosys_sysent;
 	else
 		sa->callp = &p->p_sysent->sv_table[sa->code];
 
@@ -149,7 +149,10 @@ print_with_symbol(const char *name, uint64_t value)
 		sym = db_search_symbol(value, DB_STGY_ANY, &offset);
 		if (sym != C_DB_SYM_NULL) {
 			db_symbol_values(sym, &sym_name, &sym_value);
-			printf(" (%s + 0x%lx)", sym_name, offset);
+			if (offset != 0)
+				printf(" (%s + 0x%lx)", sym_name, offset);
+			else
+				printf(" (%s)", sym_name);
 		}
 	}
 #endif
@@ -183,6 +186,7 @@ dump_regs(struct trapframe *frame)
 	print_with_symbol("tp", frame->tf_tp);
 	print_with_symbol("sepc", frame->tf_sepc);
 	printf("sstatus: 0x%016lx\n", frame->tf_sstatus);
+	printf("stval  : 0x%016lx\n", frame->tf_stval);
 }
 
 static void
