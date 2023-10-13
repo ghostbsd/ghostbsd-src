@@ -326,10 +326,6 @@ cpu_setregs(void)
 
 	TSENTER();
 	cr0 = rcr0();
-	/*
-	 * CR0_MP, CR0_NE and CR0_TS are also set by npx_probe() for the
-	 * BSP.  See the comments there about why we set them.
-	 */
 	cr0 |= CR0_MP | CR0_NE | CR0_TS | CR0_WP | CR0_AM;
 	TSENTER2("load_cr0");
 	load_cr0(cr0);
@@ -1494,6 +1490,10 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 
 	TUNABLE_INT_FETCH("machdep.mitigations.rndgs.enable",
 	    &x86_rngds_mitg_enable);
+
+	TUNABLE_INT_FETCH("machdep.mitigations.zenbleed.enable",
+	    &zenbleed_enable);
+	zenbleed_sanitize_enable();
 
 	finishidentcpu();	/* Final stage of CPU initialization */
 

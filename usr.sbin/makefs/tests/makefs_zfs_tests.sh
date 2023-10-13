@@ -56,6 +56,8 @@ import_image()
 {
 	atf_check -e empty -o save:$TEST_MD_DEVICE_FILE -s exit:0 \
 	    mdconfig -a -f $TEST_IMAGE
+	atf_check -o ignore -e empty -s exit:0 \
+            zdb -e -p /dev/$(cat $TEST_MD_DEVICE_FILE) -mmm -ddddd $ZFS_POOL_NAME
 	atf_check zpool import -R $TEST_MOUNT_DIR $ZFS_POOL_NAME
 	echo "$ZFS_POOL_NAME" > $TEST_ZFS_POOL_NAME
 }
@@ -185,6 +187,40 @@ empty_fs_body()
 	check_image_contents
 }
 empty_fs_cleanup()
+{
+	common_cleanup
+}
+
+atf_test_case file_extend cleanup
+file_extend_body()
+{
+	local i start
+
+	create_test_dirs
+
+	# Create a file slightly longer than the maximum block size.
+	start=132
+	dd if=/dev/random of=${TEST_INPUTS_DIR}/foo bs=1k count=$start
+	md5 -q ${TEST_INPUTS_DIR}/foo > foo.md5
+
+	atf_check $MAKEFS -s 10g -o rootpath=/ -o poolname=$ZFS_POOL_NAME \
+	    $TEST_IMAGE $TEST_INPUTS_DIR
+
+	import_image
+
+	check_image_contents
+
+	i=0
+	while [ $i -lt 1000 ]; do
+		dd if=/dev/random of=${TEST_MOUNT_DIR}/foo bs=1k count=1 \
+		    seek=$(($i + $start)) conv=notrunc
+		# Make sure that the first $start blocks are unmodified.
+		dd if=${TEST_MOUNT_DIR}/foo bs=1k count=$start of=foo.copy
+		atf_check -o file:foo.md5 md5 -q foo.copy
+		i=$(($i + 1))
+	done
+}
+file_extend_cleanup()
 {
 	common_cleanup
 }
@@ -697,6 +733,7 @@ atf_init_test_cases()
 	atf_add_test_case dataset_removal
 	atf_add_test_case empty_dir
 	atf_add_test_case empty_fs
+	atf_add_test_case file_extend
 	atf_add_test_case file_sizes
 	atf_add_test_case hard_links
 	atf_add_test_case indirect_dnode_array

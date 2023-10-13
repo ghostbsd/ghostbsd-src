@@ -26,6 +26,7 @@
  */
 
 #include "opt_acpi.h"
+#include "opt_kstack_pages.h"
 #include "opt_platform.h"
 #include "opt_ddb.h"
 
@@ -359,11 +360,14 @@ makectx(struct trapframe *tf, struct pcb *pcb)
 {
 	int i;
 
-	for (i = 0; i < nitems(pcb->pcb_x); i++)
-		pcb->pcb_x[i] = tf->tf_x[i + PCB_X_START];
-
 	/* NB: pcb_x[PCB_LR] is the PC, see PC_REGS() in db_machdep.h */
-	pcb->pcb_x[PCB_LR] = tf->tf_elr;
+	for (i = 0; i < nitems(pcb->pcb_x); i++) {
+		if (i == PCB_LR)
+			pcb->pcb_x[i] = tf->tf_elr;
+		else
+			pcb->pcb_x[i] = tf->tf_x[i + PCB_X_START];
+	}
+
 	pcb->pcb_sp = tf->tf_sp;
 }
 
@@ -377,7 +381,7 @@ init_proc0(vm_offset_t kstack)
 
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
-	thread0.td_kstack_pages = kstack_pages;
+	thread0.td_kstack_pages = KSTACK_PAGES;
 #if defined(PERTHREAD_SSP)
 	thread0.td_md.md_canary = boot_canary;
 #endif
@@ -1044,6 +1048,10 @@ initarm(struct arm64_bootparams *abp)
 	}
 
 	early_boot = 0;
+
+	if (bootverbose && kstack_pages != KSTACK_PAGES)
+		printf("kern.kstack_pages = %d ignored for thread0\n",
+		    kstack_pages);
 
 	TSEXIT();
 }

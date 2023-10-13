@@ -883,6 +883,12 @@ struct proc {
 						   external thread_single() is
 						   permitted */
 #define	P2_REAPKILLED		0x00080000
+#define	P2_MEMBAR_PRIVE		0x00100000	/* membar private expedited
+						   registered */
+#define	P2_MEMBAR_PRIVE_SYNCORE	0x00200000	/* membar private expedited
+						   sync core registered */
+#define	P2_MEMBAR_GLOBE		0x00400000	/* membar global expedited
+						   registered */
 
 /* Flags protected by proctree_lock, kept in p_treeflags. */
 #define	P_TREE_ORPHANED		0x00000001	/* Reparented, on orphan list */
@@ -1157,11 +1163,9 @@ void	ast_sched(struct thread *td, int tda);
 void	ast_unsched_locked(struct thread *td, int tda);
 
 struct	thread *choosethread(void);
+int	cr_bsd_visible(struct ucred *u1, struct ucred *u2);
 int	cr_cansee(struct ucred *u1, struct ucred *u2);
 int	cr_canseesocket(struct ucred *cred, struct socket *so);
-int	cr_canseeothergids(struct ucred *u1, struct ucred *u2);
-int	cr_canseeotheruids(struct ucred *u1, struct ucred *u2);
-int	cr_canseejailproc(struct ucred *u1, struct ucred *u2);
 int	cr_cansignal(struct ucred *cred, struct proc *proc, int signum);
 int	enterpgrp(struct proc *p, pid_t pgid, struct pgrp *pgrp,
 	    struct session *sess);
@@ -1229,6 +1233,7 @@ void	cpu_idle(int);
 int	cpu_idle_wakeup(int);
 extern	void (*cpu_idle_hook)(sbintime_t);	/* Hook to machdep CPU idler. */
 void	cpu_switch(struct thread *, struct thread *, struct mtx *);
+void	cpu_sync_core(void);
 void	cpu_throw(struct thread *, struct thread *) __dead2;
 bool	curproc_sigkilled(void);
 void	userret(struct thread *, struct trapframe *);

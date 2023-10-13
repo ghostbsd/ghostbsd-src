@@ -1792,13 +1792,6 @@ dev/ida/ida.c			optional ida
 dev/ida/ida_disk.c		optional ida
 dev/ida/ida_pci.c		optional ida pci
 dev/iicbus/acpi_iicbus.c	optional acpi iicbus | acpi compat_linuxkpi
-dev/iicbus/ad7418.c		optional ad7418
-dev/iicbus/ads111x.c		optional ads111x
-dev/iicbus/ds1307.c		optional ds1307
-dev/iicbus/ds13rtc.c		optional ds13rtc | ds133x | ds1374
-dev/iicbus/ds1672.c		optional ds1672
-dev/iicbus/ds3231.c		optional ds3231
-dev/iicbus/htu21.c		optional htu21
 dev/iicbus/icee.c		optional icee
 dev/iicbus/if_ic.c		optional ic
 dev/iicbus/iic.c		optional iic
@@ -1811,30 +1804,38 @@ dev/iicbus/iichid.c		optional iichid acpi hid iicbus
 dev/iicbus/iiconf.c		optional iicbus | compat_linuxkpi
 dev/iicbus/iicsmb.c		optional iicsmb				\
 	dependency	"iicbus_if.h"
-dev/iicbus/iicoc.c		optional iicoc
-dev/iicbus/iicoc_fdt.c		optional iicoc fdt
-dev/iicbus/iicoc_pci.c		optional iicoc pci
-dev/iicbus/isl12xx.c		optional isl12xx
-dev/iicbus/lm75.c		optional lm75
-dev/iicbus/max44009.c		optional max44009
+dev/iicbus/adc/ad7418.c		optional ad7418
+dev/iicbus/adc/ads111x.c	optional ads111x
+dev/iicbus/adc/pcf8591.c	optional pcf8591
+dev/iicbus/controller/opencores/iicoc.c	optional iicoc
+dev/iicbus/controller/opencores/iicoc_fdt.c	optional iicoc fdt
+dev/iicbus/controller/opencores/iicoc_pci.c	optional iicoc pci
 dev/iicbus/mux/iicmux.c		optional iicmux
 dev/iicbus/mux/iicmux_if.m	optional iicmux
 dev/iicbus/mux/iic_gpiomux.c	optional iic_gpiomux fdt
 dev/iicbus/mux/ltc430x.c	optional ltc430x
 dev/iicbus/mux/pca954x.c	optional pca954x iicbus iicmux
-dev/iicbus/nxprtc.c		optional nxprtc | pcf8563
 dev/iicbus/ofw_iicbus.c		optional fdt iicbus
 dev/iicbus/ofw_iicbus_if.m	optional fdt iicbus
-dev/iicbus/pcf8574.c		optional pcf8574
-dev/iicbus/pcf8591.c		optional pcf8591
-dev/iicbus/rtc8583.c		optional rtc8583
+dev/iicbus/rtc/ds1307.c		optional ds1307
+dev/iicbus/rtc/ds13rtc.c	optional ds13rtc | ds133x | ds1374
+dev/iicbus/rtc/ds1672.c		optional ds1672
+dev/iicbus/rtc/ds3231.c		optional ds3231
+dev/iicbus/rtc/isl12xx.c	optional isl12xx
+dev/iicbus/rtc/nxprtc.c		optional nxprtc | pcf8563
 dev/iicbus/rtc/pcf85063.c	optional pcf85063 iicbus fdt
+dev/iicbus/rtc/rtc8583.c	optional rtc8583
+dev/iicbus/rtc/rv3032.c		optional rv3032 iicbus fdt
 dev/iicbus/rtc/rx8803.c		optional rx8803 iicbus fdt
-dev/iicbus/s35390a.c		optional s35390a
-dev/iicbus/sy8106a.c		optional sy8106a fdt
-dev/iicbus/syr827.c		optional syr827 fdt
+dev/iicbus/rtc/s35390a.c	optional s35390a
+dev/iicbus/sensor/htu21.c	optional htu21
+dev/iicbus/sensor/lm75.c	optional lm75
+dev/iicbus/sensor/max44009.c	optional max44009
+dev/iicbus/gpio/pcf8574.c	optional pcf8574
 dev/iicbus/gpio/tca64xx.c	optional tca64xx fdt gpio
 dev/iicbus/pmic/fan53555.c	optional fan53555 fdt | tcs4525 fdt
+dev/iicbus/pmic/silergy/sy8106a.c	optional sy8106a fdt
+dev/iicbus/pmic/silergy/syr827.c	optional syr827 fdt
 dev/igc/if_igc.c		optional igc iflib pci
 dev/igc/igc_api.c		optional igc iflib pci
 dev/igc/igc_base.c		optional igc iflib pci
@@ -3044,6 +3045,8 @@ dev/sdhci/sdhci_pci.c		optional sdhci pci
 dev/sdio/sdio_if.m		optional mmccam
 dev/sdio/sdio_subr.c		optional mmccam
 dev/sdio/sdiob.c		optional mmccam
+dev/sff/sff_if.m		optional sff
+dev/sff/sfp_fdt.c		optional sff fdt
 dev/sge/if_sge.c		optional sge pci
 dev/siis/siis.c			optional siis pci
 dev/sis/if_sis.c		optional sis pci
@@ -3399,6 +3402,7 @@ dev/virtio/mmio/virtio_mmio_if.m	optional	virtio_mmio
 dev/virtio/network/if_vtnet.c		optional	vtnet
 dev/virtio/block/virtio_blk.c		optional	virtio_blk
 dev/virtio/balloon/virtio_balloon.c	optional	virtio_balloon
+dev/virtio/gpu/virtio_gpu.c		optional	virtio_gpu
 dev/virtio/scsi/virtio_scsi.c		optional	virtio_scsi
 dev/virtio/random/virtio_random.c	optional	virtio_random
 dev/virtio/console/virtio_console.c	optional	virtio_console
@@ -3777,6 +3781,7 @@ kern/kern_lockstat.c		optional kdtrace_hooks
 kern/kern_loginclass.c		standard
 kern/kern_malloc.c		standard
 kern/kern_mbuf.c		standard
+kern/kern_membarrier.c		standard
 kern/kern_mib.c			standard
 kern/kern_module.c		standard
 kern/kern_mtxpool.c		standard
@@ -3904,6 +3909,7 @@ kern/sys_pipe.c			standard
 kern/sys_procdesc.c		standard
 kern/sys_process.c		standard
 kern/sys_socket.c		standard
+kern/sys_timerfd.c		standard
 kern/syscalls.c			standard
 kern/sysv_ipc.c			standard
 kern/sysv_msg.c			optional sysvmsg
@@ -4032,7 +4038,7 @@ libkern/strcasecmp.c		standard
 libkern/strcasestr.c		standard
 libkern/strcat.c		standard
 libkern/strchr.c		standard
-libkern/strchrnul.c		optional gdb
+libkern/strchrnul.c		standard
 libkern/strcpy.c		standard
 libkern/strcspn.c		standard
 libkern/strdup.c		standard
@@ -4492,6 +4498,7 @@ netpfil/pf/pf_if.c		optional pf inet
 netpfil/pf/pf_ioctl.c		optional pf inet
 netpfil/pf/pf_lb.c		optional pf inet
 netpfil/pf/pf_norm.c		optional pf inet
+netpfil/pf/pf_nl.c		optional pf inet
 netpfil/pf/pf_nv.c		optional pf inet
 netpfil/pf/pf_osfp.c		optional pf inet
 netpfil/pf/pf_ruleset.c		optional pf inet
@@ -5142,6 +5149,7 @@ security/mac_priority/mac_priority.c	optional mac_priority
 security/mac_seeotheruids/mac_seeotheruids.c optional mac_seeotheruids
 security/mac_stub/mac_stub.c	optional mac_stub
 security/mac_test/mac_test.c	optional mac_test
+security/mac_grantbylabel/mac_grantbylabel.c		optional mac_grantbylabel
 security/mac_veriexec/mac_veriexec.c			optional mac_veriexec
 security/mac_veriexec/veriexec_fingerprint.c		optional mac_veriexec
 security/mac_veriexec/veriexec_metadata.c		optional mac_veriexec

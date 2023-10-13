@@ -151,7 +151,7 @@ cpu_fetch_syscall_args(struct thread *td)
 	}
 
 	if (__predict_false(sa->code >= p->p_sysent->sv_size))
-		sa->callp = &p->p_sysent->sv_table[0];
+		sa->callp = &nosys_sysent;
 	else
 		sa->callp = &p->p_sysent->sv_table[sa->code];
 
@@ -277,6 +277,7 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	} else if (!ADDR_IS_CANONICAL(far)) {
 		/* We received a TBI/PAC/etc. fault from the kernel */
 		error = KERN_INVALID_ADDRESS;
+		pcb = td->td_pcb;
 		goto bad_far;
 	} else if (ADDR_IS_KERNEL(far)) {
 		/*
@@ -558,6 +559,11 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 		panic("Undefined instruction: %08x",
 		    *(uint32_t *)frame->tf_elr);
 		break;
+	case EXCP_BTI:
+		print_registers(frame);
+		print_gp_register("far", far);
+		panic("Branch Target exception");
+		break;
 	default:
 		print_registers(frame);
 		print_gp_register("far", far);
@@ -696,6 +702,11 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		PROC_UNLOCK(td->td_proc);
 		call_trapsignal(td, SIGTRAP, TRAP_TRACE,
 		    (void *)frame->tf_elr, exception);
+		userret(td, frame);
+		break;
+	case EXCP_BTI:
+		call_trapsignal(td, SIGILL, ILL_ILLOPC, (void *)frame->tf_elr,
+		    exception);
 		userret(td, frame);
 		break;
 	default:

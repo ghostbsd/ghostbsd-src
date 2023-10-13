@@ -126,6 +126,8 @@ CHACHA20INCS+=	${SRCTOP}/sys/crypto/chacha20/_chacha.h \
 
 .if ${MACHINE} == "host"
 _host_arch= ${_HOST_ARCH}
+.elif ${MACHINE} == "host32"
+_host_arch= ${_HOST_ARCH32}
 .else
 _host_arch=${MACHINE}
 .endif
@@ -289,6 +291,8 @@ SYSINCS+=	${SRCTOP}/sys/sys/fnv_hash.h
 INCS+=	${SRCTOP}/include/elf.h
 SYSINCS+=	${SRCTOP}/sys/sys/elf.h
 SYSINCS+=	${SRCTOP}/sys/sys/ctf.h
+# for kbdcontrol:
+SYSINCS+=	${SRCTOP}/sys/sys/kbio.h
 
 # We want to run the build with only ${WORLDTMP} in $PATH to ensure we don't
 # accidentally run tools that are incompatible but happen to be in $PATH.

@@ -384,7 +384,11 @@ struct pfctl_syncookies {
 	uint8_t				lowwater;	/* Percent */
 };
 
+int	pfctl_startstop(int start);
 struct pfctl_status* pfctl_get_status(int dev);
+uint64_t pfctl_status_counter(struct pfctl_status *status, int id);
+uint64_t pfctl_status_fcounter(struct pfctl_status *status, int id);
+uint64_t pfctl_status_scounter(struct pfctl_status *status, int id);
 void	pfctl_free_status(struct pfctl_status *status);
 
 int	pfctl_get_eth_rulesets_info(int dev,
@@ -410,6 +414,9 @@ int	pfctl_add_rule(int dev, const struct pfctl_rule *r,
 	    const char *anchor, const char *anchor_call, uint32_t ticket,
 	    uint32_t pool_ticket);
 int	pfctl_set_keepcounters(int dev, bool keep);
+int	pfctl_get_creatorids(uint32_t *creators, size_t *len);
+typedef int (*pfctl_get_state_fn)(struct pfctl_state *, void *);
+int pfctl_get_states_iter(pfctl_get_state_fn f, void *arg);
 int	pfctl_get_states(int dev, struct pfctl_states *states);
 void	pfctl_free_states(struct pfctl_states *states);
 int	pfctl_clear_states(int dev, const struct pfctl_kill *kill,

@@ -210,6 +210,15 @@ struct lkpi_hw {	/* name it mac80211_sc? */
 #define	LHW_TO_HW(_lhw)		(&(_lhw)->hw)
 #define	HW_TO_LHW(_hw)		container_of(_hw, struct lkpi_hw, hw)
 
+struct lkpi_chanctx {
+	bool				added_to_drv;	/* Managed by MO */
+	struct ieee80211_chanctx_conf	conf __aligned(CACHE_LINE_SIZE);
+};
+#define	LCHANCTX_TO_CHANCTX_CONF(_lchanctx)		\
+    (&(_lchanctx)->conf)
+#define	CHANCTX_CONF_TO_LCHANCTX(_conf)			\
+    container_of(_conf, struct lkpi_chanctx, conf)
+
 struct lkpi_wiphy {
 	const struct cfg80211_ops	*ops;
 
@@ -276,9 +285,9 @@ int lkpi_80211_mo_sta_state(struct ieee80211_hw *, struct ieee80211_vif *,
     struct lkpi_sta *, enum ieee80211_sta_state);
 int lkpi_80211_mo_config(struct ieee80211_hw *, uint32_t);
 int lkpi_80211_mo_assign_vif_chanctx(struct ieee80211_hw *, struct ieee80211_vif *,
-    struct ieee80211_chanctx_conf *);
+    struct ieee80211_bss_conf *, struct ieee80211_chanctx_conf *);
 void lkpi_80211_mo_unassign_vif_chanctx(struct ieee80211_hw *, struct ieee80211_vif *,
-    struct ieee80211_chanctx_conf **);
+    struct ieee80211_bss_conf *, struct ieee80211_chanctx_conf **);
 int lkpi_80211_mo_add_chanctx(struct ieee80211_hw *, struct ieee80211_chanctx_conf *);
 void lkpi_80211_mo_change_chanctx(struct ieee80211_hw *,
     struct ieee80211_chanctx_conf *, uint32_t);
@@ -287,7 +296,7 @@ void lkpi_80211_mo_remove_chanctx(struct ieee80211_hw *,
 void lkpi_80211_mo_bss_info_changed(struct ieee80211_hw *, struct ieee80211_vif *,
     struct ieee80211_bss_conf *, uint64_t);
 int lkpi_80211_mo_conf_tx(struct ieee80211_hw *, struct ieee80211_vif *,
-    uint16_t, const struct ieee80211_tx_queue_params *);
+    uint32_t, uint16_t, const struct ieee80211_tx_queue_params *);
 void lkpi_80211_mo_flush(struct ieee80211_hw *, struct ieee80211_vif *,
     uint32_t, bool);
 void lkpi_80211_mo_mgd_prepare_tx(struct ieee80211_hw *, struct ieee80211_vif *,

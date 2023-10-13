@@ -916,7 +916,7 @@ install_create_be () {
 			echo -n "Creating snapshot of existing boot environment... "
 			VERSION=`freebsd-version -ku | sort -V | tail -n 1`
 			TIMESTAMP=`date +"%Y-%m-%d_%H%M%S"`
-			bectl create ${VERSION}_${TIMESTAMP}
+			bectl create -r ${VERSION}_${TIMESTAMP}
 			if [ $? -eq 0 ]; then
 				echo "done.";
 			else
@@ -1202,10 +1202,10 @@ fetch_progress () {
 continuep () {
 	while read -p "Does this look reasonable (y/n)? " CONTINUE; do
 		case "${CONTINUE}" in
-		y*)
+		[yY]*)
 			return 0
 			;;
-		n*)
+		[nN]*)
 			return 1
 			;;
 		esac
@@ -2903,7 +2903,13 @@ install_from_index () {
 	    while read FPATH TYPE OWNER GROUP PERM FLAGS HASH LINK; do
 		case ${TYPE} in
 		d)
-			# Create a directory
+			# Create a directory.  A file may change to a directory
+			# on upgrade (PR273661).  If that happens, remove the
+			# file first.
+			if [ -e "${BASEDIR}/${FPATH}" ] && \
+			    ! [ -d "${BASEDIR}/${FPATH}" ]; then
+				rm -f -- "${BASEDIR}/${FPATH}"
+			fi
 			install -d -o ${OWNER} -g ${GROUP}		\
 			    -m ${PERM} ${BASEDIR}/${FPATH}
 			;;
@@ -3036,9 +3042,10 @@ Kernel updates have been installed.  Please reboot and run
 		install_from_index INDEX-NEW || return 1
 		install_delete INDEX-OLD INDEX-NEW || return 1
 
-		# Restart sshd if running (PR263489).  Note that this does not
-		# affect child sshd processes handling existing sessions.
-		if service sshd status >/dev/null 2>/dev/null; then
+		# Restart host sshd if running (PR263489).  Note that this does
+		# not affect child sshd processes handling existing sessions.
+		if [ "$BASEDIR" = / ] && \
+		    service sshd status >/dev/null 2>/dev/null; then
 			echo
 			echo "Restarting sshd after upgrade"
 			service sshd restart

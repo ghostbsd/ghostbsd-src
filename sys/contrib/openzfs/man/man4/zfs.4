@@ -15,7 +15,7 @@
 .\" own identifying information:
 .\" Portions Copyright [yyyy] [name of copyright owner]
 .\"
-.Dd January 10, 2023
+.Dd July 21, 2023
 .Dt ZFS 4
 .Os
 .
@@ -239,6 +239,11 @@ relative to the pool.
 Make some blocks above a certain size be gang blocks.
 This option is used by the test suite to facilitate testing.
 .
+.It Sy metaslab_force_ganging_pct Ns = Ns Sy 3 Ns % Pq uint
+For blocks that could be forced to be a gang block (due to
+.Sy metaslab_force_ganging ) ,
+force this many of them to be gang blocks.
+.
 .It Sy zfs_ddt_zap_default_bs Ns = Ns Sy 15 Po 32 KiB Pc Pq int
 Default DDT ZAP data block size as a power of 2. Note that changing this after
 creating a DDT on the pool will not affect existing DDTs, only newly created
@@ -397,6 +402,12 @@ Practical upper limit of total metaslabs per top-level vdev.
 .It Sy metaslab_preload_enabled Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Enable metaslab group preloading.
 .
+.It Sy metaslab_preload_limit Ns = Ns Sy 10 Pq uint
+Maximum number of metaslabs per group to preload
+.
+.It Sy metaslab_preload_pct Ns = Ns Sy 50 Pq uint
+Percentage of CPUs to run a metaslab preload taskq
+.
 .It Sy metaslab_lba_weighting_enabled Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Give more weight to metaslabs with lower LBAs,
 assuming they have greater bandwidth,
@@ -518,9 +529,6 @@ However, this is limited by
 .It Sy zap_micro_max_size Ns = Ns Sy 131072 Ns B Po 128 KiB Pc Pq int
 Maximum micro ZAP size.
 A micro ZAP is upgraded to a fat ZAP, once it grows beyond the specified size.
-.
-.It Sy zfetch_array_rd_sz Ns = Ns Sy 1048576 Ns B Po 1 MiB Pc Pq u64
-If prefetching is enabled, disable prefetching for reads larger than this size.
 .
 .It Sy zfetch_min_distance Ns = Ns Sy 4194304 Ns B Po 4 MiB Pc Pq uint
 Min bytes to prefetch per stream.
@@ -2142,6 +2150,11 @@ On very fragmented pools, lowering this
 .Pq typically to Sy 36 KiB
 can improve performance.
 .
+.It Sy zil_maxcopied Ns = Ns Sy 7680 Ns B Po 7.5 KiB Pc Pq uint
+This sets the maximum number of write bytes logged via WR_COPIED.
+It tunes a tradeoff between additional memory copy and possibly worse log
+space efficiency vs additional range lock/unlock.
+.
 .It Sy zil_min_commit_timeout Ns = Ns Sy 5000 Pq u64
 This sets the minimum delay in nanoseconds ZIL care to delay block commit,
 waiting for more records.
@@ -2303,63 +2316,6 @@ If
 (the default) then internally set
 .Sy zvol_threads
 to the number of CPUs present or 32 (whichever is greater).
-.
-.It Sy zvol_blk_mq_threads Ns = Ns Sy 0 Pq uint
-The number of threads per zvol to use for queuing IO requests.
-This parameter will only appear if your kernel supports
-.Li blk-mq
-and is only read and assigned to a zvol at zvol load time.
-If
-.Sy 0
-(the default) then internally set
-.Sy zvol_blk_mq_threads
-to the number of CPUs present.
-.
-.It Sy zvol_use_blk_mq Ns = Ns Sy 0 Ns | Ns 1 Pq uint
-Set to
-.Sy 1
-to use the
-.Li blk-mq
-API for zvols.
-Set to
-.Sy 0
-(the default) to use the legacy zvol APIs.
-This setting can give better or worse zvol performance depending on
-the workload.
-This parameter will only appear if your kernel supports
-.Li blk-mq
-and is only read and assigned to a zvol at zvol load time.
-.
-.It Sy zvol_blk_mq_blocks_per_thread Ns = Ns Sy 8 Pq uint
-If
-.Sy zvol_use_blk_mq
-is enabled, then process this number of
-.Sy volblocksize Ns -sized blocks per zvol thread.
-This tunable can be use to favor better performance for zvol reads (lower
-values) or writes (higher values).
-If set to
-.Sy 0 ,
-then the zvol layer will process the maximum number of blocks
-per thread that it can.
-This parameter will only appear if your kernel supports
-.Li blk-mq
-and is only applied at each zvol's load time.
-.
-.It Sy zvol_blk_mq_queue_depth Ns = Ns Sy 0 Pq uint
-The queue_depth value for the zvol
-.Li blk-mq
-interface.
-This parameter will only appear if your kernel supports
-.Li blk-mq
-and is only applied at each zvol's load time.
-If
-.Sy 0
-(the default) then use the kernel's default queue depth.
-Values are clamped to the kernel's
-.Dv BLKDEV_MIN_RQ
-and
-.Dv BLKDEV_MAX_RQ Ns / Ns Dv BLKDEV_DEFAULT_RQ
-limits.
 .
 .It Sy zvol_volmode Ns = Ns Sy 1 Pq uint
 Defines zvol block devices behaviour when

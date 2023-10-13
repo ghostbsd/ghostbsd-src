@@ -68,10 +68,12 @@ MAN=	accept_filter.9 \
 	copy.9 \
 	counter.9 \
 	cpuset.9 \
+	cr_bsd_visible.9 \
 	cr_cansee.9 \
+	cr_canseejailproc.9 \
+	cr_canseeothergids.9 \
+	cr_canseeotheruids.9 \
 	critical_enter.9 \
-	cr_seeothergids.9 \
-	cr_seeotheruids.9 \
 	crypto.9 \
 	crypto_buffer.9 \
 	crypto_driver.9 \
@@ -1155,6 +1157,7 @@ MLINKS+=g_provider.9 g_destroy_provider.9 \
 	g_provider.9 g_error_provider.9 \
 	g_provider.9 g_new_providerf.9
 MLINKS+=gone_in.9 gone_in_dev.9
+MLINKS+=groupmember.9 realgroupmember.9
 MLINKS+=hash.9 hash32.9 \
 	hash.9 hash32_buf.9 \
 	hash.9 hash32_str.9 \
@@ -1209,8 +1212,7 @@ MLINKS+=ieee80211_node.9 ieee80211_dump_node.9 \
 	ieee80211_node.9 ieee80211_find_rxnode_withkey.9 \
 	ieee80211_node.9 ieee80211_free_node.9 \
 	ieee80211_node.9 ieee80211_iterate_nodes.9 \
-	ieee80211_node.9 ieee80211_ref_node.9 \
-	ieee80211_node.9 ieee80211_unref_node.9
+	ieee80211_node.9 ieee80211_ref_node.9
 MLINKS+=ieee80211_output.9 ieee80211_process_callback.9 \
 	ieee80211_output.9 M_SEQNO_GET.9 \
 	ieee80211_output.9 M_WME_GETAC.9
@@ -1394,7 +1396,6 @@ MLINKS+=kqueue.9 knlist_add.9 \
 	kqueue.9 knlist_init.9 \
 	kqueue.9 knlist_init_mtx.9 \
 	kqueue.9 knlist_remove.9 \
-	kqueue.9 knlist_remove_inevent.9 \
 	kqueue.9 knote_fdclose.9 \
 	kqueue.9 KNOTE_LOCKED.9 \
 	kqueue.9 KNOTE_UNLOCKED.9 \

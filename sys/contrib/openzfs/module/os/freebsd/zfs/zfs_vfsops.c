@@ -89,7 +89,7 @@ int zfs_debug_level;
 SYSCTL_INT(_vfs_zfs, OID_AUTO, debug, CTLFLAG_RWTUN, &zfs_debug_level, 0,
 	"Debug level");
 
-int zfs_bclone_enabled;
+int zfs_bclone_enabled = 1;
 SYSCTL_INT(_vfs_zfs, OID_AUTO, bclone_enabled, CTLFLAG_RWTUN,
 	&zfs_bclone_enabled, 0, "Enable block cloning");
 
@@ -1158,7 +1158,6 @@ zfsvfs_free(zfsvfs_t *zfsvfs)
 
 	mutex_destroy(&zfsvfs->z_znodes_lock);
 	mutex_destroy(&zfsvfs->z_lock);
-	ASSERT3U(zfsvfs->z_nr_znodes, ==, 0);
 	list_destroy(&zfsvfs->z_all_znodes);
 	ZFS_TEARDOWN_DESTROY(zfsvfs);
 	ZFS_TEARDOWN_INACTIVE_DESTROY(zfsvfs);
@@ -1562,12 +1561,11 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 		 * may add the parents of dir-based xattrs to the taskq
 		 * so we want to wait for these.
 		 *
-		 * We can safely read z_nr_znodes without locking because the
-		 * VFS has already blocked operations which add to the
-		 * z_all_znodes list and thus increment z_nr_znodes.
+		 * We can safely check z_all_znodes for being empty because the
+		 * VFS has already blocked operations which add to it.
 		 */
 		int round = 0;
-		while (zfsvfs->z_nr_znodes > 0) {
+		while (!list_is_empty(&zfsvfs->z_all_znodes)) {
 			taskq_wait_outstanding(dsl_pool_zrele_taskq(
 			    dmu_objset_pool(zfsvfs->z_os)), 0);
 			if (++round > 1 && !unmounting)
