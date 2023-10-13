@@ -29,7 +29,6 @@
  * SUCH DAMAGE.
  *
  *	@(#)ffs_extern.h	8.6 (Berkeley) 3/30/95
- * $FreeBSD$
  */
 
 #ifndef _UFS_FFS_EXTERN_H
@@ -198,9 +197,9 @@ void	softdep_setup_allocindir_meta(struct buf *, struct inode *,
 void	softdep_setup_allocindir_page(struct inode *, ufs_lbn_t,
 	    struct buf *, int, ufs2_daddr_t, ufs2_daddr_t, struct buf *);
 void	softdep_setup_blkfree(struct mount *, struct buf *, ufs2_daddr_t, int,
-	    struct workhead *);
+	    struct workhead *, bool);
 void	softdep_setup_inofree(struct mount *, struct buf *, ino_t,
-	    struct workhead *);
+	    struct workhead *, bool);
 void	softdep_setup_sbupdate(struct ufsmount *, struct fs *, struct buf *);
 void	softdep_fsync_mountdev(struct vnode *);
 int	softdep_sync_metadata(struct vnode *);

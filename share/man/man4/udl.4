@@ -1,5 +1,4 @@
 .\" $OpenBSD: udl.4,v 1.20 2012/09/18 17:11:41 jasper Exp $
-.\" $FreeBSD$
 .\"
 .\" Copyright (c) 2009 Marcus Glocker <mglocker@openbsd.org>
 .\"
@@ -15,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd February 15, 2015
+.Dd September 9, 2023
 .Dt UDL 4
 .Os
 .Sh NAME
@@ -23,10 +22,11 @@
 .Nd DisplayLink DL-120 / DL-160 USB display devices
 .Sh SYNOPSIS
 To compile this driver into the kernel,
-place the following line in your
+place the following lines in your
 kernel configuration file:
 .Bd -ragged -offset indent
 .Cd "device udl"
+.Cd "device videomode"
 .Ed
 .Pp
 Alternatively, to load the driver as a

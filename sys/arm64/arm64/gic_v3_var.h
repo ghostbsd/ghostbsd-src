@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _GIC_V3_VAR_H_
@@ -133,8 +131,8 @@ void gic_r_write_8(device_t, bus_size_t, uint64_t var);
 	u_int cpu = PCPU_GET(cpuid);		\
 						\
 	bus_read_##len(				\
-	    &sc->gic_redists.pcpu[cpu]->res,	\
-	    reg);				\
+	    &(sc)->gic_redists.pcpu[cpu]->res,	\
+	    (reg));				\
 })
 
 #define	gic_r_write(sc, len, reg, val)		\
@@ -142,8 +140,8 @@ void gic_r_write_8(device_t, bus_size_t, uint64_t var);
 	u_int cpu = PCPU_GET(cpuid);		\
 						\
 	bus_write_##len(			\
-	    &sc->gic_redists.pcpu[cpu]->res,	\
-	    reg, val);				\
+	    &(sc)->gic_redists.pcpu[cpu]->res,	\
+	    (reg), (val));			\
 })
 
 #endif /* _GIC_V3_VAR_H_ */

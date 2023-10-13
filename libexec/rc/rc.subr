@@ -1,5 +1,4 @@
 # $NetBSD: rc.subr,v 1.67 2006/10/07 11:25:15 elad Exp $
-# $FreeBSD$
 #
 # Copyright (c) 1997-2004 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -864,7 +863,7 @@ startmsg()
 #			($sig_stop defaults to TERM.)
 #
 #	reload		Similar to stop, except use $sig_reload instead,
-#			and doesn't wait_for_pids.
+#			and don't wait_for_pids.
 #			$sig_reload defaults to HUP.
 #			Note that `reload' isn't provided by default,
 #			it should be enabled via $extra_commands.
@@ -1010,13 +1009,14 @@ run_rc_command()
 			continue
 		fi
 					# if ${rcvar} is set, $1 is not "rcvar", "describe",
-					# "enable" or "delete", and ${rc_pid} is not set, run:
+					# "enable", "delete" or "status", and ${rc_pid} is
+					# not set, run:
 					#	checkyesno ${rcvar}
 					# and return if that failed
 					#
 		if [ -n "${rcvar}" -a "$rc_arg" != "rcvar" -a "$rc_arg" != "stop" \
 		    -a "$rc_arg" != "delete" -a "$rc_arg" != "enable" \
-		    -a "$rc_arg" != "describe" ] ||
+		    -a "$rc_arg" != "describe" -a "$rc_arg" != "status" ] ||
 		    [ -n "${rcvar}" -a "$rc_arg" = "stop" -a -z "${rc_pid}" ]; then
 			if ! checkyesno ${rcvar}; then
 				if [ -n "${rc_quiet}" ]; then

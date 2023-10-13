@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 extern "C" {
@@ -57,7 +55,7 @@ void expect_lookup(const char *relpath, uint64_t ino)
 }
 
 /* 
- * Expect tha FUSE_ACCESS will never be called for the given inode, with any
+ * Expect that FUSE_ACCESS will never be called for the given inode, with any
  * bits in the supplied access_mask set
  */
 void expect_noaccess(uint64_t ino, mode_t access_mask)

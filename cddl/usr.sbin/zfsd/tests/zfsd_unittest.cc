@@ -62,9 +62,6 @@
 #include <zfsd/zpool_list.h>
 
 #include "libmocks.h"
-
-__FBSDID("$FreeBSD$");
-
 /*================================== Macros ==================================*/
 #define	NUM_ELEMENTS(x) (sizeof(x) / sizeof(*x))
 
@@ -400,7 +397,7 @@ TEST_F(ZfsEventTest, ProcessPoolEventGetsCalled)
 {
 	string evString("!system=ZFS "
 			"subsystem=ZFS "
-			"type=misc.fs.zfs.vdev_remove "
+			"type=sysevent.fs.zfs.vdev_remove "
 			"pool_name=foo "
 			"pool_guid=9756779504028057996 "
 			"vdev_guid=1631193447431603339 "
@@ -515,7 +512,7 @@ TEST_F(CaseFileTest, PoolDestroy)
 			"pool_guid=456 "
 			"subsystem=ZFS "
 			"timestamp=1348867914 "
-			"type=misc.fs.zfs.pool_destroy ");
+			"type=sysevent.fs.zfs.pool_destroy ");
 	m_event = Event::CreateEvent(*m_eventFactory, evString);
 	ZfsEvent *zfs_event = static_cast<ZfsEvent*>(m_event);
 	EXPECT_CALL(*m_caseFile, Close());
@@ -685,7 +682,7 @@ string ReEvaluateByGuidTest::s_evString(
 	"pool_name=foo "
 	"subsystem=ZFS "
 	"timestamp=1360620391 "
-	"type=misc.fs.zfs.config_sync");
+	"type=sysevent.fs.zfs.config_sync");
 
 
 /*
@@ -768,4 +765,41 @@ TEST_F(ReEvaluateByGuidTest, ReEvaluateByGuid_five)
 	delete CaseFile3;
 	delete CaseFile4;
 	delete CaseFile5;
+}
+
+/*
+ * Test VdevIterator
+ */
+class VdevIteratorTest : public ::testing::Test
+{
+};
+
+bool VdevIteratorTestCB(Vdev &vdev, void *cbArg) {
+	return (false);
+}
+
+/*
+ * VdevIterator::Next should not crash when run on a pool that has a previously
+ * removed vdev.  Regression for
+ * https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=273663
+ */
+TEST_F(VdevIteratorTest, VdevRemoval)
+{
+	nvlist_t* poolConfig, *rootVdev;
+
+	ASSERT_EQ(0, nvlist_alloc(&rootVdev, NV_UNIQUE_NAME, 0));
+	ASSERT_EQ(0, nvlist_add_uint64(rootVdev, ZPOOL_CONFIG_GUID, 0x5678));
+	/*
+	 * Note: pools with previously-removed top-level VDEVs will contain a
+	 * TLV in their labels that has 0 children.
+	 */
+	ASSERT_EQ(0, nvlist_add_nvlist_array(rootVdev, ZPOOL_CONFIG_CHILDREN,
+				NULL, 0));
+	ASSERT_EQ(0, nvlist_alloc(&poolConfig, NV_UNIQUE_NAME, 0));
+	ASSERT_EQ(0, nvlist_add_uint64(poolConfig,
+			ZPOOL_CONFIG_POOL_GUID, 0x1234));
+	ASSERT_EQ(0, nvlist_add_nvlist(poolConfig, ZPOOL_CONFIG_VDEV_TREE,
+				rootVdev));
+
+	VdevIterator(poolConfig).Each(VdevIteratorTestCB, NULL);
 }

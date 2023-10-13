@@ -26,7 +26,6 @@
 #  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 #  SUCH DAMAGE.
 #
-# $FreeBSD$
 
 # Usage: add_to_manpath path
 # Adds a variable to manpath while ensuring we don't have duplicates.
@@ -1005,11 +1004,11 @@ do_whatis() {
 
 # User's PATH setting decides on the groff-suite to pick up.
 EQN=eqn
-NROFF='groff -S -P-h -Wall -mtty-char -man'
+NROFF='groff -S -P-h -Wall -mtty-char -mandoc'
 PIC=pic
 REFER=refer
 TBL=tbl
-TROFF='groff -S -man'
+TROFF='groff -S -mandoc'
 VGRIND=vgrind
 
 LOCALE=/usr/bin/locale

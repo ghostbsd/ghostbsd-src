@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/endian.h>
 #include <sys/fnv_hash.h>
@@ -180,8 +178,8 @@ usage(void)
 {
 
 	(void)fprintf(stderr, "usage: vtfontcvt "
-	    "[-n] [-f font|source|compressed-source] [-w width] [-h height]\n"
-	    "\t[-v] -o output_file normal.bdf [bold.bdf]\n");
+	    "[-nv] [-f format] [-h height] [-w width]\n"
+	    "\t-o output_file normal_font [bold_font]\n");
 	exit(1);
 }
 

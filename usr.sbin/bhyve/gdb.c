@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #ifndef WITHOUT_CAPSICUM
 #include <sys/capsicum.h>
@@ -795,6 +793,9 @@ gdb_cpu_resume(int vcpu)
 	if (vs->stepping) {
 		error = vm_set_capability(ctx, vcpu, VM_CAP_MTRAP_EXIT, 1);
 		assert(error == 0);
+
+		error = vm_set_capability(ctx, vcpu, VM_CAP_MASK_HWINTR, 1);
+		assert(error == 0);
 	}
 }
 
@@ -845,6 +846,8 @@ gdb_cpu_mtrap(int vcpu)
 		vs->stepping = false;
 		vs->stepped = true;
 		vm_set_capability(ctx, vcpu, VM_CAP_MTRAP_EXIT, 0);
+		vm_set_capability(ctx, vcpu, VM_CAP_MASK_HWINTR, 0);
+
 		while (vs->stepped) {
 			if (stopped_vcpu == -1) {
 				debug("$vCPU %d reporting step\n", vcpu);

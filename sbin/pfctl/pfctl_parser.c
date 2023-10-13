@@ -34,8 +34,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -622,6 +620,8 @@ print_status(struct pfctl_status *s, struct pfctl_syncookies *cookies, int opts)
 		assert(cookies->mode <= PFCTL_SYNCOOKIES_ADAPTIVE);
 		printf("  %-25s %s\n", "mode",
 		    PFCTL_SYNCOOKIES_MODE_NAMES[cookies->mode]);
+		printf("  %-25s %s\n", "active",
+		    s->syncookies_active ? "active" : "inactive");
 	}
 }
 

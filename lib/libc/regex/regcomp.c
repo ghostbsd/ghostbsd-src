@@ -6,7 +6,7 @@
  *	The Regents of the University of California.  All rights reserved.
  *
  * Copyright (c) 2011 The FreeBSD Foundation
- * All rights reserved.
+ *
  * Portions of this software were developed by David Chisnall
  * under sponsorship from the FreeBSD Foundation.
  *
@@ -44,8 +44,6 @@
 static char sccsid[] = "@(#)regcomp.c	8.5 (Berkeley) 3/20/94";
 #endif /* LIBC_SCCS and not lint */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <stdio.h>
 #include <string.h>
@@ -830,10 +828,10 @@ p_simp_re(struct parse *p, struct branchc *bc)
 	handled = false;
 
 	assert(MORE());		/* caller should have ensured this */
-	c = GETNEXT();
+	c = (uch)GETNEXT();
 	if (c == '\\') {
 		(void)REQUIRE(MORE(), REG_EESCAPE);
-		cc = GETNEXT();
+		cc = (uch)GETNEXT();
 		c = BACKSL | cc;
 #ifdef LIBREGEX
 		if (p->gnuext) {
@@ -994,7 +992,7 @@ p_count(struct parse *p)
 	int ndigits = 0;
 
 	while (MORE() && isdigit((uch)PEEK()) && count <= DUPMAX) {
-		count = count*10 + (GETNEXT() - '0');
+		count = count*10 + ((uch)GETNEXT() - '0');
 		ndigits++;
 	}
 
@@ -1304,7 +1302,7 @@ may_escape(struct parse *p, const wint_t ch)
 
 	if ((p->pflags & PFLAG_LEGACY_ESC) != 0)
 		return (true);
-	if (isalpha(ch) || ch == '\'' || ch == '`')
+	if (iswalpha(ch) || ch == '\'' || ch == '`')
 		return (false);
 	return (true);
 #ifdef NOTYET

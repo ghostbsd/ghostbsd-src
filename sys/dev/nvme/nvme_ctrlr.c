@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_cam.h"
 #include "opt_nvme.h"
 
@@ -1321,8 +1319,9 @@ nvme_ctrlr_passthrough_cmd(struct nvme_controller *ctrlr,
 		mtx_sleep(pt, mtx, PRIBIO, "nvme_pt", 0);
 	mtx_unlock(mtx);
 
-err:
 	if (buf != NULL) {
+		vunmapbuf(buf);
+err:
 		uma_zfree(pbuf_zone, buf);
 		PRELE(curproc);
 	}

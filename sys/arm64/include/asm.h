@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_ASM_H_
@@ -50,7 +48,7 @@
 #define	ENTRY(sym)						\
 	.globl sym; LENTRY(sym)
 #define	EENTRY(sym)						\
-	.globl	sym; sym:
+	.globl	sym; .text; .align 2; .type sym,#function; sym:
 #define	LEND(sym) .ltorg; .cfi_endproc; .size sym, . - sym
 #define	END(sym) LEND(sym)
 #define	EEND(sym)

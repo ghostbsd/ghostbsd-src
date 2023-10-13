@@ -1,10 +1,9 @@
-# $FreeBSD$
 
 .include <bsd.own.mk>
 
 # OpenSSL version used for manual page generation
-OPENSSL_VER=	1.1.1v
-OPENSSL_DATE=	2023-08-01
+OPENSSL_VER=	1.1.1w
+OPENSSL_DATE=	2023-09-11
 
 LCRYPTO_SRC=	${SRCTOP}/crypto/openssl
 LCRYPTO_DOC=	${LCRYPTO_SRC}/doc

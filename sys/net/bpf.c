@@ -38,8 +38,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_bpf.h"
 #include "opt_ddb.h"
 #include "opt_netgraph.h"
@@ -643,7 +641,15 @@ bpf_movein(struct uio *uio, int linktype, struct ifnet *ifp, struct mbuf **mp,
 	if (len < hlen || len - hlen > ifp->if_mtu)
 		return (EMSGSIZE);
 
-	m = m_get2(len, M_WAITOK, MT_DATA, M_PKTHDR);
+	/* Allocate a mbuf for our write, since m_get2 fails if len >= to MJUMPAGESIZE, use m_getjcl for bigger buffers */
+	if (len < MJUMPAGESIZE)
+		m = m_get2(len, M_WAITOK, MT_DATA, M_PKTHDR);
+	else if (len <= MJUM9BYTES)
+		m = m_getjcl(M_WAITOK, MT_DATA, M_PKTHDR, MJUM9BYTES);
+	else if (len <= MJUM16BYTES)
+		m = m_getjcl(M_WAITOK, MT_DATA, M_PKTHDR, MJUM16BYTES);
+	else
+		m = NULL;
 	if (m == NULL)
 		return (EIO);
 	m->m_pkthdr.len = m->m_len = len;

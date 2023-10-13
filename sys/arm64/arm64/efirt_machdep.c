@@ -35,8 +35,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/efi.h>
 #include <sys/kernel.h>
@@ -48,10 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/vmmeter.h>
 
-#include <machine/metadata.h>
-#include <machine/pcb.h>
 #include <machine/pte.h>
-#include <machine/vfp.h>
 #include <machine/vmparam.h>
 
 #include <vm/vm.h>

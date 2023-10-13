@@ -41,8 +41,6 @@ static char sccsid[] = "@(#)main.c	8.6 (Berkeley) 5/14/95";
 #endif /* not lint */
 #endif
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #define _WANT_P_OSREL
 #include <sys/param.h>
 #include <sys/file.h>
@@ -274,9 +272,16 @@ checkfilesys(char *filesys)
 	if (bkgrdcheck) {
 		if (sbreadfailed)
 			exit(3);	/* Cannot read superblock */
-		/* Earlier background failed or journaled */
-		if (sblock.fs_flags & (FS_NEEDSFSCK | FS_SUJ))
-			exit(4);
+		if ((sblock.fs_flags & FS_NEEDSFSCK) == FS_NEEDSFSCK)
+			exit(4);	/* Earlier background failed */
+		if ((sblock.fs_flags & FS_SUJ) == FS_SUJ) {
+			maxino = sblock.fs_ncg * sblock.fs_ipg;
+			maxfsblock = sblock.fs_size;
+			bufinit();
+			preen = 1;
+			if (suj_check(filesys) == 0)
+				exit(4); /* Journal good, run it now */
+		}
 		if ((sblock.fs_flags & FS_DOSOFTDEP) == 0)
 			exit(5);	/* Not running soft updates */
 		size = MIBSIZE;
@@ -350,7 +355,7 @@ checkfilesys(char *filesys)
 	/*
 	 * Determine if we can and should do journal recovery.
 	 */
-	if ((sblock.fs_flags & FS_SUJ) == FS_SUJ) {
+	if (bkgrdflag == 0 && (sblock.fs_flags & FS_SUJ) == FS_SUJ) {
 		if ((sblock.fs_flags & FS_NEEDSFSCK) != FS_NEEDSFSCK &&
 		    skipclean) {
 			sujrecovery = 1;
@@ -617,10 +622,6 @@ setup_bkgrdchk(struct statfs *mntp, int sbreadfailed, char **filesys)
 	}
 	if ((sblock.fs_flags & FS_NEEDSFSCK) != 0) {
 		pwarn("FULL FSCK NEEDED, CANNOT RUN IN BACKGROUND\n");
-		return (0);
-	}
-	if ((sblock.fs_flags & FS_SUJ) != 0) {
-		pwarn("JOURNALED FILESYSTEM, CANNOT RUN IN BACKGROUND\n");
 		return (0);
 	}
 	if (skipclean && ckclean &&

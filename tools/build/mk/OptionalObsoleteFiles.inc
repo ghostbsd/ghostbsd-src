@@ -1,5 +1,4 @@
 #
-# $FreeBSD$
 #
 # This file adds support for the WITHOUT_* and WITH_* knobs in src.conf(5) to
 # the check-old* and delete-old* targets.
@@ -918,6 +917,7 @@ OLD_FILES+=usr/lib/dtrace/drti.o
 OLD_FILES+=usr/lib/dtrace/errno.d
 OLD_FILES+=usr/lib/dtrace/io.d
 OLD_FILES+=usr/lib/dtrace/ip.d
+OLD_FILES+=usr/lib/dtrace/ipfw.d
 OLD_FILES+=usr/lib/dtrace/mbuf.d
 OLD_FILES+=usr/lib/dtrace/psinfo.d
 .if ${TARGET_ARCH} == "amd64" || ${TARGET_ARCH} == "i386"

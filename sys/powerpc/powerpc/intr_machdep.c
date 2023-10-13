@@ -58,8 +58,6 @@
  *
  *	from: @(#)isa.c	7.2 (Berkeley) 5/13/91
  *	form: src/sys/i386/isa/intr_machdep.c,v 1.57 2001/07/20
- *
- * $FreeBSD$
  */
 
 #include "opt_isa.h"
@@ -131,6 +129,7 @@ static u_int nirqs = 0;		/* Allocated IRQs. */
 #endif
 static u_int stray_count;
 
+#define	INTRNAME_LEN	(MAXCOMLEN + 1)
 u_long *intrcnt;
 char *intrnames;
 size_t sintrcnt = sizeof(intrcnt);
@@ -156,8 +155,8 @@ static void
 intrcnt_setname(const char *name, int index)
 {
 
-	snprintf(intrnames + (MAXCOMLEN + 1) * index, MAXCOMLEN + 1, "%-*s",
-	    MAXCOMLEN, name);
+	snprintf(intrnames + INTRNAME_LEN * index, INTRNAME_LEN, "%-*s",
+	    INTRNAME_LEN - 1, name);
 }
 
 static void
@@ -181,10 +180,10 @@ intr_init_sources(void *arg __unused)
 #endif
 	intrcnt = mallocarray(nintrcnt, sizeof(u_long), M_INTR, M_WAITOK |
 	    M_ZERO);
-	intrnames = mallocarray(nintrcnt, MAXCOMLEN + 1, M_INTR, M_WAITOK |
+	intrnames = mallocarray(nintrcnt, INTRNAME_LEN, M_INTR, M_WAITOK |
 	    M_ZERO);
 	sintrcnt = nintrcnt * sizeof(u_long);
-	sintrnames = nintrcnt * (MAXCOMLEN + 1);
+	sintrnames = nintrcnt * INTRNAME_LEN;
 
 	intrcnt_setname("???", 0);
 	intrcnt_index = 1;

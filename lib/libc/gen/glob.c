@@ -8,7 +8,7 @@
  * Guido van Rossum.
  *
  * Copyright (c) 2011 The FreeBSD Foundation
- * All rights reserved.
+ *
  * Portions of this software were developed by David Chisnall
  * under sponsorship from the FreeBSD Foundation.
  *
@@ -39,8 +39,6 @@
 
 #include <sys/cdefs.h>
 __SCCSID("@(#)glob.c	8.3 (Berkeley) 10/13/93");
-__FBSDID("$FreeBSD$");
-
 /*
  * glob(3) -- a superset of the one defined in POSIX 1003.2.
  *

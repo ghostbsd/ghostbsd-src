@@ -5,7 +5,7 @@
  *	The Regents of the University of California.  All rights reserved.
  *
  * Copyright (c) 2011 The FreeBSD Foundation
- * All rights reserved.
+ *
  * Portions of this software were developed by David Chisnall
  * under sponsorship from the FreeBSD Foundation.
  *
@@ -41,8 +41,6 @@ static char sccsid[] = "@(#)strtoq.c	8.1 (Berkeley) 6/4/93";
 #endif /* LIBC_SCCS and not lint */
 __FBSDID("FreeBSD: src/lib/libc/stdlib/strtoll.c,v 1.19 2002/09/06 11:23:59 tjr Exp ");
 #endif
-__FBSDID("$FreeBSD$");
-
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -80,7 +78,10 @@ wcstoll_l(const wchar_t * __restrict nptr, wchar_t ** __restrict endptr,
 			c = *s++;
 	}
 	if ((base == 0 || base == 16) &&
-	    c == L'0' && (*s == L'x' || *s == L'X')) {
+	    c == L'0' && (*s == L'x' || *s == L'X') &&
+	    ((s[1] >= L'0' && s[1] <= L'9') ||
+	    (s[1] >= L'A' && s[1] <= L'F') ||
+	    (s[1] >= L'a' && s[1] <= L'f'))) {
 		c = s[1];
 		s += 2;
 		base = 16;

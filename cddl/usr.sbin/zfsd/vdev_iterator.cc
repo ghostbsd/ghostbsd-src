@@ -28,8 +28,6 @@
  * POSSIBILITY OF SUCH DAMAGES.
  *
  * Authors: Justin T. Gibbs     (Spectra Logic Corporation)
- *
- * $FreeBSD$
  */
 
 /**
@@ -102,10 +100,7 @@ VdevIterator::Next()
 {
 	nvlist_t *vdevConfig;
 
-	if (m_vdevQueue.empty())
-		return (NULL);
-
-	for (;;) {
+	for (vdevConfig = NULL; !m_vdevQueue.empty();) {
 		nvlist_t **vdevChildren;
 		int        result;
 		u_int      numChildren;

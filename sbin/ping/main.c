@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -213,7 +211,7 @@ usage(void)
 	    "Z"
 #endif
 	    "] "
-	    "[-b bufsiz] [-c count] [-e gateway]\n"
+	    "[-b bufsiz] [-C pcp] [-c count] [-e gateway]\n"
 	    "\t    [-I interface] [-i wait] [-k addrtype] [-l preload] "
 	    "[-m hoplimit]\n"
 	    "\t    [-p pattern]"

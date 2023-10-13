@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # Please see the file src/etc/mtree/README before making changes to this file.
 #
@@ -429,6 +428,8 @@
             ..
             atf-sh
             ..
+        ..
+        rc
         ..
         rtld-elf
         ..
@@ -879,6 +880,8 @@
         vfs
         ..
         vm
+            stack
+            ..
         ..
         vmm
         ..
@@ -1151,6 +1154,8 @@
         rpcbind
         ..
         sa
+        ..
+        syslogd
         ..
     ..
 ..

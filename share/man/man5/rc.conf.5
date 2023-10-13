@@ -22,9 +22,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd December 2, 2022
+.Dd September 18, 2023
 .Dt RC.CONF 5
 .Os
 .Sh NAME
@@ -3951,7 +3949,7 @@ The configuration filename used by
 utility.
 The default value is
 .Pa /etc/jail.conf .
-.Pa /etc/jail.  Ns Ao Ar jname Ac Ns Va .conf
+.Pa /etc/jail\&.  Ns Ao Ar jname Ac Ns Va .conf
 and
 .Pa /etc/jail.conf.d/ Ns Ao Ar jname Ac Ns Va .conf
 will also be used if
@@ -4717,11 +4715,12 @@ to unlock an encrypted dataset.
 The default is 10.
 .El
 .Sh FILES
-.Bl -tag -width ".Pa /etc/defaults/rc.conf" -compact
+.Bl -tag -width "/etc/defaults/rc.conf" -compact
 .It Pa /etc/defaults/rc.conf
 .It Pa /etc/defaults/vendor.conf
 .It Pa /etc/rc.conf
 .It Pa /etc/rc.conf.local
+.It Pa /etc/rc.conf.d/
 .El
 .Sh SEE ALSO
 .Xr chmod 1 ,

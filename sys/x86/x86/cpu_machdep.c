@@ -39,8 +39,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_acpi.h"
 #include "opt_atpic.h"
 #include "opt_cpu.h"
@@ -695,7 +693,7 @@ out:
 }
 
 static int cpu_idle_apl31_workaround;
-SYSCTL_INT(_machdep, OID_AUTO, idle_apl31, CTLFLAG_RW,
+SYSCTL_INT(_machdep, OID_AUTO, idle_apl31, CTLFLAG_RWTUN | CTLFLAG_NOFETCH,
     &cpu_idle_apl31_workaround, 0,
     "Apollo Lake APL31 MWAIT bug workaround");
 
@@ -809,7 +807,7 @@ cpu_idle_sysctl(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_PROC(_machdep, OID_AUTO, idle,
-    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_MPSAFE,
     0, 0, cpu_idle_sysctl, "A",
     "currently selected idle function");
 
