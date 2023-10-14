@@ -60,6 +60,11 @@ distribution:
 	${_+_}cd ${SRCTOP}/usr.sbin/rmt; ${MAKE} etc-rmt
 	${INSTALL_SYMLINK} -T "package=runtime" ../var/run/os-release \
 		${DESTDIR}/etc/os-release
+	${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 444 \
+		-T "package=runtime" \
+		${SRCTOP}/sys/conf/package-version \
+		${DESTDIR}/etc/version
+
 .if ${MK_UNBOUND} != "no"
 	if [ ! -e ${DESTDIR}/etc/unbound ]; then \
 		${INSTALL_SYMLINK} -T "package=unbound" \
