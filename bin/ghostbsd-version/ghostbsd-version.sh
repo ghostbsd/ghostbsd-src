@@ -39,12 +39,8 @@ kernel_version() {
 }
 
 ghostbsd_version() {
-  if [ -f "/etc/version" ] ; then
-    version=$(cat /etc/version)
-    printf "%s\n" "$version"
-  else
-    pkg query '%v' os-generic-userland-base
-  fi
+  version=$(cat /etc/version)
+  printf "%s\n" "$version"
 }
 
 freebsd_version() {
