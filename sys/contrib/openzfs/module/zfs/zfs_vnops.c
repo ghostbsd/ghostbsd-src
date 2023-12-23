@@ -1094,6 +1094,15 @@ zfs_clone_range(znode_t *inzp, uint64_t *inoffp, znode_t *outzp,
 
 	ASSERT(!outzfsvfs->z_replay);
 
+	/*
+	 * Block cloning from an unencrypted dataset into an encrypted
+	 * dataset and vice versa is not supported.
+	 */
+	if (inos->os_encrypted != outos->os_encrypted) {
+		zfs_exit_two(inzfsvfs, outzfsvfs, FTAG);
+		return (SET_ERROR(EXDEV));
+	}
+
 	error = zfs_verify_zp(inzp);
 	if (error == 0)
 		error = zfs_verify_zp(outzp);
@@ -1324,7 +1333,7 @@ zfs_clone_range(znode_t *inzp, uint64_t *inoffp, znode_t *outzp,
 		}
 
 		error = dmu_brt_clone(outos, outzp->z_id, outoff, size, tx,
-		    bps, nbps, B_FALSE);
+		    bps, nbps);
 		if (error != 0) {
 			dmu_tx_commit(tx);
 			break;
@@ -1458,7 +1467,7 @@ zfs_clone_range_replay(znode_t *zp, uint64_t off, uint64_t len, uint64_t blksz,
 	if (zp->z_blksz < blksz)
 		zfs_grow_blocksize(zp, blksz, tx);
 
-	dmu_brt_clone(zfsvfs->z_os, zp->z_id, off, len, tx, bps, nbps, B_TRUE);
+	dmu_brt_clone(zfsvfs->z_os, zp->z_id, off, len, tx, bps, nbps);
 
 	zfs_tstamp_update_setup(zp, CONTENT_MODIFIED, mtime, ctime);
 

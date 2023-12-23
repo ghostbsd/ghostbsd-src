@@ -51,6 +51,22 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20231006: rename tcp6_v4unmapped_bind_test
+OLD_FILES+=usr/tests/sys/netinet/tcp6_v4unmapped_bind_test
+
+# 20231005: Remove man page link for now gone net80211 function.
+OLD_FILES+=usr/share/man/man9/ieee80211_unref_node.9.gz
+
+# 20231013: Man pages renamed to match the actual functions
+OLD_FILES+=usr/share/man/man9/cr_seeothergids.9.gz
+OLD_FILES+=usr/share/man/man9/cr_seeotheruids.9.gz
+
+# 20230925
+OLD_FILES+=usr/share/examples/diskless/ME
+OLD_FILES+=usr/share/examples/diskless/README.BOOTP
+OLD_FILES+=usr/share/examples/diskless/README.TEMPLATING
+OLD_FILES+=usr/share/examples/diskless/clone_root
+
 # 20230906: caroot bundle updated
 OLD_FILES+=usr/share/certs/trusted/E-Tugra_Certification_Authority.pem
 OLD_FILES+=usr/share/certs/trusted/E-Tugra_Global_Root_CA_ECC_v3.pem
@@ -2746,6 +2762,11 @@ OLD_FILES+=usr/share/man/man4/ng_h4.4.gz
 
 # 20210923: rename boot(9) to kern_reboot(9)
 OLD_FILES+=usr/share/man/man9/boot.9.gz
+
+# 20210922: Old mixer(8) tests removed
+OLD_FILES+=usr/tests/usr.sbin/mixer/Kyuafile
+OLD_FILES+=usr/tests/usr.sbin/mixer/mixer_test
+OLD_DIRS+=usr/tests/usr.sbin/mixer
 
 # 20210921: remove cloudabi
 OLD_FILES+=usr/share/man/man4/cloudabi.4.gz
@@ -6700,7 +6721,6 @@ OLD_FILES+=usr/share/man/man4/if_hme.4.gz
 OLD_FILES+=usr/include/net/radix_mpath.h
 
 # 20201124: ping6(8) was merged into ping(8)
-OLD_FILES+=usr/share/man/man8/ping6.8.gz
 OLD_FILES+=usr/tests/sbin/ping6/Kyuafile
 OLD_FILES+=usr/tests/sbin/ping6/ping6_c1_s8_t1.out
 OLD_FILES+=usr/tests/sbin/ping6/ping6_test

@@ -2,10 +2,12 @@
 PACKAGE=	tests
 
 TESTSDIR=       ${TESTSBASE}/sys/netpfil/pf
+BINDIR=		${TESTSDIR}
 TESTS_SUBDIRS+=	ioctl
 
 ATF_TESTS_SH+=	altq \
 		anchor \
+		divert-to \
 		dup \
 		ether \
 		forward \
@@ -37,6 +39,7 @@ ATF_TESTS_SH+=	altq \
 		syncookie \
 		synproxy \
 		table \
+		tcp \
 		tos
 
 ATF_TESTS_PYTEST+=	frag6.py
@@ -44,6 +47,8 @@ ATF_TESTS_PYTEST+=	sctp.py
 
 # Tests reuse jail names and so cannot run in parallel.
 TEST_METADATA+=	is_exclusive=true
+
+PROGS=	divapp
 
 ${PACKAGE}FILES+=	CVE-2019-5597.py \
 			CVE-2019-5598.py \

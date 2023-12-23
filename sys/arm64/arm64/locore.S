@@ -134,7 +134,7 @@ virtdone:
 	sub	sp, sp, #BOOTPARAMS_SIZE
 	mov	x0, sp
 
-	/* Degate the delda so it is VA -> PA */
+	/* Negate the delta so it is VA -> PA */
 	neg	x29, x29
 
 	str	x1,  [x0, #BP_MODULEP]
@@ -243,6 +243,14 @@ mp_virtdone:
 	tlbi	vmalle1
 	dsb	sy
 	isb
+
+	/*
+	 * Initialize the per-CPU pointer before calling into C code, for the
+	 * benefit of kernel sanitizers.
+	 */
+	adrp	x18, bootpcpu
+	ldr	x18, [x18, :lo12:bootpcpu]
+	msr	tpidr_el1, x18
 
 	b	init_secondary
 END(mpentry)

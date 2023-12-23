@@ -12,9 +12,9 @@ fi
 
 case "$daily_ntpd_leapfile_enable" in
     [Yy][Ee][Ss])
-	if service ntpd needfetch; then
+	if service ntpd enabled && service ntpd needfetch; then
 	    anticongestion
-	    service ntpd ntpd-fetch
+	    service ntpd fetch
 	fi
 	;;
 esac

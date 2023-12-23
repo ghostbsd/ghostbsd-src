@@ -85,8 +85,8 @@ static const char	*dev_console_filename;
 /*
  * Flags that are supported and stored by this implementation.
  */
-#define TTYSUP_IFLAG	(IGNBRK|BRKINT|IGNPAR|PARMRK|INPCK|ISTRIP|\
-			INLCR|IGNCR|ICRNL|IXON|IXOFF|IXANY|IMAXBEL)
+#define TTYSUP_IFLAG	(IGNBRK|BRKINT|IGNPAR|PARMRK|INPCK|ISTRIP|INLCR|\
+			IGNCR|ICRNL|IXON|IXOFF|IXANY|IMAXBEL|IUTF8)
 #define TTYSUP_OFLAG	(OPOST|ONLCR|TAB3|ONOEOT|OCRNL|ONOCR|ONLRET)
 #define TTYSUP_LFLAG	(ECHOKE|ECHOE|ECHOK|ECHO|ECHONL|ECHOPRT|\
 			ECHOCTL|ISIG|ICANON|ALTWERASE|IEXTEN|TOSTOP|\
@@ -1288,6 +1288,7 @@ tty_to_xtty(struct tty *tp, struct xtty *xt)
 
 	tty_assert_locked(tp);
 
+	memset(xt, 0, sizeof(*xt));
 	xt->xt_size = sizeof(struct xtty);
 	xt->xt_insize = ttyinq_getsize(&tp->t_inq);
 	xt->xt_incc = ttyinq_bytescanonicalized(&tp->t_inq);

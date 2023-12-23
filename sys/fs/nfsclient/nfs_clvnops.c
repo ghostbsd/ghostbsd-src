@@ -1587,7 +1587,7 @@ ncl_readrpc(struct vnode *vp, struct uio *uiop, struct ucred *cred)
 		error = nfscl_doiods(vp, uiop, NULL, NULL,
 		    NFSV4OPEN_ACCESSREAD, 0, cred, uiop->uio_td);
 	NFSCL_DEBUG(4, "readrpc: aft doiods=%d\n", error);
-	if (error != 0)
+	if (error != 0 && error != EFAULT)
 		error = nfsrpc_read(vp, uiop, cred, uiop->uio_td, &nfsva,
 		    &attrflag);
 	if (attrflag) {
@@ -1618,7 +1618,7 @@ ncl_writerpc(struct vnode *vp, struct uio *uiop, struct ucred *cred,
 		error = nfscl_doiods(vp, uiop, iomode, must_commit,
 		    NFSV4OPEN_ACCESSWRITE, 0, cred, uiop->uio_td);
 	NFSCL_DEBUG(4, "writerpc: aft doiods=%d\n", error);
-	if (error != 0)
+	if (error != 0 && error != EFAULT)
 		error = nfsrpc_write(vp, uiop, iomode, must_commit, cred,
 		    uiop->uio_td, &nfsva, &attrflag, called_from_strategy,
 		    ioflag);
@@ -2052,14 +2052,6 @@ nfs_rename(struct vop_rename_args *ap)
 		      tdnp->n_fhp->nfh_len != fnp->n_v4->n4_fhlen ||
 		      NFSBCMP(tdnp->n_fhp->nfh_fh, fnp->n_v4->n4_data,
 			tdnp->n_fhp->nfh_len))) {
-#ifdef notdef
-{ char nnn[100]; int nnnl;
-nnnl = (tcnp->cn_namelen < 100) ? tcnp->cn_namelen : 99;
-bcopy(tcnp->cn_nameptr, nnn, nnnl);
-nnn[nnnl] = '\0';
-printf("ren replace=%s\n",nnn);
-}
-#endif
 			free(fnp->n_v4, M_NFSV4NODE);
 			fnp->n_v4 = newv4;
 			newv4 = NULL;
@@ -2713,14 +2705,6 @@ nfs_lookitup(struct vnode *dvp, char *name, int len, struct ucred *cred,
 			 dnp->n_fhp->nfh_len != np->n_v4->n4_fhlen ||
 			 NFSBCMP(dnp->n_fhp->nfh_fh, np->n_v4->n4_data,
 			 dnp->n_fhp->nfh_len))) {
-#ifdef notdef
-{ char nnn[100]; int nnnl;
-nnnl = (len < 100) ? len : 99;
-bcopy(name, nnn, nnnl);
-nnn[nnnl] = '\0';
-printf("replace=%s\n",nnn);
-}
-#endif
 			    free(np->n_v4, M_NFSV4NODE);
 			    np->n_v4 = malloc(
 				sizeof (struct nfsv4node) +
@@ -3904,9 +3888,7 @@ nfs_copy_file_range(struct vop_copy_file_range_args *ap)
 	 */
 	if (invp == outvp || invp->v_mount != outvp->v_mount) {
 generic_copy:
-		return (vn_generic_copy_file_range(invp, ap->a_inoffp,
-		    outvp, ap->a_outoffp, ap->a_lenp, ap->a_flags,
-		    ap->a_incred, ap->a_outcred, ap->a_fsizetd));
+		return (ENOSYS);
 	}
 
 	/* Lock both vnodes, avoiding risk of deadlock. */

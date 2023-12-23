@@ -137,6 +137,7 @@ SDT_PROBE_DEFINE3(pf, eth, test_rule, mismatch,
 SDT_PROBE_DEFINE2(pf, eth, test_rule, match, "int", "struct pf_keth_rule *");
 SDT_PROBE_DEFINE2(pf, eth, test_rule, final_match,
     "int", "struct pf_keth_rule *");
+SDT_PROBE_DEFINE2(pf, purge, state, rowcount, "int", "size_t");
 
 /*
  * Global variables
@@ -178,6 +179,34 @@ VNET_DEFINE(struct allrulelist_head, pf_allrulelist);
 VNET_DEFINE(size_t, pf_allrulecount);
 VNET_DEFINE(struct pf_krule *, pf_rulemarker);
 #endif
+
+struct pf_sctp_endpoint;
+RB_HEAD(pf_sctp_endpoints, pf_sctp_endpoint);
+struct pf_sctp_source {
+	sa_family_t			af;
+	struct pf_addr			addr;
+	TAILQ_ENTRY(pf_sctp_source)	entry;
+};
+TAILQ_HEAD(pf_sctp_sources, pf_sctp_source);
+struct pf_sctp_endpoint
+{
+	uint32_t		 v_tag;
+	struct pf_sctp_sources	 sources;
+	RB_ENTRY(pf_sctp_endpoint)	entry;
+};
+static int
+pf_sctp_endpoint_compare(struct pf_sctp_endpoint *a, struct pf_sctp_endpoint *b)
+{
+	return (a->v_tag - b->v_tag);
+}
+RB_PROTOTYPE(pf_sctp_endpoints, pf_sctp_endpoint, entry, pf_sctp_endpoint_compare);
+RB_GENERATE(pf_sctp_endpoints, pf_sctp_endpoint, entry, pf_sctp_endpoint_compare);
+VNET_DEFINE_STATIC(struct pf_sctp_endpoints, pf_sctp_endpoints);
+#define V_pf_sctp_endpoints	VNET(pf_sctp_endpoints)
+static struct mtx_padalign pf_sctp_endpoints_mtx;
+MTX_SYSINIT(pf_sctp_endpoints_mtx, &pf_sctp_endpoints_mtx, "SCTP endpoints", MTX_DEF);
+#define	PF_SCTP_ENDPOINTS_LOCK()	mtx_lock(&pf_sctp_endpoints_mtx)
+#define	PF_SCTP_ENDPOINTS_UNLOCK()	mtx_unlock(&pf_sctp_endpoints_mtx)
 
 /*
  * Queue for pf_intr() sends.
@@ -274,6 +303,8 @@ static int		 pf_state_key_attach(struct pf_state_key *,
 static void		 pf_state_key_detach(struct pf_kstate *, int);
 static int		 pf_state_key_ctor(void *, int, void *, int);
 static u_int32_t	 pf_tcp_iss(struct pf_pdesc *);
+static __inline void	 pf_dummynet_flag_remove(struct mbuf *m,
+			    struct pf_mtag *pf_mtag);
 static int		 pf_dummynet(struct pf_pdesc *, struct pf_kstate *,
 			    struct pf_krule *, struct mbuf **);
 static int		 pf_dummynet_route(struct pf_pdesc *,
@@ -309,6 +340,7 @@ static int		 pf_test_state_udp(struct pf_kstate **,
 static int		 pf_test_state_icmp(struct pf_kstate **,
 			    struct pfi_kkif *, struct mbuf *, int,
 			    void *, struct pf_pdesc *, u_short *);
+static void		 pf_sctp_multihome_detach_addr(const struct pf_kstate *);
 static void		 pf_sctp_multihome_delayed(struct pf_pdesc *, int,
 			    struct pfi_kkif *, struct pf_kstate *, int);
 static int		 pf_test_state_sctp(struct pf_kstate **,
@@ -1140,6 +1172,7 @@ pf_cleanup(void)
 		m_freem(pfse->pfse_m);
 		free(pfse, M_PFTEMP);
 	}
+	MPASS(RB_EMPTY(&V_pf_sctp_endpoints));
 
 	uma_zdestroy(V_pf_sources_z);
 	uma_zdestroy(V_pf_state_z);
@@ -1358,6 +1391,8 @@ pf_detach_state(struct pf_kstate *s)
 {
 	struct pf_state_key *sks = s->key[PF_SK_STACK];
 	struct pf_keyhash *kh;
+
+	pf_sctp_multihome_detach_addr(s);
 
 	if (sks != NULL) {
 		kh = &V_pf_keyhash[pf_hashkey(sks)];
@@ -2142,6 +2177,7 @@ pf_purge_expired_states(u_int i, int maxcheck)
 	struct pf_idhash *ih;
 	struct pf_kstate *s;
 	struct pf_krule_item *mrm;
+	size_t count __unused;
 
 	V_pf_status.states = uma_zone_get_cur(V_pf_state_z);
 
@@ -2149,6 +2185,7 @@ pf_purge_expired_states(u_int i, int maxcheck)
 	 * Go through hash and unlink states that expire now.
 	 */
 	while (maxcheck > 0) {
+		count = 0;
 		ih = &V_pf_idhash[i];
 
 		/* only take the lock if we expect to do work */
@@ -2171,9 +2208,12 @@ relock:
 					mrm->r->rule_ref |= PFRULE_REFS;
 				if (s->rt_kif)
 					s->rt_kif->pfik_flags |= PFI_IFLAG_REFS;
+				count++;
 			}
 			PF_HASHROW_UNLOCK(ih);
 		}
+
+		SDT_PROBE2(pf, purge, state, rowcount, i, count);
 
 		/* Return when we hit end of hash. */
 		if (++i > pf_hashmask) {
@@ -4102,7 +4142,7 @@ pf_test_eth_rule(int dir, struct pfi_kkif *kif, struct mbuf **m0)
 
 		/* But only once. We may see the packet multiple times (e.g.
 		 * PFIL_IN/PFIL_OUT). */
-		mtag->flags &= ~PF_MTAG_FLAG_DUMMYNET;
+		pf_dummynet_flag_remove(m, mtag);
 
 		return (PF_PASS);
 	}
@@ -4323,7 +4363,7 @@ pf_test_eth_rule(int dir, struct pfi_kkif *kif, struct mbuf **m0)
 		mtag->flags |= PF_MTAG_FLAG_DUMMYNET;
 		ip_dn_io_ptr(m0, &dnflow);
 		if (*m0 != NULL)
-			mtag->flags &= ~PF_MTAG_FLAG_DUMMYNET;
+			pf_dummynet_flag_remove(m, mtag);
 	} else {
 		PF_RULES_RUNLOCK();
 	}
@@ -4731,6 +4771,11 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 			return (action);
 		}
 	} else {
+		while ((ri = SLIST_FIRST(&match_rules))) {
+			SLIST_REMOVE_HEAD(&match_rules, entry);
+			free(ri, M_PF_RULE_ITEM);
+		}
+
 		uma_zfree(V_pf_state_key_z, sk);
 		uma_zfree(V_pf_state_key_z, nk);
 	}
@@ -4776,6 +4821,7 @@ pf_create_state(struct pf_krule *r, struct pf_krule *nr, struct pf_krule *a,
 	struct tcphdr		*th = &pd->hdr.tcp;
 	u_int16_t		 mss = V_tcp_mssdflt;
 	u_short			 reason, sn_reason;
+	struct pf_krule_item	*ri;
 
 	/* check maximums */
 	if (r->max_states &&
@@ -4868,7 +4914,7 @@ pf_create_state(struct pf_krule *r, struct pf_krule *nr, struct pf_krule *a,
 	case IPPROTO_SCTP:
 		pf_set_protostate(s, PF_PEER_SRC, SCTP_COOKIE_WAIT);
 		pf_set_protostate(s, PF_PEER_DST, SCTP_CLOSED);
-		s->timeout = PFTM_TCP_FIRST_PACKET;
+		s->timeout = PFTM_SCTP_FIRST_PACKET;
 		break;
 	case IPPROTO_ICMP:
 #ifdef INET6
@@ -4986,6 +5032,11 @@ pf_create_state(struct pf_krule *r, struct pf_krule *nr, struct pf_krule *a,
 	return (PF_PASS);
 
 csfailed:
+	while ((ri = SLIST_FIRST(match_rules))) {
+		SLIST_REMOVE_HEAD(match_rules, entry);
+		free(ri, M_PF_RULE_ITEM);
+	}
+
 	uma_zfree(V_pf_state_key_z, sk);
 	uma_zfree(V_pf_state_key_z, nk);
 
@@ -5316,8 +5367,7 @@ pf_tcp_track_full(struct pf_kstate **state, struct pfi_kkif *kif,
 	    (ackskew <= (MAXACKWINDOW << sws)) &&
 	    /* Acking not more than one window forward */
 	    ((th->th_flags & TH_RST) == 0 || orig_seq == src->seqlo ||
-	    (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo) ||
-	    (pd->flags & PFDESC_IP_REAS) == 0)) {
+	    (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo))) {
 	    /* Require an exact/+1 sequence match on resets when possible */
 
 		if (dst->scrub || src->scrub) {
@@ -5837,7 +5887,7 @@ pf_test_state_sctp(struct pf_kstate **state, struct pfi_kkif *kif,
     struct mbuf *m, int off, void *h, struct pf_pdesc *pd, u_short *reason)
 {
 	struct pf_state_key_cmp	 key;
-	struct pf_state_peer	*src; //, *dst;
+	struct pf_state_peer	*src, *dst;
 	struct sctphdr		*sh = &pd->hdr.sctp;
 	u_int8_t		 psrc; //, pdst;
 
@@ -5860,9 +5910,11 @@ pf_test_state_sctp(struct pf_kstate **state, struct pfi_kkif *kif,
 
 	if (pd->dir == (*state)->direction) {
 		src = &(*state)->src;
+		dst = &(*state)->dst;
 		psrc = PF_PEER_SRC;
 	} else {
 		src = &(*state)->dst;
+		dst = &(*state)->src;
 		psrc = PF_PEER_DST;
 	}
 
@@ -5870,21 +5922,31 @@ pf_test_state_sctp(struct pf_kstate **state, struct pfi_kkif *kif,
 	if (pd->sctp_flags & PFDESC_SCTP_INIT) {
 		if (src->state < SCTP_COOKIE_WAIT) {
 			pf_set_protostate(*state, psrc, SCTP_COOKIE_WAIT);
-			(*state)->timeout = PFTM_TCP_OPENING;
+			(*state)->timeout = PFTM_SCTP_OPENING;
 		}
 	}
-	if (pd->sctp_flags & PFDESC_SCTP_COOKIE) {
+	if (pd->sctp_flags & PFDESC_SCTP_INIT_ACK) {
+		MPASS(dst->scrub != NULL);
+		if (dst->scrub->pfss_v_tag == 0)
+			dst->scrub->pfss_v_tag = pd->sctp_initiate_tag;
+	}
+
+	if (pd->sctp_flags & (PFDESC_SCTP_COOKIE | PFDESC_SCTP_HEARTBEAT_ACK)) {
 		if (src->state < SCTP_ESTABLISHED) {
 			pf_set_protostate(*state, psrc, SCTP_ESTABLISHED);
-			(*state)->timeout = PFTM_TCP_ESTABLISHED;
+			(*state)->timeout = PFTM_SCTP_ESTABLISHED;
 		}
 	}
 	if (pd->sctp_flags & (PFDESC_SCTP_SHUTDOWN | PFDESC_SCTP_ABORT |
 	    PFDESC_SCTP_SHUTDOWN_COMPLETE)) {
 		if (src->state < SCTP_SHUTDOWN_PENDING) {
 			pf_set_protostate(*state, psrc, SCTP_SHUTDOWN_PENDING);
-			(*state)->timeout = PFTM_TCP_CLOSING;
+			(*state)->timeout = PFTM_SCTP_CLOSING;
 		}
+	}
+	if (pd->sctp_flags & (PFDESC_SCTP_SHUTDOWN_COMPLETE)) {
+		pf_set_protostate(*state, psrc, SCTP_CLOSED);
+		(*state)->timeout = PFTM_SCTP_CLOSED;
 	}
 
 	if (src->scrub != NULL) {
@@ -5920,36 +5982,225 @@ pf_test_state_sctp(struct pf_kstate **state, struct pfi_kkif *kif,
 }
 
 static void
+pf_sctp_multihome_detach_addr(const struct pf_kstate *s)
+{
+	struct pf_sctp_endpoint key;
+	struct pf_sctp_endpoint *ep;
+	struct pf_state_key *sks = s->key[PF_SK_STACK];
+	struct pf_sctp_source *i, *tmp;
+
+	if (sks == NULL || sks->proto != IPPROTO_SCTP || s->dst.scrub == NULL)
+		return;
+
+	PF_SCTP_ENDPOINTS_LOCK();
+
+	key.v_tag = s->dst.scrub->pfss_v_tag;
+	ep  = RB_FIND(pf_sctp_endpoints, &V_pf_sctp_endpoints, &key);
+	if (ep != NULL) {
+		/* XXX Actually remove! */
+		TAILQ_FOREACH_SAFE(i, &ep->sources, entry, tmp) {
+			if (pf_addr_cmp(&i->addr,
+			    &s->key[PF_SK_WIRE]->addr[s->direction == PF_OUT],
+			    s->key[PF_SK_WIRE]->af) == 0) {
+				TAILQ_REMOVE(&ep->sources, i, entry);
+				free(i, M_PFTEMP);
+				break;
+			}
+		}
+
+		if (TAILQ_EMPTY(&ep->sources)) {
+			RB_REMOVE(pf_sctp_endpoints, &V_pf_sctp_endpoints, ep);
+			free(ep, M_PFTEMP);
+		}
+	}
+
+	/* Other direction. */
+	key.v_tag = s->src.scrub->pfss_v_tag;
+	ep = RB_FIND(pf_sctp_endpoints, &V_pf_sctp_endpoints, &key);
+	if (ep != NULL) {
+		TAILQ_FOREACH_SAFE(i, &ep->sources, entry, tmp) {
+			if (pf_addr_cmp(&i->addr,
+			    &s->key[PF_SK_WIRE]->addr[s->direction == PF_IN],
+			    s->key[PF_SK_WIRE]->af) == 0) {
+				TAILQ_REMOVE(&ep->sources, i, entry);
+				free(i, M_PFTEMP);
+				break;
+			}
+		}
+
+		if (TAILQ_EMPTY(&ep->sources)) {
+			RB_REMOVE(pf_sctp_endpoints, &V_pf_sctp_endpoints, ep);
+			free(ep, M_PFTEMP);
+		}
+	}
+
+	PF_SCTP_ENDPOINTS_UNLOCK();
+}
+
+static void
+pf_sctp_multihome_add_addr(struct pf_pdesc *pd, struct pf_addr *a, uint32_t v_tag)
+{
+	struct pf_sctp_endpoint key = {
+		.v_tag = v_tag,
+	};
+	struct pf_sctp_source *i;
+	struct pf_sctp_endpoint *ep;
+
+	PF_SCTP_ENDPOINTS_LOCK();
+
+	ep = RB_FIND(pf_sctp_endpoints, &V_pf_sctp_endpoints, &key);
+	if (ep == NULL) {
+		ep = malloc(sizeof(struct pf_sctp_endpoint),
+		    M_PFTEMP, M_NOWAIT);
+		if (ep == NULL) {
+			PF_SCTP_ENDPOINTS_UNLOCK();
+			return;
+		}
+
+		ep->v_tag = v_tag;
+		TAILQ_INIT(&ep->sources);
+		RB_INSERT(pf_sctp_endpoints, &V_pf_sctp_endpoints, ep);
+	}
+
+	/* Avoid inserting duplicates. */
+	TAILQ_FOREACH(i, &ep->sources, entry) {
+		if (pf_addr_cmp(&i->addr, a, pd->af) == 0) {
+			PF_SCTP_ENDPOINTS_UNLOCK();
+			return;
+		}
+	}
+
+	i = malloc(sizeof(*i), M_PFTEMP, M_NOWAIT);
+	if (i == NULL) {
+		PF_SCTP_ENDPOINTS_UNLOCK();
+		return;
+	}
+
+	i->af = pd->af;
+	memcpy(&i->addr, a, sizeof(*a));
+	TAILQ_INSERT_TAIL(&ep->sources, i, entry);
+
+	PF_SCTP_ENDPOINTS_UNLOCK();
+}
+
+static void
 pf_sctp_multihome_delayed(struct pf_pdesc *pd, int off, struct pfi_kkif *kif,
     struct pf_kstate *s, int action)
 {
 	struct pf_sctp_multihome_job	*j, *tmp;
+	struct pf_sctp_source		*i;
 	int			 ret __unused;;
 	struct pf_kstate	*sm = NULL;
 	struct pf_krule		*ra = NULL;
 	struct pf_krule		*r = &V_pf_default_rule;
 	struct pf_kruleset	*rs = NULL;
+	bool do_extra = true;
 
 	PF_RULES_RLOCK_TRACKER;
 
+again:
 	TAILQ_FOREACH_SAFE(j, &pd->sctp_multihome_jobs, next, tmp) {
 		if (s == NULL || action != PF_PASS)
 			goto free;
 
+		/* Confirm we don't recurse here. */
+		MPASS(! (pd->sctp_flags & PFDESC_SCTP_ADD_IP));
+
 		switch (j->op) {
 		case  SCTP_ADD_IP_ADDRESS: {
+			uint32_t v_tag = pd->sctp_initiate_tag;
+
+			if (v_tag == 0) {
+				if (s->direction == pd->dir)
+					v_tag = s->src.scrub->pfss_v_tag;
+				else
+					v_tag = s->dst.scrub->pfss_v_tag;
+			}
+
+			/*
+			 * Avoid duplicating states. We'll already have
+			 * created a state based on the source address of
+			 * the packet, but SCTP endpoints may also list this
+			 * address again in the INIT(_ACK) parameters.
+			 */
+			if (pf_addr_cmp(&j->src, pd->src, pd->af) == 0) {
+				break;
+			}
+
 			j->pd.sctp_flags |= PFDESC_SCTP_ADD_IP;
 			PF_RULES_RLOCK();
-			ret = pf_test_rule(&r, &sm, kif,
+			sm = NULL;
+			/*
+			 * New connections need to be floating, because
+			 * we cannot know what interfaces it will use.
+			 * That's why we pass V_pfi_all rather than kif.
+			 */
+			ret = pf_test_rule(&r, &sm, V_pfi_all,
 			    j->m, off, &j->pd, &ra, &rs, NULL);
 			PF_RULES_RUNLOCK();
 			SDT_PROBE4(pf, sctp, multihome, test, kif, r, j->m, ret);
-			if (sm) {
+			if (ret != PF_DROP && sm != NULL) {
 				/* Inherit v_tag values. */
-				sm->src.scrub->pfss_v_tag = s->src.scrub->pfss_flags;
-				sm->dst.scrub->pfss_v_tag = s->dst.scrub->pfss_flags;
+				if (sm->direction == s->direction) {
+					sm->src.scrub->pfss_v_tag = s->src.scrub->pfss_v_tag;
+					sm->dst.scrub->pfss_v_tag = s->dst.scrub->pfss_v_tag;
+				} else {
+					sm->src.scrub->pfss_v_tag = s->dst.scrub->pfss_v_tag;
+					sm->dst.scrub->pfss_v_tag = s->src.scrub->pfss_v_tag;
+				}
 				PF_STATE_UNLOCK(sm);
+			} else {
+				/* If we try duplicate inserts? */
+				break;
 			}
+
+			/* Only add the addres if we've actually allowed the state. */
+			pf_sctp_multihome_add_addr(pd, &j->src, v_tag);
+
+			if (! do_extra) {
+				break;
+			}
+			/*
+			 * We need to do this for each of our source addresses.
+			 * Find those based on the verification tag.
+			 */
+			struct pf_sctp_endpoint key = {
+				.v_tag = pd->hdr.sctp.v_tag,
+			};
+			struct pf_sctp_endpoint *ep;
+
+			PF_SCTP_ENDPOINTS_LOCK();
+			ep = RB_FIND(pf_sctp_endpoints, &V_pf_sctp_endpoints, &key);
+			if (ep == NULL) {
+				PF_SCTP_ENDPOINTS_UNLOCK();
+				break;
+			}
+			MPASS(ep != NULL);
+
+			TAILQ_FOREACH(i, &ep->sources, entry) {
+				struct pf_sctp_multihome_job *nj;
+
+				/* SCTP can intermingle IPv4 and IPv6. */
+				if (i->af != pd->af)
+					continue;
+
+				nj = malloc(sizeof(*nj), M_PFTEMP, M_NOWAIT | M_ZERO);
+				if (! nj) {
+					continue;
+				}
+				memcpy(&nj->pd, &j->pd, sizeof(j->pd));
+				memcpy(&nj->src, &j->src, sizeof(nj->src));
+				nj->pd.src = &nj->src;
+				// New destination address!
+				memcpy(&nj->dst, &i->addr, sizeof(nj->dst));
+				nj->pd.dst = &nj->dst;
+				nj->m = j->m;
+				nj->op = j->op;
+
+				TAILQ_INSERT_TAIL(&pd->sctp_multihome_jobs, nj, next);
+			}
+			PF_SCTP_ENDPOINTS_UNLOCK();
+
 			break;
 		}
 		case SCTP_DEL_IP_ADDRESS: {
@@ -5980,17 +6231,24 @@ pf_sctp_multihome_delayed(struct pf_pdesc *pd, int off, struct pfi_kkif *kif,
 					psrc = PF_PEER_DST;
 				}
 				pf_set_protostate(sm, psrc, SCTP_SHUTDOWN_PENDING);
-				sm->timeout = PFTM_TCP_CLOSING;
+				sm->timeout = PFTM_SCTP_CLOSING;
 				PF_STATE_UNLOCK(sm);
 			}
 			break;
 		default:
 			panic("Unknown op %#x", j->op);
 		}
-		}
+	}
 
-free:
+	free:
+		TAILQ_REMOVE(&pd->sctp_multihome_jobs, j, next);
 		free(j, M_PFTEMP);
+	}
+
+	/* We may have inserted extra work while processing the list. */
+	if (! TAILQ_EMPTY(&pd->sctp_multihome_jobs)) {
+		do_extra = false;
+		goto again;
 	}
 }
 
@@ -6023,15 +6281,6 @@ pf_multihome_scan(struct mbuf *m, int start, int len, struct pf_pdesc *pd,
 			if (!pf_pull_hdr(m, start + off + sizeof(h), &t, sizeof(t),
 			    NULL, NULL, pd->af))
 				return (PF_DROP);
-
-			/*
-			 * Avoid duplicating states. We'll already have
-			 * created a state based on the source address of
-			 * the packet, but SCTP endpoints may also list this
-			 * address again in the INIT(_ACK) parameters.
-			 */
-			if (t.s_addr == pd->src->v4.s_addr)
-				break;
 
 			if (in_nullhost(t))
 				t.s_addr = pd->src->v4.s_addr;
@@ -6910,6 +7159,9 @@ pf_routable(struct pf_addr *addr, sa_family_t af, struct pfi_kkif *kif,
 	if (af != AF_INET && af != AF_INET6)
 		return (0);
 
+	if (kif == V_pfi_all)
+		return (1);
+
 	/* Skip checks for ipsec interfaces */
 	if (kif != NULL && kif->pfik_ifp->if_type == IFT_ENC)
 		return (1);
@@ -7550,6 +7802,21 @@ pf_test_eth(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 	return (pf_test_eth_rule(dir, kif, m0));
 }
 
+static __inline void
+pf_dummynet_flag_remove(struct mbuf *m, struct pf_mtag *pf_mtag)
+{
+	struct m_tag *mtag;
+
+	pf_mtag->flags &= ~PF_MTAG_FLAG_DUMMYNET;
+
+	/* dummynet adds this tag, but pf does not need it,
+	 * and keeping it creates unexpected behavior,
+	 * e.g. in case of divert(4) usage right after dummynet. */
+	mtag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL);
+	if (mtag != NULL)
+		m_tag_delete(m, mtag);
+}
+
 static int
 pf_dummynet(struct pf_pdesc *pd, struct pf_kstate *s,
     struct pf_krule *r, struct mbuf **m0)
@@ -7600,7 +7867,7 @@ pf_dummynet_route(struct pf_pdesc *pd, struct pf_kstate *s,
 			ip_dn_io_ptr(m0, &dnflow);
 			if (*m0 != NULL) {
 				pd->pf_mtag->flags &= ~PF_MTAG_FLAG_ROUTE_TO;
-				pd->pf_mtag->flags &= ~PF_MTAG_FLAG_DUMMYNET;
+				pf_dummynet_flag_remove(*m0, pd->pf_mtag);
 			}
 		}
 	}
@@ -7617,7 +7884,7 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 	u_short			 action, reason = 0;
 	struct mbuf		*m = *m0;
 	struct ip		*h = NULL;
-	struct m_tag		*ipfwtag;
+	struct m_tag		*mtag;
 	struct pf_krule		*a = NULL, *r = &V_pf_default_rule, *tr, *nr;
 	struct pf_kstate	*s = NULL;
 	struct pf_kruleset	*ruleset = NULL;
@@ -7689,7 +7956,7 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 
 		/* But only once. We may see the packet multiple times (e.g.
 		 * PFIL_IN/PFIL_OUT). */
-		pd.pf_mtag->flags &= ~PF_MTAG_FLAG_DUMMYNET;
+		pf_dummynet_flag_remove(m, pd.pf_mtag);
 		PF_RULES_RUNLOCK();
 
 		return (PF_PASS);
@@ -7707,21 +7974,26 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 	off = h->ip_hl << 2;
 
 	if (__predict_false(ip_divert_ptr != NULL) &&
-	    ((ipfwtag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL)) != NULL)) {
-		struct ipfw_rule_ref *rr = (struct ipfw_rule_ref *)(ipfwtag+1);
-		if (rr->info & IPFW_IS_DIVERT && rr->rulenum == 0) {
+	    ((mtag = m_tag_locate(m, MTAG_PF_DIVERT, 0, NULL)) != NULL)) {
+		struct pf_divert_mtag *dt = (struct pf_divert_mtag *)(mtag+1);
+		if ((dt->idir == PF_DIVERT_MTAG_DIR_IN && dir == PF_IN) ||
+		    (dt->idir == PF_DIVERT_MTAG_DIR_OUT && dir == PF_OUT)) {
 			if (pd.pf_mtag == NULL &&
 			    ((pd.pf_mtag = pf_get_mtag(m)) == NULL)) {
 				action = PF_DROP;
 				goto done;
 			}
 			pd.pf_mtag->flags |= PF_MTAG_FLAG_PACKET_LOOPED;
-			m_tag_delete(m, ipfwtag);
 		}
 		if (pd.pf_mtag && pd.pf_mtag->flags & PF_MTAG_FLAG_FASTFWD_OURS_PRESENT) {
 			m->m_flags |= M_FASTFWD_OURS;
 			pd.pf_mtag->flags &= ~PF_MTAG_FLAG_FASTFWD_OURS_PRESENT;
 		}
+		m_tag_delete(m, mtag);
+
+		mtag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL);
+		if (mtag != NULL)
+			m_tag_delete(m, mtag);
 	} else if (pf_normalize_ip(m0, kif, &reason, &pd) != PF_PASS) {
 		/* We do IP header normalization and packet reassembly here */
 		action = PF_DROP;
@@ -8003,17 +8275,19 @@ done:
 
 	if (__predict_false(ip_divert_ptr != NULL) && action == PF_PASS &&
 	    r->divert.port && !PACKET_LOOPED(&pd)) {
-		ipfwtag = m_tag_alloc(MTAG_IPFW_RULE, 0,
-		    sizeof(struct ipfw_rule_ref), M_NOWAIT | M_ZERO);
-		if (ipfwtag != NULL) {
-			((struct ipfw_rule_ref *)(ipfwtag+1))->info =
+		mtag = m_tag_alloc(MTAG_PF_DIVERT, 0,
+		    sizeof(struct pf_divert_mtag), M_NOWAIT | M_ZERO);
+		if (mtag != NULL) {
+			((struct pf_divert_mtag *)(mtag+1))->port =
 			    ntohs(r->divert.port);
-			((struct ipfw_rule_ref *)(ipfwtag+1))->rulenum = dir;
+			((struct pf_divert_mtag *)(mtag+1))->idir =
+			    (dir == PF_IN) ? PF_DIVERT_MTAG_DIR_IN :
+			    PF_DIVERT_MTAG_DIR_OUT;
 
 			if (s)
 				PF_STATE_UNLOCK(s);
 
-			m_tag_prepend(m, ipfwtag);
+			m_tag_prepend(m, mtag);
 			if (m->m_flags & M_FASTFWD_OURS) {
 				if (pd.pf_mtag == NULL &&
 				    ((pd.pf_mtag = pf_get_mtag(m)) == NULL)) {
@@ -8041,6 +8315,9 @@ done:
 			    ("pf: failed to allocate divert tag\n"));
 		}
 	}
+	/* this flag will need revising if the pkt is forwarded */
+	if (pd.pf_mtag)
+		pd.pf_mtag->flags &= ~PF_MTAG_FLAG_PACKET_LOOPED;
 
 	if (pd.act.log) {
 		struct pf_krule		*lr;
@@ -8240,7 +8517,7 @@ pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb 
 
 	if (ip_dn_io_ptr != NULL && pd.pf_mtag != NULL &&
 	    pd.pf_mtag->flags & PF_MTAG_FLAG_DUMMYNET) {
-		pd.pf_mtag->flags &= ~PF_MTAG_FLAG_DUMMYNET;
+		pf_dummynet_flag_remove(m, pd.pf_mtag);
 		/* Dummynet re-injects packets after they've
 		 * completed their delay. We've already
 		 * processed them, so pass unconditionally. */

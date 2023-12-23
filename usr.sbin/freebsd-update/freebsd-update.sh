@@ -916,7 +916,7 @@ install_create_be () {
 			echo -n "Creating snapshot of existing boot environment... "
 			VERSION=`freebsd-version -ku | sort -V | tail -n 1`
 			TIMESTAMP=`date +"%Y-%m-%d_%H%M%S"`
-			bectl create ${VERSION}_${TIMESTAMP}
+			bectl create -r ${VERSION}_${TIMESTAMP}
 			if [ $? -eq 0 ]; then
 				echo "done.";
 			else
@@ -2544,7 +2544,11 @@ Press Enter to edit this file in ${EDITOR} and resolve the conflicts
 manually...
 			EOF
 			while true; do
-				read dummy </dev/tty
+				read response </dev/tty
+				if expr "${response}" : '[Aa][Cc][Cc][Ee][Pp][Tt]' > /dev/null; then
+					echo
+					break
+				fi
 				${EDITOR} `pwd`/merge/new/${F} < /dev/tty
 
 				if ! grep -qE '^(<<<<<<<|=======|>>>>>>>)([[:space:]].*)?$' $(pwd)/merge/new/${F} ; then
@@ -2555,7 +2559,8 @@ manually...
 Merge conflict markers remain in: ${F}
 These must be resolved for the system to be functional.
 
-Press Enter to return to editing this file.
+Press Enter to return to editing this file, or type "ACCEPT" to carry on with
+these lines remaining in the file.
 				EOF
 			done
 		done < failed.merges
