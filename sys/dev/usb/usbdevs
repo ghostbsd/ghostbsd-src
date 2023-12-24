@@ -3505,11 +3505,7 @@ product NOKIA N958GB		0x0070	Nokia N95 8GBc
 product NOKIA2 CA42		0x1234	CA-42 cable
 
 /* NOREL Systems Ltd. products */
-<<<<<<< HEAD
 product NORELSYS NS1081 	0x1081 	NS1081 USB 3.0 Flash Card Reader
-=======
-product NORELSYS NS1081	0x1081	NS1081 USB 3.0 Flash Card Reader
->>>>>>> freebsd/stable/14
 
 /* Novatel Wireless products */
 product NOVATEL V640		0x1100	Merlin V620
