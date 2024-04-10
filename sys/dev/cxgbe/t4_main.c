@@ -2733,6 +2733,7 @@ cxgbe_vi_detach(struct vi_info *vi)
 #endif
 	cxgbe_uninit_synchronized(vi);
 	callout_drain(&vi->tick);
+	mtx_destroy(&vi->tick_mtx);
 	sysctl_ctx_free(&vi->ctx);
 	vi_full_uninit(vi);
 
@@ -2754,17 +2755,14 @@ cxgbe_detach(device_t dev)
 	device_delete_children(dev);
 
 	sysctl_ctx_free(&pi->ctx);
-	doom_vi(sc, &pi->vi[0]);
-
+	begin_vi_detach(sc, &pi->vi[0]);
 	if (pi->flags & HAS_TRACEQ) {
 		sc->traceq = -1;	/* cloner should not create ifnet */
 		t4_tracer_port_detach(sc);
 	}
-
 	cxgbe_vi_detach(&pi->vi[0]);
 	ifmedia_removeall(&pi->media);
-
-	end_synchronized_op(sc, 0);
+	end_vi_detach(sc, &pi->vi[0]);
 
 	return (0);
 }
@@ -3594,12 +3592,10 @@ vcxgbe_detach(device_t dev)
 	vi = device_get_softc(dev);
 	sc = vi->adapter;
 
-	doom_vi(sc, vi);
-
+	begin_vi_detach(sc, vi);
 	cxgbe_vi_detach(vi);
 	t4_free_vi(sc, sc->mbox, sc->pf, 0, vi->viid);
-
-	end_synchronized_op(sc, 0);
+	end_vi_detach(sc, vi);
 
 	return (0);
 }
@@ -5730,18 +5726,15 @@ set_params__post_init(struct adapter *sc)
 	}
 #endif
 
-#ifdef KERN_TLS
-	if (sc->cryptocaps & FW_CAPS_CONFIG_TLSKEYS &&
-	    sc->toecaps & FW_CAPS_CONFIG_TOE) {
-		/*
-		 * Limit TOE connections to 2 reassembly "islands".
-		 * This is required to permit migrating TOE
-		 * connections to UPL_MODE_TLS.
-		 */
-		t4_tp_wr_bits_indirect(sc, A_TP_FRAG_CONFIG,
-		    V_PASSMODE(M_PASSMODE), V_PASSMODE(2));
-	}
+	/*
+	 * Limit TOE connections to 2 reassembly "islands".  This is
+	 * required to permit migrating TOE connections to either
+	 * ULP_MODE_TCPDDP or UPL_MODE_TLS.
+	 */
+	t4_tp_wr_bits_indirect(sc, A_TP_FRAG_CONFIG, V_PASSMODE(M_PASSMODE),
+	    V_PASSMODE(2));
 
+#ifdef KERN_TLS
 	if (is_ktls(sc)) {
 		sc->tlst.inline_keys = t4_tls_inline_keys;
 		sc->tlst.combo_wrs = t4_tls_combo_wrs;
@@ -6244,7 +6237,7 @@ begin_synchronized_op(struct adapter *sc, struct vi_info *vi, int flags,
 	ADAPTER_LOCK(sc);
 	for (;;) {
 
-		if (vi && IS_DOOMED(vi)) {
+		if (vi && IS_DETACHING(vi)) {
 			rc = ENXIO;
 			goto done;
 		}
@@ -6283,14 +6276,13 @@ done:
 /*
  * Tell if_ioctl and if_init that the VI is going away.  This is
  * special variant of begin_synchronized_op and must be paired with a
- * call to end_synchronized_op.
+ * call to end_vi_detach.
  */
 void
-doom_vi(struct adapter *sc, struct vi_info *vi)
+begin_vi_detach(struct adapter *sc, struct vi_info *vi)
 {
-
 	ADAPTER_LOCK(sc);
-	SET_DOOMED(vi);
+	SET_DETACHING(vi);
 	wakeup(&sc->flags);
 	while (IS_BUSY(sc))
 		mtx_sleep(&sc->flags, &sc->sc_lock, 0, "t4detach", 0);
@@ -6300,6 +6292,17 @@ doom_vi(struct adapter *sc, struct vi_info *vi)
 	sc->last_op_thr = curthread;
 	sc->last_op_flags = 0;
 #endif
+	ADAPTER_UNLOCK(sc);
+}
+
+void
+end_vi_detach(struct adapter *sc, struct vi_info *vi)
+{
+	ADAPTER_LOCK(sc);
+	KASSERT(IS_BUSY(sc), ("%s: controller not busy.", __func__));
+	CLR_BUSY(sc);
+	CLR_DETACHING(vi);
+	wakeup(&sc->flags);
 	ADAPTER_UNLOCK(sc);
 }
 
@@ -12020,6 +12023,8 @@ clear_stats(struct adapter *sc, u_int port_id)
 				counter_u64_zero(ofld_txq->tx_iscsi_pdus);
 				counter_u64_zero(ofld_txq->tx_iscsi_octets);
 				counter_u64_zero(ofld_txq->tx_iscsi_iso_wrs);
+				counter_u64_zero(ofld_txq->tx_aio_jobs);
+				counter_u64_zero(ofld_txq->tx_aio_octets);
 				counter_u64_zero(ofld_txq->tx_toe_tls_records);
 				counter_u64_zero(ofld_txq->tx_toe_tls_octets);
 			}
@@ -12037,6 +12042,8 @@ clear_stats(struct adapter *sc, u_int port_id)
 				ofld_rxq->rx_iscsi_ddp_octets = 0;
 				ofld_rxq->rx_iscsi_fl_pdus = 0;
 				ofld_rxq->rx_iscsi_fl_octets = 0;
+				ofld_rxq->rx_aio_ddp_jobs = 0;
+				ofld_rxq->rx_aio_ddp_octets = 0;
 				ofld_rxq->rx_toe_tls_records = 0;
 				ofld_rxq->rx_toe_tls_octets = 0;
 			}

@@ -229,8 +229,8 @@ SYSCTL_INT(_kern, OID_AUTO, kerneldump_gzlevel, CTLFLAG_RWTUN,
 const char *panicstr;
 bool __read_frequently panicked;
 
-int __read_mostly dumping;		/* system is dumping */
-int rebooting;				/* system is rebooting */
+int dumping __read_mostly;		/* system is dumping */
+int rebooting __read_mostly;		/* system is rebooting */
 /*
  * Used to serialize between sysctl kern.shutdown.dumpdevname and list
  * modifications via ioctl.
@@ -264,10 +264,10 @@ shutdown_conf(void *unused)
 
 	EVENTHANDLER_REGISTER(shutdown_final, poweroff_wait, NULL,
 	    SHUTDOWN_PRI_FIRST);
-	EVENTHANDLER_REGISTER(shutdown_final, shutdown_halt, NULL,
-	    SHUTDOWN_PRI_LAST + 100);
 	EVENTHANDLER_REGISTER(shutdown_final, shutdown_panic, NULL,
 	    SHUTDOWN_PRI_LAST + 100);
+	EVENTHANDLER_REGISTER(shutdown_final, shutdown_halt, NULL,
+	    SHUTDOWN_PRI_LAST + 200);
 }
 
 SYSINIT(shutdown_conf, SI_SUB_INTRINSIC, SI_ORDER_ANY, shutdown_conf, NULL);

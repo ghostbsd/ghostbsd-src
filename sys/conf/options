@@ -226,9 +226,11 @@ SYSVMSG		opt_sysvipc.h
 SYSVSEM		opt_sysvipc.h
 SYSVSHM		opt_sysvipc.h
 SW_WATCHDOG	opt_watchdog.h
-TCPHPTS         opt_inet.h
+TCPHPTS
 TCP_REQUEST_TRK opt_global.h
 TCP_ACCOUNTING	opt_global.h
+TCP_BBR		opt_inet.h
+TCP_RACK	opt_inet.h
 #
 # TCP SaD Detection is an experimental Sack attack Detection (SaD)
 # algorithm that uses "normal" behaviour with SACK's to detect
@@ -812,7 +814,6 @@ ATH_TXBUF		opt_ath.h
 ATH_RXBUF		opt_ath.h
 ATH_DIAGAPI		opt_ath.h
 ATH_TX99_DIAG		opt_ath.h
-ATH_ENABLE_11N		opt_ath.h
 ATH_ENABLE_DFS		opt_ath.h
 ATH_EEPROM_FIRMWARE	opt_ath.h
 ATH_ENABLE_RADIOTAP_VENDOR_EXT	opt_ath.h

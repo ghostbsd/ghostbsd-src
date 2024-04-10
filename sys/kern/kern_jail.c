@@ -534,7 +534,7 @@ sys_jail_set(struct thread *td, struct jail_set_args *uap)
 	if (error)
 		return (error);
 	error = kern_jail_set(td, auio, uap->flags);
-	free(auio, M_IOV);
+	freeuio(auio);
 	return (error);
 }
 
@@ -2163,7 +2163,7 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 				    optuio->uio_iov[errmsg_pos].iov_base,
 				    errmsg_len);
 			else
-				copyout(errmsg,
+				(void)copyout(errmsg,
 				    optuio->uio_iov[errmsg_pos].iov_base,
 				    errmsg_len);
 		}
@@ -2264,8 +2264,8 @@ sys_jail_get(struct thread *td, struct jail_get_args *uap)
 	error = kern_jail_get(td, auio, uap->flags);
 	if (error == 0)
 		error = copyout(auio->uio_iov, uap->iovp,
-		    uap->iovcnt * sizeof (struct iovec));
-	free(auio, M_IOV);
+		    uap->iovcnt * sizeof(struct iovec));
+	freeuio(auio);
 	return (error);
 }
 
@@ -2548,7 +2548,7 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 				    optuio->uio_iov[errmsg_pos].iov_base,
 				    errmsg_len);
 			else
-				copyout(errmsg,
+				(void)copyout(errmsg,
 				    optuio->uio_iov[errmsg_pos].iov_base,
 				    errmsg_len);
 		}
@@ -4393,6 +4393,10 @@ SYSCTL_PROC(_security_jail, OID_AUTO, mount_allowed,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     NULL, PR_ALLOW_MOUNT, sysctl_jail_default_allow, "I",
     "Processes in jail can mount/unmount jail-friendly file systems (deprecated)");
+SYSCTL_PROC(_security_jail, OID_AUTO, mlock_allowed,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    NULL, PR_ALLOW_MLOCK, sysctl_jail_default_allow, "I",
+    "Processes in jail can lock/unlock physical pages in memory");
 
 static int
 sysctl_jail_default_level(SYSCTL_HANDLER_ARGS)

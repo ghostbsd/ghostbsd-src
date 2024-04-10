@@ -187,15 +187,17 @@ show_class_attr_string(struct class *class,
 	struct class_attribute_string class_attr_##_name = \
 		_CLASS_ATTR_STRING(_name, _mode, _str)
 
-#define	dev_err(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
-#define	dev_crit(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
-#define	dev_warn(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
-#define	dev_info(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
-#define	dev_notice(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
-#define	dev_emerg(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
-#define	dev_dbg(dev, fmt, ...)	do { } while (0)
 #define	dev_printk(lvl, dev, fmt, ...)					\
-	    device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+    device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+
+#define	dev_emerg(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_alert(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_crit(dev, fmt, ...)		device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_err(dev, fmt, ...)		device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_warn(dev, fmt, ...)		device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_notice(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_info(dev, fmt, ...)		device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_dbg(dev, fmt, ...)		do { } while (0)
 
 #define	dev_WARN(dev, fmt, ...)	\
     device_printf((dev)->bsddev, "%s:%d: " fmt, __func__, __LINE__, ##__VA_ARGS__)
@@ -232,6 +234,14 @@ show_class_attr_string(struct class *class,
 	if (!__dev_err_once) {			\
 		__dev_err_once = 1;		\
 		dev_err(dev, __VA_ARGS__);	\
+	}					\
+} while (0)
+
+#define	dev_dbg_once(dev, ...) do {		\
+	static bool __dev_dbg_once;		\
+	if (!__dev_dbg_once) {			\
+		__dev_dbg_once = 1;		\
+		dev_dbg(dev, __VA_ARGS__);	\
 	}					\
 } while (0)
 

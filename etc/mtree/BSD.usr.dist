@@ -36,9 +36,11 @@
     ..
     lib
         clang
-            16
+            17
                 include
                     cuda_wrappers
+                        bits
+                        ..
                     ..
                     fuzzer
                     ..
@@ -159,6 +161,8 @@
         ..
         hyperv
         ..
+        kgdb
+        ..
         lpr
             ru
             ..
@@ -180,6 +184,8 @@
         atf             tags=package=tests
         ..
         bhyve
+            gdb
+            ..
             kbdlayout
             ..
         ..

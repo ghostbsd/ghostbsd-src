@@ -996,7 +996,8 @@ MLINKS+=dev_clone.9 drain_dev_clone_events.9
 MLINKS+=dev_refthread.9 devvn_refthread.9 \
 	dev_refthread.9 dev_relthread.9
 MLINKS+=devfs_set_cdevpriv.9 devfs_clear_cdevpriv.9 \
-	devfs_set_cdevpriv.9 devfs_get_cdevpriv.9
+	devfs_set_cdevpriv.9 devfs_get_cdevpriv.9 \
+	devfs_set_cdevpriv.9 devfs_foreach_cdevpriv.9
 MLINKS+=device_add_child.9 device_add_child_ordered.9
 MLINKS+=device_enable.9 device_disable.9 \
 	device_enable.9 device_is_enabled.9
@@ -1011,6 +1012,7 @@ MLINKS+=device_get_sysctl.9 device_get_sysctl_ctx.9 \
 MLINKS+=device_quiet.9 device_is_quiet.9 \
 	device_quiet.9 device_verbose.9
 MLINKS+=device_set_desc.9 device_get_desc.9 \
+	device_set_desc.9 device_set_descf.9 \
 	device_set_desc.9 device_set_desc_copy.9
 MLINKS+=device_set_flags.9 device_get_flags.9
 MLINKS+=devstat.9 devicestat.9 \
@@ -1516,6 +1518,7 @@ MLINKS+=\
 	mbuf.9 m_pullup.9 \
 	mbuf.9 m_split.9 \
 	mbuf.9 mtod.9 \
+	mbuf.9 mtodo.9 \
 	mbuf.9 M_TRAILINGSPACE.9 \
 	mbuf.9 m_unshare.9 \
 	mbuf.9 M_WRITABLE.9

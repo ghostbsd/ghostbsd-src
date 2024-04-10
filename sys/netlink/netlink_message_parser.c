@@ -148,7 +148,7 @@ nl_parse_attrs_raw(struct nlattr *nla_head, int len, const struct nlattr_parser 
 			if (error != 0) {
 				uint32_t off = (char *)nla - (char *)npt->hdr;
 				nlmsg_report_err_offset(npt, off);
-				NL_LOG(LOG_DEBUG3, "parse failed att offset %u", off);
+				NL_LOG(LOG_DEBUG3, "parse failed at offset %u", off);
 				return (error);
 			}
 		} else {
@@ -321,7 +321,7 @@ nlattr_get_uint8(struct nlattr *nla, struct nl_pstate *npt, const void *arg, voi
 		    nla->nla_type, NLA_DATA_LEN(nla));
 		return (EINVAL);
 	}
-	*((uint16_t *)target) = *((const uint16_t *)NL_RTA_DATA_CONST(nla));
+	*((uint8_t *)target) = *((const uint8_t *)NL_RTA_DATA_CONST(nla));
 	return (0);
 }
 

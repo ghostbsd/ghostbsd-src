@@ -10,6 +10,19 @@ newline.  Entries should be separated by a newline.
 
 Changes to this file should not be MFCed.
 
+7b9a772f9f64:
+	usbconfig(8) now reads the descriptions of the usb vendor and products
+	from usb.ids when available, similarly to what pciconf(8) does.
+
+daf917daba9c:
+	One True Awk updated to 2nd Edition with new -csv support and UTF-8
+	support. See https://awk.dev for more details.
+
+b8e137d8d32d:
+	This commit added some statistics collection to the NFS-over-TLS
+	code in the NFS server so that sysadmins can moditor usage.
+	The statistics are available via the kern.rpc.tls.* sysctls.
+
 41582f28ddf7:
 	FreeBSD 15.0 will not include support for 32-bit platforms.
 	However, 64-bit systems will still be able to run older 32-bit

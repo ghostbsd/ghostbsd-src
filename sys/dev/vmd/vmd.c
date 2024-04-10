@@ -185,14 +185,11 @@ vmd_read_config(device_t dev, u_int b, u_int s, u_int f, u_int reg, int width)
 
 	switch (width) {
 	case 4:
-		return (bus_space_read_4(sc->vmd_btag, sc->vmd_bhandle,
-		    offset));
+		return (bus_read_4(sc->vmd_regs_res[0], offset));
 	case 2:
-		return (bus_space_read_2(sc->vmd_btag, sc->vmd_bhandle,
-		    offset));
+		return (bus_read_2(sc->vmd_regs_res[0], offset));
 	case 1:
-		return (bus_space_read_1(sc->vmd_btag, sc->vmd_bhandle,
-		    offset));
+		return (bus_read_1(sc->vmd_regs_res[0], offset));
 	default:
 		__assert_unreachable();
 		return (0xffffffff);
@@ -214,14 +211,11 @@ vmd_write_config(device_t dev, u_int b, u_int s, u_int f, u_int reg,
 
 	switch (width) {
 	case 4:
-		return (bus_space_write_4(sc->vmd_btag, sc->vmd_bhandle,
-		    offset, val));
+		return (bus_write_4(sc->vmd_regs_res[0], offset, val));
 	case 2:
-		return (bus_space_write_2(sc->vmd_btag, sc->vmd_bhandle,
-		    offset, val));
+		return (bus_write_2(sc->vmd_regs_res[0], offset, val));
 	case 1:
-		return (bus_space_write_1(sc->vmd_btag, sc->vmd_bhandle,
-		    offset, val));
+		return (bus_write_1(sc->vmd_regs_res[0], offset, val));
 	default:
 		__assert_unreachable();
 	}
@@ -282,9 +276,6 @@ vmd_attach(device_t dev)
 			goto fail;
 		}
 	}
-
-	sc->vmd_btag = rman_get_bustag(sc->vmd_regs_res[0]);
-	sc->vmd_bhandle = rman_get_bushandle(sc->vmd_regs_res[0]);
 
 	vid = pci_get_vendor(dev);
 	did = pci_get_device(dev);
@@ -437,7 +428,7 @@ vmd_alloc_resource(device_t dev, device_t child, int type, int *rid,
 
 	switch (type) {
 	case SYS_RES_IRQ:
-		/* VMD harwdare does not support legacy interrupts. */
+		/* VMD hardware does not support legacy interrupts. */
 		if (*rid == 0)
 			return (NULL);
 		return (bus_generic_alloc_resource(dev, child, type, rid,
@@ -465,7 +456,7 @@ vmd_alloc_resource(device_t dev, device_t child, int type, int *rid,
 			    pcib_child_name(child));
 		break;
 	default:
-		/* VMD harwdare does not support I/O ports. */
+		/* VMD hardware does not support I/O ports. */
 		return (NULL);
 	}
 	rman_set_rid(res, *rid);
@@ -500,7 +491,7 @@ static int
 vmd_route_interrupt(device_t dev, device_t child, int pin)
 {
 
-	/* VMD harwdare does not support legacy interrupts. */
+	/* VMD hardware does not support legacy interrupts. */
 	return (PCI_INVALID_IRQ);
 }
 

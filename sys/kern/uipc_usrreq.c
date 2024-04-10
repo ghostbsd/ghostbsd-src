@@ -153,8 +153,8 @@ static struct task	unp_defer_task;
 #endif
 static u_long	unpst_sendspace = PIPSIZ;
 static u_long	unpst_recvspace = PIPSIZ;
-static u_long	unpdg_maxdgram = 2*1024;
-static u_long	unpdg_recvspace = 16*1024;	/* support 8KB syslog msgs */
+static u_long	unpdg_maxdgram = 8*1024;	/* support 8KB syslog msgs */
+static u_long	unpdg_recvspace = 16*1024;
 static u_long	unpsp_sendspace = PIPSIZ;	/* really max datagram size */
 static u_long	unpsp_recvspace = PIPSIZ;
 
@@ -622,8 +622,19 @@ restart:
 	error = mac_vnode_check_create(td->td_ucred, nd.ni_dvp, &nd.ni_cnd,
 	    &vattr);
 #endif
-	if (error == 0)
+	if (error == 0) {
+		/*
+		 * The prior lookup may have left LK_SHARED in cn_lkflags,
+		 * and VOP_CREATE technically only requires the new vnode to
+		 * be locked shared. Most filesystems will return the new vnode
+		 * locked exclusive regardless, but we should explicitly
+		 * specify that here since we require it and assert to that
+		 * effect below.
+		 */
+		nd.ni_cnd.cn_lkflags = (nd.ni_cnd.cn_lkflags & ~LK_SHARED) |
+		    LK_EXCLUSIVE;
 		error = VOP_CREATE(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &vattr);
+	}
 	NDFREE_PNBUF(&nd);
 	if (error) {
 		VOP_VPUT_PAIR(nd.ni_dvp, NULL, true);

@@ -320,7 +320,6 @@ int pcm_chnalloc(struct snddev_info *d, struct pcm_channel **ch, int direction,
     pid_t pid, char *comm, int devunit);
 int pcm_chnrelease(struct pcm_channel *c);
 int pcm_chnref(struct pcm_channel *c, int ref);
-int pcm_inprog(struct snddev_info *d, int delta);
 
 struct pcm_channel *pcm_chn_create(struct snddev_info *d, struct pcm_channel *parent, kobj_class_t cls, int dir, int num, void *devinfo);
 int pcm_chn_destroy(struct pcm_channel *ch);
@@ -379,7 +378,6 @@ struct snddev_info {
 	struct snd_clone *clones;
 	unsigned devcount, playcount, reccount, pvchancount, rvchancount ;
 	unsigned flags;
-	int inprog;
 	unsigned int bufsz;
 	void *devinfo;
 	device_t dev;
@@ -597,12 +595,6 @@ int	sound_oss_card_info(oss_card_info *);
 #define PCM_GIANT_LEAVE(x)						\
 	PCM_GIANT_EXIT(x);						\
 } while (0)
-
-#ifdef KLD_MODULE
-#define PCM_KLDSTRING(a) ("kld " # a)
-#else
-#define PCM_KLDSTRING(a) ""
-#endif
 
 #endif /* _KERNEL */
 

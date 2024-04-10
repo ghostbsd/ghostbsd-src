@@ -2895,8 +2895,17 @@ backup_kernel () {
 	(cd ${BASEDIR}/${KERNELDIR} && find . -type f $FINDFILTER -exec \
 	    cp -pl '{}' ${BASEDIR}/${BACKUPKERNELDIR}/'{}' \;)
 
-	# Re-enable patchname expansion.
+	# Re-enable pathname expansion.
 	set +f
+}
+
+# Check for and remove an existing directory that conflicts with the file or
+# symlink that we are going to install.
+dir_conflict () {
+	if [ -d "$1" ]; then
+		echo "Removing conflicting directory $1"
+		rm -rf -- "$1"
+	fi
 }
 
 # Install new files
@@ -2919,6 +2928,7 @@ install_from_index () {
 			    -m ${PERM} ${BASEDIR}/${FPATH}
 			;;
 		f)
+			dir_conflict "${BASEDIR}/${FPATH}"
 			if [ -z "${LINK}" ]; then
 				# Create a file, without setting flags.
 				gunzip < files/${HASH}.gz > ${HASH}
@@ -2931,6 +2941,7 @@ install_from_index () {
 			fi
 			;;
 		L)
+			dir_conflict "${BASEDIR}/${FPATH}"
 			# Create a symlink
 			ln -sfh ${HASH} ${BASEDIR}/${FPATH}
 			;;
@@ -2967,10 +2978,14 @@ install_delete () {
 			rmdir ${BASEDIR}/${FPATH}
 			;;
 		f)
-			rm ${BASEDIR}/${FPATH}
+			if [ -f "${BASEDIR}/${FPATH}" ]; then
+				rm "${BASEDIR}/${FPATH}"
+			fi
 			;;
 		L)
-			rm ${BASEDIR}/${FPATH}
+			if [ -L "${BASEDIR}/${FPATH}" ]; then
+				rm "${BASEDIR}/${FPATH}"
+			fi
 			;;
 		esac
 	done < killfiles
@@ -3181,6 +3196,11 @@ rollback_setup_rollback () {
 
 # Install old files, delete new files, and update linker.hints
 rollback_files () {
+	# Create directories first.  They may be needed by files we will
+	# install in subsequent steps (PR273950).
+	awk -F \| '{if ($2 == "d") print }' $1/INDEX-OLD > INDEX-OLD
+	install_from_index INDEX-OLD || return 1
+
 	# Install old shared library files which don't have the same path as
 	# a new shared library file.
 	grep -vE '^/boot/' $1/INDEX-NEW |
@@ -3437,6 +3457,7 @@ cmd_cron () {
 	    [ ${VERBOSELEVEL} = "debug" ]; then
 		mail -s "`hostname` security updates" ${MAILTO} < ${TMPFILE}
 	fi
+	ISFETCHED=1
 
 	rm ${TMPFILE}
 }

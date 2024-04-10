@@ -91,6 +91,8 @@
 #define NVME_CAP_HI_REG_CSS_NVM_MASK			(0x1)
 #define NVME_CAP_HI_REG_BPS_SHIFT			(13)
 #define NVME_CAP_HI_REG_BPS_MASK			(0x1)
+#define NVME_CAP_HI_REG_CPS_SHIFT			(14)
+#define NVME_CAP_HI_REG_CPS_MASK			(0x3)
 #define NVME_CAP_HI_REG_MPSMIN_SHIFT			(16)
 #define NVME_CAP_HI_REG_MPSMIN_MASK			(0xF)
 #define NVME_CAP_HI_REG_MPSMAX_SHIFT			(20)
@@ -99,6 +101,12 @@
 #define NVME_CAP_HI_REG_PMRS_MASK			(0x1)
 #define NVME_CAP_HI_REG_CMBS_SHIFT			(25)
 #define NVME_CAP_HI_REG_CMBS_MASK			(0x1)
+#define NVME_CAP_HI_REG_NSSS_SHIFT			(26)
+#define NVME_CAP_HI_REG_NSSS_MASK			(0x1)
+#define NVME_CAP_HI_REG_CRWMS_SHIFT			(27)
+#define NVME_CAP_HI_REG_CRWMS_MASK			(0x1)
+#define NVME_CAP_HI_REG_CRIMS_SHIFT			(28)
+#define NVME_CAP_HI_REG_CRIMS_MASK			(0x1)
 #define NVME_CAP_HI_DSTRD(x) \
 	(((x) >> NVME_CAP_HI_REG_DSTRD_SHIFT) & NVME_CAP_HI_REG_DSTRD_MASK)
 #define NVME_CAP_HI_NSSRS(x) \
@@ -109,6 +117,8 @@
 	(((x) >> NVME_CAP_HI_REG_CSS_NVM_SHIFT) & NVME_CAP_HI_REG_CSS_NVM_MASK)
 #define NVME_CAP_HI_BPS(x) \
 	(((x) >> NVME_CAP_HI_REG_BPS_SHIFT) & NVME_CAP_HI_REG_BPS_MASK)
+#define NVME_CAP_HI_CPS(x) \
+	(((x) >> NVME_CAP_HI_REG_CPS_SHIFT) & NVME_CAP_HI_REG_CPS_MASK)
 #define NVME_CAP_HI_MPSMIN(x) \
 	(((x) >> NVME_CAP_HI_REG_MPSMIN_SHIFT) & NVME_CAP_HI_REG_MPSMIN_MASK)
 #define NVME_CAP_HI_MPSMAX(x) \
@@ -117,6 +127,12 @@
 	(((x) >> NVME_CAP_HI_REG_PMRS_SHIFT) & NVME_CAP_HI_REG_PMRS_MASK)
 #define NVME_CAP_HI_CMBS(x) \
 	(((x) >> NVME_CAP_HI_REG_CMBS_SHIFT) & NVME_CAP_HI_REG_CMBS_MASK)
+#define NVME_CAP_HI_NSSS(x) \
+	(((x) >> NVME_CAP_HI_REG_NSSS_SHIFT) & NVME_CAP_HI_REG_NSSS_MASK)
+#define NVME_CAP_HI_CRWMS(x) \
+	(((x) >> NVME_CAP_HI_REG_CRWMS_SHIFT) & NVME_CAP_HI_REG_CRWMS_MASK)
+#define NVME_CAP_HI_CRIMS(x) \
+	(((x) >> NVME_CAP_HI_REG_CRIMS_SHIFT) & NVME_CAP_HI_REG_CRIMS_MASK)
 
 #define NVME_CC_REG_EN_SHIFT				(0)
 #define NVME_CC_REG_EN_MASK				(0x1)
@@ -132,6 +148,8 @@
 #define NVME_CC_REG_IOSQES_MASK				(0xF)
 #define NVME_CC_REG_IOCQES_SHIFT			(20)
 #define NVME_CC_REG_IOCQES_MASK				(0xF)
+#define NVME_CC_REG_CRIME_SHIFT				(24)
+#define NVME_CC_REG_CRIME_MASK				(0x1)
 
 #define NVME_CSTS_REG_RDY_SHIFT				(0)
 #define NVME_CSTS_REG_RDY_MASK				(0x1)
@@ -143,6 +161,8 @@
 #define NVME_CSTS_REG_NVSRO_MASK			(0x1)
 #define NVME_CSTS_REG_PP_SHIFT				(5)
 #define NVME_CSTS_REG_PP_MASK				(0x1)
+#define NVME_CSTS_REG_ST_SHIFT				(6)
+#define NVME_CSTS_REG_ST_MASK				(0x1)
 
 #define NVME_CSTS_GET_SHST(csts)			(((csts) >> NVME_CSTS_REG_SHST_SHIFT) & NVME_CSTS_REG_SHST_MASK)
 
@@ -616,7 +636,11 @@ struct nvme_registers {
 	uint64_t	bpmbl;	/* Boot Partition Memory Buffer Location */
 	uint64_t	cmbmsc;	/* Controller Memory Buffer Memory Space Control */
 	uint32_t	cmbsts;	/* Controller Memory Buffer Status */
-	uint8_t		reserved3[3492]; /* 5Ch - DFFh */
+	uint32_t	cmbebs;	/* Controller Memory Buffer Elasticity Buffer Size */
+	uint32_t	cmbswtp;/* Controller Memory Buffer Sustained Write Throughput */
+	uint32_t	nssd;	/* NVM Subsystem Shutdown */
+	uint32_t	crto;	/* Controller Ready Timeouts */
+	uint8_t		reserved3[3476]; /* 6Ch - DFFh */
 	uint32_t	pmrcap;	/* Persistent Memory Capabilities */
 	uint32_t	pmrctl;	/* Persistent Memory Region Control */
 	uint32_t	pmrsts;	/* Persistent Memory Region Status */
@@ -1431,7 +1455,8 @@ _Static_assert(sizeof(struct nvme_health_information_page) == 512, "bad size for
 struct nvme_firmware_page {
 	uint8_t			afi;
 	uint8_t			reserved[7];
-	uint64_t		revision[7]; /* revisions for 7 slots */
+	/* revisions for 7 slots */
+	uint8_t			revision[7][NVME_FIRMWARE_REVISION_LENGTH];
 	uint8_t			reserved2[448];
 } __packed __aligned(4);
 
@@ -1970,17 +1995,6 @@ void	nvme_health_information_page_swapbytes(
 	s->tmt2tc = le32toh(s->tmt2tc);
 	s->ttftmt1 = le32toh(s->ttftmt1);
 	s->ttftmt2 = le32toh(s->ttftmt2);
-#endif
-}
-
-static inline
-void	nvme_firmware_page_swapbytes(struct nvme_firmware_page *s __unused)
-{
-#if _BYTE_ORDER != _LITTLE_ENDIAN
-	int i;
-
-	for (i = 0; i < 7; i++)
-		s->revision[i] = le64toh(s->revision[i]);
 #endif
 }
 

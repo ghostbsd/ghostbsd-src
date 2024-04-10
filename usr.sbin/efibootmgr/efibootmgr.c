@@ -203,8 +203,8 @@ parse_args(int argc, char *argv[])
 {
 	int ch;
 
-	while ((ch = getopt_long(argc, argv, "AaBb:C:cdDe:EFfhk:L:l:NnOo:pTt:v",
-		    lopts, NULL)) != -1) {
+	while ((ch = getopt_long(argc, argv,
+	    "AaBb:C:cdDe:EFfhk:L:l:NnOo:pTt:u:v", lopts, NULL)) != -1) {
 		switch (ch) {
 		case 'A':
 			opts.set_inactive = true;
@@ -784,6 +784,8 @@ print_loadopt_str(uint8_t *data, size_t datalen)
 	 */
 	indent = 1;
 	while (dp < edp) {
+		if (efidp_size(dp) == 0)
+			break;
 		efidp_format_device_path(buf, sizeof(buf), dp,
 		    (intptr_t)(void *)edp - (intptr_t)(void *)dp);
 		printf("%*s%s\n", indent, "", buf);
@@ -1101,8 +1103,11 @@ main(int argc, char *argv[])
 	/*
 	 * find_dev can operate without any efi variables
 	 */
-	if (!efi_variables_supported() && !opts.find_dev)
-		errx(1, "efi variables not supported on this system. root? kldload efirt?");
+	if (!efi_variables_supported() && !opts.find_dev) {
+		if (errno == EACCES && geteuid() != 0)
+			errx(1, "must be run as root");
+		errx(1, "efi variables not supported on this system. kldload efirt?");
+	}
 
 	read_vars();
 
