@@ -403,3 +403,7 @@ device		uinput			# install /dev/uinput cdev
 options 	HID_DEBUG		# enable debug msgs
 device		hid			# Generic HID support
 options 	IICHID_SAMPLING		# Workaround missing GPIO INTR support
+
+# I2C support
+device		ig4			#Synopsys DesignWare I2C Controller
+device		iicbus			# I2C bus system
