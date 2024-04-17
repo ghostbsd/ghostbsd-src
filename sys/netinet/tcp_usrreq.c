@@ -177,7 +177,6 @@ tcp_usr_attach(struct socket *so, int proto, struct thread *td)
 	tp = tcp_newtcpcb(inp);
 	if (tp == NULL) {
 		error = ENOBUFS;
-		in_pcbdetach(inp);
 		in_pcbfree(inp);
 		goto out;
 	}
@@ -215,7 +214,6 @@ tcp_usr_detach(struct socket *so)
 	    ("%s: inp %p not dropped or embryonic", __func__, inp));
 
 	tcp_discardcb(tp);
-	in_pcbdetach(inp);
 	in_pcbfree(inp);
 }
 
@@ -1761,10 +1759,8 @@ tcp_ctloutput_set(struct inpcb *inp, struct sockopt *sopt)
 		 * Ensure the new stack takes ownership with a
 		 * clean slate on peak rate threshold.
 		 */
-#ifdef TCPHPTS
-		/* Assure that we are not on any hpts */
-		tcp_hpts_remove(tp);
-#endif
+		if (tp->t_fb->tfb_tcp_timer_stop_all != NULL)
+			tp->t_fb->tfb_tcp_timer_stop_all(tp);
 		if (blk->tfb_tcp_fb_init) {
 			error = (*blk->tfb_tcp_fb_init)(tp, &ptr);
 			if (error) {

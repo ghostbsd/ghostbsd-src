@@ -6019,7 +6019,27 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_in *sin,
 		sad->sin_family = AF_INET;
 		sad->sin_port = sin->sin_port;
 		sad->sin_addr.s_addr = sin->sin_addr.s_addr;
-		nrp = malloc(sizeof(*nrp), M_NFSSOCKREQ, M_WAITOK | M_ZERO);
+		if (NFSHASPNFS(nmp) && NFSHASKERB(nmp)) {
+			/* For pNFS, a separate server principal is needed. */
+			nrp = malloc(sizeof(*nrp) + NI_MAXSERV + NI_MAXHOST,
+			    M_NFSSOCKREQ, M_WAITOK | M_ZERO);
+			/*
+			 * Use the latter part of nr_srvprinc as a temporary
+			 * buffer for the IP address.
+			 */
+			inet_ntoa_r(sad->sin_addr,
+			    &nrp->nr_srvprinc[NI_MAXSERV]);
+			NFSCL_DEBUG(1, "nfsrpc_fillsa: DS IP=%s\n",
+			    &nrp->nr_srvprinc[NI_MAXSERV]);
+			if (!rpc_gss_ip_to_srv_principal_call(
+			    &nrp->nr_srvprinc[NI_MAXSERV], "nfs",
+			    nrp->nr_srvprinc))
+				nrp->nr_srvprinc[0] = '\0';
+			NFSCL_DEBUG(1, "nfsrpc_fillsa: srv principal=%s\n",
+			    nrp->nr_srvprinc);
+		} else
+			nrp = malloc(sizeof(*nrp), M_NFSSOCKREQ,
+			    M_WAITOK | M_ZERO);
 		nrp->nr_nam = (struct sockaddr *)sad;
 	} else if (af == AF_INET6) {
 		NFSLOCKMNT(nmp);
@@ -6058,7 +6078,27 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_in *sin,
 		sad6->sin6_port = sin6->sin6_port;
 		NFSBCOPY(&sin6->sin6_addr, &sad6->sin6_addr,
 		    sizeof(struct in6_addr));
-		nrp = malloc(sizeof(*nrp), M_NFSSOCKREQ, M_WAITOK | M_ZERO);
+		if (NFSHASPNFS(nmp) && NFSHASKERB(nmp)) {
+			/* For pNFS, a separate server principal is needed. */
+			nrp = malloc(sizeof(*nrp) + NI_MAXSERV + NI_MAXHOST,
+			    M_NFSSOCKREQ, M_WAITOK | M_ZERO);
+			/*
+			 * Use the latter part of nr_srvprinc as a temporary
+			 * buffer for the IP address.
+			 */
+			inet_ntop(AF_INET6, &sad6->sin6_addr,
+			    &nrp->nr_srvprinc[NI_MAXSERV], NI_MAXHOST);
+			NFSCL_DEBUG(1, "nfsrpc_fillsa: DS IP=%s\n",
+			    &nrp->nr_srvprinc[NI_MAXSERV]);
+			if (!rpc_gss_ip_to_srv_principal_call(
+			    &nrp->nr_srvprinc[NI_MAXSERV], "nfs",
+			    nrp->nr_srvprinc))
+				nrp->nr_srvprinc[0] = '\0';
+			NFSCL_DEBUG(1, "nfsrpc_fillsa: srv principal=%s\n",
+			    nrp->nr_srvprinc);
+		} else
+			nrp = malloc(sizeof(*nrp), M_NFSSOCKREQ,
+			    M_WAITOK | M_ZERO);
 		nrp->nr_nam = (struct sockaddr *)sad6;
 	} else
 		return (EPERM);
@@ -8688,30 +8728,57 @@ nfsrpc_copyrpc(vnode_t invp, off_t inoff, vnode_t outvp, off_t outoff,
     int *outattrflagp, bool consecutive, int *commitp, struct ucred *cred,
     NFSPROC_T *p)
 {
-	uint32_t *tl;
+	uint32_t *tl, *opcntp;
 	int error;
 	struct nfsrv_descript nfsd;
 	struct nfsrv_descript *nd = &nfsd;
 	struct nfsmount *nmp;
 	nfsattrbit_t attrbits;
+	struct vattr va;
 	uint64_t len;
 
-	nmp = VFSTONFS(outvp->v_mount);
+	nmp = VFSTONFS(invp->v_mount);
 	*inattrflagp = *outattrflagp = 0;
 	*commitp = NFSWRITE_UNSTABLE;
 	len = *lenp;
 	*lenp = 0;
 	if (len > nfs_maxcopyrange)
 		len = nfs_maxcopyrange;
-	NFSCL_REQSTART(nd, NFSPROC_COPY, invp, cred);
+	nfscl_reqstart(nd, NFSPROC_COPY, nmp, VTONFS(invp)->n_fhp->nfh_fh,
+	    VTONFS(invp)->n_fhp->nfh_len, &opcntp, NULL, 0, 0, cred);
+	/*
+	 * First do a Setattr of atime to the server's clock
+	 * time.  The FreeBSD "collective" was of the opinion
+	 * that setting atime was necessary for this syscall.
+	 * Do the Setattr before the Copy, so that it can be
+	 * handled well if the server replies NFSERR_DELAY to
+	 * the Setattr operation.
+	 */
+	if ((nmp->nm_mountp->mnt_flag & MNT_NOATIME) == 0) {
+		NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+		*tl = txdr_unsigned(NFSV4OP_SETATTR);
+		nfsm_stateidtom(nd, instateidp, NFSSTATEID_PUTSTATEID);
+		VATTR_NULL(&va);
+		va.va_atime.tv_sec = va.va_atime.tv_nsec = 0;
+		va.va_vaflags = VA_UTIMES_NULL;
+		nfscl_fillsattr(nd, &va, invp, 0, 0);
+		/* Bump opcnt from 7 to 8. */
+		*opcntp = txdr_unsigned(8);
+	}
+
+	/* Now Getattr the invp attributes. */
 	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
 	*tl = txdr_unsigned(NFSV4OP_GETATTR);
 	NFSGETATTR_ATTRBIT(&attrbits);
 	nfsrv_putattrbit(nd, &attrbits);
+
+	/* Set outvp. */
 	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
 	*tl = txdr_unsigned(NFSV4OP_PUTFH);
 	(void)nfsm_fhtom(nmp, nd, VTONFS(outvp)->n_fhp->nfh_fh,
 	    VTONFS(outvp)->n_fhp->nfh_len, 0);
+
+	/* Do the Copy. */
 	NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
 	*tl = txdr_unsigned(NFSV4OP_COPY);
 	nfsm_stateidtom(nd, instateidp, NFSSTATEID_PUTSTATEID);
@@ -8726,12 +8793,26 @@ nfsrpc_copyrpc(vnode_t invp, off_t inoff, vnode_t outvp, off_t outoff,
 		*tl++ = newnfs_false;
 	*tl++ = newnfs_true;
 	*tl++ = 0;
+
+	/* Get the outvp attributes. */
 	*tl = txdr_unsigned(NFSV4OP_GETATTR);
 	NFSWRITEGETATTR_ATTRBIT(&attrbits);
 	nfsrv_putattrbit(nd, &attrbits);
+
 	error = nfscl_request(nd, invp, p, cred);
 	if (error != 0)
 		return (error);
+	/* Skip over the Setattr reply. */
+	if ((nd->nd_flag & ND_NOMOREDATA) == 0 &&
+	    (nmp->nm_mountp->mnt_flag & MNT_NOATIME) == 0) {
+		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+		if (*(tl + 1) == 0) {
+			error = nfsrv_getattrbits(nd, &attrbits, NULL, NULL);
+			if (error != 0)
+				goto nfsmout;
+		} else
+			nd->nd_flag |= ND_NOMOREDATA;
+	}
 	if ((nd->nd_flag & ND_NOMOREDATA) == 0) {
 		/* Get the input file's attributes. */
 		NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);

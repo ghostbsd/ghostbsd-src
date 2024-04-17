@@ -1838,7 +1838,8 @@ reinstallkernel reinstallkernel.debug: _installcheck_kernel .PHONY
 	@echo "--------------------------------------------------------------"
 	${_+_}cd ${KRNLOBJDIR}/${INSTALLKERNEL}; \
 	    ${CROSSENV} PATH=${TMPPATH:Q} \
-	    ${MAKE} ${IMAKE_INSTALL} KERNEL=${INSTKERNNAME} ${.TARGET:S/kernel//}
+	    ${MAKE} ${IMAKE_INSTALL} KERNEL=${INSTKERNNAME} METALOG=${METALOG} \
+	    ${.TARGET:S/kernel//}
 	@echo "--------------------------------------------------------------"
 	@echo ">>> Installing kernel ${INSTALLKERNEL} completed on $$(LC_ALL=C date)"
 	@echo "--------------------------------------------------------------"
@@ -1850,7 +1851,8 @@ reinstallkernel reinstallkernel.debug: _installcheck_kernel .PHONY
 	@echo "--------------------------------------------------------------"
 	${_+_}cd ${KRNLOBJDIR}/${_kernel}; \
 	    ${CROSSENV} PATH=${TMPPATH:Q} \
-	    ${MAKE} ${IMAKE_INSTALL} KERNEL=${INSTKERNNAME}.${_kernel} ${.TARGET:S/kernel//}
+	    ${MAKE} ${IMAKE_INSTALL} KERNEL=${INSTKERNNAME}.${_kernel} METALOG=${METALOG} \
+	    ${.TARGET:S/kernel//}
 	@echo "--------------------------------------------------------------"
 	@echo ">>> Installing kernel ${_kernel} completed on $$(LC_ALL=C date)"
 	@echo "--------------------------------------------------------------"
@@ -1870,7 +1872,8 @@ distributekernel distributekernel.debug: .PHONY
 	${_+_}cd ${KRNLOBJDIR}/${INSTALLKERNEL}; \
 	    ${IMAKEENV} ${IMAKE_INSTALL:S/METALOG/kernel.premeta/} \
 	    ${IMAKE_MTREE} PATH=${TMPPATH:Q} ${MAKE} KERNEL=${INSTKERNNAME} \
-	    DESTDIR=${INSTALL_DDIR}/kernel \
+	    DISTBASE=/kernel DESTDIR=${INSTALL_DDIR}/kernel \
+	    METALOG=${METALOG:S/METALOG/kernel.premeta/} \
 	    ${.TARGET:S/distributekernel/install/}
 .if defined(NO_ROOT)
 	@sed -e 's|^./kernel|.|' ${DESTDIR}/${DISTDIR}/kernel.premeta > \
@@ -1886,7 +1889,8 @@ distributekernel distributekernel.debug: .PHONY
 	    ${IMAKEENV} ${IMAKE_INSTALL:S/METALOG/kernel.${_kernel}.premeta/} \
 	    ${IMAKE_MTREE} PATH=${TMPPATH:Q} ${MAKE} \
 	    KERNEL=${INSTKERNNAME}.${_kernel} \
-	    DESTDIR=${INSTALL_DDIR}/kernel.${_kernel} \
+	    DISTBASE=/kernel.${_kernel} DESTDIR=${INSTALL_DDIR}/kernel.${_kernel} \
+	    METALOG=${METALOG:S/METALOG/kernel.${_kernel}.premeta/} \
 	    ${.TARGET:S/distributekernel/install/}
 .if defined(NO_ROOT)
 	@sed -e "s|^./kernel.${_kernel}|.|" \
@@ -2088,26 +2092,34 @@ create-source-packages: _pkgbootstrap .PHONY
 .if !empty(GIT_CMD) && exists(${GIT_CMD}) && exists(${SRCDIR}/.git)
 	@cd ${SRCDIR}; \
 		( echo "@override_prefix /usr/src" ;  \
-		${GIT_CMD} ls-files ":!:sys/" ) > ${SSTAGEDIR}/src.plist
+		${GIT_CMD} ls-files --recurse-submodules ":!:sys/" ) \
+		> ${SSTAGEDIR}/src.plist
 	@cd ${SRCDIR}; \
 		( echo "@override_prefix /usr/src" ; \
-		${GIT_CMD} ls-files "sys/" ) > ${SSTAGEDIR}/src-sys.plist
-	sed -e "s/%VERSION%/${PKG_VERSION}/" \
-		-e "s/%DESC%/FreeBSD sources/" \
-		-e "s/ %VCS_REVISION%/${VCS_REVISION}/" \
-		-e "s/%PKG_NAME_PREFIX%/${PKG_NAME_PREFIX}/" \
-		-e "s/%PKG_MAINTAINER%/${PKG_MAINTAINER}/" \
-		-e "s|%PKG_WWW%|${PKG_WWW}|" \
-		${SRCDIR}/release/packages/src.ucl \
-		> ${SSTAGEDIR}/src.ucl
-	sed -e "s/%VERSION%/${PKG_VERSION}/" \
-		-e "s/%DESC%/FreeBSD Kernel sources/" \
-		-e "s/ %VCS_REVISION%/${VCS_REVISION}/" \
-		-e "s/%PKG_NAME_PREFIX%/${PKG_NAME_PREFIX}/" \
-		-e "s/%PKG_MAINTAINER%/${PKG_MAINTAINER}/" \
-		-e "s|%PKG_WWW%|${PKG_WWW}|" \
-		${SRCDIR}/release/packages/src-sys.ucl \
-		> ${SSTAGEDIR}/src-sys.ucl
+		${GIT_CMD} ls-files --recurse-submodules "sys/" ) \
+		> ${SSTAGEDIR}/src-sys.plist
+	${SRCDIR}/release/packages/generate-ucl.lua \
+		PKGNAME "src" \
+		PKGGENNAME "src" \
+		VERSION "${PKG_VERSION}" \
+		DESC "FreeBSD Kernel Sources" \
+		COMMENT "FreeBSD Userland Sources" \
+		PKG_NAME_PREFIX "${PKG_NAME_PREFIX}" \
+		PKG_MAINTAINER "${PKG_MAINTAINER}" \
+		PKG_WWW "${PKG_WWW}" \
+		${SRCDIR}/release/packages/template.ucl \
+		${SSTAGEDIR}/src.ucl
+	${SRCDIR}/release/packages/generate-ucl.lua \
+		PKGNAME "src-sys" \
+		PKGGENNAME "src" \
+		VERSION "${PKG_VERSION}" \
+		DESC "FreeBSD Kernel Sources" \
+		COMMENT "FreeBSD Kernel Sources" \
+		PKG_NAME_PREFIX "${PKG_NAME_PREFIX}" \
+		PKG_MAINTAINER "${PKG_MAINTAINER}" \
+		PKG_WWW "${PKG_WWW}" \
+		${SRCDIR}/release/packages/template.ucl \
+		${SSTAGEDIR}/src-sys.ucl
 	${PKG_CMD} -o ABI=${PKG_ABI} \
 		-o OSVERSION="${SRCRELDATE}" \
 		create -f ${PKG_FORMAT} \
@@ -2177,17 +2189,17 @@ create-kernel-packages-flavor${flavor:C,^""$,${_default_flavor},}: _pkgbootstrap
 	${METALOG_SORT_CMD} ${KSTAGEDIR}/kernel.meta | \
 	awk -f ${SRCDIR}/release/scripts/mtree-to-plist.awk \
 		-v kernel=yes -v _kernconf=${INSTALLKERNEL} ; \
-	sed -e "s/%VERSION%/${PKG_VERSION}/" \
-		-e "s/%PKGNAME%/kernel-${INSTALLKERNEL:tl}${flavor}/" \
-		-e "s/%KERNELDIR%/kernel/" \
-		-e "s/%COMMENT%/FreeBSD ${INSTALLKERNEL} kernel ${flavor}/" \
-		-e "s/%DESC%/FreeBSD ${INSTALLKERNEL} kernel ${flavor}/" \
-		-e "s/ %VCS_REVISION%/${VCS_REVISION}/" \
-		-e "s/%PKG_NAME_PREFIX%/${PKG_NAME_PREFIX}/" \
-		-e "s/%PKG_MAINTAINER%/${PKG_MAINTAINER}/" \
-		-e "s|%PKG_WWW%|${PKG_WWW}|" \
-		${SRCDIR}/release/packages/kernel.ucl \
-		> ${KSTAGEDIR}/${DISTDIR}/kernel.${INSTALLKERNEL}${flavor}.ucl ; \
+	${SRCDIR}/release/packages/generate-ucl.lua \
+		PKGNAME "kernel-${INSTALLKERNEL:tl}${flavor}" \
+		VERSION "${PKG_VERSION}" \
+		KERNELDIR "kernel" \
+		COMMENT "FreeBSD ${INSTALLKERNEL} kernel ${flavor}" \
+		DESC "FreeBSD ${INSTALLKERNEL} kernel ${flavor}" \
+		PKG_NAME_PREFIX "${PKG_NAME_PREFIX}" \
+		PKG_MAINTAINER "${PKG_MAINTAINER}" \
+		PKG_WWW "${PKG_WWW}" \
+		${SRCDIR}/release/packages/template.ucl \
+		 ${KSTAGEDIR}/${DISTDIR}/kernel.${INSTALLKERNEL}${flavor}.ucl ; \
 	awk -F\" ' \
 		/name/ { printf("===> Creating %s-", $$2); next } \
 		/version/ {print $$2; next } ' \
@@ -2214,17 +2226,20 @@ create-kernel-packages-extra-flavor${flavor:C,^""$,${_default_flavor},}-${_kerne
 	${METALOG_SORT_CMD} ${KSTAGEDIR}/kernel.${_kernel}.meta | \
 	awk -f ${SRCDIR}/release/scripts/mtree-to-plist.awk \
 		-v kernel=yes -v _kernconf=${_kernel} ; \
-	sed -e "s/%VERSION%/${PKG_VERSION}/" \
-		-e "s/%PKGNAME%/kernel-${_kernel:tl}${flavor}/" \
-		-e "s/%KERNELDIR%/kernel.${_kernel}/" \
-		-e "s/%COMMENT%/FreeBSD ${_kernel} kernel ${flavor}/" \
-		-e "s/%DESC%/FreeBSD ${_kernel} kernel ${flavor}/" \
-		-e "s/ %VCS_REVISION%/${VCS_REVISION}/" \
-		-e "s/%PKG_NAME_PREFIX%/${PKG_NAME_PREFIX}/" \
-		-e "s/%PKG_MAINTAINER%/${PKG_MAINTAINER}/" \
-		-e "s|%PKG_WWW%|${PKG_WWW}|" \
-		${SRCDIR}/release/packages/kernel.ucl \
-		> ${KSTAGEDIR}/kernel.${_kernel}/kernel.${_kernel}${flavor}.ucl ; \
+	${SRCDIR}/release/packages/generate-ucl.lua \
+		PKGNAME "kernel-${_kernel:tl}${flavor}" \
+		PKGGENNAME "kernel" \
+		FORCEINCLUDE "kernel${flavor}" \
+		UCLFILES "${SRCDIR}/release/packages/" \
+		VERSION "${PKG_VERSION}" \
+		KERNELDIR "kernel.${_kernel}" \
+		DESC "FreeBSD ${_kernel} kernel ${flavor}" \
+		COMMENT "FreeBSD ${_kernel} kernel ${flavor}" \
+		PKG_NAME_PREFIX "${PKG_NAME_PREFIX}" \
+		PKG_MAINTAINER "${PKG_MAINTAINER}" \
+		PKG_WWW "${PKG_WWW}" \
+		${SRCDIR}/release/packages/template.ucl \
+		${KSTAGEDIR}/kernel.${_kernel}/kernel.${_kernel}${flavor}.ucl ; \
 	awk -F\" ' \
 		/name/ { printf("===> Creating %s-", $$2); next } \
 		/version/ {print $$2; next } ' \
@@ -2405,7 +2420,11 @@ _bootstrap_tools_links+=m4 lex
 _elftoolchain_libs= lib/libelf lib/libdwarf lib/libzstd
 ${_bt}-lib/libelf: ${_bt_m4_depend}
 ${_bt}-lib/libdwarf: ${_bt_m4_depend}
+_bt_libelf_depend=${_bt}-lib/libelf
 .endif
+
+_kldxref=	usr.sbin/kldxref
+${_bt}-usr.sbin/kldxref: ${_bt_libelf_depend}
 
 # flua is required to regenerate syscall files.  It first appeared during the
 # 13.0-CURRENT cycle, thus needs to be built on -older releases and stable
@@ -2498,6 +2517,7 @@ _gensnmptree=	usr.sbin/bsnmpd/gensnmptree
     ${MK_LLDB} != "no" || ${MK_LLVM_BINUTILS} != "no"
 _clang_tblgen= \
 	lib/clang/libllvmminimal \
+	usr.bin/clang/llvm-min-tblgen \
 	usr.bin/clang/llvm-tblgen
 .if ${MK_CLANG_BOOTSTRAP} != "no" || ${MK_CLANG} != "no" || \
     ${MK_LLDB} != "no"
@@ -2508,8 +2528,10 @@ _clang_tblgen+= usr.bin/clang/clang-tblgen
 _clang_tblgen+=	usr.bin/clang/lldb-tblgen
 .endif
 ${_bt}-usr.bin/clang/clang-tblgen: ${_bt}-lib/clang/libllvmminimal
-${_bt}-usr.bin/clang/llvm-tblgen: ${_bt}-lib/clang/libllvmminimal
 ${_bt}-usr.bin/clang/lldb-tblgen: ${_bt}-lib/clang/libllvmminimal
+${_bt}-usr.bin/clang/llvm-min-tblgen: ${_bt}-lib/clang/libllvmminimal
+${_bt}-usr.bin/clang/llvm-tblgen: ${_bt}-lib/clang/libllvmminimal
+${_bt}-usr.bin/clang/llvm-tblgen: ${_bt}-usr.bin/clang/llvm-min-tblgen
 .endif
 
 # C.UTF-8 is always built in share/ctypes and we need localedef for that.
@@ -2665,6 +2687,7 @@ bootstrap-tools: ${_bt}-links .PHONY
     ${_cat} \
     ${_kbdcontrol} \
     ${_elftoolchain_libs} \
+    ${_kldxref} \
     lib/libopenbsd \
     usr.bin/mandoc \
     usr.bin/rpcgen \
@@ -3445,7 +3468,7 @@ check-old-files: .PHONY
 list-old-libs: .PHONY
 	@cd ${.CURDIR}; \
 	${MAKE} -f ${.CURDIR}/Makefile.inc1 ${.MAKEFLAGS} ${.TARGET} \
-	    -V "OLD_LIBS:ts\n" -V "MOVED_LIBS:ts\n" \
+	    -V "OLD_LIBS:ts\n" \
 	    ${_ALL_libcompats:@v@-V "OLD_LIBS:Mlib/*:S,^lib,usr/lib$v,:ts\n"@} \
 	    ${_ALL_libcompats:@v@-V "OLD_LIBS:Musr/lib/*:S,^usr/lib,usr/lib$v,:ts\n"@} \
 	    ${_ALL_libcompats:@v@-V "OLD_LIBS:Mlib/casper/*:S,^lib/casper,usr/lib$v,:ts\n"@} | \

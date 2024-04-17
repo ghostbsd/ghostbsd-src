@@ -1461,8 +1461,12 @@ calculate_padding(struct wg_packet *pkt)
 {
 	unsigned int padded_size, last_unit = pkt->p_mbuf->m_pkthdr.len;
 
-	if (__predict_false(!pkt->p_mtu))
-		return (last_unit + (WG_PKT_PADDING - 1)) & ~(WG_PKT_PADDING - 1);
+	/* Keepalive packets don't set p_mtu, but also have a length of zero. */
+	if (__predict_false(pkt->p_mtu == 0)) {
+		padded_size = (last_unit + (WG_PKT_PADDING - 1)) &
+		    ~(WG_PKT_PADDING - 1);
+		return (padded_size - last_unit);
+	}
 
 	if (__predict_false(last_unit > pkt->p_mtu))
 		last_unit %= pkt->p_mtu;
@@ -1470,7 +1474,7 @@ calculate_padding(struct wg_packet *pkt)
 	padded_size = (last_unit + (WG_PKT_PADDING - 1)) & ~(WG_PKT_PADDING - 1);
 	if (pkt->p_mtu < padded_size)
 		padded_size = pkt->p_mtu;
-	return padded_size - last_unit;
+	return (padded_size - last_unit);
 }
 
 static void
@@ -1511,8 +1515,7 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	state = WG_PACKET_CRYPTED;
 out:
 	pkt->p_mbuf = m;
-	wmb();
-	pkt->p_state = state;
+	atomic_store_rel_int(&pkt->p_state, state);
 	GROUPTASK_ENQUEUE(&peer->p_send);
 	noise_remote_put(remote);
 }
@@ -1584,8 +1587,7 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	state = WG_PACKET_CRYPTED;
 out:
 	pkt->p_mbuf = m;
-	wmb();
-	pkt->p_state = state;
+	atomic_store_rel_int(&pkt->p_state, state);
 	GROUPTASK_ENQUEUE(&peer->p_recv);
 	noise_remote_put(remote);
 }
@@ -1641,7 +1643,7 @@ wg_deliver_out(struct wg_peer *peer)
 	wg_peer_get_endpoint(peer, &endpoint);
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_encrypt_serial)) != NULL) {
-		if (pkt->p_state != WG_PACKET_CRYPTED)
+		if (atomic_load_acq_int(&pkt->p_state) != WG_PACKET_CRYPTED)
 			goto error;
 
 		m = pkt->p_mbuf;
@@ -1683,7 +1685,7 @@ wg_deliver_in(struct wg_peer *peer)
 	struct epoch_tracker	 et;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
-		if (pkt->p_state != WG_PACKET_CRYPTED)
+		if (atomic_load_acq_int(&pkt->p_state) != WG_PACKET_CRYPTED)
 			goto error;
 
 		m = pkt->p_mbuf;
@@ -2870,6 +2872,7 @@ wg_clone_destroy(struct if_clone *ifc, if_t ifp, uint32_t flags)
 
 	if (cred != NULL)
 		crfree(cred);
+	bpfdetach(sc->sc_ifp);
 	if_detach(sc->sc_ifp);
 	if_free(sc->sc_ifp);
 

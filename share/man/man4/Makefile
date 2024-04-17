@@ -171,7 +171,6 @@ MAN=	aac.4 \
 	genetlink.4 \
 	geom.4 \
 	geom_linux_lvm.4 \
-	geom_map.4 \
 	geom_uzip.4 \
 	gif.4 \
 	${_gve.4} \
@@ -692,6 +691,7 @@ MLINKS+=ipfirewall.4 ipaccounting.4 \
 MLINKS+=ipheth.4 if_ipheth.4
 MLINKS+=ipw.4 if_ipw.4
 MLINKS+=iwi.4 if_iwi.4
+MLINKS+=iwlwifi.4 if_iwlwifi.4
 MLINKS+=iwm.4 if_iwm.4
 MLINKS+=iwn.4 if_iwn.4
 MLINKS+=ixgbe.4 ix.4

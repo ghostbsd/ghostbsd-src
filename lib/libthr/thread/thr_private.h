@@ -37,7 +37,6 @@
  */
 #include <sys/types.h>
 #include <sys/time.h>
-#include <sys/cdefs.h>
 #include <sys/queue.h>
 #include <sys/param.h>
 #include <sys/cpuset.h>
@@ -261,7 +260,6 @@ struct pthread_atfork {
 };
 
 struct pthread_attr {
-#define pthread_attr_start_copy	sched_policy
 	int	sched_policy;
 	int	sched_inherit;
 	int	prio;
@@ -271,7 +269,6 @@ struct pthread_attr {
 	void	*stackaddr_attr;
 	size_t	stacksize_attr;
 	size_t	guardsize_attr;
-#define pthread_attr_end_copy	cpuset
 	cpuset_t	*cpuset;
 	size_t	cpusetsize;
 };

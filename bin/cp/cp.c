@@ -84,8 +84,8 @@ static char emptystring[] = "";
 
 PATH_T to = { to.p_path, emptystring, "" };
 
-int fflag, iflag, lflag, nflag, pflag, sflag, vflag;
-static int Hflag, Lflag, Rflag, rflag;
+int Nflag, fflag, iflag, lflag, nflag, pflag, sflag, vflag;
+static int Hflag, Lflag, Pflag, Rflag, rflag;
 volatile sig_atomic_t info;
 
 enum op { FILE_TO_FILE, FILE_TO_DIR, DIR_TO_DNE };
@@ -98,12 +98,11 @@ main(int argc, char *argv[])
 {
 	struct stat to_stat, tmp_stat;
 	enum op type;
-	int Pflag, ch, fts_options, r, have_trailing_slash;
+	int ch, fts_options, r, have_trailing_slash;
 	char *target;
 
 	fts_options = FTS_NOCHDIR | FTS_PHYSICAL;
-	Pflag = 0;
-	while ((ch = getopt(argc, argv, "HLPRafilnprsvx")) != -1)
+	while ((ch = getopt(argc, argv, "HLPRafilNnprsvx")) != -1)
 		switch (ch) {
 		case 'H':
 			Hflag = 1;
@@ -136,6 +135,9 @@ main(int argc, char *argv[])
 			break;
 		case 'l':
 			lflag = 1;
+			break;
+		case 'N':
+			Nflag = 1;
 			break;
 		case 'n':
 			nflag = 1;
@@ -517,9 +519,13 @@ copy(char *argv[], enum op type, int fts_options, struct stat *root_stat)
 			 * umask blocks owner writes, we fail.
 			 */
 			if (dne) {
-				if (mkdir(to.p_path,
-				    curr->fts_statp->st_mode | S_IRWXU) < 0)
-					err(1, "%s", to.p_path);
+				mode = curr->fts_statp->st_mode | S_IRWXU;
+				if (mkdir(to.p_path, mode) != 0) {
+					warn("%s", to.p_path);
+					(void)fts_set(ftsp, curr, FTS_SKIP);
+					badcp = rval = 1;
+					break;
+				}
 				/*
 				 * First DNE with a NULL root_stat is the root
 				 * path, so set root_stat.  We can't really
@@ -528,14 +534,19 @@ copy(char *argv[], enum op type, int fts_options, struct stat *root_stat)
 				 * first directory we created and use that.
 				 */
 				if (root_stat == NULL &&
-				    stat(to.p_path, &created_root_stat) == -1) {
-					err(1, "stat");
-				} else if (root_stat == NULL) {
-					root_stat = &created_root_stat;
+				    stat(to.p_path, &created_root_stat) != 0) {
+					warn("%s", to.p_path);
+					(void)fts_set(ftsp, curr, FTS_SKIP);
+					badcp = rval = 1;
+					break;
 				}
+				if (root_stat == NULL)
+					root_stat = &created_root_stat;
 			} else if (!S_ISDIR(to_stat.st_mode)) {
-				errno = ENOTDIR;
-				err(1, "%s", to.p_path);
+				warnc(ENOTDIR, "%s", to.p_path);
+				(void)fts_set(ftsp, curr, FTS_SKIP);
+				badcp = rval = 1;
+				break;
 			}
 			/*
 			 * Arrange to correct directory attributes later

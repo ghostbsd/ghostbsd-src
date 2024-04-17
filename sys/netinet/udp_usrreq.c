@@ -897,6 +897,10 @@ udp_ctloutput(struct socket *so, struct sockopt *sopt)
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 #ifdef INET
 		case UDP_ENCAP:
+			if (!INP_CHECK_SOCKAF(so, AF_INET)) {
+				INP_WUNLOCK(inp);
+				return (EINVAL);
+			}
 			if (!IPSEC_ENABLED(ipv4)) {
 				INP_WUNLOCK(inp);
 				return (ENOPROTOOPT);
@@ -944,6 +948,10 @@ udp_ctloutput(struct socket *so, struct sockopt *sopt)
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 #ifdef INET
 		case UDP_ENCAP:
+			if (!INP_CHECK_SOCKAF(so, AF_INET)) {
+				INP_WUNLOCK(inp);
+				return (EINVAL);
+			}
 			if (!IPSEC_ENABLED(ipv4)) {
 				INP_WUNLOCK(inp);
 				return (ENOPROTOOPT);
@@ -1055,6 +1063,7 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 	uint16_t cscov = 0;
 	uint32_t flowid = 0;
 	uint8_t flowtype = M_HASHTYPE_NONE;
+	bool use_cached_route;
 
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_send: inp == NULL"));
@@ -1091,9 +1100,8 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 	 * We will need network epoch in either case, to safely lookup into
 	 * pcb hash.
 	 */
-	if (sin == NULL ||
-	    (inp->inp_laddr.s_addr == INADDR_ANY && inp->inp_lport == 0) ||
-	    (flags & PRUS_IPV6) != 0)
+	use_cached_route = sin == NULL || (inp->inp_laddr.s_addr == INADDR_ANY && inp->inp_lport == 0);
+	if (use_cached_route || (flags & PRUS_IPV6) != 0)
 		INP_WLOCK(inp);
 	else
 		INP_RLOCK(inp);
@@ -1330,8 +1338,12 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 	 * into network format.
 	 */
 	ui = mtod(m, struct udpiphdr *);
-	bzero(ui->ui_x1, sizeof(ui->ui_x1));	/* XXX still needed? */
-	ui->ui_v = IPVERSION << 4;
+	/*
+	 * Filling only those fields of udpiphdr that participate in the
+	 * checksum calculation. The rest must be zeroed and will be filled
+	 * later.
+	 */
+	bzero(ui->ui_x1, sizeof(ui->ui_x1));
 	ui->ui_pr = pr;
 	ui->ui_src = laddr;
 	ui->ui_dst = faddr;
@@ -1354,16 +1366,6 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 		 * the entire UDPLite packet is covered by the checksum.
 		 */
 		cscov_partial = (cscov == 0) ? 0 : 1;
-	}
-
-	/*
-	 * Set the Don't Fragment bit in the IP header.
-	 */
-	if (inp->inp_flags & INP_DONTFRAG) {
-		struct ip *ip;
-
-		ip = (struct ip *)&ui->ui_i;
-		ip->ip_off |= htons(IP_DF);
 	}
 
 	if (inp->inp_socket->so_options & SO_DONTROUTE)
@@ -1399,9 +1401,16 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 		m->m_pkthdr.csum_flags = CSUM_UDP;
 		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 	}
+	/*
+	 * After finishing the checksum computation, fill the remaining fields
+	 * of udpiphdr.
+	 */
+	((struct ip *)ui)->ip_v = IPVERSION;
+	((struct ip *)ui)->ip_tos = tos;
 	((struct ip *)ui)->ip_len = htons(sizeof(struct udpiphdr) + len);
-	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;	/* XXX */
-	((struct ip *)ui)->ip_tos = tos;		/* XXX */
+	if (inp->inp_flags & INP_DONTFRAG)
+		((struct ip *)ui)->ip_off |= htons(IP_DF);
+	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;
 	UDPSTAT_INC(udps_opackets);
 
 	/*
@@ -1443,7 +1452,7 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 	else
 		UDP_PROBE(send, NULL, inp, &ui->ui_i, inp, &ui->ui_u);
 	error = ip_output(m, inp->inp_options,
-	    INP_WLOCKED(inp) ? &inp->inp_route : NULL, ipflags,
+	    use_cached_route ? &inp->inp_route : NULL, ipflags,
 	    inp->inp_moptions, inp);
 	INP_UNLOCK(inp);
 	NET_EPOCH_EXIT(et);
@@ -1634,7 +1643,6 @@ udp_detach(struct socket *so)
 	KASSERT(inp->inp_faddr.s_addr == INADDR_ANY,
 	    ("udp_detach: not disconnected"));
 	INP_WLOCK(inp);
-	in_pcbdetach(inp);
 	in_pcbfree(inp);
 }
 

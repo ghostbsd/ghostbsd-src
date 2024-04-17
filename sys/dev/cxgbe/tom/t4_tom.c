@@ -179,8 +179,7 @@ init_toepcb(struct vi_info *vi, struct toepcb *toep)
 	toep->ctrlq = &sc->sge.ctrlq[pi->port_id];
 
 	tls_init_toep(toep);
-	if (ulp_mode(toep) == ULP_MODE_TCPDDP)
-		ddp_init_toep(toep);
+	MPASS(ulp_mode(toep) != ULP_MODE_TCPDDP);
 
 	toep->flags |= TPF_INITIALIZED;
 
@@ -323,8 +322,8 @@ release_offload_resources(struct toepcb *toep)
 	 * that a normal connection's socket's so_snd would have been purged or
 	 * drained.  Do _not_ clean up here.
 	 */
-	MPASS(mbufq_len(&toep->ulp_pduq) == 0);
-	MPASS(mbufq_len(&toep->ulp_pdu_reclaimq) == 0);
+	MPASS(mbufq_empty(&toep->ulp_pduq));
+	MPASS(mbufq_empty(&toep->ulp_pdu_reclaimq));
 #ifdef INVARIANTS
 	if (ulp_mode(toep) == ULP_MODE_TCPDDP)
 		ddp_assert_empty(toep);
@@ -1216,10 +1215,7 @@ calc_options2(struct vi_info *vi, struct conn_params *cp)
 		opt2 |= V_RX_COALESCE(M_RX_COALESCE);
 
 	opt2 |= V_RX_FC_DDP(0) | V_RX_FC_DISABLE(0);
-#ifdef USE_DDP_RX_FLOW_CONTROL
-	if (cp->ulp_mode == ULP_MODE_TCPDDP)
-		opt2 |= F_RX_FC_DDP;
-#endif
+	MPASS(cp->ulp_mode != ULP_MODE_TCPDDP);
 
 	return (htobe32(opt2));
 }
@@ -1327,11 +1323,7 @@ init_conn_params(struct vi_info *vi , struct offload_settings *s,
 		cp->tx_align = 0;
 
 	/* ULP mode. */
-	if (s->ddp > 0 ||
-	    (s->ddp < 0 && sc->tt.ddp && (so_options_get(so) & SO_NO_DDP) == 0))
-		cp->ulp_mode = ULP_MODE_TCPDDP;
-	else
-		cp->ulp_mode = ULP_MODE_NONE;
+	cp->ulp_mode = ULP_MODE_NONE;
 
 	/* Rx coalescing. */
 	if (s->rx_coalesce >= 0)
@@ -1972,7 +1964,8 @@ t4_aio_queue_tom(struct socket *so, struct kaiocb *job)
 	if (SOLISTENING(so))
 		return (EINVAL);
 
-	if (ulp_mode(toep) == ULP_MODE_TCPDDP) {
+	if (ulp_mode(toep) == ULP_MODE_TCPDDP ||
+	    ulp_mode(toep) == ULP_MODE_NONE) {
 		error = t4_aio_queue_ddp(so, job);
 		if (error != EOPNOTSUPP)
 			return (error);

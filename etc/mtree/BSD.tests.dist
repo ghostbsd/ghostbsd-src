@@ -21,6 +21,8 @@
         ..
         expr
         ..
+        hostname
+        ..
         ln
         ..
         ls
@@ -1085,6 +1087,8 @@
         ..
         lockf
         ..
+        lorder
+        ..
         m4
         ..
         mkimg
@@ -1129,6 +1133,8 @@
         ..
         tftp
         ..
+        touch
+        ..
         tr
         ..
         truncate
@@ -1172,8 +1178,6 @@
         jail
         ..
         makefs
-        ..
-        mixer
         ..
         newsyslog
         ..

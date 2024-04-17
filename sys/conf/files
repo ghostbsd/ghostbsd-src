@@ -1455,7 +1455,7 @@ t4fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t4fw.fwo"
 t4fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t4fw-1.27.4.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t4fw-1.27.5.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t4fw.fw"
@@ -1489,7 +1489,7 @@ t5fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t5fw.fwo"
 t5fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t5fw-1.27.4.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t5fw-1.27.5.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t5fw.fw"
@@ -1523,7 +1523,7 @@ t6fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t6fw.fwo"
 t6fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t6fw-1.27.4.0.bin"	\
+	dependency	"$S/dev/cxgbe/firmware/t6fw-1.27.5.0.bin"	\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t6fw.fw"
@@ -3618,8 +3618,6 @@ geom/geom_event.c		standard
 geom/geom_flashmap.c		optional fdt cfi | fdt mx25l | mmcsd | fdt n25q | fdt at45d
 geom/geom_io.c			standard
 geom/geom_kern.c		standard
-geom/geom_map.c			optional geom_map
-geom/geom_redboot.c		optional geom_redboot
 geom/geom_slice.c		standard
 geom/geom_subr.c		standard
 geom/geom_vfs.c			standard
@@ -3795,7 +3793,7 @@ kern/kern_priv.c		standard
 kern/kern_proc.c		standard
 kern/kern_procctl.c		standard
 kern/kern_prot.c		standard
-kern/kern_racct.c		standard
+kern/kern_racct.c		optional racct
 kern/kern_rangelock.c		standard
 kern/kern_rctl.c		standard
 kern/kern_resource.c		standard
@@ -3983,6 +3981,7 @@ kgssapi/gss_get_mic.c		optional kgssapi
 kgssapi/gss_init_sec_context.c	optional kgssapi
 kgssapi/gss_impl.c		optional kgssapi
 kgssapi/gss_import_name.c	optional kgssapi
+kgssapi/gss_ip_to_dns.c		optional kgssapi
 kgssapi/gss_names.c		optional kgssapi
 kgssapi/gss_pname_to_uid.c	optional kgssapi
 kgssapi/gss_release_buffer.c	optional kgssapi
@@ -4353,6 +4352,7 @@ netinet/tcp_hostcache.c		optional inet | inet6
 netinet/tcp_input.c		optional inet | inet6
 netinet/tcp_log_buf.c		optional tcp_blackbox inet | tcp_blackbox inet6
 netinet/tcp_lro.c		optional inet | inet6
+netinet/tcp_lro_hpts.c		optional tcphpts inet | tcphpts inet6
 netinet/tcp_output.c		optional inet | inet6
 netinet/tcp_offload.c		optional tcp_offload inet | tcp_offload inet6
 netinet/tcp_hpts.c		optional tcphpts inet | tcphpts inet6
@@ -4361,6 +4361,13 @@ netinet/tcp_pcap.c		optional inet tcppcap | inet6 tcppcap \
 	compile-with "${NORMAL_C} ${NO_WNONNULL}"
 netinet/tcp_reass.c		optional inet | inet6
 netinet/tcp_sack.c		optional inet | inet6
+netinet/tcp_stacks/bbr.c	optional inet tcphpts tcp_bbr | inet6 tcphpts tcp_bbr \
+	compile-with "${NORMAL_C} -DMODNAME=tcp_bbr -DSTACKNAME=bbr"
+netinet/tcp_stacks/rack.c	optional inet tcphpts tcp_rack | inet6 tcphpts tcp_rack \
+	compile-with "${NORMAL_C} -DMODNAME=tcp_rack -DSTACKNAME=rack"
+netinet/tcp_stacks/rack_bbr_common.c	optional inet tcphpts tcp_bbr | inet tcphpts tcp_rack | inet6 tcphpts tcp_bbr | inet6 tcphpts tcp_rack
+netinet/tcp_stacks/sack_filter.c	optional inet tcphpts tcp_bbr | inet tcphpts tcp_rack | inet6 tcphpts tcp_bbr | inet6 tcphpts tcp_rack
+netinet/tcp_stacks/tailq_hash.c	optional inet tcphpts tcp_bbr | inet tcphpts tcp_rack | inet6 tcphpts tcp_bbr | inet6 tcphpts tcp_rack
 netinet/tcp_stats.c		optional stats inet | stats inet6
 netinet/tcp_subr.c		optional inet | inet6
 netinet/tcp_syncache.c		optional inet | inet6
@@ -4556,6 +4563,8 @@ compat/linuxkpi/common/src/linux_i2c.c		optional compat_linuxkpi \
 compat/linuxkpi/common/src/linux_i2cbb.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_interrupt.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_kobject.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_kthread.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"

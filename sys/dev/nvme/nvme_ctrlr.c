@@ -714,10 +714,6 @@ nvme_ctrlr_async_event_log_page_cb(void *arg, const struct nvme_completion *cpl)
 			nvme_health_information_page_swapbytes(
 			    (struct nvme_health_information_page *)aer->log_page_buffer);
 			break;
-		case NVME_LOG_FIRMWARE_SLOT:
-			nvme_firmware_page_swapbytes(
-			    (struct nvme_firmware_page *)aer->log_page_buffer);
-			break;
 		case NVME_LOG_CHANGED_NAMESPACE:
 			nvme_ns_list_swapbytes(
 			    (struct nvme_ns_list *)aer->log_page_buffer);
@@ -1037,6 +1033,8 @@ again:
 	}
 
 	for (i = 0; i < ctrlr->hmb_nchunks; i++) {
+		memset(&ctrlr->hmb_desc_vaddr[i], 0,
+		    sizeof(struct nvme_hmb_desc));
 		ctrlr->hmb_desc_vaddr[i].addr =
 		    htole64(ctrlr->hmb_chunks[i].hmbc_paddr);
 		ctrlr->hmb_desc_vaddr[i].size = htole32(ctrlr->hmb_chunk / ctrlr->page_size);
@@ -1414,15 +1412,19 @@ nvme_ctrlr_construct(struct nvme_controller *ctrlr, device_t dev)
 	ctrlr->cap_hi = cap_hi = nvme_mmio_read_4(ctrlr, cap_hi);
 	if (bootverbose) {
 		device_printf(dev, "CapHi: 0x%08x: DSTRD %u%s, CSS %x%s, "
-		    "MPSMIN %u, MPSMAX %u%s%s\n", cap_hi,
+		    "CPS %x, MPSMIN %u, MPSMAX %u%s%s%s%s%s\n", cap_hi,
 		    NVME_CAP_HI_DSTRD(cap_hi),
 		    NVME_CAP_HI_NSSRS(cap_hi) ? ", NSSRS" : "",
 		    NVME_CAP_HI_CSS(cap_hi),
 		    NVME_CAP_HI_BPS(cap_hi) ? ", BPS" : "",
+		    NVME_CAP_HI_CPS(cap_hi),
 		    NVME_CAP_HI_MPSMIN(cap_hi),
 		    NVME_CAP_HI_MPSMAX(cap_hi),
 		    NVME_CAP_HI_PMRS(cap_hi) ? ", PMRS" : "",
-		    NVME_CAP_HI_CMBS(cap_hi) ? ", CMBS" : "");
+		    NVME_CAP_HI_CMBS(cap_hi) ? ", CMBS" : "",
+		    NVME_CAP_HI_NSSS(cap_hi) ? ", NSSS" : "",
+		    NVME_CAP_HI_CRWMS(cap_hi) ? ", CRWMS" : "",
+		    NVME_CAP_HI_CRIMS(cap_hi) ? ", CRIMS" : "");
 	}
 	if (bootverbose) {
 		vs = nvme_mmio_read_4(ctrlr, vs);

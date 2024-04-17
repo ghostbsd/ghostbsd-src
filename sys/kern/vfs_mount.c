@@ -474,7 +474,7 @@ sys_nmount(struct thread *td, struct nmount_args *uap)
 	}
 	error = vfs_donmount(td, flags, auio);
 
-	free(auio, M_IOV);
+	freeuio(auio);
 	return (error);
 }
 
@@ -996,7 +996,7 @@ vfs_donmount(struct thread *td, uint64_t fsflags, struct uio *fsoptions)
 		jail_export = false;
 
 	error = vfs_domount(td, fstype, fspath, fsflags, jail_export, &optlist);
-	if (error == ENOENT) {
+	if (error == ENODEV) {
 		error = EINVAL;
 		if (errmsg != NULL)
 			strncpy(errmsg, "Invalid fstype", errmsg_len);
@@ -1025,7 +1025,7 @@ bail:
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_base,
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_len);
 		} else {
-			copyout(errmsg,
+			(void)copyout(errmsg,
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_base,
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_len);
 		}
@@ -1086,7 +1086,7 @@ sys_mount(struct thread *td, struct mount_args *uap)
 	vfsp = vfs_byname_kld(fstype, td, &error);
 	free(fstype, M_TEMP);
 	if (vfsp == NULL)
-		return (ENOENT);
+		return (EINVAL);
 	if (((vfsp->vfc_flags & VFCF_SBDRY) != 0 &&
 	    vfsp->vfc_vfsops_sd->vfs_cmount == NULL) ||
 	    ((vfsp->vfc_flags & VFCF_SBDRY) == 0 &&
@@ -1389,7 +1389,7 @@ vfs_domount_update(
 			error = EINVAL;
 			goto end;
 		}
-		if (fsidcmp(&fsid_up, &mp->mnt_stat.f_fsid) != 0) {
+		if (fsidcmp(fsid_up, &mp->mnt_stat.f_fsid) != 0) {
 			error = ENOENT;
 			goto end;
 		}

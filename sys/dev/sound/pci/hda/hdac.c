@@ -201,6 +201,7 @@ static const struct {
 	{ HDA_VMWARE,        "VMware",		0, 0 },
 	{ HDA_SIS_966,       "SiS 966/968",	0, 0 },
 	{ HDA_ULI_M5461,     "ULI M5461",	0, 0 },
+	{ HDA_CREATIVE_SB1570,	"Creative SB Audigy FX", 0, HDAC_QUIRK_64BIT },
 	/* Unknown */
 	{ HDA_INTEL_ALL,  "Intel",		0, 0 },
 	{ HDA_NVIDIA_ALL, "NVIDIA",		0, 0 },
@@ -1101,10 +1102,8 @@ hdac_probe(device_t dev)
 		snprintf(desc, sizeof(desc), "Generic (0x%08x)", model);
 		result = BUS_PROBE_GENERIC;
 	}
-	if (result != ENXIO) {
-		strlcat(desc, " HDA Controller", sizeof(desc));
-		device_set_desc_copy(dev, desc);
-	}
+	if (result != ENXIO)
+		device_set_descf(dev, "%s HDA Controller", desc);
 
 	return (result);
 }
