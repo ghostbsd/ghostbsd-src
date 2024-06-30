@@ -48,7 +48,7 @@ freebsd_version() {
 }
 
 os_version() {
-  pkg query '%v' os-generic-userland-base
+  pkg query '%v' GhostBSD-runtime
 }
 
 usage() {
