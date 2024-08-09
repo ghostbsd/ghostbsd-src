@@ -2104,8 +2104,10 @@ struct pf_idhash {
 };
 
 extern u_long		pf_ioctl_maxcount;
-extern u_long		pf_hashmask;
-extern u_long		pf_srchashmask;
+VNET_DECLARE(u_long, pf_hashmask);
+#define V_pf_hashmask	VNET(pf_hashmask)
+VNET_DECLARE(u_long, pf_srchashmask);
+#define V_pf_srchashmask	VNET(pf_srchashmask)
 #define	PF_HASHSIZ	(131072)
 #define	PF_SRCHASHSIZ	(PF_HASHSIZ/4)
 VNET_DECLARE(struct pf_keyhash *, pf_keyhash);
@@ -2115,7 +2117,7 @@ VNET_DECLARE(struct pf_idhash *, pf_idhash);
 VNET_DECLARE(struct pf_srchash *, pf_srchash);
 #define	V_pf_srchash	VNET(pf_srchash)
 
-#define PF_IDHASH(s)	(be64toh((s)->id) % (pf_hashmask + 1))
+#define PF_IDHASH(s)	(be64toh((s)->id) % (V_pf_hashmask + 1))
 
 VNET_DECLARE(void *, pf_swi_cookie);
 #define V_pf_swi_cookie	VNET(pf_swi_cookie)
@@ -2231,9 +2233,11 @@ pf_release_staten(struct pf_kstate *s, u_int n)
 }
 
 extern struct pf_kstate		*pf_find_state_byid(uint64_t, uint32_t);
-extern struct pf_kstate		*pf_find_state_all(struct pf_state_key_cmp *,
+extern struct pf_kstate		*pf_find_state_all(
+				    const struct pf_state_key_cmp *,
 				    u_int, int *);
-extern bool			pf_find_state_all_exists(struct pf_state_key_cmp *,
+extern bool			pf_find_state_all_exists(
+				    const struct pf_state_key_cmp *,
 				    u_int);
 extern struct pf_ksrc_node	*pf_find_src_node(struct pf_addr *,
 				    struct pf_krule *, sa_family_t,
@@ -2514,7 +2518,7 @@ struct pf_krule		*pf_get_translation(struct pf_pdesc *, struct mbuf *,
 
 struct pf_state_key	*pf_state_key_setup(struct pf_pdesc *, struct pf_addr *,
 			    struct pf_addr *, u_int16_t, u_int16_t);
-struct pf_state_key	*pf_state_key_clone(struct pf_state_key *);
+struct pf_state_key	*pf_state_key_clone(const struct pf_state_key *);
 void			 pf_rule_to_actions(struct pf_krule *,
 			    struct pf_rule_actions *);
 int			 pf_normalize_mss(struct mbuf *m, int off,

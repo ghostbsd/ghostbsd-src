@@ -1611,8 +1611,8 @@ nkpt_init(vm_paddr_t addr)
 	 * Secondly, device memory mapped as part of setting up the low-
 	 * level console(s) is taken from KVA, starting at virtual_avail.
 	 * This is because cninit() is called after pmap_bootstrap() but
-	 * before vm_init() and pmap_init(). 20MB for a frame buffer is
-	 * not uncommon.
+	 * before vm_mem_init() and pmap_init(). 20MB for a frame buffer
+	 * is not uncommon.
 	 */
 	pt_pages += 32;		/* 64MB additional slop. */
 #endif
@@ -2451,7 +2451,8 @@ pmap_init_pv_table(void)
 
 /*
  *	Initialize the pmap module.
- *	Called by vm_init, to initialize any structures that the pmap
+ *
+ *	Called by vm_mem_init(), to initialize any structures that the pmap
  *	system needs to map virtual memory.
  */
 void
@@ -4703,8 +4704,8 @@ pmap_allocpte_nosleep(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp,
 		*pml5 = VM_PAGE_TO_PHYS(m) | PG_U | PG_RW | PG_V | PG_A | PG_M;
 
 		if (pmap->pm_pmltopu != NULL && pml5index < NUPML5E) {
-			if (pmap->pm_ucr3 != PMAP_NO_CR3)
-				*pml5 |= pg_nx;
+			MPASS(pmap->pm_ucr3 != PMAP_NO_CR3);
+			*pml5 |= pg_nx;
 
 			pml5u = &pmap->pm_pmltopu[pml5index];
 			*pml5u = VM_PAGE_TO_PHYS(m) | PG_U | PG_RW | PG_V |
@@ -4724,6 +4725,8 @@ pmap_allocpte_nosleep(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp,
 
 		if (!pmap_is_la57(pmap) && pmap->pm_pmltopu != NULL &&
 		    pml4index < NUPML4E) {
+			MPASS(pmap->pm_ucr3 != PMAP_NO_CR3);
+
 			/*
 			 * PTI: Make all user-space mappings in the
 			 * kernel-mode page table no-execute so that
@@ -4731,8 +4734,7 @@ pmap_allocpte_nosleep(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp,
 			 * the kernel-mode page table active on return
 			 * to user space.
 			 */
-			if (pmap->pm_ucr3 != PMAP_NO_CR3)
-				*pml4 |= pg_nx;
+			*pml4 |= pg_nx;
 
 			pml4u = &pmap->pm_pmltopu[pml4index];
 			*pml4u = VM_PAGE_TO_PHYS(m) | PG_U | PG_RW | PG_V |
@@ -4757,8 +4759,8 @@ pmap_allocpte_nosleep(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp,
 		}
 		if ((*pdp & PG_V) == 0) {
 			/* Have to allocate a new pd, recurse */
-		  if (pmap_allocpte_nosleep(pmap, pmap_pdpe_pindex(va),
-		      lockp, va) == NULL) {
+			if (pmap_allocpte_nosleep(pmap, pmap_pdpe_pindex(va),
+			    lockp, va) == NULL) {
 				pmap_allocpte_free_unref(pmap, va,
 				    pmap_pml4e(pmap, va));
 				pmap_free_pt_page(pmap, m, true);

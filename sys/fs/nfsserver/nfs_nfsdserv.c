@@ -1797,6 +1797,7 @@ nfsrvd_link(struct nfsrv_descript *nd, int isdgram,
 	char *bufp;
 	u_long *hashp;
 	struct thread *p = curthread;
+	nfsquad_t clientid;
 
 	if (nd->nd_repstat) {
 		nfsrv_postopattr(nd, getret, &at);
@@ -1858,8 +1859,14 @@ nfsrvd_link(struct nfsrv_descript *nd, int isdgram,
 			    NULL);
 		}
 	}
-	if (!nd->nd_repstat)
-		nd->nd_repstat = nfsvno_link(&named, vp, nd->nd_cred, p, exp);
+	if (!nd->nd_repstat) {
+		clientid.qval = 0;
+		if ((nd->nd_flag & (ND_IMPLIEDCLID | ND_NFSV41)) ==
+		    (ND_IMPLIEDCLID | ND_NFSV41))
+			clientid.qval = nd->nd_clientid.qval;
+		nd->nd_repstat = nfsvno_link(&named, vp, clientid, nd->nd_cred,
+		    p, exp);
+	}
 	if (nd->nd_flag & ND_NFSV3)
 		getret = nfsvno_getattr(vp, &at, nd, p, 0, NULL);
 	if (dirp) {
@@ -3003,17 +3010,11 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 	 */
 	NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 	claim = fxdr_unsigned(int, *tl);
-	if (claim == NFSV4OPEN_CLAIMDELEGATECUR) {
+	if (claim == NFSV4OPEN_CLAIMDELEGATECUR || claim ==
+	    NFSV4OPEN_CLAIMDELEGATECURFH) {
 		NFSM_DISSECT(tl, u_int32_t *, NFSX_STATEID);
 		stateid.seqid = fxdr_unsigned(u_int32_t, *tl++);
 		NFSBCOPY((caddr_t)tl,(caddr_t)stateid.other,NFSX_STATEIDOTHER);
-		stp->ls_flags |= NFSLCK_DELEGCUR;
-	} else if (claim == NFSV4OPEN_CLAIMDELEGATECURFH) {
-		/* Fill in most of the stateid from the clientid. */
-		stateid.seqid = 0;
-		stateid.other[0] = clientid.lval[0];
-		stateid.other[1] = clientid.lval[1];
-		stateid.other[2] = 0;
 		stp->ls_flags |= NFSLCK_DELEGCUR;
 	} else if (claim == NFSV4OPEN_CLAIMDELEGATEPREV || claim ==
 	    NFSV4OPEN_CLAIMDELEGATEPREVFH) {
@@ -3243,6 +3244,13 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 				NFSM_BUILD(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
 				*tl++ = txdr_unsigned(NFSV4OPEN_RESOURCE);
 				*tl = newnfs_false;
+			} else if ((rflags &
+			    NFSV4OPEN_WDNOTSUPPDOWNGRADE) != 0) {
+				NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+				*tl = txdr_unsigned(NFSV4OPEN_NOTSUPPDOWNGRADE);
+			} else if ((rflags & NFSV4OPEN_WDNOTSUPPUPGRADE) != 0) {
+				NFSM_BUILD(tl, uint32_t *, NFSX_UNSIGNED);
+				*tl = txdr_unsigned(NFSV4OPEN_NOTSUPPUPGRADE);
 			} else {
 				NFSM_BUILD(tl, u_int32_t *, NFSX_UNSIGNED);
 				*tl = txdr_unsigned(NFSV4OPEN_NOTWANTED);

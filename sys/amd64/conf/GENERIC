@@ -348,8 +348,10 @@ device		uhci			# UHCI PCI->USB interface
 device		ohci			# OHCI PCI->USB interface
 device		ehci			# EHCI PCI->USB interface (USB 2.0)
 device		xhci			# XHCI PCI->USB interface (USB 3.0)
-device		usb				# USB Bus (required)
-device		ukbd			# Keyboard
+device		usb			# USB Bus (required)
+device		usbhid			# USB HID Transport
+device		hkbd			# HID Keyboard
+device		ukbd			# USB Keyboard
 device		umass			# Disks/Mass storage - Requires scbus and da
 device		uhid			# USB generic HID support
 
@@ -402,6 +404,7 @@ device		uinput			# install /dev/uinput cdev
 # HID support
 options 	HID_DEBUG		# enable debug msgs
 device		hid			# Generic HID support
+device		hidbus			# Generic HID Bus
 options 	IICHID_SAMPLING		# Workaround missing GPIO INTR support
 
 # I2C support

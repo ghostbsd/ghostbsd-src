@@ -12058,6 +12058,7 @@ dtrace_buffer_switch(dtrace_buffer_t *buf)
 	hrtime_t now;
 
 	ASSERT(!(buf->dtb_flags & DTRACEBUF_NOSWITCH));
+	ASSERT(!(buf->dtb_flags & DTRACEBUF_RING));
 
 	cookie = dtrace_interrupt_disable();
 	now = dtrace_gethrtime();
@@ -14865,10 +14866,10 @@ dtrace_state_buffer(dtrace_state_t *state, dtrace_buffer_t *buf, int which)
 
 	if (which == DTRACEOPT_BUFSIZE) {
 		if (opt[DTRACEOPT_BUFPOLICY] == DTRACEOPT_BUFPOLICY_RING)
-			flags |= DTRACEBUF_RING | DTRACEBUF_NOSWITCH;
+			flags |= DTRACEBUF_RING;
 
 		if (opt[DTRACEOPT_BUFPOLICY] == DTRACEOPT_BUFPOLICY_FILL)
-			flags |= DTRACEBUF_FILL | DTRACEBUF_NOSWITCH;
+			flags |= DTRACEBUF_FILL;
 
 		if (state != dtrace_anon.dta_state ||
 		    state->dts_activity != DTRACE_ACTIVITY_ACTIVE)
@@ -18445,7 +18446,6 @@ static struct cdevsw helper_cdevsw = {
 #include <dtrace_unload.c>
 #include <dtrace_vtime.c>
 #include <dtrace_hacks.c>
-#include <dtrace_isa.c>
 
 SYSINIT(dtrace_load, SI_SUB_DTRACE, SI_ORDER_FIRST, dtrace_load, NULL);
 SYSUNINIT(dtrace_unload, SI_SUB_DTRACE, SI_ORDER_FIRST, dtrace_unload, NULL);

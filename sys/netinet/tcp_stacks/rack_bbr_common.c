@@ -415,10 +415,6 @@ skip_vnet:
 				break;
 #endif
 			} /* end switch */
-			/*
-			 * Convert TCP protocol specific fields to host format.
-			 */
-			tcp_fields_to_host(th);
 			off = th->th_off << 2;
 			if (off < sizeof (struct tcphdr) || off > tlen) {
 				printf("off:%d < hdrlen:%zu || > tlen:%u -- dump\n",
@@ -539,8 +535,8 @@ void
 ctf_ack_war_checks(struct tcpcb *tp, uint32_t *ts, uint32_t *cnt)
 {
 	if ((ts != NULL) && (cnt != NULL) &&
-	    (tcp_ack_war_time_window > 0) &&
-	    (tcp_ack_war_cnt > 0)) {
+	    (V_tcp_ack_war_time_window > 0) &&
+	    (V_tcp_ack_war_cnt > 0)) {
 		/* We are possibly doing ack war prevention */
 		uint32_t cts;
 
@@ -554,9 +550,9 @@ ctf_ack_war_checks(struct tcpcb *tp, uint32_t *ts, uint32_t *cnt)
 		if (TSTMP_LT((*ts), cts)) {
 			/* Timestamp is in the past */
 			*cnt = 0;
-			*ts = (cts + tcp_ack_war_time_window);
+			*ts = (cts + V_tcp_ack_war_time_window);
 		}
-		if (*cnt < tcp_ack_war_cnt) {
+		if (*cnt < V_tcp_ack_war_cnt) {
 			*cnt = (*cnt + 1);
 			tp->t_flags |= TF_ACKNOW;
 		} else
@@ -776,8 +772,8 @@ __ctf_process_rst(struct mbuf *m, struct tcphdr *th, struct socket *so,
 
 			KMOD_TCPSTAT_INC(tcps_badrst);
 			if ((ts != NULL) && (cnt != NULL) &&
-			    (tcp_ack_war_time_window > 0) &&
-			    (tcp_ack_war_cnt > 0)) {
+			    (V_tcp_ack_war_time_window > 0) &&
+			    (V_tcp_ack_war_cnt > 0)) {
 				/* We are possibly preventing an  ack-rst  war prevention */
 				uint32_t cts;
 
@@ -791,9 +787,9 @@ __ctf_process_rst(struct mbuf *m, struct tcphdr *th, struct socket *so,
 				if (TSTMP_LT((*ts), cts)) {
 					/* Timestamp is in the past */
 					*cnt = 0;
-					*ts = (cts + tcp_ack_war_time_window);
+					*ts = (cts + V_tcp_ack_war_time_window);
 				}
-				if (*cnt < tcp_ack_war_cnt) {
+				if (*cnt < V_tcp_ack_war_cnt) {
 					*cnt = (*cnt + 1);
 					send_challenge = 1;
 				} else

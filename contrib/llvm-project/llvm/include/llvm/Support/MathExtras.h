@@ -359,9 +359,9 @@ constexpr inline uint64_t NextPowerOf2(uint64_t A) {
 /// Returns the power of two which is greater than or equal to the given value.
 /// Essentially, it is a ceil operation across the domain of powers of two.
 inline uint64_t PowerOf2Ceil(uint64_t A) {
-  if (!A)
+  if (!A || A > UINT64_MAX / 2)
     return 0;
-  return NextPowerOf2(A - 1);
+  return UINT64_C(1) << Log2_64_Ceil(A);
 }
 
 /// Returns the next integer (mod 2**64) that is greater than or equal to
@@ -382,7 +382,10 @@ inline uint64_t alignTo(uint64_t Value, uint64_t Align) {
 inline uint64_t alignToPowerOf2(uint64_t Value, uint64_t Align) {
   assert(Align != 0 && (Align & (Align - 1)) == 0 &&
          "Align must be a power of 2");
-  return (Value + Align - 1) & -Align;
+  // Replace unary minus to avoid compilation error on Windows:
+  // "unary minus operator applied to unsigned type, result still unsigned"
+  uint64_t negAlign = (~Align) + 1;
+  return (Value + Align - 1) & negAlign;
 }
 
 /// If non-zero \p Skew is specified, the return value will be a minimal integer
@@ -640,6 +643,14 @@ std::enable_if_t<std::is_signed_v<T>, T> MulOverflow(T X, T Y, T &Result) {
   else
     return UX > (static_cast<U>(std::numeric_limits<T>::max())) / UY;
 }
+
+/// Type to force float point values onto the stack, so that x86 doesn't add
+/// hidden precision, avoiding rounding differences on various platforms.
+#if defined(__i386__) || defined(_M_IX86)
+using stack_float_t = volatile float;
+#else
+using stack_float_t = float;
+#endif
 
 } // End llvm namespace
 

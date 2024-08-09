@@ -633,6 +633,8 @@ MLINKS+=bitset.9 BITSET_DEFINE.9 \
 	bitset.9 BIT_CMP.9 \
 	bitset.9 BIT_OR.9 \
 	bitset.9 BIT_OR2.9 \
+	bitset.9 BIT_ORNOT.9 \
+	bitset.9 BIT_ORNOT2.9 \
 	bitset.9 BIT_AND.9 \
 	bitset.9 BIT_AND2.9 \
 	bitset.9 BIT_ANDNOT.9 \
@@ -922,6 +924,7 @@ MLINKS+=cpuset.9 CPUSET_T_INITIALIZER.9 \
 	cpuset.9 CPU_OVERLAP.9 \
 	cpuset.9 CPU_CMP.9 \
 	cpuset.9 CPU_OR.9 \
+	cpuset.9 CPU_ORNOT.9 \
 	cpuset.9 CPU_AND.9 \
 	cpuset.9 CPU_ANDNOT.9 \
 	cpuset.9 CPU_CLR_ATOMIC.9 \
@@ -1331,7 +1334,6 @@ MLINKS+=ifnet.9 if_addmulti.9 \
 	ifnet.9 ifa_ifwithnet.9 \
 	ifnet.9 ifa_ref.9 \
 	ifnet.9 ifaddr.9 \
-	ifnet.9 ifaddr_byindex.9 \
 	ifnet.9 ifaof_ifpforaddr.9 \
 	ifnet.9 ifioctl.9 \
 	ifnet.9 ifpromisc.9 \
@@ -2238,6 +2240,7 @@ MLINKS+=taskqueue.9 TASK_INIT.9 \
 	taskqueue.9 taskqueue_drain_timeout.9 \
 	taskqueue.9 taskqueue_enqueue.9 \
 	taskqueue.9 taskqueue_enqueue_timeout.9 \
+	taskqueue.9 taskqueue_enqueue_timeout_sbt.9 \
 	taskqueue.9 TASKQUEUE_FAST_DEFINE.9 \
 	taskqueue.9 TASKQUEUE_FAST_DEFINE_THREAD.9 \
 	taskqueue.9 taskqueue_free.9 \

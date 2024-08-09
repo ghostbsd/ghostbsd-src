@@ -12149,6 +12149,45 @@ rack_process_ack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	INP_WLOCK_ASSERT(tptoinpcb(tp));
 
 	rack = (struct tcp_rack *)tp->t_fb_ptr;
+	if (SEQ_GEQ(tp->snd_una, tp->iss + (65535 << tp->snd_scale))) {
+		/* Checking SEG.ACK against ISS is definitely redundant. */
+		tp->t_flags2 |= TF2_NO_ISS_CHECK;
+	}
+	if (!V_tcp_insecure_ack) {
+		tcp_seq seq_min;
+		bool ghost_ack_check;
+
+		if (tp->t_flags2 & TF2_NO_ISS_CHECK) {
+			/* Check for too old ACKs (RFC 5961, Section 5.2). */
+			seq_min = tp->snd_una - tp->max_sndwnd;
+			ghost_ack_check = false;
+		} else {
+			if (SEQ_GT(tp->iss + 1, tp->snd_una - tp->max_sndwnd)) {
+				/* Checking for ghost ACKs is stricter. */
+				seq_min = tp->iss + 1;
+				ghost_ack_check = true;
+			} else {
+				/*
+				 * Checking for too old ACKs (RFC 5961,
+				 * Section 5.2) is stricter.
+				 */
+				seq_min = tp->snd_una - tp->max_sndwnd;
+				ghost_ack_check = false;
+			}
+		}
+		if (SEQ_LT(th->th_ack, seq_min)) {
+			if (ghost_ack_check)
+				TCPSTAT_INC(tcps_rcvghostack);
+			else
+				TCPSTAT_INC(tcps_rcvacktooold);
+			/* Send challenge ACK. */
+			__ctf_do_dropafterack(m, tp, th, thflags, tlen, ret_val,
+					      &rack->r_ctl.challenge_ack_ts,
+					      &rack->r_ctl.challenge_ack_cnt);
+			rack->r_wanted_output = 1;
+			return (1);
+		}
+	}
 	if (SEQ_GT(th->th_ack, tp->snd_max)) {
 		__ctf_do_dropafterack(m, tp, th, thflags, tlen, ret_val,
 				      &rack->r_ctl.challenge_ack_ts,
@@ -12346,8 +12385,8 @@ rack_process_ack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	if (SEQ_GT(tp->snd_una, tp->snd_recover))
 		tp->snd_recover = tp->snd_una;
 
-	if (SEQ_LT(tp->snd_nxt, tp->snd_una)) {
-		tp->snd_nxt = tp->snd_una;
+	if (SEQ_LT(tp->snd_nxt, tp->snd_max)) {
+		tp->snd_nxt = tp->snd_max;
 	}
 	if (under_pacing &&
 	    (rack->use_fixed_rate == 0) &&
@@ -14042,13 +14081,6 @@ rack_do_closing(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		return (ret_val);
 	}
 	/*
-	 * If new data are received on a connection after the user processes
-	 * are gone, then RST the other end.
-	 */
-	if ((tp->t_flags & TF_CLOSED) && tlen &&
-	    rack_check_data_after_close(m, tp, &tlen, th, so))
-		return (1);
-	/*
 	 * If last ACK falls within this segment's sequence numbers, record
 	 * its timestamp. NOTE: 1) That the test incorporates suggestions
 	 * from the latest proposal of the tcplw@cray.com list (Braden
@@ -14154,13 +14186,6 @@ rack_do_lastack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			      &rack->r_ctl.challenge_ack_cnt)) {
 		return (ret_val);
 	}
-	/*
-	 * If new data are received on a connection after the user processes
-	 * are gone, then RST the other end.
-	 */
-	if ((tp->t_flags & TF_CLOSED) && tlen &&
-	    rack_check_data_after_close(m, tp, &tlen, th, so))
-		return (1);
 	/*
 	 * If last ACK falls within this segment's sequence numbers, record
 	 * its timestamp. NOTE: 1) That the test incorporates suggestions
@@ -16369,8 +16394,8 @@ rack_do_compressed_ack_processing(struct tcpcb *tp, struct socket *so, struct mb
 		/* Send recover and snd_nxt must be dragged along */
 		if (SEQ_GT(tp->snd_una, tp->snd_recover))
 			tp->snd_recover = tp->snd_una;
-		if (SEQ_LT(tp->snd_nxt, tp->snd_una))
-			tp->snd_nxt = tp->snd_una;
+		if (SEQ_LT(tp->snd_nxt, tp->snd_max))
+			tp->snd_nxt = tp->snd_max;
 		/*
 		 * If the RXT timer is running we want to
 		 * stop it, so we can restart a TLP (or new RXT).
@@ -19118,6 +19143,8 @@ rack_fast_rsm_output(struct tcpcb *tp, struct tcp_rack *rack, struct rack_sendma
 		lgb->tlb_errno = error;
 		lgb = NULL;
 	}
+	/* Move snd_nxt to snd_max so we don't have false retransmissions */
+	tp->snd_nxt = tp->snd_max;
 	if (error) {
 		goto failed;
 	} else if (rack->rc_hw_nobuf && (ip_sendflag != IP_NO_SND_TAG_RL)) {
@@ -19927,6 +19954,7 @@ rack_output(struct tcpcb *tp)
 
 #endif
 	int32_t idle, sendalot;
+	uint32_t tot_idle;
 	int32_t sub_from_prr = 0;
 	volatile int32_t sack_rxmit;
 	struct rack_sendmap *rsm = NULL;
@@ -20164,8 +20192,8 @@ rack_output(struct tcpcb *tp)
 	if ((tp->snd_una == tp->snd_max) &&
 	    rack->r_ctl.rc_went_idle_time &&
 	    TSTMP_GT(cts, rack->r_ctl.rc_went_idle_time)) {
-		idle = cts - rack->r_ctl.rc_went_idle_time;
-		if (idle > rack_min_probertt_hold) {
+		tot_idle = (cts - rack->r_ctl.rc_went_idle_time);
+		if (tot_idle > rack_min_probertt_hold) {
 			/* Count as a probe rtt */
 			if (rack->in_probe_rtt == 0) {
 				rack->r_ctl.rc_lower_rtt_us_cts = cts;
@@ -20176,7 +20204,6 @@ rack_output(struct tcpcb *tp)
 				rack_exit_probertt(rack, cts);
 			}
 		}
-		idle = 0;
 	}
 	if (rack_use_fsb &&
 	    (rack->r_ctl.fsb.tcp_ip_hdr) &&
@@ -22151,12 +22178,12 @@ send:
 			mtu = inp->inp_route.ro_nh->nh_mtu;
 	}
 #endif				/* INET */
-
-out:
 	if (lgb) {
 		lgb->tlb_errno = error;
 		lgb = NULL;
 	}
+
+out:
 	/*
 	 * In transmit state, time the transmission and arrange for the
 	 * retransmit.  In persist state, just set snd_max.
@@ -22371,6 +22398,7 @@ nomore:
 		sendalot = 0;
 		switch (error) {
 		case EPERM:
+		case EACCES:
 			tp->t_softerror = error;
 #ifdef TCP_ACCOUNTING
 			crtsc = get_cyclecount();
@@ -23772,7 +23800,7 @@ static struct tcp_function_block __tcp_rack = {
 	.tfb_switch_failed = rack_switch_failed,
 	.tfb_early_wake_check = rack_wake_check,
 	.tfb_compute_pipe = rack_compute_pipe,
-	.tfb_flags = TCP_FUNC_OUTPUT_CANDROP,
+	.tfb_flags = TCP_FUNC_OUTPUT_CANDROP | TCP_FUNC_DEFAULT_OK,
 };
 
 /*

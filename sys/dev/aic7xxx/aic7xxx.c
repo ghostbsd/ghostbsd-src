@@ -4931,7 +4931,6 @@ ahc_init(struct ahc_softc *ahc)
 		for (i = 0; i < AHC_TMODE_CMDS; i++)
 			ahc->targetcmds[i].cmd_valid = 0;
 		ahc_sync_tqinfifo(ahc, BUS_DMASYNC_PREREAD);
-		ahc->qoutfifo = (uint8_t *)&ahc->targetcmds[256];
 	}
 	ahc->qinfifo = &ahc->qoutfifo[256];
 
@@ -7843,7 +7842,10 @@ ahc_handle_target_cmd(struct ahc_softc *ahc, struct target_cmd *cmd)
 		ahc->pending_device = lstate;
 		aic_freeze_ccb((union ccb *)atio);
 		atio->ccb_h.flags |= CAM_DIS_DISCONNECT;
+	} else {
+		atio->ccb_h.flags &= ~CAM_DIS_DISCONNECT;
 	}
+
 	xpt_done((union ccb*)atio);
 	return (0);
 }

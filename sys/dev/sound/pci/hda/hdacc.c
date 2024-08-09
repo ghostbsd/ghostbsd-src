@@ -393,6 +393,7 @@ static const struct {
 	{ HDA_CODEC_INTELGMLK1, 0,	"Intel Gemini Lake" },
 	{ HDA_CODEC_INTELICLK, 0,	"Intel Ice Lake" },
 	{ HDA_CODEC_INTELTGLK, 0,	"Intel Tiger Lake" },
+	{ HDA_CODEC_INTELTGLKH, 0,	"Intel Tiger Lake-H" },
 	{ HDA_CODEC_INTELALLK, 0,	"Intel Alder Lake" },
 	{ HDA_CODEC_SII1390, 0,		"Silicon Image SiI1390" },
 	{ HDA_CODEC_SII1392, 0,		"Silicon Image SiI1392" },
@@ -539,9 +540,10 @@ hdacc_detach(device_t dev)
 	struct hdacc_softc *codec = device_get_softc(dev);
 	int error;
 
-	error = device_delete_children(dev);
+	if ((error = device_delete_children(dev)) != 0)
+		return (error);
 	free(codec->fgs, M_HDACC);
-	return (error);
+	return (0);
 }
 
 static int

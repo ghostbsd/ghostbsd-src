@@ -152,6 +152,8 @@
                     ..
                     offsetof
                     ..
+                    oformat
+                    ..
                     operators
                     ..
                     pid
@@ -434,6 +436,8 @@
             ..
             atf-sh
             ..
+        ..
+        nuageinit
         ..
         rc
         ..
@@ -1178,6 +1182,8 @@
         jail
         ..
         makefs
+        ..
+        mixer
         ..
         newsyslog
         ..

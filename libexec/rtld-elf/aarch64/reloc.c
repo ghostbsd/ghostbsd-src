@@ -1,6 +1,5 @@
 /*-
  * Copyright (c) 2014-2015 The FreeBSD Foundation
- * All rights reserved.
  *
  * Portions of this software were developed by Andrew Turner
  * under sponsorship from the FreeBSD Foundation.
@@ -521,7 +520,7 @@ allocate_initial_tls(Obj_Entry *objs)
 	* use.
 	*/
 	tls_static_space = tls_last_offset + tls_last_size +
-	    RTLD_STATIC_TLS_EXTRA;
+	    ld_static_tls_extra;
 
 	_tcb_set(allocate_tls(objs, NULL, TLS_TCB_SIZE, TLS_TCB_ALIGN));
 }
