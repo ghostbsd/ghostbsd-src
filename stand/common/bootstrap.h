@@ -281,6 +281,7 @@ int tslog_init(void);
 int tslog_publish(void);
 
 vm_offset_t build_font_module(vm_offset_t);
+vm_offset_t build_splash_module(vm_offset_t);
 
 /* MI module loaders */
 #ifdef __elfN
@@ -381,9 +382,5 @@ void	delay(int delay);
 int gen_setcurrdev(struct env_var *ev, int flags, const void *value);
 int mount_currdev(struct env_var *, int, const void *);
 void set_currdev(const char *devname);
-
-#ifndef CTASSERT
-#define	CTASSERT(x)	_Static_assert(x, "compile-time assertion failed")
-#endif
 
 #endif /* !_BOOTSTRAP_H_ */

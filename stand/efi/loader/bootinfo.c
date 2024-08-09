@@ -26,7 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 #include <stand.h>
 #include <string.h>
 #include <sys/param.h>
@@ -386,10 +385,17 @@ bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp, bool exit_bs)
 	/* Pad to a page boundary. */
 	addr = roundup(addr, PAGE_SIZE);
 
+#ifdef EFI
 	addr = build_font_module(addr);
 
 	/* Pad to a page boundary. */
 	addr = roundup(addr, PAGE_SIZE);
+
+	addr = build_splash_module(addr);
+
+	/* Pad to a page boundary. */
+	addr = roundup(addr, PAGE_SIZE);
+#endif
 
 	/* Copy our environment. */
 	envp = addr;

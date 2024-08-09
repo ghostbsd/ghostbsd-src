@@ -97,9 +97,9 @@ main(int argc, char *argv[])
 		if ((n = mixer_get_nmixers()) < 0)
 			errx(1, "no mixers present in the system");
 		for (i = 0; i < n; i++) {
-			(void)snprintf(buf, sizeof(buf), "/dev/mixer%d", i);
+			(void)mixer_get_path(buf, sizeof(buf), i);
 			if ((m = mixer_open(buf)) == NULL)
-				errx(1, "%s: no such mixer", buf);
+				continue;
 			initctls(m);
 			if (sflag)
 				printrecsrc(m, oflag);
@@ -426,11 +426,14 @@ mod_mute(struct mix_dev *d, void *p)
 	m = d->parent_mixer;
 	cp = mixer_get_ctl(m->dev, C_MUT);
 	val = p;
-	if (strncmp(val, "off", strlen(val)) == 0 || *val == '0')
+	if (strncmp(val, "off", strlen(val)) == 0 ||
+	    strncmp(val, "0", strlen(val)) == 0)
 		opt = MIX_UNMUTE;
-	else if (strncmp(val, "on", strlen(val)) == 0 || *val == '1')
+	else if (strncmp(val, "on", strlen(val)) == 0 ||
+	    strncmp(val, "1", strlen(val)) == 0)
 		opt = MIX_MUTE;
-	else if (strncmp(val, "toggle", strlen(val)) == 0 || *val == '^')
+	else if (strncmp(val, "toggle", strlen(val)) == 0 ||
+	    strncmp(val, "^", strlen(val)) == 0)
 		opt = MIX_TOGGLEMUTE;
 	else {
 		warnx("%s: no such modifier", val);
@@ -459,13 +462,17 @@ mod_recsrc(struct mix_dev *d, void *p)
 	m = d->parent_mixer;
 	cp = mixer_get_ctl(m->dev, C_SRC);
 	val = p;
-	if (strncmp(val, "add", strlen(val)) == 0 || *val == '+')
+	if (strncmp(val, "add", strlen(val)) == 0 ||
+	    strncmp(val, "+", strlen(val)) == 0)
 		opt = MIX_ADDRECSRC;
-	else if (strncmp(val, "remove", strlen(val)) == 0 || *val == '-')
+	else if (strncmp(val, "remove", strlen(val)) == 0 ||
+	    strncmp(val, "-", strlen(val)) == 0)
 		opt = MIX_REMOVERECSRC;
-	else if (strncmp(val, "set", strlen(val)) == 0 || *val == '=')
+	else if (strncmp(val, "set", strlen(val)) == 0 ||
+	    strncmp(val, "=", strlen(val)) == 0)
 		opt = MIX_SETRECSRC;
-	else if (strncmp(val, "toggle", strlen(val)) == 0 || *val == '^')
+	else if (strncmp(val, "toggle", strlen(val)) == 0 ||
+	    strncmp(val, "^", strlen(val)) == 0)
 		opt = MIX_TOGGLERECSRC;
 	else {
 		warnx("%s: no such modifier", val);

@@ -116,7 +116,7 @@ static void	vtnet_free_rxtx_queues(struct vtnet_softc *);
 static int	vtnet_alloc_rx_filters(struct vtnet_softc *);
 static void	vtnet_free_rx_filters(struct vtnet_softc *);
 static int	vtnet_alloc_virtqueues(struct vtnet_softc *);
-static int	vtnet_alloc_interface(struct vtnet_softc *);
+static void	vtnet_alloc_interface(struct vtnet_softc *);
 static int	vtnet_setup_interface(struct vtnet_softc *);
 static int	vtnet_ioctl_mtu(struct vtnet_softc *, u_int);
 static int	vtnet_ioctl_ifflags(struct vtnet_softc *);
@@ -438,12 +438,7 @@ vtnet_attach(device_t dev)
 	callout_init_mtx(&sc->vtnet_tick_ch, VTNET_CORE_MTX(sc), 0);
 	vtnet_load_tunables(sc);
 
-	error = vtnet_alloc_interface(sc);
-	if (error) {
-		device_printf(dev, "cannot allocate interface\n");
-		goto fail;
-	}
-
+	vtnet_alloc_interface(sc);
 	vtnet_setup_sysctl(sc);
 
 	error = vtnet_setup_features(sc);
@@ -1078,7 +1073,7 @@ vtnet_alloc_virtqueues(struct vtnet_softc *sc)
 	return (error);
 }
 
-static int
+static void
 vtnet_alloc_interface(struct vtnet_softc *sc)
 {
 	device_t dev;
@@ -1087,14 +1082,9 @@ vtnet_alloc_interface(struct vtnet_softc *sc)
 	dev = sc->vtnet_dev;
 
 	ifp = if_alloc(IFT_ETHER);
-	if (ifp == NULL)
-		return (ENOMEM);
-
 	sc->vtnet_ifp = ifp;
 	if_setsoftc(ifp, sc);
 	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
-
-	return (0);
 }
 
 static int
@@ -2095,6 +2085,7 @@ vtnet_rxq_eof(struct vtnet_rxq *rxq)
 
 	VTNET_RXQ_LOCK_ASSERT(rxq);
 
+	CURVNET_SET_QUIET(if_getvnet(ifp));
 	while (count-- > 0) {
 		struct mbuf *m;
 		uint32_t len, nbufs, adjsz;
@@ -2188,6 +2179,7 @@ vtnet_rxq_eof(struct vtnet_rxq *rxq)
 #endif
 		virtqueue_notify(vq);
 	}
+	CURVNET_RESTORE();
 
 	return (count > 0 ? 0 : EAGAIN);
 }

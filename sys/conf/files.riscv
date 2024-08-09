@@ -1,4 +1,5 @@
 cddl/dev/dtrace/riscv/dtrace_asm.S			optional dtrace compile-with "${DTRACE_S}"
+cddl/dev/dtrace/riscv/dtrace_isa.c			optional dtrace compile-with "${DTRACE_C}"
 cddl/dev/dtrace/riscv/dtrace_subr.c			optional dtrace compile-with "${DTRACE_C}"
 cddl/dev/dtrace/riscv/instr_size.c			optional dtrace compile-with "${DTRACE_C}"
 cddl/dev/fbt/riscv/fbt_isa.c				optional dtrace_fbt | dtraceall compile-with "${FBT_C}"
@@ -27,6 +28,7 @@ libkern/memset.c		standard
 libkern/strcmp.c		standard
 libkern/strlen.c		standard
 libkern/strncmp.c		standard
+riscv/riscv/aplic.c		standard
 riscv/riscv/autoconf.c		standard
 riscv/riscv/bus_machdep.c	standard
 riscv/riscv/bus_space_asm.S	standard

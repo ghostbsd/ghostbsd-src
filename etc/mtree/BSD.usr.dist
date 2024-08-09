@@ -36,7 +36,7 @@
     ..
     lib
         clang
-            17
+            18
                 include
                     cuda_wrappers
                         bits
@@ -85,8 +85,6 @@
         ..
     ..
     libdata
-        gcc
-        ..
         ldscripts
         ..
         pkgconfig

@@ -1068,7 +1068,7 @@ malloc_size(size_t size)
 	int indx;
 
 	if (size > kmem_zmax)
-		return (0);
+		return (round_page(size));
 	if (size & KMEM_ZMASK)
 		size = (size & ~KMEM_ZMASK) + KMEM_ZBASE;
 	indx = kmemsize[size >> KMEM_ZSHIFT];
@@ -1268,7 +1268,8 @@ malloc_init(void *data)
 	struct malloc_type_internal *mtip;
 	struct malloc_type *mtp;
 
-	KASSERT(vm_cnt.v_page_count != 0, ("malloc_register before vm_init"));
+	KASSERT(vm_cnt.v_page_count != 0,
+	    ("malloc_init() called before vm_mem_init()"));
 
 	mtp = data;
 	if (mtp->ks_version != M_VERSION)

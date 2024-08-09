@@ -44,8 +44,10 @@
 #ifndef _MACHINE_CPU_H_
 #define	_MACHINE_CPU_H_
 
+#if !defined(__ASSEMBLER__)
 #include <machine/atomic.h>
 #include <machine/frame.h>
+#endif
 #include <machine/armreg.h>
 
 #define	TRAPF_PC(tfp)		((tfp)->tf_elr)
@@ -134,6 +136,20 @@
 #define	CPU_PART_KRYO400_GOLD	0x804
 #define	CPU_PART_KRYO400_SILVER	0x805
 
+/* Apple part numbers */
+#define CPU_PART_M1_ICESTORM      0x022
+#define CPU_PART_M1_FIRESTORM     0x023
+#define CPU_PART_M1_ICESTORM_PRO  0x024
+#define CPU_PART_M1_FIRESTORM_PRO 0x025
+#define CPU_PART_M1_ICESTORM_MAX  0x028
+#define CPU_PART_M1_FIRESTORM_MAX 0x029
+#define CPU_PART_M2_BLIZZARD      0x032
+#define CPU_PART_M2_AVALANCHE     0x033
+#define CPU_PART_M2_BLIZZARD_PRO  0x034
+#define CPU_PART_M2_AVALANCHE_PRO 0x035
+#define CPU_PART_M2_BLIZZARD_MAX  0x038
+#define CPU_PART_M2_AVALANCHE_MAX 0x039
+
 #define	CPU_IMPL(midr)	(((midr) >> 24) & 0xff)
 #define	CPU_PART(midr)	(((midr) >> 4) & 0xfff)
 #define	CPU_VAR(midr)	(((midr) >> 20) & 0xf)
@@ -186,6 +202,7 @@
 #define	CPU_MATCH_ERRATA_CAVIUM_THUNDERX_1_1	0
 #endif
 
+#if !defined(__ASSEMBLER__)
 extern char btext[];
 extern char etext[];
 
@@ -253,6 +270,7 @@ ADDRESS_TRANSLATE_FUNC(s1e0w)
 ADDRESS_TRANSLATE_FUNC(s1e1r)
 ADDRESS_TRANSLATE_FUNC(s1e1w)
 
+#endif /* !__ASSEMBLER__ */
 #endif
 
 #endif /* !_MACHINE_CPU_H_ */

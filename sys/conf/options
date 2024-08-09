@@ -105,7 +105,6 @@ CY_PCI_FASTINTR
 DEADLKRES	opt_watchdog.h
 EXPERIMENTAL	opt_global.h
 DIRECTIO
-FILEMON		opt_dontuse.h
 FFCLOCK
 FULL_PREEMPTION	opt_sched.h
 GZIO		opt_gzio.h
@@ -415,9 +414,6 @@ ISP_FW_CRASH_DUMP	opt_isp.h
 ISP_DEFAULT_ROLES	opt_isp.h
 ISP_INTERNAL_TARGET	opt_isp.h
 ISP_FCTAPE_OFF		opt_isp.h
-
-# Options used only in dev/iscsi
-ISCSI_INITIATOR_DEBUG	opt_iscsi_initiator.h
 
 # Net stuff.
 ACCEPT_FILTER_DATA

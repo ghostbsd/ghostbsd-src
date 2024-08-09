@@ -52,14 +52,10 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)stand.h	8.1 (Berkeley) 6/11/93
  */
 
 #ifndef	STAND_H
 #define	STAND_H
-
-#include <sys/cdefs.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>

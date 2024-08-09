@@ -101,11 +101,13 @@ SYSCTL_BOOL(_kern_geom_eli, OID_AUTO, blocking_malloc, CTLFLAG_RWTUN,
 static bool g_eli_unmapped_io = true;
 SYSCTL_BOOL(_kern_geom_eli, OID_AUTO, unmapped_io, CTLFLAG_RDTUN,
     &g_eli_unmapped_io, 0, "Enable support for unmapped I/O");
+static int g_eli_alloc_sz;
+SYSCTL_UINT(_kern_geom_eli, OID_AUTO, use_uma_bytes, CTLFLAG_RD,
+    &g_eli_alloc_sz, 0, "Use uma(9) for allocations of this size or smaller.");
 
 static struct sx g_eli_umalock;	/* Controls changes to UMA zone. */
 SX_SYSINIT(g_eli_umalock, &g_eli_umalock, "GELI UMA");
 static uma_zone_t g_eli_uma = NULL;
-static int g_eli_alloc_sz;
 static volatile int g_eli_umaoutstanding;
 static volatile int g_eli_devs;
 
@@ -1045,10 +1047,12 @@ g_eli_create(struct gctl_req *req, struct g_class *mp, struct g_provider *bpp,
 	bioq_init(&sc->sc_queue);
 	mtx_init(&sc->sc_queue_mtx, "geli:queue", NULL, MTX_DEF);
 	mtx_init(&sc->sc_ekeys_lock, "geli:ekeys", NULL, MTX_DEF);
+	g_eli_init_uma();
 
 	pp = NULL;
 	cp = g_new_consumer(gp);
 	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
+
 	error = g_attach(cp, bpp);
 	if (error != 0) {
 		if (req != NULL) {
@@ -1091,7 +1095,6 @@ g_eli_create(struct gctl_req *req, struct g_class *mp, struct g_provider *bpp,
 	if (threads == 0)
 		threads = mp_ncpus;
 	sc->sc_cpubind = (mp_ncpus > 1 && threads == mp_ncpus);
-	g_eli_init_uma();
 	for (i = 0; i < threads; i++) {
 		if (g_eli_cpu_is_disabled(i)) {
 			G_ELI_DEBUG(1, "%s: CPU %u disabled, skipping.",
@@ -1163,6 +1166,7 @@ g_eli_create(struct gctl_req *req, struct g_class *mp, struct g_provider *bpp,
 	    sc->sc_crypto == G_ELI_CRYPTO_SW_ACCEL ? "accelerated software" :
 	    sc->sc_crypto == G_ELI_CRYPTO_SW ? "software" : "hardware");
 	return (gp);
+
 failed:
 	mtx_lock(&sc->sc_queue_mtx);
 	sc->sc_flags |= G_ELI_FLAG_DESTROY;

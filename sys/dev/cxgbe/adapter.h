@@ -320,10 +320,10 @@ struct port_info {
 	uint8_t  port_type;
 	uint8_t  mod_type;
 	uint8_t  port_id;
-	uint8_t  tx_chan;
+	uint8_t  tx_chan;	/* tx TP c-channel */
+	uint8_t  rx_chan;	/* rx TP c-channel */
 	uint8_t  mps_bg_map;	/* rx MPS buffer group bitmap */
 	uint8_t  rx_e_chan_map;	/* rx TP e-channel bitmap */
-	uint8_t  rx_c_chan;	/* rx TP c-channel */
 
 	struct link_config link_cfg;
 	struct ifmedia media;
@@ -471,6 +471,7 @@ struct sge_eq {
 	unsigned int abs_id;	/* absolute SGE id for the eq */
 	uint8_t type;		/* EQ_CTRL/EQ_ETH/EQ_OFLD */
 	uint8_t doorbells;
+	uint8_t port_id;	/* port_id of the port associated with the eq */
 	uint8_t tx_chan;	/* tx channel used by the eq */
 	struct mtx eq_lock;
 
@@ -690,6 +691,10 @@ struct sge_ofld_rxq {
 	uint64_t rx_aio_ddp_octets;
 	u_long	rx_toe_tls_records;
 	u_long	rx_toe_tls_octets;
+	u_long	rx_toe_ddp_octets;
+	counter_u64_t ddp_buffer_alloc;
+	counter_u64_t ddp_buffer_reuse;
+	counter_u64_t ddp_buffer_free;
 } __aligned(CACHE_LINE_SIZE);
 
 static inline struct sge_ofld_rxq *
@@ -924,8 +929,9 @@ struct adapter {
 	u_int vxlan_refcount;
 	int rawf_base;
 	int nrawf;
+	u_int vlan_id;
 
-	struct taskqueue *tq[MAX_NCHAN];	/* General purpose taskqueues */
+	struct taskqueue *tq[MAX_NPORTS];	/* General purpose taskqueues */
 	struct port_info *port[MAX_NPORTS];
 	uint8_t chan_map[MAX_NCHAN];		/* channel -> port */
 
@@ -1344,6 +1350,8 @@ extern int t4_tmr_idx;
 extern int t4_pktc_idx;
 extern unsigned int t4_qsize_rxq;
 extern unsigned int t4_qsize_txq;
+extern int t4_ddp_rcvbuf_len;
+extern unsigned int t4_ddp_rcvbuf_cache;
 extern device_method_t cxgbe_methods[];
 
 int t4_os_find_pci_capability(struct adapter *, int);
@@ -1357,6 +1365,7 @@ void t4_add_adapter(struct adapter *);
 int t4_detach_common(device_t);
 int t4_map_bars_0_and_4(struct adapter *);
 int t4_map_bar_2(struct adapter *);
+int t4_adj_doorbells(struct adapter *);
 int t4_setup_intr_handlers(struct adapter *);
 void t4_sysctls(struct adapter *);
 int begin_synchronized_op(struct adapter *, struct vi_info *, int, char *);

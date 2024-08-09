@@ -1322,11 +1322,14 @@ dev/bhnd/siba/siba_bhndb.c		optional siba bhnd bhndb
 dev/bhnd/siba/siba_erom.c		optional siba bhnd
 dev/bhnd/siba/siba_subr.c		optional siba bhnd
 #
-dev/bnxt/bnxt_hwrm.c		optional bnxt iflib pci
-dev/bnxt/bnxt_mgmt.c		optional bnxt iflib pci
-dev/bnxt/bnxt_sysctl.c		optional bnxt iflib pci
-dev/bnxt/bnxt_txrx.c		optional bnxt iflib pci
-dev/bnxt/if_bnxt.c		optional bnxt iflib pci
+dev/bnxt/bnxt_en/bnxt_auxbus_compat.c	optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_dcb.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_hwrm.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_mgmt.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_sysctl.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_txrx.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_ulp.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/if_bnxt.c		optional bnxt iflib pci compile-with "${BNXT_C}"
 dev/bwi/bwimac.c		optional bwi
 dev/bwi/bwiphy.c		optional bwi
 dev/bwi/bwirf.c			optional bwi
@@ -1767,7 +1770,7 @@ dev/hid/hgame.c			optional hgame
 dev/hid/hid.c			optional hid
 dev/hid/hid_if.m		optional hid
 dev/hid/hidbus.c		optional hidbus
-dev/hid/hidmap.c		optional hidmap
+dev/hid/hidmap.c		optional hidmap | hms
 dev/hid/hidquirk.c		optional hid
 dev/hid/hidraw.c		optional hidraw
 dev/hid/hkbd.c			optional hkbd
@@ -1900,6 +1903,14 @@ dev/iscsi/icl_conn_if.m		optional cfiscsi | iscsi
 dev/iscsi/icl_soft.c		optional iscsi
 dev/iscsi/icl_soft_proxy.c	optional iscsi
 dev/iscsi/iscsi.c		optional iscsi scbus
+dev/iser/icl_iser.c		optional iser				\
+	compile-with "${OFED_C} -DICL_KERNEL_PROXY"
+dev/iser/iser_initiator.c	optional iser				\
+	compile-with "${OFED_C} -DICL_KERNEL_PROXY"
+dev/iser/iser_memory.c		optional iser				\
+	compile-with "${OFED_C} -DICL_KERNEL_PROXY"
+dev/iser/iser_verbs.c		optional iser				\
+	compile-with "${OFED_C} -DICL_KERNEL_PROXY"
 dev/ismt/ismt.c			optional ismt
 dev/isl/isl.c			optional isl iicbus
 dev/isp/isp.c			optional isp
@@ -3060,8 +3071,6 @@ dev/smc/if_smc.c		optional smc
 dev/smc/if_smc_acpi.c		optional smc acpi
 dev/smc/if_smc_fdt.c		optional smc fdt
 dev/snp/snp.c			optional snp
-dev/sound/clone.c		optional sound
-dev/sound/unit.c		optional sound
 dev/sound/pci/als4000.c		optional snd_als4000 pci
 dev/sound/pci/atiixp.c		optional snd_atiixp pci
 dev/sound/pci/cmi.c		optional snd_cmi pci
@@ -3206,8 +3215,6 @@ dev/usb/controller/uhci.c		optional uhci
 dev/usb/controller/uhci_pci.c		optional uhci pci
 dev/usb/controller/xhci.c		optional xhci
 dev/usb/controller/xhci_pci.c		optional xhci pci
-dev/usb/controller/saf1761_otg.c	optional saf1761otg
-dev/usb/controller/saf1761_otg_fdt.c	optional saf1761otg fdt
 dev/usb/controller/uss820dci.c		optional uss820dci
 dev/usb/controller/usb_controller.c	optional usb
 #
@@ -3400,12 +3407,12 @@ dev/virtio/mmio/virtio_mmio_cmdline.c	optional	virtio_mmio
 dev/virtio/mmio/virtio_mmio_fdt.c	optional	virtio_mmio fdt
 dev/virtio/mmio/virtio_mmio_if.m	optional	virtio_mmio
 dev/virtio/network/if_vtnet.c		optional	vtnet
-dev/virtio/block/virtio_blk.c		optional	virtio_blk
 dev/virtio/balloon/virtio_balloon.c	optional	virtio_balloon
-dev/virtio/gpu/virtio_gpu.c		optional	virtio_gpu
-dev/virtio/scsi/virtio_scsi.c		optional	virtio_scsi
-dev/virtio/random/virtio_random.c	optional	virtio_random
+dev/virtio/block/virtio_blk.c		optional	virtio_blk
 dev/virtio/console/virtio_console.c	optional	virtio_console
+dev/virtio/gpu/virtio_gpu.c		optional	virtio_gpu
+dev/virtio/random/virtio_random.c	optional	virtio_random
+dev/virtio/scsi/virtio_scsi.c		optional	virtio_scsi
 dev/vkbd/vkbd.c			optional vkbd
 dev/vmgenc/vmgenc_acpi.c	optional acpi
 dev/vmware/vmxnet3/if_vmx.c		optional vmx
@@ -3847,7 +3854,7 @@ kern/subr_clock.c		standard
 kern/subr_compressor.c		standard \
 	compile-with "${NORMAL_C} -I$S/contrib/zstd/lib/freebsd"
 kern/subr_coverage.c		optional coverage \
-	compile-with "${NORMAL_C:N-fsanitize*}"
+	compile-with "${NORMAL_C:N-fsanitize*:N-fno-sanitize*}"
 kern/subr_counter.c		standard
 kern/subr_csan.c		optional kcsan \
 	compile-with "${NORMAL_C:N-fsanitize*:N-fstack-protector*}"

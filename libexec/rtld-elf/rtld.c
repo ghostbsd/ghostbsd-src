@@ -225,6 +225,8 @@ static Obj_Entry *obj_main;	/* The main program shared object */
 static Obj_Entry obj_rtld;	/* The dynamic linker shared object */
 static unsigned int obj_count;	/* Number of objects in obj_list */
 static unsigned int obj_loads;	/* Number of loads of objects (gen count) */
+size_t ld_static_tls_extra =	/* Static TLS extra space (bytes) */
+  RTLD_STATIC_TLS_EXTRA;
 
 static Objlist list_global =	/* Objects dlopened with RTLD_GLOBAL */
   STAILQ_HEAD_INITIALIZER(list_global);
@@ -342,31 +344,6 @@ ld_utrace_log(int event, void *handle, void *mapbase, size_t mapsize,
 	utrace(&ut, sizeof(ut));
 }
 
-enum {
-	LD_BIND_NOW = 0,
-	LD_PRELOAD,
-	LD_LIBMAP,
-	LD_LIBRARY_PATH,
-	LD_LIBRARY_PATH_FDS,
-	LD_LIBMAP_DISABLE,
-	LD_BIND_NOT,
-	LD_DEBUG,
-	LD_ELF_HINTS_PATH,
-	LD_LOADFLTR,
-	LD_LIBRARY_PATH_RPATH,
-	LD_PRELOAD_FDS,
-	LD_DYNAMIC_WEAK,
-	LD_TRACE_LOADED_OBJECTS,
-	LD_UTRACE,
-	LD_DUMP_REL_PRE,
-	LD_DUMP_REL_POST,
-	LD_TRACE_LOADED_OBJECTS_PROGNAME,
-	LD_TRACE_LOADED_OBJECTS_FMT1,
-	LD_TRACE_LOADED_OBJECTS_FMT2,
-	LD_TRACE_LOADED_OBJECTS_ALL,
-	LD_SHOW_AUXV,
-};
-
 struct ld_env_var_desc {
 	const char * const n;
 	const char *val;
@@ -398,9 +375,11 @@ static struct ld_env_var_desc ld_env_vars[] = {
 	LD_ENV_DESC(TRACE_LOADED_OBJECTS_FMT2, false),
 	LD_ENV_DESC(TRACE_LOADED_OBJECTS_ALL, false),
 	LD_ENV_DESC(SHOW_AUXV, false),
+	LD_ENV_DESC(STATIC_TLS_EXTRA, false),
+	LD_ENV_DESC(NO_DL_ITERATE_PHDR_AFTER_FORK, false),
 };
 
-static const char *
+const char *
 ld_get_env_var(int idx)
 {
 	return (ld_env_vars[idx].val);
@@ -515,7 +494,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     struct stat st;
     Elf_Addr *argcp;
     char **argv, **env, **envp, *kexecpath;
-    const char *argv0, *binpath, *library_path_rpath;
+    const char *argv0, *binpath, *library_path_rpath, *static_tls_extra;
     struct ld_env_var_desc *lvd;
     caddr_t imgentry;
     char buf[MAXPATHLEN];
@@ -738,9 +717,16 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	    else
 		    ld_library_path_rpath = false;
     }
+    static_tls_extra = ld_get_env_var(LD_STATIC_TLS_EXTRA);
+    if (static_tls_extra != NULL && static_tls_extra[0] != '\0') {
+	sz = parse_integer(static_tls_extra);
+	if (sz >= RTLD_STATIC_TLS_EXTRA && sz <= SIZE_T_MAX)
+	    ld_static_tls_extra = sz;
+    }
     dangerous_ld_env = libmap_disable || libmap_override != NULL ||
 	ld_library_path != NULL || ld_preload != NULL ||
-	ld_elf_hints_path != NULL || ld_loadfltr || !ld_dynamic_weak;
+	ld_elf_hints_path != NULL || ld_loadfltr || !ld_dynamic_weak ||
+	static_tls_extra != NULL;
     ld_tracing = ld_get_env_var(LD_TRACE_LOADED_OBJECTS);
     ld_utrace = ld_get_env_var(LD_UTRACE);
 
@@ -6144,10 +6130,42 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
 				*fdp = fd;
 				seen_f = true;
 				break;
+			} else if (opt == 'o') {
+				struct ld_env_var_desc *l;
+				char *n, *v;
+				u_int ll;
+
+				if (j != arglen - 1) {
+					_rtld_error("Invalid options: %s", arg);
+					rtld_die();
+				}
+				i++;
+				n = argv[i];
+				v = strchr(n, '=');
+				if (v == NULL) {
+					_rtld_error("No '=' in -o parameter");
+					rtld_die();
+				}
+				for (ll = 0; ll < nitems(ld_env_vars); ll++) {
+					l = &ld_env_vars[ll];
+					if (v - n == (ptrdiff_t)strlen(l->n) &&
+					    strncmp(n, l->n, v - n) == 0) {
+						l->val = v + 1;
+						break;
+					}
+				}
+				if (ll == nitems(ld_env_vars)) {
+					_rtld_error("Unknown LD_ option %s",
+					    n);
+					rtld_die();
+				}
 			} else if (opt == 'p') {
 				*use_pathp = true;
 			} else if (opt == 'u') {
-				trust = false;
+				u_int ll;
+
+				for (ll = 0; ll < nitems(ld_env_vars); ll++)
+					ld_env_vars[ll].val = NULL;
 			} else if (opt == 'v') {
 				machine[0] = '\0';
 				mib[0] = CTL_HW;
@@ -6165,13 +6183,15 @@ parse_args(char* argv[], int argc, bool *use_pathp, int *fdp,
 				    "Env prefix %s\n"
 				    "Default hint file %s\n"
 				    "Hint file %s\n"
-				    "libmap file %s\n",
+				    "libmap file %s\n"
+				    "Optional static TLS size %zd bytes\n",
 				    machine,
 				    __FreeBSD_version, ld_standard_library_path,
 				    gethints(false),
 				    ld_env_prefix, ld_elf_hints_default,
 				    ld_elf_hints_path,
-				    ld_path_libmap_conf);
+				    ld_path_libmap_conf,
+				    ld_static_tls_extra);
 				_exit(0);
 			} else {
 				_rtld_error("Invalid argument: '%s'", arg);
@@ -6225,6 +6245,7 @@ print_usage(const char *argv0)
 	    "  -b <exe>  Execute <exe> instead of <binary>, arg0 is <binary>\n"
 	    "  -d        Ignore lack of exec permissions for the binary\n"
 	    "  -f <FD>   Execute <FD> instead of searching for <binary>\n"
+	    "  -o <OPT>=<VAL> Set LD_<OPT> to <VAL>, without polluting env\n"
 	    "  -p        Search in PATH for named binary\n"
 	    "  -u        Ignore LD_ environment variables\n"
 	    "  -v        Display identification information\n"

@@ -155,6 +155,7 @@ GCC_4.6.0 {
 	__eqtf2;
 	__extenddftf2;
 	__extendsftf2;
+	__extendxftf2;
 	__fixtfdi;
 	__fixtfsi;
 	__fixtfti;
@@ -176,5 +177,12 @@ GCC_4.6.0 {
 	__subtf3;
 	__trunctfdf2;
 	__trunctfsf2;
+	__trunctfxf2;
 	__unordtf2;
+};
+
+GCC_7.0.0 {
+#ifdef __i386__
+	__divmoddi4;
+#endif
 };

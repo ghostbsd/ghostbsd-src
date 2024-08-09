@@ -971,9 +971,6 @@ tuncreate(struct cdev *dev)
 		iflags |= IFF_POINTOPOINT;
 	}
 	ifp = tp->tun_ifp = if_alloc(type);
-	if (ifp == NULL)
-		panic("%s%d: failed to if_alloc() interface.\n",
-		    drv->cdevsw.d_name, dev2unit(dev));
 	ifp->if_softc = tp;
 	if_initname(ifp, drv->cdevsw.d_name, dev2unit(dev));
 	ifp->if_ioctl = tunifioctl;
@@ -1442,7 +1439,7 @@ tunoutput(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 	}
 
 	/* BPF writes need to be handled specially. */
-	if (dst->sa_family == AF_UNSPEC)
+	if (dst->sa_family == AF_UNSPEC || dst->sa_family == pseudo_AF_HDRCMPLT)
 		bcopy(dst->sa_data, &af, sizeof(af));
 	else
 		af = RO_GET_FAMILY(ro, dst);
