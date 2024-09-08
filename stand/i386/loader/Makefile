@@ -7,7 +7,8 @@ LOADER_CD9660_SUPPORT?=	yes
 LOADER_EXT2FS_SUPPORT?=	no
 LOADER_MSDOS_SUPPORT?=	no
 LOADER_UFS_SUPPORT?=	yes
-LOADER_GZIP_SUPPORT?=	no
+# Don't set gzip support to no.
+LOADER_GZIP_SUPPORT?=	yes
 LOADER_BZIP2_SUPPORT?=	no
 
 .include <bsd.init.mk>
