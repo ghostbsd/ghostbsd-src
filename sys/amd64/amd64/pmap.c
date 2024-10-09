@@ -552,6 +552,10 @@ SYSCTL_INT(_vm_pmap, OID_AUTO, pcid_enabled, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
 int invpcid_works = 0;
 SYSCTL_INT(_vm_pmap, OID_AUTO, invpcid_works, CTLFLAG_RD, &invpcid_works, 0,
     "Is the invpcid instruction available ?");
+int invlpgb_works;
+SYSCTL_INT(_vm_pmap, OID_AUTO, invlpgb_works, CTLFLAG_RD, &invlpgb_works, 0,
+    "Is the invlpgb instruction available?");
+int invlpgb_maxcnt;
 int pmap_pcid_invlpg_workaround = 0;
 SYSCTL_INT(_vm_pmap, OID_AUTO, pcid_invlpg_workaround,
     CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
@@ -2223,7 +2227,7 @@ pmap_bootstrap_la57(void *arg __unused)
 	 * entering all existing kernel mappings into level 5 table.
 	 */
 	v_pml5[pmap_pml5e_index(UPT_MAX_ADDRESS)] = KPML4phys | X86_PG_V |
-	    X86_PG_RW | X86_PG_A | X86_PG_M | pg_g;
+	    X86_PG_RW | X86_PG_A | X86_PG_M;
 
 	/*
 	 * Add pml5 entry for 1:1 trampoline mapping after LA57 is turned on.
@@ -2242,7 +2246,11 @@ pmap_bootstrap_la57(void *arg __unused)
 	*(u_long *)(v_code + 2 + (la57_trampoline_gdt_desc - la57_trampoline)) =
 	    la57_trampoline_gdt - la57_trampoline + VM_PAGE_TO_PHYS(m_code);
 	la57_tramp = (void (*)(uint64_t))VM_PAGE_TO_PHYS(m_code);
-	invlpg((vm_offset_t)la57_tramp);
+	pmap_invalidate_all(kernel_pmap);
+	if (bootverbose) {
+		printf("entering LA57 trampoline at %#lx\n",
+		    (vm_offset_t)la57_tramp);
+	}
 	la57_tramp(KPML5phys);
 
 	/*
@@ -2256,6 +2264,10 @@ pmap_bootstrap_la57(void *arg __unused)
 	ssdtosyssd(&gdt_segs[GPROC0_SEL],
 	    (struct system_segment_descriptor *)&__pcpu[0].pc_gdt[GPROC0_SEL]);
 	ltr(GSEL(GPROC0_SEL, SEL_KPL));
+	lidt(&r_idt);
+
+	if (bootverbose)
+		printf("LA57 trampoline returned, CR4 %#lx\n", rcr4());
 
 	/*
 	 * Now unmap the trampoline, and free the pages.
@@ -4359,15 +4371,13 @@ pmap_pinit_pml5(vm_page_t pml5pg)
 	 * entering all existing kernel mappings into level 5 table.
 	 */
 	pm_pml5[pmap_pml5e_index(UPT_MAX_ADDRESS)] = KPML4phys | X86_PG_V |
-	    X86_PG_RW | X86_PG_A | X86_PG_M | pg_g |
-	    pmap_cache_bits(kernel_pmap, VM_MEMATTR_DEFAULT, FALSE);
+	    X86_PG_RW | X86_PG_A | X86_PG_M;
 
 	/* 
 	 * Install self-referential address mapping entry.
 	 */
 	pm_pml5[PML5PML5I] = VM_PAGE_TO_PHYS(pml5pg) |
-	    X86_PG_RW | X86_PG_V | X86_PG_M | X86_PG_A |
-	    pmap_cache_bits(kernel_pmap, VM_MEMATTR_DEFAULT, FALSE);
+	    X86_PG_RW | X86_PG_V | X86_PG_M | X86_PG_A;
 }
 
 static void
@@ -4396,8 +4406,7 @@ pmap_pinit_pml5_pti(vm_page_t pml5pgu)
 	 */
 	pm_pml5u[pmap_pml5e_index(UPT_MAX_ADDRESS)] =
 	    pmap_kextract((vm_offset_t)pti_pml4) |
-	    X86_PG_V | X86_PG_RW | X86_PG_A | X86_PG_M | pg_g |
-	    pmap_cache_bits(kernel_pmap, VM_MEMATTR_DEFAULT, FALSE);
+	    X86_PG_V | X86_PG_RW | X86_PG_A | X86_PG_M;
 }
 
 /* Allocate a page table page and do related bookkeeping */
