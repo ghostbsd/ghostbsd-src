@@ -66,7 +66,7 @@ static void dmar_ir_program_irte(struct dmar_unit *unit, u_int idx,
 static int dmar_ir_free_irte(struct dmar_unit *unit, u_int cookie);
 
 int
-iommu_alloc_msi_intr(device_t src, u_int *cookies, u_int count)
+dmar_alloc_msi_intr(device_t src, u_int *cookies, u_int count)
 {
 	struct dmar_unit *unit;
 	vmem_addr_t vmem_res;
@@ -94,7 +94,7 @@ iommu_alloc_msi_intr(device_t src, u_int *cookies, u_int count)
 }
 
 int
-iommu_map_msi_intr(device_t src, u_int cpu, u_int vector, u_int cookie,
+dmar_map_msi_intr(device_t src, u_int cpu, u_int vector, u_int cookie,
     uint64_t *addr, uint32_t *data)
 {
 	struct dmar_unit *unit;
@@ -140,7 +140,7 @@ iommu_map_msi_intr(device_t src, u_int cpu, u_int vector, u_int cookie,
 }
 
 int
-iommu_unmap_msi_intr(device_t src, u_int cookie)
+dmar_unmap_msi_intr(device_t src, u_int cookie)
 {
 	struct dmar_unit *unit;
 
@@ -151,7 +151,7 @@ iommu_unmap_msi_intr(device_t src, u_int cookie)
 }
 
 int
-iommu_map_ioapic_intr(u_int ioapic_id, u_int cpu, u_int vector, bool edge,
+dmar_map_ioapic_intr(u_int ioapic_id, u_int cpu, u_int vector, bool edge,
     bool activehi, int irq, u_int *cookie, uint32_t *hi, uint32_t *lo)
 {
 	struct dmar_unit *unit;
@@ -214,7 +214,7 @@ iommu_map_ioapic_intr(u_int ioapic_id, u_int cpu, u_int vector, bool edge,
 }
 
 int
-iommu_unmap_ioapic_intr(u_int ioapic_id, u_int *cookie)
+dmar_unmap_ioapic_intr(u_int ioapic_id, u_int *cookie)
 {
 	struct dmar_unit *unit;
 	u_int idx;
@@ -326,11 +326,15 @@ clp2(u_int v)
 int
 dmar_init_irt(struct dmar_unit *unit)
 {
-
+	SYSCTL_ADD_INT(&unit->iommu.sysctl_ctx,
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(unit->iommu.dev)),
+	    OID_AUTO, "ir", CTLFLAG_RD, &unit->ir_enabled, 0,
+	    "Interrupt remapping ops enabled");
 	if ((unit->hw_ecap & DMAR_ECAP_IR) == 0)
 		return (0);
 	unit->ir_enabled = 1;
 	TUNABLE_INT_FETCH("hw.dmar.ir", &unit->ir_enabled);
+	TUNABLE_INT_FETCH("hw.iommu.ir", &unit->ir_enabled);
 	if (!unit->ir_enabled)
 		return (0);
 	if (!unit->qi_enabled) {

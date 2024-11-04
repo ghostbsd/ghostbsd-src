@@ -304,13 +304,9 @@ fwip_init(void *arg)
 		xferq->psize = MCLBYTES;
 		xferq->queued = 0;
 		xferq->buf = NULL;
-		xferq->bulkxfer = (struct fw_bulkxfer *) malloc(
+		xferq->bulkxfer = malloc(
 			sizeof(struct fw_bulkxfer) * xferq->bnchunk,
 							M_FWIP, M_WAITOK);
-		if (xferq->bulkxfer == NULL) {
-			printf("if_fwip: malloc failed\n");
-			return;
-		}
 		STAILQ_INIT(&xferq->stvalid);
 		STAILQ_INIT(&xferq->stfree);
 		STAILQ_INIT(&xferq->stdma);
@@ -778,7 +774,7 @@ fwip_stream_input(struct fw_xferq *xferq)
 		 * Record the sender ID for possible BPF usage.
 		 */
 		src = ntohl(p[1]) >> 16;
-		if (bpf_peers_present(if_getbpf(ifp))) {
+		if (bpf_peers_present_if(ifp)) {
 			mtag = m_tag_alloc(MTAG_FIREWIRE,
 			    MTAG_FIREWIRE_SENDER_EUID,
 			    2*sizeof(uint32_t), M_NOWAIT);
@@ -878,7 +874,7 @@ fwip_unicast_input(struct fw_xfer *xfer)
 		goto done;
 	}
 
-	if (bpf_peers_present(if_getbpf(ifp))) {
+	if (bpf_peers_present_if(ifp)) {
 		/*
 		 * Record the sender ID for possible BPF usage.
 		 */

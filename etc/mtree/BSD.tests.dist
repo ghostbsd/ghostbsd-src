@@ -763,6 +763,10 @@
         ..
         compat32
         ..
+        cam
+            ctl
+            ..
+        ..
         devrandom
         ..
         dtrace
@@ -1170,6 +1174,8 @@
     ..
     usr.sbin
         chown
+        ..
+        ctladm
         ..
         daemon
         ..

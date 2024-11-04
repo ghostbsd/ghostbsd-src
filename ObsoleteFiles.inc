@@ -51,6 +51,24 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20240914 libpcap upgrade from 1.10.4 to 1.10.5
+OLD_FILES+=contrib/libpcap/pcap-haiku.cpp
+OLD_FILES+=contrib/libpcap/pcap-rpcap-int.h
+OLD_FILES+=contrib/libpcap/pcap-usb-linux-common.c
+
+# 20240827: retire fips.so
+OLD_LIBS+=usr/lib/ossl-modules/fips.so
+
+# 20240824: sound examples: midi.c moved out of oss/
+OLD_FILES+=share/examples/sound/oss/midi.c
+
+# 20240824: sound examples: Remove ossinit.h and rename basic.c to audio.c
+OLD_FILES+=share/examples/sound/oss/ossinit.h
+OLD_FILES+=share/examples/sound/oss/basic.c
+
+# 20240824: sound examples: Remove ossmidi.h
+OLD_FILES+=share/examples/sound/oss/ossmidi.h
+
 # 20240801: retire ifaddr_byindex
 OLD_FILES+=usr/share/man/man9/ifaddr_byindex.9.gz
 
@@ -3633,11 +3651,6 @@ OLD_FILES+=usr/share/man/man4/ng_h4.4.gz
 
 # 20210923: rename boot(9) to kern_reboot(9)
 OLD_FILES+=usr/share/man/man9/boot.9.gz
-
-# 20210922: Old mixer(8) tests removed
-OLD_FILES+=usr/tests/usr.sbin/mixer/Kyuafile
-OLD_FILES+=usr/tests/usr.sbin/mixer/mixer_test
-OLD_DIRS+=usr/tests/usr.sbin/mixer
 
 # 20210921: remove cloudabi
 OLD_FILES+=usr/share/man/man4/cloudabi.4.gz
