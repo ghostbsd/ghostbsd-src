@@ -34,7 +34,7 @@ osrelease_start()
 		CPE_NAME=cpe:/o:ghostbsd:ghostbsd:$_version_id
 		HOME_URL=https://GhostBSD.org/
 		BUG_REPORT_URL=https://github.com/ghostbsd/issues/issues/new/choose
-		CODENAME="Twenty Five"
+		CODENAME="Twenty-Five"
 __EOF__
 	install -C -o root -g wheel -m ${osrelease_perms} "$t" "${osrelease_file}"
 	rm -f "$t"
