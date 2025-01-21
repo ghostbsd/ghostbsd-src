@@ -1327,6 +1327,7 @@ tmpfs_rmdir(struct vop_rmdir_args *v)
 		 goto out;
 	 }
 
+	/* Check flags to see if we are allowed to remove the directory. */
 	if ((dnode->tn_flags & APPEND)
 	    || (node->tn_flags & (NOUNLINK | IMMUTABLE | APPEND))) {
 		error = EPERM;
@@ -1343,13 +1344,6 @@ tmpfs_rmdir(struct vop_rmdir_args *v)
 	MPASS(TMPFS_DIRENT_MATCHES(de,
 	    v->a_cnp->cn_nameptr,
 	    v->a_cnp->cn_namelen));
-
-	/* Check flags to see if we are allowed to remove the directory. */
-	if ((dnode->tn_flags & APPEND) != 0 ||
-	    (node->tn_flags & (NOUNLINK | IMMUTABLE | APPEND)) != 0) {
-		error = EPERM;
-		goto out;
-	}
 
 	/* Detach the directory entry from the directory (dnode). */
 	tmpfs_dir_detach(dvp, de);
@@ -1684,21 +1678,15 @@ vop_vptofh {
 };
 */
 {
-	struct tmpfs_fid_data tfd;
+	struct tmpfs_fid_data *const tfd = (struct tmpfs_fid_data *)ap->a_fhp;
 	struct tmpfs_node *node;
-	struct fid *fhp;
+	_Static_assert(sizeof(struct tmpfs_fid_data) <= sizeof(struct fid),
+	    "struct tmpfs_fid_data cannot be larger than struct fid");
 
 	node = VP_TO_TMPFS_NODE(ap->a_vp);
-	fhp = ap->a_fhp;
-	fhp->fid_len = sizeof(tfd);
-
-	/*
-	 * Copy into fid_data from the stack to avoid unaligned pointer use.
-	 * See the comment in sys/mount.h on struct fid for details.
-	 */
-	tfd.tfd_id = node->tn_id;
-	tfd.tfd_gen = node->tn_gen;
-	memcpy(fhp->fid_data, &tfd, fhp->fid_len);
+	tfd->tfd_len = sizeof(*tfd);
+	tfd->tfd_gen = node->tn_gen;
+	tfd->tfd_id = node->tn_id;
 
 	return (0);
 }

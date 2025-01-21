@@ -849,6 +849,20 @@ linker_file_lookup_symbol_internal(linker_file_t file, const char *name,
 	KLD_DPF(SYM, ("linker_file_lookup_symbol: file=%p, name=%s, deps=%d\n",
 	    file, name, deps));
 
+	/*
+	 * Treat the __this_linker_file as a special symbol. This is a
+	 * global that linuxkpi uses to populate the THIS_MODULE
+	 * value.  In this case we can simply return the linker_file_t.
+	 *
+	 * Modules compiled statically into the kernel are assigned NULL.
+	 */
+	if (strcmp(name, "__this_linker_file") == 0) {
+		address = (file == linker_kernel_file) ? NULL : (caddr_t)file;
+		KLD_DPF(SYM, ("linker_file_lookup_symbol: resolving special "
+		    "symbol __this_linker_file to %p\n", address));
+		return (address);
+	}
+
 	if (LINKER_LOOKUP_SYMBOL(file, name, &sym) == 0) {
 		LINKER_SYMBOL_VALUES(file, sym, &symval);
 		if (symval.value == 0)
@@ -1945,6 +1959,10 @@ linker_hints_lookup(const char *path, int pathlen, const char *modname,
 	 */
 	if (vattr.va_size > LINKER_HINTS_MAX) {
 		printf("linker.hints file too large %ld\n", (long)vattr.va_size);
+		goto bad;
+	}
+	if (vattr.va_size < sizeof(ival)) {
+		printf("linker.hints file truncated\n");
 		goto bad;
 	}
 	hints = malloc(vattr.va_size, M_TEMP, M_WAITOK);

@@ -89,11 +89,12 @@ run()
 # $1 directory
 # $2 source filename w/o extension
 # $3 source extension
+# $4 optional regex for egrep -w
 clean_dep()
 {
 	for libcompat in "" $ALL_libcompats; do
 		dirprfx=${libcompat:+obj-lib${libcompat}/}
-		if egrep -qw "$2\.$3" "$OBJTOP"/$dirprfx$1/.depend.$2.*o 2>/dev/null; then
+		if egrep -qw "${4:-$2\.$3}" "$OBJTOP"/$dirprfx$1/.depend.$2.*o 2>/dev/null; then
 			echo "Removing stale ${libcompat:+lib${libcompat} }dependencies and objects for $2.$3"
 			run rm -f \
 			    "$OBJTOP"/$dirprfx$1/.depend.$2.* \
@@ -162,7 +163,22 @@ fi
 
 # 20240416  2fda3ab0ac19    WITH_NVME: Remove from broken
 if [ -f "$OBJTOP"/rescue/rescue/rescue.mk ] && \
-    grep -q -v 'nvme_util.o' "$OBJTOP"/rescue/rescue/rescue.mk; then
+    ! grep -q 'nvme_util.o' "$OBJTOP"/rescue/rescue/rescue.mk; then
 	echo "removing rescue.mk without nvme_util.o"
-	rm -f "$OBJTOP"/rescue/rescue/rescue.mk
+	run rm -f "$OBJTOP"/rescue/rescue/rescue.mk
 fi
+
+# 20241018  5deeebd8c6ca   Merge llvm-project release/19.x llvmorg-19.1.2-0-g7ba7d8e2f7b6
+p="$OBJTOP"/lib/clang/libclang/clang/Basic
+f="$p"/arm_mve_builtin_sema.inc
+if [ -e "$f" ]; then
+	if grep -q SemaBuiltinConstantArgRange "$f"; then
+		echo "Removing pre-llvm19 clang-tblgen output"
+		run rm -f "$p"/*.inc
+	fi
+fi
+
+# 20241212  2ec8b6948070   zfs: merge openzfs/zfs@e269af1b3 (zfs-2.2-release) into stable/14
+clean_dep   cddl/lib/libzpool abd_os c "linux/zfs/abd_os\.c"
+clean_dep   cddl/lib/libzpool arc_os c "linux/zfs/arc_os\.c"
+clean_dep   cddl/lib/libzpool zfs_debug c "linux/zfs/zfs_debug\.c"

@@ -52,6 +52,7 @@
 #include <sys/acct.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
+#include <sys/libkern.h>
 #include <sys/lock.h>
 #include <sys/loginclass.h>
 #include <sys/malloc.h>
@@ -88,8 +89,22 @@ SYSCTL_NODE(_security, OID_AUTO, bsd, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "BSD security policy");
 
 static void crfree_final(struct ucred *cr);
-static void crsetgroups_locked(struct ucred *cr, int ngrp,
-    gid_t *groups);
+
+static inline void
+groups_check_positive_len(int ngrp)
+{
+	MPASS2(ngrp >= 0, "negative number of groups");
+	MPASS2(ngrp != 0, "at least one group expected (effective GID)");
+}
+static inline void
+groups_check_max_len(int ngrp)
+{
+	MPASS2(ngrp <= ngroups_max + 1, "too many groups");
+}
+
+static void groups_normalize(int *ngrp, gid_t *groups);
+static void crsetgroups_internal(struct ucred *cr, int ngrp,
+    const gid_t *groups);
 
 static int cr_canseeotheruids(struct ucred *u1, struct ucred *u2);
 static int cr_canseeothergids(struct ucred *u1, struct ucred *u2);
@@ -553,7 +568,7 @@ sys_setuid(struct thread *td, struct setuid_args *uap)
 #endif
 	{
 		/*
-		 * Set the real uid and transfer proc count to new user.
+		 * Set the real uid.
 		 */
 		if (uid != oldcred->cr_ruid) {
 			change_ruid(newcred, uip);
@@ -579,6 +594,9 @@ sys_setuid(struct thread *td, struct setuid_args *uap)
 		change_euid(newcred, uip);
 		setsugid(p);
 	}
+	/*
+	 * This also transfers the proc count to the new user.
+	 */
 	proc_set_cred(p, newcred);
 #ifdef RACCT
 	racct_proc_ucred_changed(p, oldcred, newcred);
@@ -810,44 +828,79 @@ struct setgroups_args {
 int
 sys_setgroups(struct thread *td, struct setgroups_args *uap)
 {
-	gid_t smallgroups[XU_NGROUPS];
+	gid_t smallgroups[CRED_SMALLGROUPS_NB];
 	gid_t *groups;
 	int gidsetsize, error;
 
+	/*
+	 * Sanity check size now to avoid passing too big a value to copyin(),
+	 * even if kern_setgroups() will do it again.
+	 *
+	 * Ideally, the 'gidsetsize' argument should have been a 'u_int' (and it
+	 * was, in this implementation, for a long time), but POSIX standardized
+	 * getgroups() to take an 'int' and it would be quite entrapping to have
+	 * setgroups() differ.
+	 */
 	gidsetsize = uap->gidsetsize;
 	if (gidsetsize > ngroups_max + 1 || gidsetsize < 0)
 		return (EINVAL);
 
-	if (gidsetsize > XU_NGROUPS)
+	if (gidsetsize > CRED_SMALLGROUPS_NB)
 		groups = malloc(gidsetsize * sizeof(gid_t), M_TEMP, M_WAITOK);
 	else
 		groups = smallgroups;
 
 	error = copyin(uap->gidset, groups, gidsetsize * sizeof(gid_t));
 	if (error == 0)
-		error = kern_setgroups(td, gidsetsize, groups);
+		error = kern_setgroups(td, &gidsetsize, groups);
 
-	if (gidsetsize > XU_NGROUPS)
+	if (groups != smallgroups)
 		free(groups, M_TEMP);
 	return (error);
 }
 
+static int
+gidp_cmp(const void *p1, const void *p2)
+{
+	const gid_t g1 = *(const gid_t *)p1;
+	const gid_t g2 = *(const gid_t *)p2;
+
+	return ((g1 > g2) - (g1 < g2));
+}
+
+/*
+ * CAUTION: This function normalizes 'groups', possibly also changing the value
+ * of '*ngrpp' as a consequence.
+ */
 int
-kern_setgroups(struct thread *td, u_int ngrp, gid_t *groups)
+kern_setgroups(struct thread *td, int *ngrpp, gid_t *groups)
 {
 	struct proc *p = td->td_proc;
 	struct ucred *newcred, *oldcred;
-	int error;
+	int ngrp, error;
 
-	MPASS(ngrp <= ngroups_max + 1);
+	ngrp = *ngrpp;
+	/* Sanity check size. */
+	if (ngrp < 0 || ngrp > ngroups_max + 1)
+		return (EINVAL);
+
 	AUDIT_ARG_GROUPSET(groups, ngrp);
+	if (ngrp != 0) {
+		/* We allow and treat 0 specially below. */
+		groups_normalize(ngrpp, groups);
+		ngrp = *ngrpp;
+	}
 	newcred = crget();
-	crextend(newcred, ngrp);
+	if (ngrp != 0)
+		crextend(newcred, ngrp);
 	PROC_LOCK(p);
 	oldcred = crcopysafe(p, newcred);
 
 #ifdef MAC
-	error = mac_cred_check_setgroups(oldcred, ngrp, groups);
+	error = ngrp == 0 ?
+	    /* If 'ngrp' is 0, we'll keep just the current effective GID. */
+	    mac_cred_check_setgroups(oldcred, 1, oldcred->cr_groups) :
+	    mac_cred_check_setgroups(oldcred, ngrp, groups);
 	if (error)
 		goto fail;
 #endif
@@ -864,9 +917,9 @@ kern_setgroups(struct thread *td, u_int ngrp, gid_t *groups)
 		 * when running non-BSD software if we do not do the same.
 		 */
 		newcred->cr_ngroups = 1;
-	} else {
-		crsetgroups_locked(newcred, ngrp, groups);
-	}
+	} else
+		crsetgroups_internal(newcred, ngrp, groups);
+
 	setsugid(p);
 	proc_set_cred(p, newcred);
 	PROC_UNLOCK(p);
@@ -1276,30 +1329,47 @@ sys___setugid(struct thread *td, struct __setugid_args *uap)
 #endif /* REGRESSION */
 }
 
+#ifdef INVARIANTS
+static void
+groups_check_normalized(int ngrp, const gid_t *groups)
+{
+	gid_t prev_g;
+
+	groups_check_positive_len(ngrp);
+	groups_check_max_len(ngrp);
+
+	if (ngrp == 1)
+		return;
+
+	prev_g = groups[1];
+	for (int i = 2; i < ngrp; ++i) {
+		const gid_t g = groups[i];
+
+		if (prev_g >= g)
+			panic("%s: groups[%d] (%u) >= groups[%d] (%u)",
+			    __func__, i - 1, prev_g, i, g);
+		prev_g = g;
+	}
+}
+#else
+#define groups_check_normalized(...)
+#endif
+
 /*
  * Returns whether gid designates a supplementary group in cred.
  */
-static bool
-supplementary_group_member(gid_t gid, struct ucred *cred)
+bool
+group_is_supplementary(const gid_t gid, const struct ucred *const cred)
 {
-	int l, h, m;
+
+	groups_check_normalized(cred->cr_ngroups, cred->cr_groups);
 
 	/*
-	 * Perform a binary search of the supplemental groups.  This is possible
-	 * because we sort the groups in crsetgroups().
+	 * Perform a binary search of the supplementary groups.  This is
+	 * possible because we sort the groups in crsetgroups().
 	 */
-	l = 1;
-	h = cred->cr_ngroups;
-
-	while (l < h) {
-		m = l + (h - l) / 2;
-		if (cred->cr_groups[m] < gid)
-			l = m + 1;
-		else
-			h = m;
-	}
-
-	return (l < cred->cr_ngroups && cred->cr_groups[l] == gid);
+	return (bsearch(&gid, cred->cr_groups + 1, cred->cr_ngroups - 1,
+	    sizeof(gid), gidp_cmp) != NULL);
 }
 
 /*
@@ -1307,13 +1377,15 @@ supplementary_group_member(gid_t gid, struct ucred *cred)
  * supplementary groups).
  */
 bool
-groupmember(gid_t gid, struct ucred *cred)
+groupmember(gid_t gid, const struct ucred *cred)
 {
+
+	groups_check_positive_len(cred->cr_ngroups);
 
 	if (gid == cred->cr_groups[0])
 		return (true);
 
-	return (supplementary_group_member(gid, cred));
+	return (group_is_supplementary(gid, cred));
 }
 
 /*
@@ -1321,12 +1393,20 @@ groupmember(gid_t gid, struct ucred *cred)
  * groups).
  */
 bool
-realgroupmember(gid_t gid, struct ucred *cred)
+realgroupmember(gid_t gid, const struct ucred *cred)
 {
+	/*
+	 * Although the equality test on 'cr_rgid' below doesn't access
+	 * 'cr_groups', we check for the latter's length here as we assume that,
+	 * if 'cr_ngroups' is 0, the passed 'struct ucred' is invalid, and
+	 * 'cr_rgid' may not have been filled.
+	 */
+	groups_check_positive_len(cred->cr_ngroups);
+
 	if (gid == cred->cr_rgid)
 		return (true);
 
-	return (supplementary_group_member(gid, cred));
+	return (group_is_supplementary(gid, cred));
 }
 
 /*
@@ -2042,8 +2122,7 @@ crget(void)
 	mac_cred_init(cr);
 #endif
 	cr->cr_groups = cr->cr_smallgroups;
-	cr->cr_agroups =
-	    sizeof(cr->cr_smallgroups) / sizeof(cr->cr_smallgroups[0]);
+	cr->cr_agroups = nitems(cr->cr_smallgroups);
 	return (cr);
 }
 
@@ -2140,7 +2219,11 @@ void
 crcopy(struct ucred *dest, struct ucred *src)
 {
 
-	KASSERT(dest->cr_ref == 1, ("crcopy of shared ucred"));
+	/*
+	 * Ideally, 'cr_ngroups' should be moved out of 'struct ucred''s bcopied
+	 * area, but this would break the ABI, so is deferred until there is
+	 * a compelling need to change it.
+	 */
 	bcopy(&src->cr_startcopy, &dest->cr_startcopy,
 	    (unsigned)((caddr_t)&src->cr_endcopy -
 		(caddr_t)&src->cr_startcopy));
@@ -2198,48 +2281,77 @@ cru2xt(struct thread *td, struct xucred *xcr)
 }
 
 /*
- * Set initial process credentials.
- * Callers are responsible for providing the reference for provided credentials.
- */
-void
-proc_set_cred_init(struct proc *p, struct ucred *newcred)
-{
-
-	p->p_ucred = crcowget(newcred);
-}
-
-/*
  * Change process credentials.
- * Callers are responsible for providing the reference for passed credentials
- * and for freeing old ones.
  *
- * Process has to be locked except when it does not have credentials (as it
- * should not be visible just yet) or when newcred is NULL (as this can be
- * only used when the process is about to be freed, at which point it should
- * not be visible anymore).
+ * Callers are responsible for providing the reference for passed credentials
+ * and for freeing old ones.  Calls chgproccnt() to correctly account the
+ * current process to the proper real UID, if the latter has changed.  Returns
+ * whether the operation was successful.  Failure can happen only on
+ * 'enforce_proc_lim' being true and if no new process can be accounted to the
+ * new real UID because of the current limit (see the inner comment for more
+ * details) and the caller does not have privilege (PRIV_PROC_LIMIT) to override
+ * that.
  */
-void
-proc_set_cred(struct proc *p, struct ucred *newcred)
+static bool
+_proc_set_cred(struct proc *p, struct ucred *newcred, bool enforce_proc_lim)
 {
-	struct ucred *cr;
+	struct ucred *const oldcred = p->p_ucred;
 
-	cr = p->p_ucred;
-	MPASS(cr != NULL);
+	MPASS(oldcred != NULL);
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	KASSERT(newcred->cr_users == 0, ("%s: users %d not 0 on cred %p",
 	    __func__, newcred->cr_users, newcred));
-	mtx_lock(&cr->cr_mtx);
-	KASSERT(cr->cr_users > 0, ("%s: users %d not > 0 on cred %p",
-	    __func__, cr->cr_users, cr));
-	cr->cr_users--;
-	mtx_unlock(&cr->cr_mtx);
+	KASSERT(newcred->cr_ref == 1, ("%s: ref %ld not 1 on cred %p",
+	    __func__, newcred->cr_ref, newcred));
+
+	if (newcred->cr_ruidinfo != oldcred->cr_ruidinfo) {
+		/*
+		 * XXXOC: This check is flawed but nonetheless the best we can
+		 * currently do as we don't really track limits per UID contrary
+		 * to what we pretend in setrlimit(2).  Until this is reworked,
+		 * we just check here that the number of processes for our new
+		 * real UID doesn't exceed this process' process number limit
+		 * (which is meant to be associated with the current real UID).
+		 */
+		const int proccnt_changed = chgproccnt(newcred->cr_ruidinfo, 1,
+		    enforce_proc_lim ? lim_cur_proc(p, RLIMIT_NPROC) : 0);
+
+		if (!proccnt_changed) {
+			if (priv_check_cred(oldcred, PRIV_PROC_LIMIT) != 0)
+				return (false);
+			(void)chgproccnt(newcred->cr_ruidinfo, 1, 0);
+		}
+	}
+
+	mtx_lock(&oldcred->cr_mtx);
+	KASSERT(oldcred->cr_users > 0, ("%s: users %d not > 0 on cred %p",
+	    __func__, oldcred->cr_users, oldcred));
+	oldcred->cr_users--;
+	mtx_unlock(&oldcred->cr_mtx);
 	p->p_ucred = newcred;
 	newcred->cr_users = 1;
 	PROC_UPDATE_COW(p);
+	if (newcred->cr_ruidinfo != oldcred->cr_ruidinfo)
+		(void)chgproccnt(oldcred->cr_ruidinfo, -1, 0);
+	return (true);
 }
 
 void
-proc_unset_cred(struct proc *p)
+proc_set_cred(struct proc *p, struct ucred *newcred)
+{
+	bool success __diagused = _proc_set_cred(p, newcred, false);
+
+	MPASS(success);
+}
+
+bool
+proc_set_cred_enforce_proc_lim(struct proc *p, struct ucred *newcred)
+{
+	return (_proc_set_cred(p, newcred, true));
+}
+
+void
+proc_unset_cred(struct proc *p, bool decrement_proc_count)
 {
 	struct ucred *cr;
 
@@ -2254,6 +2366,8 @@ proc_unset_cred(struct proc *p)
 		KASSERT(cr->cr_ref > 0, ("%s: ref %ld not > 0 on cred %p",
 		    __func__, cr->cr_ref, cr));
 	mtx_unlock(&cr->cr_mtx);
+	if (decrement_proc_count)
+		(void)chgproccnt(cr->cr_ruidinfo, -1, 0);
 	crfree(cr);
 }
 
@@ -2279,92 +2393,158 @@ crcopysafe(struct proc *p, struct ucred *cr)
 }
 
 /*
- * Extend the passed in credential to hold n items.
+ * Extend the passed-in credentials to hold n groups.
+ *
+ * Must not be called after groups have been set.
  */
 void
 crextend(struct ucred *cr, int n)
 {
-	int cnt;
+	size_t nbytes;
 
-	/* Truncate? */
+	MPASS2(cr->cr_ref == 1, "'cr_ref' must be 1 (referenced, unshared)");
+	MPASS2(cr->cr_ngroups == 0, "groups on 'cr' already set!");
+	groups_check_positive_len(n);
+	groups_check_max_len(n);
+
 	if (n <= cr->cr_agroups)
 		return;
 
-	/*
-	 * We extend by 2 each time since we're using a power of two
-	 * allocator until we need enough groups to fill a page.
-	 * Once we're allocating multiple pages, only allocate as many
-	 * as we actually need.  The case of processes needing a
-	 * non-power of two number of pages seems more likely than
-	 * a real world process that adds thousands of groups one at a
-	 * time.
-	 */
-	if ( n < PAGE_SIZE / sizeof(gid_t) ) {
-		if (cr->cr_agroups == 0)
-			cnt = MAX(1, MINALLOCSIZE / sizeof(gid_t));
-		else
-			cnt = cr->cr_agroups * 2;
+	nbytes = n * sizeof(gid_t);
+	if (nbytes < n)
+		panic("Too many groups (memory size overflow)! "
+		    "Computation of 'kern.ngroups' should have prevented this, "
+		    "please fix it. In the meantime, reduce 'kern.ngroups'.");
 
-		while (cnt < n)
-			cnt *= 2;
+	/*
+	 * We allocate a power of 2 larger than 'nbytes', except when that
+	 * exceeds PAGE_SIZE, in which case we allocate the right multiple of
+	 * pages.  We assume PAGE_SIZE is a power of 2 (the call to roundup2()
+	 * below) but do not need to for sizeof(gid_t).
+	 */
+	if (nbytes < PAGE_SIZE) {
+		if (!powerof2(nbytes))
+			/* fls*() return a bit index starting at 1. */
+			nbytes = 1 << flsl(nbytes);
 	} else
-		cnt = roundup2(n, PAGE_SIZE / sizeof(gid_t));
+		nbytes = roundup2(nbytes, PAGE_SIZE);
 
 	/* Free the old array. */
 	if (cr->cr_groups != cr->cr_smallgroups)
 		free(cr->cr_groups, M_CRED);
 
-	cr->cr_groups = malloc(cnt * sizeof(gid_t), M_CRED, M_WAITOK | M_ZERO);
-	cr->cr_agroups = cnt;
+	cr->cr_groups = malloc(nbytes, M_CRED, M_WAITOK | M_ZERO);
+	cr->cr_agroups = nbytes / sizeof(gid_t);
 }
 
 /*
- * Copy groups in to a credential, preserving any necessary invariants.
- * Currently this includes the sorting of all supplemental gids.
- * crextend() must have been called before hand to ensure sufficient
- * space is available.
+ * Normalizes a set of groups to be applied to a 'struct ucred'.
+ *
+ * The set of groups is an array that must comprise the effective GID as its
+ * first element (so its length cannot be 0).
+ *
+ * Normalization ensures that elements after the first, which stand for the
+ * supplementary groups, are sorted in ascending order and do not contain
+ * duplicates.
  */
 static void
-crsetgroups_locked(struct ucred *cr, int ngrp, gid_t *groups)
+groups_normalize(int *ngrp, gid_t *groups)
 {
-	int i;
-	int j;
-	gid_t g;
+	gid_t prev_g;
+	int ins_idx;
 
-	KASSERT(cr->cr_agroups >= ngrp, ("cr_ngroups is too small"));
+	groups_check_positive_len(*ngrp);
+	groups_check_max_len(*ngrp);
+
+	if (*ngrp == 1)
+		return;
+
+	qsort(groups + 1, *ngrp - 1, sizeof(*groups), gidp_cmp);
+
+	/* Remove duplicates. */
+	prev_g = groups[1];
+	ins_idx = 2;
+	for (int i = 2; i < *ngrp; ++i) {
+		const gid_t g = groups[i];
+
+		if (g != prev_g) {
+			if (i != ins_idx)
+				groups[ins_idx] = g;
+			++ins_idx;
+			prev_g = g;
+		}
+	}
+	*ngrp = ins_idx;
+
+	groups_check_normalized(*ngrp, groups);
+}
+
+/*
+ * Internal function copying groups into a credential.
+ *
+ * 'ngrp' must be strictly positive.  Either the passed 'groups' array must have
+ * been normalized in advance (see groups_normalize()), else it must be so
+ * before the structure is to be used again.
+ *
+ * This function is suitable to be used under any lock (it doesn't take any lock
+ * itself nor sleep, and in particular doesn't allocate memory).  crextend()
+ * must have been called beforehand to ensure sufficient space is available.
+ * See also crsetgroups(), which handles that.
+ */
+static void
+crsetgroups_internal(struct ucred *cr, int ngrp, const gid_t *groups)
+{
+
+	MPASS2(cr->cr_ref == 1, "'cr_ref' must be 1 (referenced, unshared)");
+	MPASS2(cr->cr_agroups >= ngrp, "'cr_agroups' too small");
+	groups_check_positive_len(ngrp);
 
 	bcopy(groups, cr->cr_groups, ngrp * sizeof(gid_t));
 	cr->cr_ngroups = ngrp;
-
-	/*
-	 * Sort all groups except cr_groups[0] to allow groupmember to
-	 * perform a binary search.
-	 *
-	 * XXX: If large numbers of groups become common this should
-	 * be replaced with shell sort like linux uses or possibly
-	 * heap sort.
-	 */
-	for (i = 2; i < ngrp; i++) {
-		g = cr->cr_groups[i];
-		for (j = i-1; j >= 1 && g < cr->cr_groups[j]; j--)
-			cr->cr_groups[j + 1] = cr->cr_groups[j];
-		cr->cr_groups[j + 1] = g;
-	}
 }
 
 /*
  * Copy groups in to a credential after expanding it if required.
- * Truncate the list to (ngroups_max + 1) if it is too large.
+ *
+ * May sleep in order to allocate memory (except if, e.g., crextend() was called
+ * before with 'ngrp' or greater).  Truncates the list to (ngroups_max + 1) if
+ * it is too large.  Array 'groups' doesn't need to be sorted.  'ngrp' must be
+ * strictly positive.
  */
 void
-crsetgroups(struct ucred *cr, int ngrp, gid_t *groups)
+crsetgroups(struct ucred *cr, int ngrp, const gid_t *groups)
 {
 
 	if (ngrp > ngroups_max + 1)
 		ngrp = ngroups_max + 1;
-
+	/*
+	 * crextend() asserts that groups are not set, as it may allocate a new
+	 * backing storage without copying the content of the old one.  Since we
+	 * are going to install a completely new set anyway, signal that we
+	 * consider the old ones thrown away.
+	 */
+	cr->cr_ngroups = 0;
 	crextend(cr, ngrp);
-	crsetgroups_locked(cr, ngrp, groups);
+	crsetgroups_internal(cr, ngrp, groups);
+	groups_normalize(&cr->cr_ngroups, cr->cr_groups);
+}
+
+/*
+ * Same as crsetgroups() but accepts an empty groups array.
+ *
+ * This function ensures that an effective GID is always present in credentials.
+ * An empty array is treated as a one-size one holding the passed effective GID
+ * fallback.
+ */
+void
+crsetgroups_fallback(struct ucred *cr, int ngrp, const gid_t *groups,
+    const gid_t fallback)
+{
+	if (ngrp == 0)
+		/* Shortcut. */
+		crsetgroups_internal(cr, 1, &fallback);
+	else
+		crsetgroups(cr, ngrp, groups);
 }
 
 /*
@@ -2472,8 +2652,7 @@ change_egid(struct ucred *newcred, gid_t egid)
 /*-
  * Change a process's real uid.
  * Side effects: newcred->cr_ruid will be updated, newcred->cr_ruidinfo
- *               will be updated, and the old and new cr_ruidinfo proc
- *               counts will be updated.
+ *               will be updated.
  * References: newcred must be an exclusive credential reference for the
  *             duration of the call.
  */
@@ -2481,12 +2660,10 @@ void
 change_ruid(struct ucred *newcred, struct uidinfo *ruip)
 {
 
-	(void)chgproccnt(newcred->cr_ruidinfo, -1, 0);
 	newcred->cr_ruid = ruip->ui_uid;
 	uihold(ruip);
 	uifree(newcred->cr_ruidinfo);
 	newcred->cr_ruidinfo = ruip;
-	(void)chgproccnt(newcred->cr_ruidinfo, 1, 0);
 }
 
 /*-

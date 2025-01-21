@@ -1470,6 +1470,7 @@ display_object(struct kinfo_vmobject *kvo)
 	xo_emit("{:resident/%5ju} ", (uintmax_t)kvo->kvo_resident);
 	xo_emit("{:active/%5ju} ", (uintmax_t)kvo->kvo_active);
 	xo_emit("{:inactive/%5ju} ", (uintmax_t)kvo->kvo_inactive);
+	xo_emit("{:laundry/%5ju} ", (uintmax_t)kvo->kvo_laundry);
 	xo_emit("{:refcount/%3d} ", kvo->kvo_ref_count);
 	xo_emit("{:shadowcount/%3d} ", kvo->kvo_shadow_count);
 
@@ -1552,6 +1553,11 @@ display_object(struct kinfo_vmobject *kvo)
 		break;
 	}
 	xo_emit("{:type/%-2s} ", str);
+	if ((kvo->kvo_flags & KVMO_FLAG_SYSVSHM) != 0)
+		xo_emit("{:sysvshm/sysvshm(%ju:%u)} ",
+		    (uintmax_t)kvo->kvo_vn_fileid, kvo->kvo_vn_fsid_freebsd11);
+	if ((kvo->kvo_flags & KVMO_FLAG_POSIXSHM) != 0)
+		xo_emit("{:posixshm/posixshm@/posixshm}");
 	xo_emit("{:path/%-s}\n", kvo->kvo_path);
 	xo_close_instance("object");
 }
@@ -1567,8 +1573,8 @@ doobjstat(void)
 		xo_warn("Failed to fetch VM object list");
 		return;
 	}
-	xo_emit("{T:RES/%5s} {T:ACT/%5s} {T:INACT/%5s} {T:REF/%3s} {T:SHD/%3s} "
-	    "{T:CM/%3s} {T:TP/%2s} {T:PATH/%s}\n");
+	xo_emit("{T:RES/%5s} {T:ACT/%5s} {T:INACT/%5s} {T:LAUND/%5s} "
+	    "{T:REF/%3s} {T:SHD/%3s} {T:CM/%2s} {T:TP/%3s} {T:PATH/%s}\n");
 	xo_open_list("object");
 	for (i = 0; i < cnt; i++)
 		display_object(&kvo[i]);

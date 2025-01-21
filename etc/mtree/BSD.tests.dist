@@ -364,6 +364,8 @@
             ..
             stdlib
             ..
+            stdtime
+            ..
             string
             ..
             sys
@@ -477,6 +479,8 @@
         ..
         route
         ..
+        savecore
+        ..
         sysctl
         ..
     ..
@@ -514,6 +518,10 @@
         audit
         ..
         auditpipe
+        ..
+        cam
+            ctl
+            ..
         ..
         capsicum
         ..
@@ -763,10 +771,6 @@
         ..
         compat32
         ..
-        cam
-            ctl
-            ..
-        ..
         devrandom
         ..
         dtrace
@@ -904,6 +908,8 @@
             ..
         ..
         posixshm
+        ..
+        sound
         ..
         sys
         ..
@@ -1056,6 +1062,8 @@
         dirname
         ..
         du
+        ..
+        env
         ..
         factor
         ..

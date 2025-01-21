@@ -3223,6 +3223,23 @@ nfsv4_sattr(struct nfsrv_descript *nd, vnode_t vp, struct nfsvattr *nvap,
 			}
 			attrsum += 2 * NFSX_UNSIGNED;
 			break;
+		case NFSATTRBIT_MODEUMASK:
+			NFSM_DISSECT(tl, uint32_t *, 2 * NFSX_UNSIGNED);
+			mode = fxdr_unsigned(u_short, *tl++);
+			mask = fxdr_unsigned(u_short, *tl);
+			/*
+			 * If moderet != 0, mode has already been done.
+			 * If vp != NULL, this is not a file object creation.
+			 */
+			if ((nd->nd_flag & ND_NFSV42) == 0)
+				nd->nd_repstat = NFSERR_ATTRNOTSUPP;
+			else if ((mask & ~0777) != 0 || vp != NULL ||
+			    moderet != 0)
+				nd->nd_repstat = NFSERR_INVAL;
+			else
+				nvap->na_mode = (mode & ~mask);
+			attrsum += 2 * NFSX_UNSIGNED;
+			break;
 		default:
 			nd->nd_repstat = NFSERR_ATTRNOTSUPP;
 			/*
@@ -3293,7 +3310,11 @@ nfsd_excred(struct nfsrv_descript *nd, struct nfsexstuff *exp,
 		     NFSVNO_EXPORTANON(exp) ||
 		     (nd->nd_flag & ND_AUTHNONE) != 0) {
 			nd->nd_cred->cr_uid = credanon->cr_uid;
-			nd->nd_cred->cr_gid = credanon->cr_gid;
+			/*
+			 * 'credanon' is already a 'struct ucred' that was built
+			 * internally with calls to crsetgroups_fallback(), so
+			 * we don't need a fallback here.
+			 */
 			crsetgroups(nd->nd_cred, credanon->cr_ngroups,
 			    credanon->cr_groups);
 		} else if ((nd->nd_flag & ND_GSS) == 0) {

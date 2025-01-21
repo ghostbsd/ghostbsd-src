@@ -117,6 +117,10 @@ int linuxkpi_debug;
 SYSCTL_INT(_compat_linuxkpi, OID_AUTO, debug, CTLFLAG_RWTUN,
     &linuxkpi_debug, 0, "Set to enable pr_debug() prints. Clear to disable.");
 
+int linuxkpi_rcu_debug;
+SYSCTL_INT(_compat_linuxkpi, OID_AUTO, rcu_debug, CTLFLAG_RWTUN,
+    &linuxkpi_rcu_debug, 0, "Set to enable RCU warning. Clear to disable.");
+
 int linuxkpi_warn_dump_stack = 0;
 SYSCTL_INT(_compat_linuxkpi, OID_AUTO, warn_dump_stack, CTLFLAG_RWTUN,
     &linuxkpi_warn_dump_stack, 0,
@@ -769,7 +773,7 @@ linux_dev_fdopen(struct cdev *dev, int fflags, struct thread *td,
 	}
 
 	/* hold on to the vnode - used for fstat() */
-	vhold(filp->f_vnode);
+	vref(filp->f_vnode);
 
 	/* release the file from devfs */
 	finit(file, filp->f_mode, DTYPE_DEV, filp, &linuxfileops);
@@ -1109,13 +1113,13 @@ linux_file_kqfilter_write_event(struct knote *kn, long hint)
 	return ((filp->f_kqflags & LINUX_KQ_FLAG_NEED_WRITE) ? 1 : 0);
 }
 
-static struct filterops linux_dev_kqfiltops_read = {
+static const struct filterops linux_dev_kqfiltops_read = {
 	.f_isfd = 1,
 	.f_detach = linux_file_kqfilter_detach,
 	.f_event = linux_file_kqfilter_read_event,
 };
 
-static struct filterops linux_dev_kqfiltops_write = {
+static const struct filterops linux_dev_kqfiltops_write = {
 	.f_isfd = 1,
 	.f_detach = linux_file_kqfilter_detach,
 	.f_event = linux_file_kqfilter_write_event,
@@ -1501,7 +1505,7 @@ linux_file_close(struct file *file, struct thread *td)
 		error = -OPW(file, td, release(filp->f_vnode, filp));
 	funsetown(&filp->f_sigio);
 	if (filp->f_vnode != NULL)
-		vdrop(filp->f_vnode);
+		vrele(filp->f_vnode);
 	linux_drop_fop(ldev);
 	ldev = filp->f_cdev;
 	if (ldev != NULL)
@@ -1734,7 +1738,7 @@ linux_file_kcmp(struct file *fp1, struct file *fp2, struct thread *td)
 	return (kcmp_cmp((uintptr_t)filp1->f_cdev, (uintptr_t)filp2->f_cdev));
 }
 
-struct fileops linuxfileops = {
+const struct fileops linuxfileops = {
 	.fo_read = linux_file_read,
 	.fo_write = linux_file_write,
 	.fo_truncate = invfo_truncate,
