@@ -218,7 +218,7 @@ contrib/openzfs/module/os/freebsd/zfs/zfs_ioctl_os.c		optional zfs compile-with 
 contrib/openzfs/module/os/freebsd/zfs/zfs_racct.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zfs_vfsops.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zfs_vnops_os.c		optional zfs compile-with "${ZFS_C}"
-contrib/openzfs/module/os/freebsd/zfs/zfs_znode.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/os/freebsd/zfs/zfs_znode_os.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zio_crypt.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/os/freebsd/zfs/zvol_os.c		optional zfs compile-with "${ZFS_C}"
 
@@ -236,6 +236,7 @@ contrib/openzfs/module/zcommon/zfs_fletcher_superscalar.c		optional zfs compile-
 contrib/openzfs/module/zcommon/zfs_fletcher_superscalar4.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zcommon/zfs_namecheck.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zcommon/zfs_prop.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zcommon/zfs_valstr.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zcommon/zpool_prop.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zcommon/zprop_common.c		optional zfs compile-with "${ZFS_C}"
 
@@ -366,6 +367,7 @@ contrib/openzfs/module/zfs/zfs_replay.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zfs_rlock.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zfs_sa.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zfs_vnops.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zfs/zfs_znode.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zstd/zfs_zstd.c		optional zfs zstdio compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zil.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zio.c		optional zfs compile-with "${ZFS_C}"
@@ -1737,13 +1739,17 @@ dev/gve/gve_adminq.c		optional gve
 dev/gve/gve_main.c		optional gve
 dev/gve/gve_qpl.c		optional gve
 dev/gve/gve_rx.c		optional gve
+dev/gve/gve_rx_dqo.c		optional gve
 dev/gve/gve_sysctl.c		optional gve
 dev/gve/gve_tx.c		optional gve
+dev/gve/gve_tx_dqo.c		optional gve
 dev/gve/gve_utils.c		optional gve
 dev/goldfish/goldfish_rtc.c	optional goldfish_rtc fdt
+dev/gpio/acpi_gpiobus.c		optional acpi gpio
 dev/gpio/dwgpio/dwgpio.c	optional gpio dwgpio fdt
 dev/gpio/dwgpio/dwgpio_bus.c	optional gpio dwgpio fdt
 dev/gpio/dwgpio/dwgpio_if.m	optional gpio dwgpio fdt
+dev/gpio/gpioaei.c		optional acpi gpio
 dev/gpio/gpiobacklight.c	optional gpiobacklight fdt
 dev/gpio/gpiokeys.c		optional gpiokeys fdt
 dev/gpio/gpiokeys_codes.c	optional gpiokeys fdt
@@ -3103,7 +3109,6 @@ dev/sound/pci/hdspe.c		optional snd_hdspe pci
 dev/sound/pci/hdspe-pcm.c	optional snd_hdspe pci
 dev/sound/pcm/ac97.c		optional sound
 dev/sound/pcm/ac97_if.m		optional sound
-dev/sound/pcm/ac97_patch.c	optional sound
 dev/sound/pcm/buffer.c		optional sound	\
 	dependency	"snd_fxdiv_gen.h"
 dev/sound/pcm/channel.c		optional sound
@@ -4220,6 +4225,7 @@ net80211/ieee80211_alq.c	optional wlan ieee80211_alq
 netgraph/bluetooth/common/ng_bluetooth.c optional netgraph_bluetooth
 netgraph/bluetooth/drivers/ubt/ng_ubt.c optional netgraph_bluetooth_ubt usb
 netgraph/bluetooth/drivers/ubt/ng_ubt_intel.c optional netgraph_bluetooth_ubt usb
+netgraph/bluetooth/drivers/ubt/ng_ubt_rtl.c optional netgraph_bluetooth_ubt usb
 netgraph/bluetooth/drivers/ubtbcmfw/ubtbcmfw.c optional netgraph_bluetooth_ubtbcmfw usb
 netgraph/bluetooth/hci/ng_hci_cmds.c optional netgraph_bluetooth_hci
 netgraph/bluetooth/hci/ng_hci_evnt.c optional netgraph_bluetooth_hci

@@ -332,6 +332,8 @@ _libpthread_init(struct pthread *curthread)
 	/* Set the initial thread. */
 	if (curthread == NULL) {
 		first = 1;
+		/* Force _get_curthread() return NULL until set. */
+		_tcb_get()->tcb_thread = NULL;
 		/* Create and initialize the initial thread. */
 		curthread = _thr_alloc(NULL);
 		if (curthread == NULL)
@@ -519,7 +521,6 @@ init_private(void)
 		env = getenv("LIBPTHREAD_QUEUE_FIFO");
 		if (env)
 			_thr_queuefifo = atoi(env);
-		TAILQ_INIT(&_thr_atfork_list);
 		env = getenv("LIBPTHREAD_UMTX_MIN_TIMEOUT");
 		if (env) {
 			char *endptr;

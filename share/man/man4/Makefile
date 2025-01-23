@@ -259,7 +259,7 @@ MAN=	aac.4 \
 	iwnfw.4 \
 	iwlwifi.4 \
 	iwlwififw.4 \
-	ixgbe.4 \
+	ix.4 \
 	ixl.4 \
 	jedec_dimm.4 \
 	jme.4 \
@@ -455,6 +455,7 @@ MAN=	aac.4 \
 	pty.4 \
 	puc.4 \
 	pwmc.4 \
+	${_pvscsi.4} \
 	${_qat.4} \
 	${_qat_c2xxx.4} \
 	${_qlxge.4} \
@@ -474,6 +475,7 @@ MAN=	aac.4 \
 	rtsx.4 \
 	rtw88.4 \
 	rtw88fw.4 \
+	rtw89.4 \
 	rtwn.4 \
 	rtwnfw.4 \
 	rtwn_pci.4 \
@@ -687,6 +689,8 @@ MLINKS+=gpioths.4 dht11.4
 MLINKS+=gpioths.4 dht22.4
 MLINKS+=gre.4 if_gre.4
 MLINKS+=hpet.4 acpi_hpet.4
+MLINKS+=${_hv_netvsc.4} ${_hn.4} \
+	${_hv_netvsc.4} ${_if_hn.4}
 MLINKS+=${_hptrr.4} ${_rr232x.4}
 MLINKS+=${_attimer.4} ${_i8254.4}
 MLINKS+=ip.4 rawip.4
@@ -700,9 +704,9 @@ MLINKS+=iwi.4 if_iwi.4
 MLINKS+=iwlwifi.4 if_iwlwifi.4
 MLINKS+=iwm.4 if_iwm.4
 MLINKS+=iwn.4 if_iwn.4
-MLINKS+=ixgbe.4 ix.4
-MLINKS+=ixgbe.4 if_ix.4
-MLINKS+=ixgbe.4 if_ixgbe.4
+MLINKS+=ix.4 if_ix.4
+MLINKS+=ix.4 if_ixgbe.4
+MLINKS+=ix.4 ixgbe.4
 MLINKS+=ixl.4 if_ixl.4
 MLINKS+=iavf.4 if_iavf.4
 MLINKS+=jme.4 if_jme.4
@@ -810,6 +814,7 @@ _cpuctl.4=	cpuctl.4
 _dpms.4=	dpms.4
 _ftgpio.4=	ftgpio.4
 _ftwd.4=	ftwd.4
+_hn.4=		_hn.4
 _hpt27xx.4=	hpt27xx.4
 _hptiop.4=	hptiop.4
 _hptmv.4=	hptmv.4
@@ -825,9 +830,9 @@ _hwpstate_intel.4=	hwpstate_intel.4
 _i8254.4=	i8254.4
 _ichwd.4=	ichwd.4
 _if_bxe.4=	if_bxe.4
+_if_hn.4=	if_hn.4
 _if_nfe.4=	if_nfe.4
 _if_urtw.4=	if_urtw.4
-_if_vmx.4=	if_vmx.4
 _if_wpi.4=	if_wpi.4
 _igc.4=		igc.4
 _imcsmb.4=	imcsmb.4
@@ -858,7 +863,6 @@ _urtw.4=	urtw.4
 _viawd.4=	viawd.4
 _vmci.4=	vmci.4
 _vmd.4=		vmd.4
-_vmx.4=		vmx.4
 _wbwd.4=	wbwd.4
 _wdatwd.4=	wdatwd.4
 _wpi.4=		wpi.4
@@ -894,9 +898,12 @@ _vmm.4=		vmm.4
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386" || \
 	 ${MACHINE_CPUARCH} == "aarch64"
 _gve.4=		gve.4
+_if_vmx.4=	if_vmx.4
 _ipmi.4=	ipmi.4
 _linux.4=	linux.4
 _ossl.4=	ossl.4
+_pvscsi.4=	pvscsi.4
+_vmx.4=		vmx.4
 .endif
 
 .if ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "aarch64" || \

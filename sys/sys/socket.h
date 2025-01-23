@@ -37,6 +37,7 @@
 #include <sys/cdefs.h>
 #include <sys/_types.h>
 #include <sys/_iovec.h>
+#include <sys/_timeval.h>
 #include <machine/_align.h>
 
 /*
@@ -172,6 +173,7 @@ typedef	__uintptr_t	uintptr_t;
 #define	SO_TS_CLOCK	0x1017		/* clock type used for SO_TIMESTAMP */
 #define	SO_MAX_PACING_RATE	0x1018	/* socket's max TX pacing rate (Linux name) */
 #define	SO_DOMAIN	0x1019		/* get socket domain */
+#define	SO_SPLICE	0x1023		/* splice data to other socket */
 #endif
 
 #if __BSD_VISIBLE
@@ -673,6 +675,16 @@ struct mmsghdr {
 	struct msghdr	msg_hdr;		/* message header */
 	ssize_t		msg_len;		/* message length */
 };
+
+/*
+ * Structure used for manipulating splice option.
+ */
+struct splice {
+	int	sp_fd;			/* drain socket file descriptor */
+	off_t	sp_max;			/* if set, maximum bytes to splice */
+	struct timeval sp_idle;		/* idle timeout */
+};
+
 #endif /* __BSD_VISIBLE */
 
 #ifndef	_KERNEL

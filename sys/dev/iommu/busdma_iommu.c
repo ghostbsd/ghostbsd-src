@@ -127,6 +127,12 @@ iommu_get_requester(device_t dev, uint16_t *rid)
 	pci_class = devclass_find("pci");
 	l = requester = dev;
 
+	pci = device_get_parent(dev);
+	if (pci == NULL || device_get_devclass(pci) != pci_class) {
+		*rid = 0;	/* XXXKIB: Could be ACPI HID */
+		return (requester);
+	}
+
 	*rid = pci_get_rid(dev);
 
 	/*
@@ -394,6 +400,8 @@ iommu_bus_dma_tag_destroy(bus_dma_tag_t dmat1)
 {
 	struct bus_dma_tag_iommu *dmat, *parent;
 	struct bus_dma_tag_iommu *dmat_copy __unused;
+	struct iommu_unit *iommu;
+	struct iommu_ctx *ctx;
 	int error;
 
 	error = 0;
@@ -408,8 +416,12 @@ iommu_bus_dma_tag_destroy(bus_dma_tag_t dmat1)
 			parent = (struct bus_dma_tag_iommu *)dmat->common.parent;
 			if (atomic_fetchadd_int(&dmat->common.ref_count, -1) ==
 			    1) {
-				if (dmat == dmat->ctx->tag)
-					iommu_free_ctx(dmat->ctx);
+				ctx = dmat->ctx;
+				if (dmat == ctx->tag) {
+					iommu = ctx->domain->iommu;
+					IOMMU_LOCK(iommu);
+					iommu_free_ctx_locked(iommu, dmat->ctx);
+				}
 				free(dmat->segments, M_IOMMU_DMAMAP);
 				free(dmat, M_DEVBUF);
 				dmat = parent;

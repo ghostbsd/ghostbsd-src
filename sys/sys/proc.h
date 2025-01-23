@@ -567,6 +567,8 @@ enum {
 #define	TDP2_SBPAGES	0x00000001 /* Owns sbusy on some pages */
 #define	TDP2_COMPAT32RB	0x00000002 /* compat32 ABI for robust lists */
 #define	TDP2_ACCT	0x00000004 /* Doing accounting */
+#define	TDP2_EFIRT	0x20000000 /* In firmware (EFI RT) call */
+#define	TDP2_SAN_QUIET	0x00000008 /* Disable warnings from K(A|M)SAN */
 
 /*
  * Reasons that the current thread can not be run yet.
@@ -714,7 +716,7 @@ struct proc {
 	int		p_suspcount;	/* (j) Num threads in suspended mode. */
 	struct thread	*p_xthread;	/* (c) Trap thread */
 	int		p_boundary_count;/* (j) Num threads at user boundary */
-	int		p_pendingcnt;	/* how many signals are pending */
+	int		p_pendingcnt;	/* (c) how many signals are pending */
 	struct itimers	*p_itimers;	/* (c) POSIX interval timers. */
 	struct procdesc	*p_procdesc;	/* (e) Process descriptor, if any. */
 	u_int		p_treeflag;	/* (e) P_TREE flags */
@@ -874,7 +876,7 @@ struct proc {
 						   MAP_STACK */
 #define	P2_STKGAP_DISABLE_EXEC	0x00001000	/* Stack gap disabled
 						   after exec */
-#define	P2_ITSTOPPED		0x00002000
+#define	P2_ITSTOPPED		0x00002000	/* itimers stopped */
 #define	P2_PTRACEREQ		0x00004000	/* Active ptrace req */
 #define	P2_NO_NEW_PRIVS		0x00008000	/* Ignore setuid */
 #define	P2_WXORX_DISABLE	0x00010000	/* WX mappings enabled */
@@ -882,7 +884,7 @@ struct proc {
 #define	P2_WEXIT		0x00040000	/* exit just started, no
 						   external thread_single() is
 						   permitted */
-#define	P2_REAPKILLED		0x00080000
+#define	P2_REAPKILLED		0x00080000	/* REAP_KILL pass touched me */
 #define	P2_MEMBAR_PRIVE		0x00100000	/* membar private expedited
 						   registered */
 #define	P2_MEMBAR_PRIVE_SYNCORE	0x00200000	/* membar private expedited

@@ -68,7 +68,9 @@
 
 #include <sys/systm.h>
 #include <sys/blockcount.h>
+#include <sys/conf.h>
 #include <sys/cpuset.h>
+#include <sys/ipc.h>
 #include <sys/jail.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
@@ -79,6 +81,7 @@
 #include <sys/pctrie.h>
 #include <sys/proc.h>
 #include <sys/refcount.h>
+#include <sys/shm.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/resourcevar.h>
@@ -2515,8 +2518,12 @@ vm_object_list_handler(struct sysctl_req *req, bool swap_only)
 	struct vattr va;
 	vm_object_t obj;
 	vm_page_t m;
+	struct cdev *cdev;
+	struct cdevsw *csw;
 	u_long sp;
-	int count, error;
+	int count, error, ref;
+	key_t key;
+	unsigned short seq;
 	bool want_path;
 
 	if (req->oldptr == NULL) {
@@ -2564,6 +2571,7 @@ vm_object_list_handler(struct sysctl_req *req, bool swap_only)
 		kvo->kvo_memattr = obj->memattr;
 		kvo->kvo_active = 0;
 		kvo->kvo_inactive = 0;
+		kvo->kvo_flags = 0;
 		if (!swap_only) {
 			TAILQ_FOREACH(m, &obj->memq, listq) {
 				/*
@@ -2575,10 +2583,12 @@ vm_object_list_handler(struct sysctl_req *req, bool swap_only)
 				 * sysctl is only meant to give an
 				 * approximation of the system anyway.
 				 */
-				if (m->a.queue == PQ_ACTIVE)
+				if (vm_page_active(m))
 					kvo->kvo_active++;
-				else if (m->a.queue == PQ_INACTIVE)
+				else if (vm_page_inactive(m))
 					kvo->kvo_inactive++;
+				else if (vm_page_in_laundry(m))
+					kvo->kvo_laundry++;
 			}
 		}
 
@@ -2600,7 +2610,30 @@ vm_object_list_handler(struct sysctl_req *req, bool swap_only)
 			sp = swap_pager_swapped_pages(obj);
 			kvo->kvo_swapped = sp > UINT32_MAX ? UINT32_MAX : sp;
 		}
+		if ((obj->type == OBJT_DEVICE || obj->type == OBJT_MGTDEVICE) &&
+		    (obj->flags & OBJ_CDEVH) != 0) {
+			cdev = obj->un_pager.devp.handle;
+			if (cdev != NULL) {
+				csw = dev_refthread(cdev, &ref);
+				if (csw != NULL) {
+					strlcpy(kvo->kvo_path, cdev->si_name,
+					    sizeof(kvo->kvo_path));
+					dev_relthread(cdev, ref);
+				}
+			}
+		}
 		VM_OBJECT_RUNLOCK(obj);
+		if ((obj->flags & OBJ_SYSVSHM) != 0) {
+			kvo->kvo_flags |= KVMO_FLAG_SYSVSHM;
+			shmobjinfo(obj, &key, &seq);
+			kvo->kvo_vn_fileid = key;
+			kvo->kvo_vn_fsid_freebsd11 = seq;
+		}
+		if ((obj->flags & OBJ_POSIXSHM) != 0) {
+			kvo->kvo_flags |= KVMO_FLAG_POSIXSHM;
+			shm_get_path(obj, kvo->kvo_path,
+			    sizeof(kvo->kvo_path));
+		}
 		if (vp != NULL) {
 			vn_fullpath(vp, &fullpath, &freepath);
 			vn_lock(vp, LK_SHARED | LK_RETRY);
@@ -2611,10 +2644,9 @@ vm_object_list_handler(struct sysctl_req *req, bool swap_only)
 								/* truncate */
 			}
 			vput(vp);
+			strlcpy(kvo->kvo_path, fullpath, sizeof(kvo->kvo_path));
+			free(freepath, M_TEMP);
 		}
-
-		strlcpy(kvo->kvo_path, fullpath, sizeof(kvo->kvo_path));
-		free(freepath, M_TEMP);
 
 		/* Pack record size down */
 		kvo->kvo_structsize = offsetof(struct kinfo_vmobject, kvo_path)

@@ -134,7 +134,7 @@ struct vnode {
 	seqc_t	v_seqc;				/* i modification count */
 	uint32_t v_nchash;			/* u namecache hash */
 	u_int	v_hash;
-	struct	vop_vector *v_op;		/* u vnode operations vector */
+	const struct vop_vector *v_op;		/* u vnode operations vector */
 	void	*v_data;			/* u private data for fs */
 
 	/*
@@ -233,6 +233,7 @@ _Static_assert(sizeof(struct vnode) <= 448, "vnode size crosses 448 bytes");
 /*
  * Vnode flags.
  *	VI flags are protected by interlock and live in v_iflag
+ *	VIRF flags are protected by interlock and live in v_irflag
  *	VV flags are protected by the vnode lock and live in v_vflag
  *
  *	VIRF_DOOMED is doubly protected by the interlock and vnode lock.  Both
