@@ -31,3 +31,7 @@ for _dir in /etc /usr/local/etc ; do
 	done
 done
 unset _loaded _dir _file
+
+CHARSET=UTF-8;	export CHARSET
+LANG=en_US.UTF-8;	export LANG
+LC_ALL=en_US.UTF-8; export LC_ALL

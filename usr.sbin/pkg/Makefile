@@ -16,9 +16,8 @@ PKGCONFBRANCH?=	latest
 .  endif
 . endif
 .endif
-PKGCONF?=	FreeBSD.conf.${PKGCONFBRANCH}
-CONFS=		${PKGCONF}
-CONFSNAME_${PKGCONF}=	${PKGCONF:C/\.conf.+$/.conf/}
+CONFS=		GhostBSD.conf
+CONFSNAME=	GhostBSD.conf
 CONFSDIR=	/etc/pkg
 CONFSMODE=	644
 PROG=	pkg

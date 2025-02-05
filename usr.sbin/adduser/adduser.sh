@@ -990,7 +990,7 @@ defaultclass=
 defaultLgroup=
 defaultgroups=
 defaultshell="${DEFAULTSHELL}"
-defaultHomePerm=
+defaultHomePerm="700"
 zfsopt=
 Zencrypt="no"
 

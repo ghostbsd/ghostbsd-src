@@ -54,7 +54,6 @@ DEVD+=	apple.conf
 .endif
 
 .if ${MK_ZFS} != "no"
-DEVD+=	zfs.conf
 .endif
 
 PROG_CXX=devd

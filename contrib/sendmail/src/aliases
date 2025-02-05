@@ -10,10 +10,10 @@
 #	>>>>>>>>>>	show through to sendmail.
 #
 #
-# See also RFC 2142, `MAILBOX NAMES FOR COMMON SERVICES, ROLES 
+# See also RFC 2142, `MAILBOX NAMES FOR COMMON SERVICES, ROLES
 # AND FUNCTIONS', May 1997
 
-# Pretty much everything else in this file points to "root", so 
+# Pretty much everything else in this file points to "root", so
 # you should forward root's email to the system administrator.
 # Delivering mail to root's mailbox or reading mail as root is
 # inadvisable.
@@ -34,7 +34,6 @@ smmsp:		postmaster
 ingres:		root
 nobody:		root
 system:		root
-toor:		root
 
 # Well-known aliases
 manager:	root

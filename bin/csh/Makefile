@@ -161,8 +161,8 @@ tc.const.h: tc.const.c sh.char.h config.h config_f.h sh.types.h sh.err.h ${BUILD
 	    sort >> ${.TARGET}
 	@echo '#endif /* _h_tc_const */' >> ${.TARGET}
 
-beforeinstallconfig:
-	rm -f ${DESTDIR}/.cshrc
+#beforeinstallconfig:
+#	rm -f ${DESTDIR}/.cshrc
 
 afterinstallconfig:
 	# XXX Set link mode explicitly via -m.  We cannot use LINKMODE for this

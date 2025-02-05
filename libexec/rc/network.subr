@@ -121,7 +121,7 @@ ifn_vnet0()
 #
 ifconfig_up()
 {
-	local _cfg _ifconfig_descr _ipv6_opts ifconfig_args 
+	local _cfg _ifconfig_descr _ipv6_opts ifconfig_args
 	_cfg=1
 
 	# Make sure lo0 always comes up.
@@ -258,7 +258,9 @@ ifconfig_down()
 	elif hostapif $1; then
 		/etc/rc.d/hostapd stop $1
 		_cfg=0
-	elif dhcpif $1; then
+	fi
+
+	if dhcpif $1; then
 		/etc/rc.d/dhclient stop $1
 		_cfg=0
 	fi
@@ -329,6 +331,9 @@ ifconfig_getargs()
 	for _arg in $_tmpargs; do
 		case $_arg:$_vnet in
 		[Dd][Hh][Cc][Pp]:0) ;;
+		[Aa][Ll][Ll]:0) ;;
+		[Ii][Pp][Vv][4]:0) ;;
+		[Ii][Pp][Vv][6]:0) ;;
 		[Nn][Oo][Aa][Uu][Tt][Oo]:0) ;;
 		[Nn][Oo][Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp]:0) ;;
 		[Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp]:0) ;;
@@ -388,6 +393,15 @@ dhcpif()
 		[Dd][Hh][Cc][Pp])
 			return 0
 			;;
+		[Aa][Ll][Ll])
+			return 0
+			;;
+		[Ii][Pp][Vv][4])
+			return 0
+			;;
+		[Ii][Pp][Vv][6])
+			return 0
+			;;
 		[Nn][Oo][Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp])
 			return 0
 			;;
@@ -418,6 +432,15 @@ syncdhcpif()
 			return 1
 			;;
 		[Ss][Yy][Nn][Cc][Dd][Hh][Cc][Pp])
+			return 0
+			;;
+		[Aa][Ll][Ll])
+			return 0
+			;;
+		[Ii][Pp][Vv][4])
+			return 0
+			;;
+		[Ii][Pp][Vv][6])
 			return 0
 			;;
 		esac
@@ -1285,9 +1308,8 @@ wlan_up()
 		done
 	done
 	if [ -n "${_list# }" ]; then
-		echo "Created wlan(4) interfaces: ${_list# }."
+		debug "Created wlan(4)s: ${_list# }"
 	fi
-	debug "Created wlan(4)s: ${_list# }"
 }
 
 # wlan_down
@@ -1767,4 +1789,33 @@ network6_getladdr()
 
 		return
 	done
+}
+
+
+# ltr str src dst [var]
+#	Change every $src in $str to $dst.
+#	Useful when /usr is not yet mounted and we cannot use tr(1), sed(1) nor
+#	awk(1). If var is non-NULL, set it to the result.
+ltr()
+{
+	local _str _src _dst _out _com _var
+	_str="$1"
+	_src="$2"
+	_dst="$3"
+	_var="$4"
+	_out=""
+
+	local IFS="${_src}"
+	for _com in ${_str}; do
+		if [ -z "${_out}" ]; then
+			_out="${_com}"
+		else
+			_out="${_out}${_dst}${_com}"
+		fi
+	done
+	if [ -n "${_var}" ]; then
+		setvar "${_var}" "${_out}"
+	else
+		echo "${_out}"
+	fi
 }

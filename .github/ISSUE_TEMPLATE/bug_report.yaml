@@ -1,0 +1,55 @@
+name: Bug Report
+description: Report a bug or issue here.
+title: "[BUG] <title>"
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Please read this first
+        Before reporting an issue, make sure it is not in our [Development Management](https://github.com/orgs/ghostbsd/projects/4/views/12).
+
+        Follow these tips to help us understand your issue.
+        * Only one issue per report
+        * The title describes the issue
+        * Follow the information of each field
+        * Be concise and clear on each field
+        * Make sure the issue is understandable after reading it
+
+        **Note:** If we have a problem understanding the issue, we might close the report.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Use ghostbsd-version -v or go to App menu > System Tools > Mate System Monitor and on the System Monitor window click System Tab
+      placeholder: "22.03.11"
+    validations:
+      required: true
+  - type: textarea
+    id: describe
+    attributes:
+      label: Explain the issue and what happens
+      description: What is the issue, and what happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Explain how to reproduce the bug?
+      description: What are the steps to reproduce this issue?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What is the Expected behavior (if applicable)
+      description: What do you expect to happen?
+    validations:
+      required: false
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context (if applicable)
+      description: Added your Terminal ouput or logs here with context
+    validations:
+      required: false
