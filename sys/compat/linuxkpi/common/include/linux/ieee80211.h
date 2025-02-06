@@ -37,6 +37,14 @@
 #include <linux/bitops.h>
 #include <linux/if_ether.h>
 
+/* linux_80211.c */
+extern int linuxkpi_debug_80211;
+#ifndef	D80211_TODO
+#define	D80211_TODO		0x1
+#endif
+#define	TODO(fmt, ...)		if (linuxkpi_debug_80211 & D80211_TODO)	\
+    printf("%s:%d: XXX LKPI80211 TODO " fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
+
 
 /* 9.4.2.55 Management MIC element (CMAC-256, GMAC-128, and GMAC-256). */
 struct ieee80211_mmie_16 {
@@ -130,16 +138,18 @@ enum wlan_ht_cap_sm_ps {
 #define	WLAN_PMKID_LEN				16
 #define	WLAN_PMK_LEN_SUITE_B_192		48
 
-#define	WLAN_KEY_LEN_WEP40			5
-#define	WLAN_KEY_LEN_WEP104			13
-#define	WLAN_KEY_LEN_TKIP			32
-#define	WLAN_KEY_LEN_CCMP			16
-#define	WLAN_KEY_LEN_GCMP			16
-#define	WLAN_KEY_LEN_AES_CMAC			16
-#define	WLAN_KEY_LEN_GCMP_256			32
-#define	WLAN_KEY_LEN_BIP_CMAC_256		32
-#define	WLAN_KEY_LEN_BIP_GMAC_128		16
-#define	WLAN_KEY_LEN_BIP_GMAC_256		32
+enum ieee80211_key_len {
+	WLAN_KEY_LEN_WEP40			= 5,
+	WLAN_KEY_LEN_WEP104			= 13,
+	WLAN_KEY_LEN_TKIP			= 32,
+	WLAN_KEY_LEN_CCMP			= 16,
+	WLAN_KEY_LEN_GCMP			= 16,
+	WLAN_KEY_LEN_AES_CMAC			= 16,
+	WLAN_KEY_LEN_GCMP_256			= 32,
+	WLAN_KEY_LEN_BIP_CMAC_256		= 32,
+	WLAN_KEY_LEN_BIP_GMAC_128		= 16,
+	WLAN_KEY_LEN_BIP_GMAC_256		= 32,
+};
 
 /* 802.11-2020, 9.4.2.55.3, Table 9-185 Subfields of the A-MPDU Parameters field */
 enum ieee80211_min_mpdu_start_spacing {
@@ -475,9 +485,14 @@ enum ieee80211_back {
 	WLAN_ACTION_ADDBA_REQ		= 0,
 };
 
+enum ieee80211_sa_query {
+	WLAN_ACTION_SA_QUERY_RESPONSE	= 1,
+};
+
 /* 802.11-2020, Table 9-51-Category values */
 enum ieee80211_category {
 	WLAN_CATEGORY_BACK		= 3,
+	WLAN_CATEGORY_SA_QUERY		= 8,	/* net80211::IEEE80211_ACTION_CAT_SA_QUERY */
 };
 
 /* 80211-2020 9.3.3.2 Format of Management frames */
@@ -593,6 +608,7 @@ enum ieee80211_eid {
 	WLAN_EID_TIM				= 5,
 	WLAN_EID_COUNTRY			= 7,	/* IEEE80211_ELEMID_COUNTRY */
 	WLAN_EID_REQUEST			= 10,
+	WLAN_EID_QBSS_LOAD			= 11,	/* IEEE80211_ELEMID_BSSLOAD */
 	WLAN_EID_CHANNEL_SWITCH			= 37,
 	WLAN_EID_MEASURE_REPORT			= 39,
 	WLAN_EID_HT_CAPABILITY			= 45,	/* IEEE80211_ELEMID_HTCAP */
@@ -604,6 +620,7 @@ enum ieee80211_eid {
 	WLAN_EID_MULTI_BSSID_IDX		= 85,
 	WLAN_EID_EXT_CAPABILITY			= 127,
 	WLAN_EID_VHT_CAPABILITY			= 191,	/* IEEE80211_ELEMID_VHT_CAP */
+	WLAN_EID_S1G_TWT			= 216,
 	WLAN_EID_VENDOR_SPECIFIC		= 221,	/* IEEE80211_ELEMID_VENDOR */
 };
 
@@ -752,6 +769,16 @@ enum ieee80211_tx_pwr_interpretation_subfield_enc {
 	IEEE80211_TPE_REG_CLIENT_EIRP_PSD,
 };
 
+enum ieee80211_tx_pwr_category_6ghz {
+	IEEE80211_TPE_CAT_6GHZ_DEFAULT,
+};
+
+/* 802.11-2020, 9.4.2.27 BSS Load element */
+struct ieee80211_bss_load_elem {
+	uint16_t				sta_count;
+	uint8_t					channel_util;
+	uint16_t				avail_adm_capa;
+};
 
 /* net80211: IEEE80211_IS_CTL() */
 static __inline bool
@@ -852,5 +879,348 @@ ieee80211_is_trigger(__le16 fc)
 
 	return (fc == v);
 }
+
+static __inline bool
+ieee80211_is_action(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_ACTION | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_probe_resp(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_PROBE_RESP | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_auth(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_AUTH | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_assoc_req(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_ASSOC_REQ | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_assoc_resp(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_ASSOC_RESP | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_reassoc_req(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_REASSOC_REQ | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_reassoc_resp(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_REASSOC_RESP | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_disassoc(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_DISASSOC | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_data_present(__le16 fc)
+{
+	__le16 v;
+
+	/* If it is a data frame and NODATA is not present. */
+	fc &= htole16(IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_NODATA);
+	v = htole16(IEEE80211_FC0_TYPE_DATA);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_deauth(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_DEAUTH | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_beacon(__le16 fc)
+{
+	__le16 v;
+
+	/*
+	 * For as much as I get it this comes in LE and unlike FreeBSD
+	 * where we get the entire frame header and u8[], here we get the
+	 * 9.2.4.1 Frame Control field only. Mask and compare.
+	 */
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_BEACON | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+
+static __inline bool
+ieee80211_is_probe_req(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_PROBE_REQ | IEEE80211_FC0_TYPE_MGT);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_has_protected(__le16 fc)
+{
+
+	return (fc & htole16(IEEE80211_FC1_PROTECTED << 8));
+}
+
+static __inline bool
+ieee80211_is_back_req(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_BAR | IEEE80211_FC0_TYPE_CTL);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_bufferable_mmpdu(struct sk_buff *skb)
+{
+	struct ieee80211_mgmt *mgmt;
+	__le16 fc;
+
+	mgmt = (struct ieee80211_mgmt *)skb->data;
+	fc = mgmt->frame_control;
+
+	/* 11.2.2 Bufferable MMPDUs, 80211-2020. */
+	/* XXX we do not care about IBSS yet. */
+
+	if (!ieee80211_is_mgmt(fc))
+		return (false);
+	if (ieee80211_is_action(fc))		/* XXX FTM? */
+		return (true);			/* XXX false? */
+	if (ieee80211_is_disassoc(fc))
+		return (true);
+	if (ieee80211_is_deauth(fc))
+		return (true);
+
+	TODO();
+
+	return (false);
+}
+
+static __inline bool
+ieee80211_is_nullfunc(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_NODATA | IEEE80211_FC0_TYPE_DATA);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_qos_nullfunc(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_QOS_NULL | IEEE80211_FC0_TYPE_DATA);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_is_any_nullfunc(__le16 fc)
+{
+
+	return (ieee80211_is_nullfunc(fc) || ieee80211_is_qos_nullfunc(fc));
+}
+
+static inline bool
+ieee80211_is_pspoll(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
+	v = htole16(IEEE80211_FC0_SUBTYPE_PS_POLL | IEEE80211_FC0_TYPE_CTL);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_has_a4(__le16 fc)
+{
+	__le16 v;
+
+	fc &= htole16((IEEE80211_FC1_DIR_TODS | IEEE80211_FC1_DIR_FROMDS) << 8);
+	v = htole16((IEEE80211_FC1_DIR_TODS | IEEE80211_FC1_DIR_FROMDS) << 8);
+
+	return (fc == v);
+}
+
+static __inline bool
+ieee80211_has_order(__le16 fc)
+{
+
+	return (fc & htole16(IEEE80211_FC1_ORDER << 8));
+}
+
+static __inline bool
+ieee80211_has_retry(__le16 fc)
+{
+
+	return (fc & htole16(IEEE80211_FC1_RETRY << 8));
+}
+
+
+static __inline bool
+ieee80211_has_fromds(__le16 fc)
+{
+
+	return (fc & htole16(IEEE80211_FC1_DIR_FROMDS << 8));
+}
+
+static __inline bool
+ieee80211_has_tods(__le16 fc)
+{
+
+	return (fc & htole16(IEEE80211_FC1_DIR_TODS << 8));
+}
+
+static __inline uint8_t *
+ieee80211_get_SA(struct ieee80211_hdr *hdr)
+{
+
+	if (ieee80211_has_a4(hdr->frame_control))
+		return (hdr->addr4);
+	if (ieee80211_has_fromds(hdr->frame_control))
+		return (hdr->addr3);
+	return (hdr->addr2);
+}
+
+static __inline uint8_t *
+ieee80211_get_DA(struct ieee80211_hdr *hdr)
+{
+
+	if (ieee80211_has_tods(hdr->frame_control))
+		return (hdr->addr3);
+	return (hdr->addr1);
+}
+
+static __inline bool
+ieee80211_is_frag(struct ieee80211_hdr *hdr)
+{
+	TODO();
+	return (false);
+}
+
+static __inline bool
+ieee80211_is_first_frag(__le16 fc)
+{
+	TODO();
+	return (false);
+}
+
+static __inline bool
+ieee80211_is_robust_mgmt_frame(struct sk_buff *skb)
+{
+	TODO();
+	return (false);
+}
+
+static __inline bool
+ieee80211_is_ftm(struct sk_buff *skb)
+{
+	TODO();
+	return (false);
+}
+
+static __inline bool
+ieee80211_is_timing_measurement(struct sk_buff *skb)
+{
+	TODO();
+	return (false);
+}
+
+static __inline bool
+ieee80211_has_pm(__le16 fc)
+{
+	TODO();
+	return (false);
+}
+
+static __inline bool
+ieee80211_has_morefrags(__le16 fc)
+{
+
+	fc &= htole16(IEEE80211_FC1_MORE_FRAG << 8);
+	return (fc != 0);
+}
+
+static __inline u8 *
+ieee80211_get_qos_ctl(struct ieee80211_hdr *hdr)
+{
+        if (ieee80211_has_a4(hdr->frame_control))
+                return (u8 *)hdr + 30;
+        else
+                return (u8 *)hdr + 24;
+}
+
 
 #endif	/* _LINUXKPI_LINUX_IEEE80211_H */

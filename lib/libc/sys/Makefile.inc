@@ -216,6 +216,7 @@ MAN+=	abort2.2 \
 	getpriority.2 \
 	getrandom.2 \
 	getrlimit.2 \
+	getrlimitusage.2 \
 	getrusage.2 \
 	getsid.2 \
 	getsockname.2 \
@@ -243,6 +244,7 @@ MAN+=	abort2.2 \
 	listen.2 \
 	lseek.2 \
 	madvise.2 \
+	membarrier.2 \
 	mincore.2 \
 	minherit.2 \
 	mkdir.2 \

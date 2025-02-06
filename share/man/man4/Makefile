@@ -259,7 +259,7 @@ MAN=	aac.4 \
 	iwnfw.4 \
 	iwlwifi.4 \
 	iwlwififw.4 \
-	ixgbe.4 \
+	ix.4 \
 	ixl.4 \
 	jedec_dimm.4 \
 	jme.4 \
@@ -474,6 +474,7 @@ MAN=	aac.4 \
 	rtsx.4 \
 	rtw88.4 \
 	rtw88fw.4 \
+	rtw89.4 \
 	rtwn.4 \
 	rtwnfw.4 \
 	rtwn_pci.4 \
@@ -687,6 +688,8 @@ MLINKS+=gpioths.4 dht11.4
 MLINKS+=gpioths.4 dht22.4
 MLINKS+=gre.4 if_gre.4
 MLINKS+=hpet.4 acpi_hpet.4
+MLINKS+=${_hv_netvsc.4} ${_hn.4} \
+	${_hv_netvsc.4} ${_if_hn.4}
 MLINKS+=${_hptrr.4} ${_rr232x.4}
 MLINKS+=${_attimer.4} ${_i8254.4}
 MLINKS+=ip.4 rawip.4
@@ -700,9 +703,9 @@ MLINKS+=iwi.4 if_iwi.4
 MLINKS+=iwlwifi.4 if_iwlwifi.4
 MLINKS+=iwm.4 if_iwm.4
 MLINKS+=iwn.4 if_iwn.4
-MLINKS+=ixgbe.4 ix.4
-MLINKS+=ixgbe.4 if_ix.4
-MLINKS+=ixgbe.4 if_ixgbe.4
+MLINKS+=ix.4 if_ix.4
+MLINKS+=ix.4 if_ixgbe.4
+MLINKS+=ix.4 ixgbe.4
 MLINKS+=ixl.4 if_ixl.4
 MLINKS+=iavf.4 if_iavf.4
 MLINKS+=jme.4 if_jme.4
@@ -810,6 +813,7 @@ _cpuctl.4=	cpuctl.4
 _dpms.4=	dpms.4
 _ftgpio.4=	ftgpio.4
 _ftwd.4=	ftwd.4
+_hn.4=		_hn.4
 _hpt27xx.4=	hpt27xx.4
 _hptiop.4=	hptiop.4
 _hptmv.4=	hptmv.4
@@ -825,6 +829,7 @@ _hwpstate_intel.4=	hwpstate_intel.4
 _i8254.4=	i8254.4
 _ichwd.4=	ichwd.4
 _if_bxe.4=	if_bxe.4
+_if_hn.4=	if_hn.4
 _if_nfe.4=	if_nfe.4
 _if_urtw.4=	if_urtw.4
 _if_vmx.4=	if_vmx.4

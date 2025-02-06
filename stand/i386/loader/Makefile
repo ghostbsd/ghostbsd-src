@@ -9,7 +9,7 @@ LOADER_MSDOS_SUPPORT?=	no
 LOADER_UFS_SUPPORT?=	yes
 # Don't set gzip support to no.
 LOADER_GZIP_SUPPORT?=	yes
-LOADER_BZIP2_SUPPORT?=	no
+LOADER_BZIP2_SUPPORT?=	yes
 
 .include <bsd.init.mk>
 
