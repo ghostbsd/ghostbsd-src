@@ -106,7 +106,6 @@ static void		 pf_empty_kpool(struct pf_kpalist *);
 static int		 pfioctl(struct cdev *, u_long, caddr_t, int,
 			    struct thread *);
 static int		 pf_begin_eth(uint32_t *, const char *);
-static void		 pf_rollback_eth_cb(struct epoch_context *);
 static int		 pf_rollback_eth(uint32_t, const char *);
 static int		 pf_commit_eth(uint32_t, const char *);
 static void		 pf_free_eth_rule(struct pf_keth_rule *);
@@ -198,6 +197,16 @@ VNET_DEFINE_STATIC(bool, pf_filter_local) = false;
 SYSCTL_BOOL(_net_pf, OID_AUTO, filter_local, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(pf_filter_local), false,
     "Enable filtering for packets delivered to local network stack");
+
+#ifdef PF_DEFAULT_TO_DROP
+VNET_DEFINE_STATIC(bool, default_to_drop) = true;
+#else
+VNET_DEFINE_STATIC(bool, default_to_drop);
+#endif
+#define	V_default_to_drop VNET(default_to_drop)
+SYSCTL_BOOL(_net_pf, OID_AUTO, default_to_drop, CTLFLAG_RDTUN | CTLFLAG_VNET,
+    &VNET_NAME(default_to_drop), false,
+    "Make the default rule drop all packets.");
 
 static void		 pf_init_tagset(struct pf_tagset *, unsigned int *,
 			    unsigned int);
@@ -335,11 +344,7 @@ pfattach_vnet(void)
 
 	/* default rule should never be garbage collected */
 	V_pf_default_rule.entries.tqe_prev = &V_pf_default_rule.entries.tqe_next;
-#ifdef PF_DEFAULT_TO_DROP
-	V_pf_default_rule.action = PF_DROP;
-#else
-	V_pf_default_rule.action = PF_PASS;
-#endif
+	V_pf_default_rule.action = V_default_to_drop ? PF_DROP : PF_PASS;
 	V_pf_default_rule.nr = -1;
 	V_pf_default_rule.rtableid = -1;
 
@@ -776,23 +781,6 @@ pf_begin_eth(uint32_t *ticket, const char *anchor)
 	return (0);
 }
 
-static void
-pf_rollback_eth_cb(struct epoch_context *ctx)
-{
-	struct pf_keth_ruleset *rs;
-
-	rs = __containerof(ctx, struct pf_keth_ruleset, epoch_ctx);
-
-	CURVNET_SET(rs->vnet);
-
-	PF_RULES_WLOCK();
-	pf_rollback_eth(rs->inactive.ticket,
-	    rs->anchor ? rs->anchor->path : "");
-	PF_RULES_WUNLOCK();
-
-	CURVNET_RESTORE();
-}
-
 static int
 pf_rollback_eth(uint32_t ticket, const char *anchor)
 {
@@ -886,15 +874,12 @@ pf_commit_eth(uint32_t ticket, const char *anchor)
 	pf_eth_calc_skip_steps(rs->inactive.rules);
 
 	rules = rs->active.rules;
-	ck_pr_store_ptr(&rs->active.rules, rs->inactive.rules);
+	atomic_store_ptr(&rs->active.rules, rs->inactive.rules);
 	rs->inactive.rules = rules;
 	rs->inactive.ticket = rs->active.ticket;
 
-	/* Clean up inactive rules (i.e. previously active rules), only when
-	 * we're sure they're no longer used. */
-	NET_EPOCH_CALL(pf_rollback_eth_cb, &rs->epoch_ctx);
-
-	return (0);
+	return (pf_rollback_eth(rs->inactive.ticket,
+	    rs->anchor ? rs->anchor->path : ""));
 }
 
 #ifdef ALTQ
@@ -5202,8 +5187,6 @@ DIOCCHANGEADDR_error:
 			free(ioes, M_TEMP);
 			break;
 		}
-		/* Ensure there's no more ethernet rules to clean up. */
-		NET_EPOCH_DRAIN_CALLBACKS();
 		PF_RULES_WLOCK();
 		for (i = 0, ioe = ioes; i < io->size; i++, ioe++) {
 			ioe->anchor[sizeof(ioe->anchor) - 1] = '\0';
@@ -6845,9 +6828,6 @@ pf_unload_vnet(void)
 	pf_syncookies_cleanup();
 	shutdown_pf();
 	PF_RULES_WUNLOCK();
-
-	/* Make sure we've cleaned up ethernet rules before we continue. */
-	NET_EPOCH_DRAIN_CALLBACKS();
 
 	ret = swi_remove(V_pf_swi_cookie);
 	MPASS(ret == 0);

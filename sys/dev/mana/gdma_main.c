@@ -939,7 +939,7 @@ mana_gd_create_dma_region(struct gdma_dev *gd,
 	int err;
 	int i;
 
-	if (length < PAGE_SIZE || !is_power_of_2(length)) {
+	if (length < PAGE_SIZE || !powerof2(length)) {
 		mana_err(NULL, "gmi size incorrect: %u\n", length);
 		return EINVAL;
 	}
@@ -1879,6 +1879,11 @@ static int
 mana_gd_detach(device_t dev)
 {
 	struct gdma_context *gc = device_get_softc(dev);
+	int error;
+
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
 
 	mana_remove(&gc->mana);
 
@@ -1890,7 +1895,7 @@ mana_gd_detach(device_t dev)
 
 	pci_disable_busmaster(dev);
 
-	return (bus_generic_detach(dev));
+	return (0);
 }
 
 

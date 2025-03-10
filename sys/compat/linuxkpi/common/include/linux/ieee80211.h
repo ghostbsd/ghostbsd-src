@@ -100,7 +100,9 @@ struct ieee80211_mmie_16 {
 #define	IEEE80211_QOS_CTL_ACK_POLICY_NOACK	0x0020
 #define	IEEE80211_QOS_CTL_MESH_CONTROL_PRESENT	0x0100
 
-#define	IEEE80211_RATE_SHORT_PREAMBLE		BIT(0)
+enum ieee80211_rate_flags {
+	IEEE80211_RATE_SHORT_PREAMBLE		= BIT(0),
+};
 
 enum ieee80211_rate_control_changed_flags {
 	IEEE80211_RC_BW_CHANGED			= BIT(0),
@@ -115,7 +117,8 @@ enum ieee80211_rate_control_changed_flags {
 #define	IEEE80211_TKIP_ICV_LEN			4
 #define	IEEE80211_TKIP_IV_LEN			8	/* WEP + KID + EXT */
 
-#define	IEEE80211_VHT_EXT_NSS_BW_CAPABLE	(1 << 13)	/* assigned to tx_highest */
+/* 802.11-2016, 9.4.2.158.3 Supported VHT-MCS and NSS Set field. */
+#define	IEEE80211_VHT_EXT_NSS_BW_CAPABLE	(1 << 13)	/* part of tx_highest */
 
 #define	IEEE80211_VHT_MAX_AMPDU_1024K		7	/* 9.4.2.56.3 A-MPDU Parameters field, Table 9-163 */
 
@@ -387,14 +390,6 @@ enum ieee80211_sta_state {
 	IEEE80211_STA_AUTHORIZED	= 4,	/* 802.1x */
 };
 
-enum ieee80211_sta_rx_bw {
-	IEEE80211_STA_RX_BW_20,
-	IEEE80211_STA_RX_BW_40,
-	IEEE80211_STA_RX_BW_80,
-	IEEE80211_STA_RX_BW_160,
-	IEEE80211_STA_RX_BW_320,
-};
-
 enum ieee80211_tx_info_flags {
 	/* XXX TODO .. right shift numbers - not sure where that came from? */
 	IEEE80211_TX_CTL_AMPDU			= BIT(0),
@@ -418,7 +413,7 @@ enum ieee80211_tx_info_flags {
 	IEEE80211_TX_CTL_RATE_CTRL_PROBE	= BIT(18),
 	IEEE80211_TX_CTL_LDPC			= BIT(19),
 	IEEE80211_TX_CTL_STBC			= BIT(20),
-};
+} __packed;
 
 enum ieee80211_tx_status_flags {
 	IEEE80211_TX_STATUS_ACK_SIGNAL_VALID	= BIT(0),

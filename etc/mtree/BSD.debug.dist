@@ -37,7 +37,15 @@
                 ..
                 engines-3
                 ..
+                flua
+                ..
                 i18n
+                ..
+                libxo
+                    encoder
+                    ..
+                ..
+                ossl-modules
                 ..
             ..
             libexec

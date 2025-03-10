@@ -335,14 +335,14 @@ ld_utrace_log(int event, void *handle, void *mapbase, size_t mapsize,
 	struct utrace_rtld ut;
 	static const char rtld_utrace_sig[RTLD_UTRACE_SIG_SZ] = RTLD_UTRACE_SIG;
 
+	memset(&ut, 0, sizeof(ut));	/* clear holes */
 	memcpy(ut.sig, rtld_utrace_sig, sizeof(ut.sig));
 	ut.event = event;
 	ut.handle = handle;
 	ut.mapbase = mapbase;
 	ut.mapsize = mapsize;
 	ut.refcnt = refcnt;
-	bzero(ut.name, sizeof(ut.name));
-	if (name)
+	if (name != NULL)
 		strlcpy(ut.name, name, sizeof(ut.name));
 	utrace(&ut, sizeof(ut));
 }
@@ -5319,7 +5319,7 @@ allocate_tls(Obj_Entry *objs, void *oldtcb, size_t tcbsize, size_t tcbalign)
     maxalign = MAX(tcbalign, tls_static_max_align);
     tls_init_align = MAX(obj_main->tlsalign, 1);
 
-    /* Compute fragmets sizes. */
+    /* Compute fragments sizes. */
     extra_size = tcbsize - TLS_TCB_SIZE;
     post_size = calculate_tls_post_size(tls_init_align);
     tls_block_size = tcbsize + post_size;

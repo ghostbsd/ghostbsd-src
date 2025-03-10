@@ -1378,7 +1378,7 @@ startbgscan(struct ieee80211vap *vap)
 /*
  * Compare two quiet IEs and return if they are equivalent.
  *
- * The tbttcount isnt checked - that's not part of the configuration.
+ * The tbttcount isn't checked - that's not part of the configuration.
  */
 static int
 compare_quiet_ie(const struct ieee80211_quiet_ie *q1,
@@ -1942,7 +1942,7 @@ sta_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m0, int subtype,
 		    vap->iv_flags&IEEE80211_F_USEPROT ? ", protection" : "",
 		    ni->ni_flags & IEEE80211_NODE_QOS ? ", QoS" : "",
 		    ni->ni_flags & IEEE80211_NODE_HT ?
-			(ni->ni_chw == 40 ? ", HT40" : ", HT20") : "",
+			(ni->ni_chw == IEEE80211_STA_RX_BW_40 ? ", HT40" : ", HT20") : "",
 		    ni->ni_flags & IEEE80211_NODE_AMPDU ? " (+AMPDU)" : "",
 		    ni->ni_flags & IEEE80211_NODE_AMSDU ? " (+AMSDU)" : "",
 		    ni->ni_flags & IEEE80211_NODE_MIMO_RTS ? " (+SMPS-DYN)" :

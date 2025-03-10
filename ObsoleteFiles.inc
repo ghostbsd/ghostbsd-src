@@ -51,6 +51,10 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20250204: sys/vm/stack test symbols moved to /usr/lib/debug
+OLD_FILES+=usr/tests/sys/vm/stack/.debug/libsoxstack.so.debug
+OLD_DIRS+=usr/tests/sys/vm/stack/.debug
+
 # 20241201: new clang import which bumps version from 18 to 19
 OLD_FILES+=usr/lib/clang/18/include/__clang_cuda_builtin_vars.h
 OLD_FILES+=usr/lib/clang/18/include/__clang_cuda_cmath.h
@@ -347,6 +351,7 @@ OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_cxx-powerpc64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_cxx-powerpc64le.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_cxx-riscv64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_cxx-x86_64.a
+OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_static-aarch64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_static-i386.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_static-powerpc64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.asan_static-powerpc64le.a
@@ -365,6 +370,7 @@ OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.dd-aarch64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.dd-x86_64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.fuzzer-aarch64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.fuzzer-x86_64.a
+OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.fuzzer_interceptors-aarch64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.fuzzer_interceptors-x86_64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.fuzzer_no_main-aarch64.a
 OLD_FILES+=usr/lib/clang/18/lib/freebsd/libclang_rt.fuzzer_no_main-x86_64.a
@@ -524,11 +530,6 @@ OLD_FILES+=usr/include/c++/v1/__type_traits/is_trivially_move_assignable.h
 OLD_FILES+=usr/include/c++/v1/__type_traits/is_trivially_move_constructible.h
 OLD_FILES+=usr/include/c++/v1/__type_traits/operation_traits.h
 OLD_FILES+=usr/include/c++/v1/experimental/__memory
-
-# 20240914 libpcap upgrade from 1.10.4 to 1.10.5
-OLD_FILES+=contrib/libpcap/pcap-haiku.cpp
-OLD_FILES+=contrib/libpcap/pcap-rpcap-int.h
-OLD_FILES+=contrib/libpcap/pcap-usb-linux-common.c
 
 # 20240827: retire fips.so
 OLD_LIBS+=usr/lib/ossl-modules/fips.so
@@ -1919,6 +1920,9 @@ OLD_FILES+=usr/share/certs/trusted/Staat_der_Nederlanden_EV_Root_CA.pem
 OLD_FILES+=usr/share/certs/trusted/TrustCor_ECA-1.pem
 OLD_FILES+=usr/share/certs/trusted/TrustCor_RootCert_CA-1.pem
 OLD_FILES+=usr/share/certs/trusted/TrustCor_RootCert_CA-2.pem
+
+# 20230510: twe(4) driver removed
+OLD_FILES+=usr/share/man/man4/twe.4.gz
 
 # 20230505: md5 tests are now self-contained
 OLD_FILES+=usr/tests/sbin/md5/1.inp
