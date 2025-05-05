@@ -1,11 +1,11 @@
 
 Welcome to GhostBSD!
 
-Release Notes, Errata:  https://www.GhostBSD.org/releases/
 Security Advisories:    https://www.freebsd.org/security/advisories/
 GhostBSD Documentation: https://ghostbsd-documentation-portal.readthedocs.io/
 GhostBSD FAQ:           https://ghostbsd-documentation-portal.readthedocs.io/en/latest/user/FAQ.html
 GhostBSD Forums:        https://forums.ghostbsd.org/
+GhostBSD development:   https://github.com/orgs/ghostbsd/projects/4
 
 Show the version of GhostBSD installed:  ghostbsd-version
 Please include that output and any error messages when posting questions.
