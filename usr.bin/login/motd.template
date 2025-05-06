@@ -1,11 +1,11 @@
 
 Welcome to GhostBSD!
 
-Release Notes, Errata:  https://www.GhostBSD.org/releases/
-Security Advisories:    https://www.FreeBSD.org/security/
-GhostBSD Docs:          https://wiki.GhostBSD.org/
-GhostBSD FAQ:           https://wiki.GhostBSD.org/index.php/FAQ
-GhostBSD Forums:        https://forums.GhostBSD.org/
+GhostBSD Home:          https://www.ghostbsd.org/
+GhostBSD Documentation: https://ghostbsd-documentation-portal.readthedocs.io/
+GhostBSD Forums:        https://forums.ghostbsd.org/
+GhostBSD Development:   https://github.com/orgs/ghostbsd/projects/4
+Security Advisories:    https://www.freebsd.org/security/advisories/
 
-Show the version of GhostBSD installed:  ghostbsd-version
+Show information about GhostBSD: ghostbsd-version -fkov
 Please include that output and any error messages when posting questions.
