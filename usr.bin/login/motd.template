@@ -7,5 +7,5 @@ GhostBSD Forums:        https://forums.ghostbsd.org/
 GhostBSD Development:   https://github.com/orgs/ghostbsd/projects/4
 Security Advisories:    https://www.freebsd.org/security/advisories/
 
-Show the version of GhostBSD installed:  ghostbsd-version
+Show information about GhostBSD: ghostbsd-version -fkov
 Please include that output and any error messages when posting questions.
