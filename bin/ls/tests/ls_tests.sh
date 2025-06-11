@@ -1001,7 +1001,266 @@ atf_init_test_cases()
 	atf_add_test_case h_precision_2
 	atf_add_test_case h_precision_enables_human
 	atf_add_test_case h_precision_invalid
+
+	# Tests for --extension
+	atf_add_test_case ext_filter_simple_txt
+	atf_add_test_case ext_filter_simple_c
+	atf_add_test_case ext_filter_leading_dot_c
+	atf_add_test_case ext_filter_case_insensitive
+	atf_add_test_case ext_filter_multi_dot_gz
+	atf_add_test_case ext_filter_no_ext_nomatch
+	atf_add_test_case ext_filter_only_dot_matches_no_ext
+	atf_add_test_case ext_filter_empty_lists_all
+	atf_add_test_case ext_filter_hidden_files_a
+	atf_add_test_case ext_filter_hidden_files_A_match
+	atf_add_test_case ext_filter_hidden_files_A_nomatch
+	atf_add_test_case ext_filter_dir_nomatch_by_default
+	atf_add_test_case ext_filter_dir_match_with_d
+	atf_add_test_case ext_filter_symlink
 }
+
+# Helper function to setup files for extension tests
+setup_extension_test_files()
+{
+	# Ensure we are in a temporary directory created by ATF if possible
+	# or use a sub-directory of the current PWD for tests.
+	# For simplicity here, assuming PWD is the test's temp dir.
+	# In a real ATF setup, $ATF_TMPDIR or similar would be used.
+
+	touch file.txt File.TXT backup.txt~ .hidden.txt archive.tar.gz main.c main.h Makefile .profile no_ext_file
+	mkdir dir.txt testdir
+	ln -s file.txt symlink.txt
+}
+
+# Helper function to cleanup files from extension tests
+cleanup_extension_test_files()
+{
+	rm -f file.txt File.TXT backup.txt~ .hidden.txt archive.tar.gz main.c main.h Makefile .profile no_ext_file symlink.txt
+	rm -rf dir.txt testdir
+}
+
+# Test cases for --extension option
+
+atf_test_case ext_filter_simple_txt
+ext_filter_simple_txt_head()
+{
+	atf_set "descr" "Filter for .txt extension"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_simple_txt_body()
+{
+	setup_extension_test_files
+	atf_check -o inline:"File.TXT\nfile.txt\n" "ls -1 --extension=txt | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_simple_c
+ext_filter_simple_c_head()
+{
+	atf_set "descr" "Filter for .c extension"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_simple_c_body()
+{
+	setup_extension_test_files
+	atf_check -o inline:"main.c\n" "ls -1 --extension=c | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_leading_dot_c
+ext_filter_leading_dot_c_head()
+{
+	atf_set "descr" "Filter for .c extension using '.c' as filter"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_leading_dot_c_body()
+{
+	setup_extension_test_files
+	atf_check -o inline:"main.c\n" "ls -1 --extension=.c | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_case_insensitive
+ext_filter_case_insensitive_head()
+{
+	atf_set "descr" "Verify case-insensitive filter for .TXT"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_case_insensitive_body()
+{
+	setup_extension_test_files
+	atf_check -o inline:"File.TXT\nfile.txt\n" "ls -1 --extension=TXT | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_multi_dot_gz
+ext_filter_multi_dot_gz_head()
+{
+	atf_set "descr" "Filter for .gz in 'archive.tar.gz'"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_multi_dot_gz_body()
+{
+	setup_extension_test_files
+	atf_check -o inline:"archive.tar.gz\n" "ls -1 --extension=gz | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_no_ext_nomatch
+ext_filter_no_ext_nomatch_head()
+{
+	atf_set "descr" "Files with no extension should not match a regular filter"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_no_ext_nomatch_body()
+{
+	setup_extension_test_files
+	# Makefile, no_ext_file, .profile should not be listed
+	atf_check -o inline:"File.TXT\nfile.txt\n" "ls -1 --extension=txt | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_only_dot_matches_no_ext
+ext_filter_only_dot_matches_no_ext_head()
+{
+	atf_set "descr" "Filter '--extension=.' should match files with no extension or only leading dot"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_only_dot_matches_no_ext_body()
+{
+	setup_extension_test_files
+	# Expected: Makefile, no_ext_file, .profile (dotfiles shown if -a or -A, but filter applies to name)
+	# The filter "." should match files like "Makefile", "no_ext_file"
+	# and also dotfiles like ".profile" if they are otherwise visible (e.g. with -A or -a)
+	# For this test, we don't use -a or -A, so .profile and .hidden.txt are not candidates to be listed by ls itself.
+	# So, among visible files: Makefile, no_ext_file should match. dir.txt and testdir are dirs.
+	atf_check -o inline:"Makefile\nno_ext_file\n" "ls -1 --extension=. | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_empty_lists_all
+ext_filter_empty_lists_all_head()
+{
+	atf_set "descr" "Filter '--extension=\"\"' should list all (non-hidden) files"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_empty_lists_all_body()
+{
+	setup_extension_test_files
+	# Expected: all non-hidden files and dirs
+	# archive.tar.gz, backup.txt~, dir.txt, File.TXT, file.txt, main.c, main.h, Makefile, no_ext_file, symlink.txt, testdir
+	# Order by sort
+	expected_output=$(printf "File.TXT\nMakefile\narchive.tar.gz\nbackup.txt~\ndir.txt\nfile.txt\nmain.c\nmain.h\nno_ext_file\nsymlink.txt\ntestdir\n")
+	atf_check -o inline:"${expected_output}" "ls -1 --extension=\"\" | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_hidden_files_a
+ext_filter_hidden_files_a_head()
+{
+	atf_set "descr" "Filter with -a, expecting matching hidden files"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_hidden_files_a_body()
+{
+	setup_extension_test_files
+	# With -a, .hidden.txt is a candidate. Filter is "txt".
+	# Expected: .hidden.txt, File.TXT, file.txt
+	# Note: ls -a also lists . and ..
+	# We will grep out . and .. for stable comparison of filtered files.
+	atf_check -o inline:".hidden.txt\nFile.TXT\nfile.txt\n" "ls -1a --extension=txt | sort | grep -v '^\.$' | grep -v '^\.\.$'"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_hidden_files_A_match
+ext_filter_hidden_files_A_match_head()
+{
+	atf_set "descr" "Filter with -A, expecting matching hidden files (e.g. .hidden.txt)"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_hidden_files_A_match_body()
+{
+	setup_extension_test_files
+	# With -A, .hidden.txt is a candidate. Filter is "txt".
+	# Expected: .hidden.txt, File.TXT, file.txt
+	atf_check -o inline:".hidden.txt\nFile.TXT\nfile.txt\n" "ls -1A --extension=txt | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_hidden_files_A_nomatch
+ext_filter_hidden_files_A_nomatch_head()
+{
+	atf_set "descr" "Filter with -A, hidden file .profile should not match if filter is 'txt'"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_hidden_files_A_nomatch_body()
+{
+	setup_extension_test_files
+	# With -A, .profile is a candidate for ls, but does not match --extension=txt.
+	# Expected: File.TXT, file.txt (and .hidden.txt matches, so it's included here too)
+	atf_check -o inline:".hidden.txt\nFile.TXT\nfile.txt\n" "ls -1A --extension=txt | sort"
+	cleanup_extension_test_files
+}
+
+
+atf_test_case ext_filter_dir_nomatch_by_default
+ext_filter_dir_nomatch_by_default_head()
+{
+	atf_set "descr" "Directories like dir.txt should not be matched by default by --extension=txt"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_dir_nomatch_by_default_body()
+{
+	setup_extension_test_files
+	# dir.txt is a directory. Without -d, ls lists its *contents*.
+	# If dir.txt is empty, ls --extension=txt dir.txt would output nothing or an error.
+	# If we list the current directory, dir.txt itself is not subject to extension filter
+	# as it's a directory to be traversed.
+	# This test checks that 'dir.txt/' (if -F is used) or 'dir.txt' (if -1 is used) is not filtered out
+	# because it's a directory. The filter applies to files *within* it, or if -d is used.
+	# Let's list current dir, filter by txt. dir.txt should not be listed as a *file* that matches.
+	# It will be listed as a directory name, and its contents (if any, and if they match) would be listed.
+	# The test setup makes dir.txt empty.
+	# So, `ls -1 --extension=txt` should list file.txt, File.TXT. `dir.txt` itself is not filtered.
+	# The name `dir.txt` will appear in `ls -1` if it's not filtered.
+	# However, the filter in display() is: `if (cur->fts_info == FTS_D && !f_listdir)` then skip filter.
+	# So, dir.txt will be listed by `ls -1` if no filter. With a filter, it should still be listed.
+	# This tests that the *directory name itself* isn't filtered out.
+	expected_files="File.TXT\ndir.txt\nfile.txt\nsymlink.txt\n" # symlink.txt also matches due to target.
+	# The symlink.txt is tricky. readlink will be called by ls -F or -l.
+	# For basic name listing, symlink.txt itself has .txt.
+	atf_check -o inline:"${expected_files}" "ls -1 --extension=txt | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_dir_match_with_d
+ext_filter_dir_match_with_d_head()
+{
+	atf_set "descr" "Directories like dir.txt should be matched by --extension=txt if -d is used"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_dir_match_with_d_body()
+{
+	setup_extension_test_files
+	# With -d, dir.txt is treated as a file and should match the extension.
+	atf_check -o inline:"dir.txt\n" "ls -1d --extension=txt dir.txt | sort"
+	cleanup_extension_test_files
+}
+
+atf_test_case ext_filter_symlink
+ext_filter_symlink_head()
+{
+	atf_set "descr" "Symlinks like symlink.txt should be matched by --extension=txt based on link name"
+	atf_set "require.progs" "touch ln mkdir rm sort"
+}
+ext_filter_symlink_body()
+{
+	setup_extension_test_files
+	# symlink.txt itself matches ".txt".
+	atf_check -o inline:"symlink.txt\n" "ls -1 --extension=txt symlink.txt | sort"
+	cleanup_extension_test_files
+}
+
 
 # Test cases for --human-readable-precision
 

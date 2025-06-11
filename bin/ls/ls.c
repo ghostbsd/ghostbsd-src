@@ -105,6 +105,7 @@ static const struct option long_opts[] =
 {
         {"color",       optional_argument,      NULL, COLOR_OPT},
         {"human-readable-precision", required_argument, NULL, CHAR_MAX + 2},
+        {"extension",   required_argument,      NULL, CHAR_MAX + 3},
         {NULL,          no_argument,            NULL, 0}
 };
 
@@ -149,6 +150,7 @@ static int f_sizesort;
 static int f_stream;		/* stream the output, separate with commas */
        int f_thousands;		/* show file sizes with thousands separators */
        char *f_timeformat;	/* user-specified time format */
+       char *f_extension_filter = NULL; /* filter by extension */
 static int f_timesort;		/* sort by time vice name */
        int f_type;		/* add type character for non-regular files */
 static int f_whiteout;		/* show whiteout entries */
@@ -491,6 +493,13 @@ main(int argc, char *argv[])
 				errx(2, "human-readable precision is %s: %s", errstr_hrp, optarg);
 			break;
 		}
+		case CHAR_MAX + 3: /* extension */
+			if (optarg && *optarg == '\0') { /* Handle empty string as no filter */
+				f_extension_filter = NULL;
+			} else {
+				f_extension_filter = optarg;
+			}
+			break;
 		default:
 		case '?':
 			usage();
@@ -833,6 +842,51 @@ display(const FTSENT *p, FTSENT *list, int options)
 				continue;
 			}
 		}
+
+		/* Apply extension filter if specified */
+		if (f_extension_filter != NULL && *f_extension_filter != '\0') {
+			/*
+			 * Skip extension filtering for directories that are not listed with -d.
+			 * These directories will be traversed, and their contents filtered if necessary.
+			 */
+			if (cur->fts_info == FTS_D && !f_listdir) {
+				/* This is a directory that will be traversed, do nothing here. */
+			} else {
+				const char *filename = cur->fts_name;
+				const char *file_ext_dot = strrchr(filename, '.');
+				bool match = false;
+				const char *filter_val = f_extension_filter;
+
+				if (filter_val[0] == '.') {
+					filter_val++; /* Skip the dot in filter if present */
+				}
+
+				if (file_ext_dot != NULL && file_ext_dot != filename && *(file_ext_dot + 1) != '\0') {
+					/* File has a non-leading dot followed by some char, e.g., "name.txt", "archive.tar.gz" */
+					/* Compare part after dot with filter_val */
+					if (strcasecmp(file_ext_dot + 1, filter_val) == 0) {
+						match = true;
+					}
+				} else {
+					/* File has no extension, or is a dotfile like ".bashrc", or ends with a dot like "name." */
+					/* Match if filter was exactly "." (meaning filter_val is now empty) */
+					if (f_extension_filter[0] == '.' && f_extension_filter[1] == '\0') { /* Original filter was "." */
+						if (file_ext_dot == NULL ||                                 /* No dot: "file" */
+						    file_ext_dot == filename ||                             /* Leading dot: ".bashrc" */
+						    *(file_ext_dot + 1) == '\0') {                       /* Ends with dot: "file." */
+							match = true;
+						}
+					}
+					/* Otherwise, no extension and filter is not ".", so no match (match remains false) */
+				}
+
+				if (!match) {
+					cur->fts_number = NO_PRINT;
+					continue;
+				}
+			}
+		}
+
 		if (cur->fts_namelen > maxlen)
 			maxlen = cur->fts_namelen;
 		if (f_octal || f_octal_escape) {

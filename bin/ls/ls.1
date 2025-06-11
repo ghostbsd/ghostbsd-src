@@ -282,6 +282,28 @@ as equivalent to
 .Cm auto .
 .It Fl d
 Directories are listed as plain files (not searched recursively).
+.It Fl -extension Ar EXT
+Display only files with the extension
+.Ar EXT .
+The comparison is case-insensitive.
+If
+.Ar EXT
+starts with a
+.Ql . ,
+the match is done against the full extension including the dot.
+Otherwise, the match is done against the part of the filename after the last dot.
+For example,
+.Cm --extension=txt
+and
+.Cm --extension=.txt
+will both match
+.Pa file.txt .
+To list files with no extension, use
+.Cm --extension=.
+(a single dot).
+An empty extension string (e.g.,
+.Cm --extension="" Ns )
+will result in no filtering based on extension.
 .It Fl f
 Output is not sorted.
 This option turns on

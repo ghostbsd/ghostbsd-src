@@ -60,6 +60,7 @@ extern int f_sowner;		/* disable showing the owner's name */
 extern int f_statustime;	/* use time of last mode change */
 extern int f_thousands;		/* show file sizes with thousands separators */
 extern char *f_timeformat;	/* user-specified time format */
+extern char *f_extension_filter; /* filter by extension */
 extern int f_notabs;		/* don't use tab-separated multi-col output */
 extern int f_type;		/* add type character for non-regular files */
 #ifdef COLORLS
