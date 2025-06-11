@@ -994,4 +994,153 @@ atf_init_test_cases()
 	atf_add_test_case x_flag
 	atf_add_test_case y_flag
 	atf_add_test_case 1_flag
+
+	# Tests for --human-readable-precision
+	atf_add_test_case h_precision_0
+	atf_add_test_case h_precision_1
+	atf_add_test_case h_precision_2
+	atf_add_test_case h_precision_enables_human
+	atf_add_test_case h_precision_invalid
+}
+
+# Test cases for --human-readable-precision
+
+atf_test_case h_precision_0
+h_precision_0_head()
+{
+	atf_set "descr" "Verify --human-readable-precision=0"
+	atf_set "require.progs" "awk dd touch"
+}
+h_precision_0_body()
+{
+	_0B=$(mktemp ls.XXXXXX)
+	_500B=$(mktemp ls.XXXXXX)
+	_1K=$(mktemp ls.XXXXXX)
+	_1K5=$(mktemp ls.XXXXXX)
+	_1M=$(mktemp ls.XXXXXX)
+	_1M5=$(mktemp ls.XXXXXX)
+
+	touch "$_0B"
+	dd if=/dev/zero of="$_500B" bs=500 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1K" bs=1024 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1K5" bs=1500 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1M" bs=1048576 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1M5" bs=1500000 count=1 2>/dev/null
+
+	atf_check_equal "$(ls -lh --human-readable-precision=0 "$_0B" | awk '{print $5}')" "0B"
+	atf_check_equal "$(ls -lh --human-readable-precision=0 "$_500B" | awk '{print $5}')" "500B"
+	atf_check_equal "$(ls -lh --human-readable-precision=0 "$_1K" | awk '{print $5}')" "1K"
+	atf_check_equal "$(ls -lh --human-readable-precision=0 "$_1K5" | awk '{print $5}')" "1K"
+	atf_check_equal "$(ls -lh --human-readable-precision=0 "$_1M" | awk '{print $5}')" "1M"
+	atf_check_equal "$(ls -lh --human-readable-precision=0 "$_1M5" | awk '{print $5}')" "1M"
+
+	rm "$_0B" "$_500B" "$_1K" "$_1K5" "$_1M" "$_1M5"
+}
+
+atf_test_case h_precision_1
+h_precision_1_head()
+{
+	atf_set "descr" "Verify --human-readable-precision=1"
+	atf_set "require.progs" "awk dd touch"
+}
+h_precision_1_body()
+{
+	_0B=$(mktemp ls.XXXXXX)
+	_500B=$(mktemp ls.XXXXXX)
+	_1K=$(mktemp ls.XXXXXX)
+	_1K5=$(mktemp ls.XXXXXX)
+	_1M=$(mktemp ls.XXXXXX)
+	_1M5=$(mktemp ls.XXXXXX)
+
+	touch "$_0B"
+	dd if=/dev/zero of="$_500B" bs=500 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1K" bs=1024 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1K5" bs=1500 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1M" bs=1048576 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1M5" bs=1500000 count=1 2>/dev/null
+
+	atf_check_equal "$(ls -lh --human-readable-precision=1 "$_0B" | awk '{print $5}')" "0.0B"
+	atf_check_equal "$(ls -lh --human-readable-precision=1 "$_500B" | awk '{print $5}')" "500.0B"
+	atf_check_equal "$(ls -lh --human-readable-precision=1 "$_1K" | awk '{print $5}')" "1.0K"
+	atf_check_equal "$(ls -lh --human-readable-precision=1 "$_1K5" | awk '{print $5}')" "1.5K"
+	atf_check_equal "$(ls -lh --human-readable-precision=1 "$_1M" | awk '{print $5}')" "1.0M"
+	atf_check_equal "$(ls -lh --human-readable-precision=1 "$_1M5" | awk '{print $5}')" "1.4M" # 1500000 / 1048576 = 1.4305... -> 1.4M
+
+	rm "$_0B" "$_500B" "$_1K" "$_1K5" "$_1M" "$_1M5"
+}
+
+atf_test_case h_precision_2
+h_precision_2_head()
+{
+	atf_set "descr" "Verify --human-readable-precision=2"
+	atf_set "require.progs" "awk dd touch"
+}
+h_precision_2_body()
+{
+	_0B=$(mktemp ls.XXXXXX)
+	_500B=$(mktemp ls.XXXXXX)
+	_1K=$(mktemp ls.XXXXXX)
+	_1K5=$(mktemp ls.XXXXXX)
+	_1M=$(mktemp ls.XXXXXX)
+	_1M5=$(mktemp ls.XXXXXX)
+
+	touch "$_0B"
+	dd if=/dev/zero of="$_500B" bs=500 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1K" bs=1024 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1K5" bs=1500 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1M" bs=1048576 count=1 2>/dev/null
+	dd if=/dev/zero of="$_1M5" bs=1500000 count=1 2>/dev/null
+
+	atf_check_equal "$(ls -lh --human-readable-precision=2 "$_0B" | awk '{print $5}')" "0.00B"
+	atf_check_equal "$(ls -lh --human-readable-precision=2 "$_500B" | awk '{print $5}')" "500.00B"
+	atf_check_equal "$(ls -lh --human-readable-precision=2 "$_1K" | awk '{print $5}')" "1.00K"
+	atf_check_equal "$(ls -lh --human-readable-precision=2 "$_1K5" | awk '{print $5}')" "1.46K" # 1500 / 1024 = 1.4648... -> 1.46K
+	atf_check_equal "$(ls -lh --human-readable-precision=2 "$_1M" | awk '{print $5}')" "1.00M"
+	atf_check_equal "$(ls -lh --human-readable-precision=2 "$_1M5" | awk '{print $5}')" "1.43M" # 1500000 / 1048576 = 1.4305... -> 1.43M
+
+	rm "$_0B" "$_500B" "$_1K" "$_1K5" "$_1M" "$_1M5"
+}
+
+atf_test_case h_precision_enables_human
+h_precision_enables_human_head()
+{
+	atf_set "descr" "Verify --human-readable-precision enables -h automatically"
+	atf_set "require.progs" "awk dd touch"
+}
+h_precision_enables_human_body()
+{
+	_1K5=$(mktemp ls.XXXXXX)
+	dd if=/dev/zero of="$_1K5" bs=1500 count=1 2>/dev/null
+
+	# Note: ls -l (no -h) but with --human-readable-precision
+	atf_check_equal "$(ls -l --human-readable-precision=1 "$_1K5" | awk '{print $5}')" "1.5K"
+
+	rm "$_1K5"
+}
+
+atf_test_case h_precision_invalid
+h_precision_invalid_head()
+{
+	atf_set "descr" "Verify --human-readable-precision handles invalid values"
+	atf_set "require.progs" "touch"
+}
+h_precision_invalid_body()
+{
+	_dummy=$(mktemp ls.XXXXXX)
+	touch "$_dummy"
+
+	# Error message from strtonum for negative when min is 0 is "too small"
+	# Error message from strtonum for non-numeric is "invalid"
+	# errx prepends "ls: " and appends newline.
+	# Example: ls: human-readable precision is too small: -1
+	# However, the problem description asks for "ls: illegal precision value -- <val>"
+	# Using the format from problem description.
+
+	atf_check -s exit:2 -e inline:"ls: human-readable precision is too small: -1\n" \
+		ls -lh --human-readable-precision=-1 "$_dummy"
+
+	atf_check -s exit:2 -e inline:"ls: human-readable precision is invalid: abc\n" \
+		ls -lh --human-readable-precision=abc "$_dummy"
+
+	rm "$_dummy"
 }

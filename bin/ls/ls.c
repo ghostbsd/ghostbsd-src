@@ -104,6 +104,7 @@ static void	 traverse(int, char **, int);
 static const struct option long_opts[] =
 {
         {"color",       optional_argument,      NULL, COLOR_OPT},
+        {"human-readable-precision", required_argument, NULL, CHAR_MAX + 2},
         {NULL,          no_argument,            NULL, 0}
 };
 
@@ -118,6 +119,7 @@ int termwidth = 80;		/* default terminal width */
        int f_birthtime;		/* use time of birth */
        int f_flags;		/* show flags associated with a file */
        int f_humanval;		/* show human-readable file sizes */
+       int f_human_readable_precision = 0; /* precision for human-readable sizes */
        int f_inode;		/* print inode */
 static int f_kblocks;		/* print size in kilobytes */
        int f_label;		/* show MAC label */
@@ -476,6 +478,19 @@ main(int argc, char *argv[])
 #else
 			warnx("color support not compiled in");
 #endif
+		case CHAR_MAX + 2: /* human-readable-precision */
+		{
+			const char *errstr_hrp;
+			/*
+			 * Enable -h if --human-readable-precision is specified,
+			 * as the precision only makes sense with human-readable sizes.
+			 */
+			f_humanval = 1;
+			f_human_readable_precision = strtonum(optarg, 0, INT_MAX, &errstr_hrp);
+			if (errstr_hrp)
+				errx(2, "human-readable precision is %s: %s", errstr_hrp, optarg);
+			break;
+		}
 		default:
 		case '?':
 			usage();

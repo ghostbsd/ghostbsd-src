@@ -313,6 +313,17 @@ and Petabyte in order to reduce the number of digits to four or fewer
 using base 2 for sizes.
 This option is not defined in
 .St -p1003.1-2008 .
+.It Fl -human-readable-precision Ar PRECISION
+When used with the
+.Fl h
+option, print human-readable sizes with
+.Ar PRECISION
+decimal places.
+If
+.Ar PRECISION
+is 0 (the default), the output is an integer.
+This option implies
+.Fl h .
 .It Fl i
 For each file, print the file's file serial number (inode number).
 .It Fl k

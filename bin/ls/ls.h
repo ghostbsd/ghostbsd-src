@@ -36,7 +36,7 @@
 
 #define NO_PRINT	1
 
-#define HUMANVALSTR_LEN	5
+#define HUMANVALSTR_LEN	10
 
 extern long blocksize;		/* block size units */
 
@@ -44,6 +44,7 @@ extern int f_accesstime;	/* use time of last access */
 extern int f_birthtime;	/* use time of file creation */
 extern int f_flags;		/* show flags associated with a file */
 extern int f_humanval;		/* show human-readable file sizes */
+extern int f_human_readable_precision;
 extern int f_label;		/* show MAC label */
 extern int f_inode;		/* print inode */
 extern int f_longform;		/* long listing format */

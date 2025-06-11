@@ -750,14 +750,20 @@ printsize(size_t width, off_t bytes)
 {
 
 	if (f_humanval) {
-		/*
-		 * Reserve one space before the size and allocate room for
-		 * the trailing '\0'.
-		 */
-		char buf[HUMANVALSTR_LEN - 1 + 1];
+		char buf[HUMANVALSTR_LEN];
+		int hflags = HN_AUTOSCALE | HN_B | HN_NOSPACE;
 
-		humanize_number(buf, sizeof(buf), (int64_t)bytes, "",
-		    HN_AUTOSCALE, HN_B | HN_NOSPACE | HN_DECIMAL);
+		if (f_human_readable_precision > 0) {
+			hflags |= HN_DECIMAL;
+			/* Call with precision argument */
+			humanize_number(buf, sizeof(buf), (int64_t)bytes, "",
+			    HN_AUTOSCALE, hflags, f_human_readable_precision);
+		} else {
+			/* Original behavior: no HN_DECIMAL for integer output if precision is 0 */
+			/* Call without precision argument (or with HN_DECIMAL removed from flags if necessary) */
+			humanize_number(buf, sizeof(buf), (int64_t)bytes, "",
+			    HN_AUTOSCALE, hflags);
+		}
 		(void)printf("%*s ", (u_int)width, buf);
 	} else {
 		(void)printf(f_thousands ? "%'*jd " : "%*jd ",
