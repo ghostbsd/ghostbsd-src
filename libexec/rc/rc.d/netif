@@ -54,6 +54,15 @@ netif_start()
 {
 	local _if
 
+	# Check for required utilities
+	required_utils="wpa_cli dhclient netstat"
+	for util in $required_utils; do
+		if ! command -v "$util" >/dev/null 2>&1; then
+			echo "Error: Required utility '$util' not found. Network initialization cannot proceed." >&2
+			exit 1
+		fi
+	done
+
 	# Set the list of interfaces to work on.
 	#
 	cmdifn=$*
