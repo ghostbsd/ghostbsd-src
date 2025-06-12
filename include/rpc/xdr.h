@@ -160,7 +160,7 @@ typedef	bool_t (*xdrproc_t)(XDR *, ...);
 #define xdr_putlong(xdrs, longp)			\
 	(*(xdrs)->x_ops->x_putlong)(xdrs, longp)
 
-static __inline int
+static inline int
 xdr_getint32(XDR *xdrs, int32_t *ip)
 {
 	long l;
@@ -171,7 +171,7 @@ xdr_getint32(XDR *xdrs, int32_t *ip)
 	return (TRUE);
 }
 
-static __inline int
+static inline int
 xdr_putint32(XDR *xdrs, int32_t *ip)
 {
 	long l;

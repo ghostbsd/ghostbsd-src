@@ -23,14 +23,14 @@
 
 #include "extern.h"
 
-static __inline bool	 stack_empty(const struct stack *);
+static inline bool	 stack_empty(const struct stack *);
 static void		 stack_grow(struct stack *);
 static struct array	*array_new(void);
-static __inline void	 array_free(struct array *);
+static inline void	 array_free(struct array *);
 static struct array	*array_dup(const struct array *);
-static __inline void	 array_grow(struct array *, size_t);
-static __inline void	 array_assign(struct array *, size_t, const struct value *);
-static __inline struct value	*array_retrieve(const struct array *, size_t);
+static inline void	 array_grow(struct array *, size_t);
+static inline void	 array_assign(struct array *, size_t, const struct value *);
+static inline struct value	*array_retrieve(const struct array *, size_t);
 
 void
 stack_init(struct stack *stack)
@@ -41,7 +41,7 @@ stack_init(struct stack *stack)
 	stack->stack = NULL;
 }
 
-static __inline bool
+static inline bool
 stack_empty(const struct stack *stack)
 {
 	bool empty = stack->sp == -1;
@@ -278,7 +278,7 @@ array_new(void)
 	return a;
 }
 
-static __inline void
+static inline void
 array_free(struct array *a)
 {
 	size_t i;
@@ -306,7 +306,7 @@ array_dup(const struct array *a)
 	return (n);
 }
 
-static __inline void
+static inline void
 array_grow(struct array *array, size_t newsize)
 {
 	size_t i;
@@ -319,7 +319,7 @@ array_grow(struct array *array, size_t newsize)
 	array->size = newsize;
 }
 
-static __inline void
+static inline void
 array_assign(struct array *array, size_t i, const struct value *v)
 {
 
@@ -329,7 +329,7 @@ array_assign(struct array *array, size_t i, const struct value *v)
 	array->data[i] = *v;
 }
 
-static __inline struct value *
+static inline struct value *
 array_retrieve(const struct array *array, size_t i)
 {
 

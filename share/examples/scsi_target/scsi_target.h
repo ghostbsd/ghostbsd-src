@@ -112,7 +112,7 @@ extern void		tcmd_ua(u_int init_id, ua_types new_ua);
 extern int		work_atio(struct ccb_accept_tio *atio);
 extern void		send_ccb(union ccb *ccb, int priority);
 extern void		free_ccb(union ccb *ccb);
-static __inline u_int	min(u_int a, u_int b) { return (a < b ? a : b); }
+static inline u_int	min(u_int a, u_int b) { return (a < b ? a : b); }
 
 /* Global Data */
 extern int	notaio;

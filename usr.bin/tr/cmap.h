@@ -57,7 +57,7 @@ wint_t		cmap_lookup_hard(struct cmap *, wint_t);
 void		cmap_cache(struct cmap *);
 wint_t		cmap_default(struct cmap *, wint_t);
 
-static __inline wint_t
+static inline wint_t
 cmap_lookup(struct cmap *cm, wint_t from)
 {
 
@@ -66,14 +66,14 @@ cmap_lookup(struct cmap *cm, wint_t from)
 	return (cmap_lookup_hard(cm, from));
 }
 
-static __inline wint_t
+static inline wint_t
 cmap_min(struct cmap *cm)
 {
 
 	return (cm->cm_min);
 }
 
-static __inline wint_t
+static inline wint_t
 cmap_max(struct cmap *cm)
 {
 

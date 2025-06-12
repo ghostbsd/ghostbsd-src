@@ -51,26 +51,26 @@ struct bmachine {
 
 static struct bmachine	 bmachine;
 
-static __inline int	 readch(void);
-static __inline void	 unreadch(void);
-static __inline char	*readline(void);
-static __inline void	 src_free(void);
+static inline int	 readch(void);
+static inline void	 unreadch(void);
+static inline char	*readline(void);
+static inline void	 src_free(void);
 
 static u_long		 get_ulong(struct number *);
 
-static __inline void	 push_number(struct number *);
-static __inline void	 push_string(char *);
-static __inline void	 push(struct value *);
-static __inline struct value *tos(void);
-static __inline struct number	*pop_number(void);
-static __inline char	*pop_string(void);
-static __inline void	 clear_stack(void);
-static __inline void	 print_tos(void);
+static inline void	 push_number(struct number *);
+static inline void	 push_string(char *);
+static inline void	 push(struct value *);
+static inline struct value *tos(void);
+static inline struct number	*pop_number(void);
+static inline char	*pop_string(void);
+static inline void	 clear_stack(void);
+static inline void	 print_tos(void);
 static void		 print_err(void);
 static void		 pop_print(void);
 static void		 pop_printn(void);
-static __inline void	 print_stack(void);
-static __inline void	 dup(void);
+static inline void	 print_stack(void);
+static inline void	 dup(void);
 static void		 swap(void);
 static void		 drop(void);
 
@@ -264,7 +264,7 @@ reset_bmachine(struct source *src)
 	bmachine.readstack[0] = *src;
 }
 
-static __inline int
+static inline int
 readch(void)
 {
 	struct source *src = &bmachine.readstack[bmachine.readsp];
@@ -272,7 +272,7 @@ readch(void)
 	return (src->vtable->readchar(src));
 }
 
-static __inline void
+static inline void
 unreadch(void)
 {
 	struct source *src = &bmachine.readstack[bmachine.readsp];
@@ -280,7 +280,7 @@ unreadch(void)
 	src->vtable->unreadchar(src);
 }
 
-static __inline char *
+static inline char *
 readline(void)
 {
 	struct source *src = &bmachine.readstack[bmachine.readsp];
@@ -288,7 +288,7 @@ readline(void)
 	return (src->vtable->readline(src));
 }
 
-static __inline void
+static inline void
 src_free(void)
 {
 	struct source *src = &bmachine.readstack[bmachine.readsp];
@@ -425,70 +425,70 @@ negate(struct number *n)
 	BN_set_negative(n->number, !BN_is_negative(n->number));
 }
 
-static __inline void
+static inline void
 push_number(struct number *n)
 {
 
 	stack_pushnumber(&bmachine.stack, n);
 }
 
-static __inline void
+static inline void
 push_string(char *string)
 {
 
 	stack_pushstring(&bmachine.stack, string);
 }
 
-static __inline void
+static inline void
 push(struct value *v)
 {
 
 	stack_push(&bmachine.stack, v);
 }
 
-static __inline struct value *
+static inline struct value *
 tos(void)
 {
 
 	return (stack_tos(&bmachine.stack));
 }
 
-static __inline struct value *
+static inline struct value *
 pop(void)
 {
 
 	return (stack_pop(&bmachine.stack));
 }
 
-static __inline struct number *
+static inline struct number *
 pop_number(void)
 {
 
 	return (stack_popnumber(&bmachine.stack));
 }
 
-static __inline char *
+static inline char *
 pop_string(void)
 {
 
 	return (stack_popstring(&bmachine.stack));
 }
 
-static __inline void
+static inline void
 clear_stack(void)
 {
 
 	stack_clear(&bmachine.stack);
 }
 
-static __inline void
+static inline void
 print_stack(void)
 {
 
 	stack_print(stdout, &bmachine.stack, "", bmachine.obase);
 }
 
-static __inline void
+static inline void
 print_tos(void)
 {
 	struct value *value = tos();
@@ -548,7 +548,7 @@ pop_printn(void)
 	}
 }
 
-static __inline void
+static inline void
 dup(void)
 {
 

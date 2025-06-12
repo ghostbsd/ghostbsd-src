@@ -8,7 +8,7 @@
 
 #define	PRIV_SYS_CONFIG	0
 
-static __inline int
+static inline int
 priv_ineffect(int priv)
 {
 

@@ -107,7 +107,7 @@ typedef __uint128_t uint128_t;
 typedef uint64_t uint128_t;
 #endif
 
-static __inline uint128_t
+static inline uint128_t
 to128(void *p)
 {
 #if __STDC_VERSION__ >= 202311L || defined(__SIZEOF_INT128__)

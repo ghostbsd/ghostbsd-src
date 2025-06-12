@@ -29,7 +29,7 @@
 
 #include <stdint.h>
 
-static __inline uint16_t
+static inline uint16_t
 be16dec(const void *pp)
 {
 	uint8_t const *p = (uint8_t const *)pp;
@@ -37,7 +37,7 @@ be16dec(const void *pp)
 	return ((p[0] << 8) | p[1]);
 }
 
-static __inline void
+static inline void
 be16enc(void *pp, uint16_t u)
 {
 	uint8_t *p = (uint8_t *)pp;
@@ -46,7 +46,7 @@ be16enc(void *pp, uint16_t u)
 	p[1] = u & 0xff;
 }
 
-static __inline void
+static inline void
 be32enc(void *pp, uint32_t u)
 {
 	uint8_t *p = (uint8_t *)pp;
@@ -57,7 +57,7 @@ be32enc(void *pp, uint32_t u)
 	p[3] = u & 0xff;
 }
 
-static __inline void
+static inline void
 be64enc(void *pp, uint64_t u)
 {
 	uint8_t *p = (uint8_t *)pp;
@@ -66,7 +66,7 @@ be64enc(void *pp, uint64_t u)
 	be32enc(p + 4, (uint32_t)(u & 0xffffffffU));
 }
 
-static __inline uint16_t
+static inline uint16_t
 le16dec(const void *pp)
 {
 	uint8_t const *p = (uint8_t const *)pp;
@@ -74,7 +74,7 @@ le16dec(const void *pp)
 	return ((p[1] << 8) | p[0]);
 }
 
-static __inline void
+static inline void
 le16enc(void *pp, uint16_t u)
 {
 	uint8_t *p = (uint8_t *)pp;
@@ -83,7 +83,7 @@ le16enc(void *pp, uint16_t u)
 	p[1] = (u >> 8) & 0xff;
 }
 
-static __inline void
+static inline void
 le32enc(void *pp, uint32_t u)
 {
 	uint8_t *p = (uint8_t *)pp;
@@ -94,7 +94,7 @@ le32enc(void *pp, uint32_t u)
 	p[3] = (u >> 24) & 0xff;
 }
 
-static __inline void
+static inline void
 le64enc(void *pp, uint64_t u)
 {
 	uint8_t *p = (uint8_t *)pp;

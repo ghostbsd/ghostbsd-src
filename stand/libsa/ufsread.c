@@ -90,7 +90,7 @@ static ssize_t fsread(ufs_ino_t, void *, size_t);
 static uint8_t ls, dsk_meta;
 static uint32_t fs_off;
 
-static __inline uint8_t
+static inline uint8_t
 fsfind(const char *name, ufs_ino_t * ino)
 {
 	static char buf[DEV_BSIZE];

@@ -1240,7 +1240,7 @@ fdt_cmd_ls(int argc, char *argv[])
 	return (CMD_OK);
 }
 
-static __inline int
+static inline int
 isprint(int c)
 {
 
