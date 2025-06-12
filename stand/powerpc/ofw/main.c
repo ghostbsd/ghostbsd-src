@@ -48,7 +48,7 @@ static char heap[HEAP_SIZE]; // In BSS, so uses no space
 
 #define OF_puts(fd, text) OF_write(fd, text, strlen(text))
 
-static __inline register_t
+static inline register_t
 mfmsr(void)
 {
 	register_t value;

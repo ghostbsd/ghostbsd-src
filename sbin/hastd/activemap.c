@@ -93,7 +93,7 @@ bitcount32(uint32_t x)
 	return (x);
 }
 
-static __inline int
+static inline int
 off2ext(const struct activemap *amp, off_t offset)
 {
 	int extent;
@@ -104,7 +104,7 @@ off2ext(const struct activemap *amp, off_t offset)
 	return (extent);
 }
 
-static __inline off_t
+static inline off_t
 ext2off(const struct activemap *amp, int extent)
 {
 	off_t offset;
@@ -119,7 +119,7 @@ ext2off(const struct activemap *amp, int extent)
  * Function calculates number of requests needed to synchronize the given
  * extent.
  */
-static __inline int
+static inline int
 ext2reqs(const struct activemap *amp, int ext)
 {
 	off_t left;

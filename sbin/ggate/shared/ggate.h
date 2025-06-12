@@ -119,7 +119,7 @@ in_addr_t g_gate_str2ip(const char *str);
  *                   to big endian byte order).
  */
 
-static __inline void
+static inline void
 g_gate_swap2h_version(struct g_gate_version *ver)
 {
 
@@ -127,7 +127,7 @@ g_gate_swap2h_version(struct g_gate_version *ver)
 	ver->gv_error = be16toh(ver->gv_error);
 }
 
-static __inline void
+static inline void
 g_gate_swap2n_version(struct g_gate_version *ver)
 {
 
@@ -135,7 +135,7 @@ g_gate_swap2n_version(struct g_gate_version *ver)
 	ver->gv_error = htobe16(ver->gv_error);
 }
 
-static __inline void
+static inline void
 g_gate_swap2h_cinit(struct g_gate_cinit *cinit)
 {
 
@@ -144,7 +144,7 @@ g_gate_swap2h_cinit(struct g_gate_cinit *cinit)
 	cinit->gc_token = be32toh(cinit->gc_token);
 }
 
-static __inline void
+static inline void
 g_gate_swap2n_cinit(struct g_gate_cinit *cinit)
 {
 
@@ -153,7 +153,7 @@ g_gate_swap2n_cinit(struct g_gate_cinit *cinit)
 	cinit->gc_token = htobe32(cinit->gc_token);
 }
 
-static __inline void
+static inline void
 g_gate_swap2h_sinit(struct g_gate_sinit *sinit)
 {
 
@@ -163,7 +163,7 @@ g_gate_swap2h_sinit(struct g_gate_sinit *sinit)
 	sinit->gs_error = be16toh(sinit->gs_error);
 }
 
-static __inline void
+static inline void
 g_gate_swap2n_sinit(struct g_gate_sinit *sinit)
 {
 
@@ -173,7 +173,7 @@ g_gate_swap2n_sinit(struct g_gate_sinit *sinit)
 	sinit->gs_error = htobe16(sinit->gs_error);
 }
 
-static __inline void
+static inline void
 g_gate_swap2h_hdr(struct g_gate_hdr *hdr)
 {
 
@@ -184,7 +184,7 @@ g_gate_swap2h_hdr(struct g_gate_hdr *hdr)
 	hdr->gh_error = be16toh(hdr->gh_error);
 }
 
-static __inline void
+static inline void
 g_gate_swap2n_hdr(struct g_gate_hdr *hdr)
 {
 

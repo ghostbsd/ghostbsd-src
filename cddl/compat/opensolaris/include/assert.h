@@ -45,7 +45,7 @@
 extern "C" {
 #endif
 
-static __inline void
+static inline void
 __assert(const char *expr, const char *file, int line)
 {
 

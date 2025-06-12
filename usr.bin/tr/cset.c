@@ -40,7 +40,7 @@
 #include "cset.h"
 
 static struct csnode *	cset_delete(struct csnode *, wchar_t);
-static __inline int	cset_rangecmp(struct csnode *, wchar_t);
+static inline int	cset_rangecmp(struct csnode *, wchar_t);
 static struct csnode *	cset_splay(struct csnode *, wchar_t);
 
 /*
@@ -210,7 +210,7 @@ cset_addclass(struct cset *cs, wctype_t type, bool invert)
 	return (true);
 }
 
-static __inline int
+static inline int
 cset_rangecmp(struct csnode *t, wchar_t ch)
 {
 

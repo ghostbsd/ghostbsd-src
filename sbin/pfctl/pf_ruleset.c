@@ -80,7 +80,7 @@ extern struct pfctl_eth_anchor	 pf_eth_main_anchor;
 #undef pf_main_ruleset
 #define pf_main_ruleset		 pf_main_anchor.ruleset
 
-static __inline int		pf_anchor_compare(struct pfctl_anchor *,
+static inline int		pf_anchor_compare(struct pfctl_anchor *,
 				    struct pfctl_anchor *);
 static struct pfctl_anchor	*pf_find_anchor(const char *);
 
@@ -88,7 +88,7 @@ RB_GENERATE(pfctl_anchor_global, pfctl_anchor, entry_global,
     pf_anchor_compare);
 RB_GENERATE(pfctl_anchor_node, pfctl_anchor, entry_node, pf_anchor_compare);
 
-static __inline int
+static inline int
 pf_anchor_compare(struct pfctl_anchor *a, struct pfctl_anchor *b)
 {
 	int c = strcmp(a->path, b->path);

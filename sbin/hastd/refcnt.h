@@ -34,21 +34,21 @@
 
 typedef unsigned int refcnt_t;
 
-static __inline void
+static inline void
 refcnt_init(refcnt_t *count, unsigned int v)
 {
 
 	*count = v;
 }
 
-static __inline void
+static inline void
 refcnt_acquire(refcnt_t *count)
 {
 
 	atomic_add_acq_int(count, 1);
 }
 
-static __inline unsigned int
+static inline unsigned int
 refcnt_release(refcnt_t *count)
 {
 	unsigned int old;

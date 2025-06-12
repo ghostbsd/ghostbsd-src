@@ -72,7 +72,7 @@ typedef pthread_rwlock_t rwlock_t;
 #define THR_SUSPENDED 0x00000080
 #define THR_DAEMON    0x00000100
 
-static __inline int
+static inline int
 thr_create(void *stack_base, size_t stack_size, void *(*start_func) (void*),
     void *arg, long flags, thread_t *new_thread_ID)
 {

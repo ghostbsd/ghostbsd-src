@@ -199,7 +199,7 @@ ssize_t host_write(int fd, const void *buf, size_t nbyte);
  * declared that no successful result could be -4096 to 0. This implements
  * that quirk so we can check return values easily.
  */
-static __inline bool
+static inline bool
 is_linux_error(long e)
 {
 	return (e < 0 && e >= -4096);
@@ -215,7 +215,7 @@ is_linux_error(long e)
  * values as a 'long' which has to align to CPU register size, so accept that
  * size as the error so the assert can catch more values.
  */
-static __inline int
+static inline int
 host_to_stand_errno(long e)
 {
 	assert(is_linux_error(e));

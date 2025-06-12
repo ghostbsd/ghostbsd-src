@@ -219,63 +219,63 @@ extern struct open_file *fd2open_file(int);
 
 #define isascii(c)	(((c) & ~0x7F) == 0)
 
-static __inline int isupper(int c)
+static inline int isupper(int c)
 {
     return c >= 'A' && c <= 'Z';
 }
 
-static __inline int islower(int c)
+static inline int islower(int c)
 {
     return c >= 'a' && c <= 'z';
 }
 
-static __inline int isspace(int c)
+static inline int isspace(int c)
 {
     return c == ' ' || (c >= 0x9 && c <= 0xd);
 }
 
-static __inline int isdigit(int c)
+static inline int isdigit(int c)
 {
     return c >= '0' && c <= '9';
 }
 
-static __inline int isxdigit(int c)
+static inline int isxdigit(int c)
 {
     return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
-static __inline int isalpha(int c)
+static inline int isalpha(int c)
 {
     return isupper(c) || islower(c);
 }
 
-static __inline int isalnum(int c)
+static inline int isalnum(int c)
 {
     return isalpha(c) || isdigit(c);
 }
 
-static __inline int iscntrl(int c)
+static inline int iscntrl(int c)
 {
 	return (c >= 0 && c < ' ') || c == 127;
 }
 
-static __inline int isgraph(int c)
+static inline int isgraph(int c)
 {
 	return c >= '!' && c <= '~';
 }
 
-static __inline int ispunct(int c)
+static inline int ispunct(int c)
 {
 	return (c >= '!' && c <= '/') || (c >= ':' && c <= '@') ||
 	    (c >= '[' && c <= '`') || (c >= '{' && c <= '~');
 }
 
-static __inline int toupper(int c)
+static inline int toupper(int c)
 {
     return islower(c) ? c - 'a' + 'A' : c;
 }
 
-static __inline int tolower(int c)
+static inline int tolower(int c)
 {
     return isupper(c) ? c - 'A' + 'a' : c;
 }
@@ -390,16 +390,16 @@ extern char const	hex2ascii_data[];
 #define	validbcd(bcd)	(bcd == 0 || (bcd > 0 && bcd <= 0x99 && bcd2bin_data[bcd] != 0))
 
 /* min/max (undocumented) */
-static __inline int imax(int a, int b) { return (a > b ? a : b); }
-static __inline int imin(int a, int b) { return (a < b ? a : b); }
-static __inline long lmax(long a, long b) { return (a > b ? a : b); }
-static __inline long lmin(long a, long b) { return (a < b ? a : b); }
-static __inline u_int max(u_int a, u_int b) { return (a > b ? a : b); }
-static __inline u_int min(u_int a, u_int b) { return (a < b ? a : b); }
-static __inline quad_t qmax(quad_t a, quad_t b) { return (a > b ? a : b); }
-static __inline quad_t qmin(quad_t a, quad_t b) { return (a < b ? a : b); }
-static __inline u_long ulmax(u_long a, u_long b) { return (a > b ? a : b); }
-static __inline u_long ulmin(u_long a, u_long b) { return (a < b ? a : b); }
+static inline int imax(int a, int b) { return (a > b ? a : b); }
+static inline int imin(int a, int b) { return (a < b ? a : b); }
+static inline long lmax(long a, long b) { return (a > b ? a : b); }
+static inline long lmin(long a, long b) { return (a < b ? a : b); }
+static inline u_int max(u_int a, u_int b) { return (a > b ? a : b); }
+static inline u_int min(u_int a, u_int b) { return (a < b ? a : b); }
+static inline quad_t qmax(quad_t a, quad_t b) { return (a > b ? a : b); }
+static inline quad_t qmin(quad_t a, quad_t b) { return (a < b ? a : b); }
+static inline u_long ulmax(u_long a, u_long b) { return (a > b ? a : b); }
+static inline u_long ulmin(u_long a, u_long b) { return (a < b ? a : b); }
 
 /* null functions for device/filesystem switches (undocumented) */
 extern int	nodev(void);
