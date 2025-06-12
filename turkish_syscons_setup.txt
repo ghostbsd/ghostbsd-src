@@ -1,0 +1,60 @@
+To enable Turkish language support for the syscons console in FreeBSD, you need to make a few changes to your system configuration. This involves setting the keyboard layout and screen map. Turkish console fonts (like tr-8x16.fnt) were not added in this setup, so syscons will use its default font. If you have separately installed Turkish console fonts, you can add the font settings as well.
+
+**1. Configure `/etc/rc.conf` or `/etc/rc.conf.local`**
+
+You should add or modify the following lines in your `/etc/rc.conf` file. If you prefer to keep local modifications separate, you can add these lines to `/etc/rc.conf.local` instead. Create this file if it doesn't exist.
+
+```sh
+# /etc/rc.conf or /etc/rc.conf.local settings for Turkish syscons
+
+# Set the default keyboard layout.
+# Use "tr.iso9.q" for Turkish Q keyboard layout (recommended for most users).
+# Use "tr.iso9.f" for Turkish F keyboard layout.
+keymap="tr.iso9.q"
+
+# Set the screen map to enable correct display of Turkish characters.
+# "iso-8859-9_to_vga" is generally a good choice.
+# Alternatively, "iso-8859-9_to_cp437" can be used.
+scrnmap="iso-8859-9_to_vga"
+
+# Font settings (optional, if you have Turkish console fonts installed)
+# If you had tr-8x16.fnt, tr-8x14.fnt, tr-8x8.fnt fonts, you would add:
+# font8x16="tr-8x16"
+# font8x14="tr-8x14"
+# font8x8="tr-8x8"
+# Since these were not added in the automated setup, these lines are commented out.
+# If you install them later, you can uncomment and set them.
+```
+
+**To apply these settings:**
+*   You can either reboot your system.
+*   Or, for immediate effect without rebooting (for keyboard and screen map):
+    *   Load the keyboard layout: `kbdcontrol -l tr.iso9.q` (or `tr.iso9.f`)
+    *   Load the screen map: `vidcontrol -l iso-8859-9_to_vga`
+
+**2. Switching Keyboard Layouts After Boot**
+
+Once your system has booted with the default keymap set in `rc.conf`, you can temporarily switch to a different Turkish layout if needed.
+
+*   To switch to the Turkish F keyboard layout:
+    ```sh
+    kbdcontrol -l tr.iso9.f
+    ```
+
+*   To switch back to the Turkish Q keyboard layout:
+    ```sh
+    kbdcontrol -l tr.iso9.q
+    ```
+
+These `kbdcontrol` commands change the layout for the current session on the active virtual console. The `rc.conf` setting determines the default at boot time.
+
+**Summary of files added by the automated process (relevant to syscons):**
+*   Keyboard layouts:
+    *   `share/syscons/keymaps/tr.iso9.q.kbd`
+    *   `share/syscons/keymaps/tr.iso9.f.kbd`
+*   Screen maps:
+    *   `share/syscons/scrnmaps/iso-8859-9_to_cp437.scr`
+    *   `share/syscons/scrnmaps/iso-8859-9_to_vga.scr`
+
+Make sure these files are correctly placed in your system's `/usr/share/syscons/` subdirectories if you are manually transferring them from a source repository.
+The Makefiles in `share/syscons/keymaps/Makefile` and `share/syscons/scrnmaps/Makefile` have been updated to include these files in a standard FreeBSD build process.
