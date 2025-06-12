@@ -15,7 +15,7 @@
  * FreeBSD's sys/_endian.h is very close to the interface provided on Linux by
  * glibc's endian.h.
  */
-#include <sys/_endian.h>
+#include <endian.h>
 
 /*
  * glibc uses double underscore for these symbols. Define these unconditionally.

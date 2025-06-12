@@ -35,11 +35,11 @@
 #define _STDDEF_H_
 
 #include <sys/cdefs.h>
-#include <sys/_null.h>
-#include <sys/_types.h>
+#include <sys/types.h>
+#include <runetype.h> /* For __rune_t */
 
 #ifndef _PTRDIFF_T_DECLARED
-typedef	__ptrdiff_t	ptrdiff_t;
+typedef	__PTRDIFF_TYPE__	ptrdiff_t;
 #define	_PTRDIFF_T_DECLARED
 #endif
 
@@ -51,13 +51,13 @@ typedef	__rune_t	rune_t;
 #endif
 
 #ifndef _SIZE_T_DECLARED
-typedef	__size_t	size_t;
+typedef	__SIZE_TYPE__	size_t;
 #define	_SIZE_T_DECLARED
 #endif
 
 #ifndef	__cplusplus
 #ifndef _WCHAR_T_DECLARED
-typedef	___wchar_t	wchar_t;
+typedef	__WCHAR_TYPE__	wchar_t;
 #define	_WCHAR_T_DECLARED
 #endif
 #endif
