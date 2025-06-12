@@ -38,7 +38,25 @@
 #define	_RUNETYPE_H_
 
 #include <sys/cdefs.h>
-#include <sys/_types.h>
+#include <sys/types.h>
+
+#ifndef __RUNE_T_DEFINED_IN_RUNETYPE_H // Guard against multiple definitions
+#define __RUNE_T_DEFINED_IN_RUNETYPE_H
+#ifdef __WCHAR_TYPE__
+typedef __WCHAR_TYPE__ __rune_t;
+#else
+typedef int __rune_t; // Fallback if compiler intrinsic __WCHAR_TYPE__ is not available
+#endif
+#endif
+
+#ifndef __SIZE_T_DEFINED_IN_RUNETYPE_H // Guard against multiple definitions
+#define __SIZE_T_DEFINED_IN_RUNETYPE_H
+#ifdef __SIZE_TYPE__
+typedef __SIZE_TYPE__ __size_t;
+#else
+typedef unsigned long __size_t; // Fallback
+#endif
+#endif
 
 #define	_CACHED_RUNES	(1 <<8 )	/* Must be a power of 2 */
 #define	_CRMASK		(~(_CACHED_RUNES - 1))

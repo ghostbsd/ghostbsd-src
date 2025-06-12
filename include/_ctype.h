@@ -44,7 +44,17 @@
 #define	__CTYPE_H_
 
 #include <sys/cdefs.h>
-#include <sys/_types.h>
+#include <sys/types.h>
+#include <runetype.h> /* For __rune_t */
+
+/* Define __ct_rune_t based on __rune_t, which should be defined via stddef.h->sys/types.h */
+/* stddef.h is included via sys/types.h which is included from ctype.h/_ctype.h */
+#if __BSD_VISIBLE /* Matches guard in stddef.h for rune_t */
+typedef __rune_t __ct_rune_t;
+#else
+/* Fallback if __rune_t or __BSD_VISIBLE pathway isn't met, though less likely now */
+typedef int __ct_rune_t;
+#endif
 
 #define	_CTYPE_A	0x00000100L		/* Alpha */
 #define	_CTYPE_C	0x00000200L		/* Control */
@@ -70,9 +80,9 @@
 
 /* See comments in <sys/_types.h> about __ct_rune_t. */
 __BEGIN_DECLS
-unsigned long	___runetype(__ct_rune_t) __pure;
-__ct_rune_t	___tolower(__ct_rune_t) __pure;
-__ct_rune_t	___toupper(__ct_rune_t) __pure;
+unsigned long	___runetype(__ct_rune_t);
+__ct_rune_t	___tolower(__ct_rune_t);
+__ct_rune_t	___toupper(__ct_rune_t);
 __END_DECLS
 
 /*
@@ -169,6 +179,8 @@ __wcwidth(__ct_rune_t _c)
 	return ((_x & _CTYPE_R) != 0 ? 1 : -1);
 }
 
+#undef static
+#undef __inline
 #else /* not using inlines */
 
 __BEGIN_DECLS

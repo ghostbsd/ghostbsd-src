@@ -38,8 +38,21 @@
 #define	_STDIO_H_
 
 #include <sys/cdefs.h>
-#include <sys/_null.h>
-#include <sys/_types.h>
+/* #include <sys/_null.h> // Removed, NULL is usually in stddef.h or compiler builtin */
+#include <sys/types.h>
+
+/* Attempt to define __off_t if not available, based on system's off_t */
+#ifndef __off_t_defined_hopefully_by_sys_types
+#include <sys/types.h> /* Ensure off_t is available */
+typedef off_t __off_t;
+#define __off_t_defined_hopefully_by_sys_types
+#endif
+
+/* Attempt to define __va_list if not available, based on compiler intrinsic */
+#ifndef __va_list_defined_hopefully_by_compiler
+#define __va_list_defined_hopefully_by_compiler
+typedef __builtin_va_list __va_list;
+#endif
 
 __NULLABILITY_PRAGMA_PUSH
 

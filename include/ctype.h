@@ -43,7 +43,7 @@
 #define	_CTYPE_H_
 
 #include <sys/cdefs.h>
-#include <sys/_types.h>
+#include <sys/types.h>
 #include <_ctype.h>
 
 __BEGIN_DECLS
