@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2020-2024 The FreeBSD Foundation
+ * Copyright (c) 2020-2025 The FreeBSD Foundation
  *
  * This software was developed by Björn Zeeb under sponsorship from
  * the FreeBSD Foundation.
@@ -64,6 +64,7 @@ struct ieee80211_mmie_16 {
 #define	IEEE80211_GCMP_MIC_LEN			16
 #define	IEEE80211_GCMP_PN_LEN			6
 #define	IEEE80211_GMAC_PN_LEN			6
+#define	IEEE80211_CMAC_PN_LEN			6
 
 #define	IEEE80211_MAX_PN_LEN			16
 
@@ -146,6 +147,7 @@ enum ieee80211_key_len {
 	WLAN_KEY_LEN_WEP104			= 13,
 	WLAN_KEY_LEN_TKIP			= 32,
 	WLAN_KEY_LEN_CCMP			= 16,
+	WLAN_KEY_LEN_CCMP_256			= 32,
 	WLAN_KEY_LEN_GCMP			= 16,
 	WLAN_KEY_LEN_AES_CMAC			= 16,
 	WLAN_KEY_LEN_GCMP_256			= 32,
@@ -293,6 +295,7 @@ enum ieee80211_ac_numbers {
 #define	IEEE80211_HT_MCS_MASK_LEN		10
 
 #define	IEEE80211_MLD_MAX_NUM_LINKS		15
+#define	IEEE80211_MLD_CAP_OP_MAX_SIMUL_LINKS	0xf
 #define	IEEE80211_MLD_CAP_OP_TID_TO_LINK_MAP_NEG_SUPP		0x0060
 #define	IEEE80211_MLD_CAP_OP_TID_TO_LINK_MAP_NEG_SUPP_SAME	1
 
@@ -301,7 +304,7 @@ struct ieee80211_mcs_info {
 	uint16_t	rx_highest;
 	uint8_t		tx_params;
 	uint8_t		__reserved[3];
-};
+} __packed;
 
 /* 802.11-2020, 9.4.2.55.1 HT Capabilities element structure */
 struct ieee80211_ht_cap {
@@ -311,7 +314,7 @@ struct ieee80211_ht_cap {
 	uint16_t				extended_ht_cap_info;
 	uint32_t				tx_BF_cap_info;
 	uint8_t					antenna_selection_info;
-};
+} __packed;
 
 #define	IEEE80211_HT_MAX_AMPDU_FACTOR		13
 #define	IEEE80211_HE_HT_MAX_AMPDU_FACTOR	16
@@ -347,6 +350,7 @@ enum ieee80211_chanctx_change_flags {
 	IEEE80211_CHANCTX_CHANGE_WIDTH		= BIT(3),
 	IEEE80211_CHANCTX_CHANGE_CHANNEL	= BIT(4),
 	IEEE80211_CHANCTX_CHANGE_PUNCTURING	= BIT(5),
+	IEEE80211_CHANCTX_CHANGE_MIN_DEF	= BIT(6),
 };
 
 enum ieee80211_frame_release_type {
@@ -424,6 +428,7 @@ enum ieee80211_tx_control_flags {
 	IEEE80211_TX_CTRL_PORT_CTRL_PROTO	= BIT(0),
 	IEEE80211_TX_CTRL_PS_RESPONSE		= BIT(1),
 	IEEE80211_TX_CTRL_RATE_INJECT		= BIT(2),
+	IEEE80211_TX_CTRL_DONT_USE_RATE_MASK	= BIT(3),
 	IEEE80211_TX_CTRL_MLO_LINK		= 0xF0000000,	/* This is IEEE80211_LINK_UNSPECIFIED on the high bits. */
 };
 
@@ -490,6 +495,10 @@ enum ieee80211_category {
 	WLAN_CATEGORY_SA_QUERY		= 8,	/* net80211::IEEE80211_ACTION_CAT_SA_QUERY */
 };
 
+struct ieee80211_he_6ghz_capa {
+	uint16_t capa;
+};
+
 /* 80211-2020 9.3.3.2 Format of Management frames */
 struct ieee80211_mgmt {
 	__le16		frame_control;
@@ -506,6 +515,12 @@ struct ieee80211_mgmt {
 			uint16_t	capab_info;
 			uint8_t		variable[0];
 		} beacon;
+		/* 9.3.3.5 Association Request frame format */
+		struct  {
+			uint16_t	capab_info;
+			uint16_t	listen_interval;
+			uint8_t		variable[0];
+		} assoc_req;
 		/* 9.3.3.10 Probe Request frame format */
 		struct {
 			uint8_t		variable[0];
@@ -774,6 +789,20 @@ struct ieee80211_bss_load_elem {
 	uint8_t					channel_util;
 	uint16_t				avail_adm_capa;
 };
+
+struct ieee80211_p2p_noa_desc {
+	uint32_t				count;		/* uint8_t ? */
+	uint32_t				duration;
+	uint32_t				interval;
+	uint32_t				start_time;
+};
+
+struct ieee80211_p2p_noa_attr {
+	uint8_t					index;
+	uint8_t					oppps_ctwindow;
+	struct ieee80211_p2p_noa_desc		desc[4];
+};
+
 
 /* net80211: IEEE80211_IS_CTL() */
 static __inline bool
@@ -1216,6 +1245,5 @@ ieee80211_get_qos_ctl(struct ieee80211_hdr *hdr)
         else
                 return (u8 *)hdr + 24;
 }
-
 
 #endif	/* _LINUXKPI_LINUX_IEEE80211_H */

@@ -2155,7 +2155,7 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 			union tcp_log_stackspecific log;
 			struct timeval tv;
 
-			memset(&log.u_bbr, 0, sizeof(log.u_bbr));
+			memset(&log, 0, sizeof(log));
 			log.u_bbr.inhpts = tcp_in_hpts(tp);
 			log.u_bbr.flex8 = 4;
 			log.u_bbr.pkts_out = tp->t_maxseg;
@@ -2751,6 +2751,8 @@ tcp_getcred(SYSCTL_HANDLER_ARGS)
 	struct inpcb *inp;
 	int error;
 
+	if (req->newptr == NULL)
+		return (EINVAL);
 	error = priv_check(req->td, PRIV_NETINET_GETCRED);
 	if (error)
 		return (error);
@@ -2793,6 +2795,8 @@ tcp6_getcred(SYSCTL_HANDLER_ARGS)
 	int mapped = 0;
 #endif
 
+	if (req->newptr == NULL)
+		return (EINVAL);
 	error = priv_check(req->td, PRIV_NETINET_GETCRED);
 	if (error)
 		return (error);
@@ -4384,7 +4388,7 @@ tcp_req_log_req_info(struct tcpcb *tp, struct tcp_sendfile_track *req,
 		union tcp_log_stackspecific log;
 		struct timeval tv;
 
-		memset(&log.u_bbr, 0, sizeof(log.u_bbr));
+		memset(&log, 0, sizeof(log));
 		log.u_bbr.inhpts = tcp_in_hpts(tp);
 		log.u_bbr.flex8 = val;
 		log.u_bbr.rttProp = req->timestamp;
