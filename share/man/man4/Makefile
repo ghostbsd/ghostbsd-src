@@ -148,6 +148,7 @@ MAN=	aac.4 \
 	etherswitch.4 \
 	eventtimers.4 \
 	exca.4 \
+	e6000sw.4 \
 	e6060sw.4 \
 	fd.4 \
 	fdc.4 \
@@ -237,6 +238,7 @@ MAN=	aac.4 \
 	${_io.4} \
 	${_ioat.4} \
 	ip.4 \
+	ip17x.4 \
 	ip6.4 \
 	ipfirewall.4 \
 	ipheth.4 \
@@ -327,6 +329,7 @@ MAN=	aac.4 \
 	mrsas.4 \
 	msk.4 \
 	mtio.4 \
+	mtkswitch.4 \
 	multicast.4 \
 	muge.4 \
 	mvs.4 \

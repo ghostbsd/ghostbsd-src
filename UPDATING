@@ -12,6 +12,27 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20250610:
+	14.3-RELEASE.
+
+20250419:
+	LinuxKPI alloc routines were changed to return physically contiguous
+	memory where expected. These changes may require out-of-tree drivers
+	to be recompiled.
+	Bump __FreeBSD_version to 1402505 to be able to detect this change.
+
+20250419:
+	Intel iwlwifi firmware has been removed from the src repository.
+	Before updating their system, users of iwlwifi(4) or iwx(4) must
+	install the appropriate firmware for their chipset using fwget(8) or
+	building it from ports.
+
+20250403:
+	Commit 8aedc83c1cc2 ("New setcred() system call and associated MAC
+	hooks") introduces new MAC hooks for the new setcred() system call,
+	modifying the layout and size of 'struct mac_policy_ops'.  As a result,
+	all MAC modules need to be recompiled.
+
 20250228:
 	Commit 9fed5151903f modified the internal API between the
 	nfscommon and nfscl modules.  As such, both of these modules
@@ -22,6 +43,12 @@ and/or ports.
 	The layout of NFS file handles for the tarfs, cd9660, and ext2fs
 	file systems has changed.  An NFS server that exports any of these file
 	systems will need its clients to unmount and remount the exports.
+
+20241222:
+	The ng_ubt(4) driver now requires firmwares to be loaded on Realtek
+	adaptors with rtlbtfw(8) utility. It no longer attaches to devices
+	standing in bootloader mode. Firmware files are available in the
+	comms/rtlbt-firmware port.
 
 20240419:
 	Clang, llvm, lld, lldb, compiler-rt, libc++, libunwind and openmp have
@@ -2032,7 +2059,7 @@ FOOTNOTES:
 	happens automatically. If all your modules come from ports, then adding
 	the port origin directories to PORTS_MODULES instead is also automatic
 	and effective, eg:
-	     PORTS_MODULES+=x11/nvidia-driver
+	     PORTS_MODULES+=graphics/drm-kmod graphics/nvidia-drm-kmod
 
 	[3] From the bootblocks, boot -s, and then do
 		fsck -p

@@ -709,7 +709,11 @@ ieee80211_ioctl_getdevcaps(struct ieee80211com *ic,
 	if (dc == NULL)
 		return ENOMEM;
 	dc->dc_drivercaps = ic->ic_caps;
-	dc->dc_cryptocaps = ic->ic_cryptocaps;
+	/*
+	 * Announce the set of both hardware and software supported
+	 * ciphers.
+	 */
+	dc->dc_cryptocaps = ic->ic_cryptocaps | ic->ic_sw_cryptocaps;
 	dc->dc_htcaps = ic->ic_htcaps;
 	dc->dc_vhtcaps = ic->ic_vht_cap.vht_cap_info;
 	ci = &dc->dc_chaninfo;
@@ -1530,7 +1534,8 @@ struct scanlookup {
 	const uint8_t *mac;
 	int esslen;
 	const uint8_t *essid;
-	const struct ieee80211_scan_entry *se;
+	bool found;
+	struct ieee80211_scan_entry se;
 };
 
 /*
@@ -1540,6 +1545,10 @@ static void
 mlmelookup(void *arg, const struct ieee80211_scan_entry *se)
 {
 	struct scanlookup *look = arg;
+	int rv;
+
+	if (look->found)
+		return;
 
 	if (!IEEE80211_ADDR_EQ(look->mac, se->se_macaddr))
 		return;
@@ -1549,7 +1558,14 @@ mlmelookup(void *arg, const struct ieee80211_scan_entry *se)
 		if (memcmp(look->essid, se->se_ssid+2, look->esslen))
 			return;
 	}
-	look->se = se;
+	/*
+	 * First copy everything and then ensure we get our own copy of se_ies. */
+	look->se = *se;
+	look->se.se_ies.data = 0;
+	look->se.se_ies.len = 0;
+	rv = ieee80211_ies_init(&look->se.se_ies, se->se_ies.data, se->se_ies.len);
+	if (rv != 0)	/* No error */
+		look->found = true;
 }
 
 static int
@@ -1558,21 +1574,25 @@ setmlme_assoc_sta(struct ieee80211vap *vap,
 	const uint8_t ssid[IEEE80211_NWID_LEN])
 {
 	struct scanlookup lookup;
+	int rv;
 
 	KASSERT(vap->iv_opmode == IEEE80211_M_STA,
 	    ("expected opmode STA not %s",
 	    ieee80211_opmode_name[vap->iv_opmode]));
 
 	/* NB: this is racey if roaming is !manual */
-	lookup.se = NULL;
 	lookup.mac = mac;
 	lookup.esslen = ssid_len;
 	lookup.essid = ssid;
+	memset(&lookup.se, 0, sizeof(lookup.se));
+	lookup.found = false;
 	ieee80211_scan_iterate(vap, mlmelookup, &lookup);
-	if (lookup.se == NULL)
+	if (!lookup.found)
 		return ENOENT;
 	mlmedebug(vap, mac, IEEE80211_MLME_ASSOC, 0);
-	if (!ieee80211_sta_join(vap, lookup.se->se_chan, lookup.se))
+	rv = ieee80211_sta_join(vap, lookup.se.se_chan, &lookup.se);
+	ieee80211_ies_cleanup(&lookup.se.se_ies);
+	if (rv == 0)
 		return EIO;		/* XXX unique but could be better */
 	return 0;
 }

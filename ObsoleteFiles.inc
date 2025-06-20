@@ -51,6 +51,35 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20250524: don't install zoneinfo version
+OLD_FILES+=usr/share/zoneinfo/version
+
+# 20250521: NDFREE(9) -> NDFREE_PNBUF(9)
+OLD_FILES+=usr/share/man/man9/NDFREE.9.gz
+
+# 20250419: removal of iwlwifi firmware files
+OLD_FILES+=usr/share/doc/legal/intel_iwlwifi_firmware.LICENCE
+
+# 20250310: caroot bundle updated
+OLD_FILES+=usr/share/certs/trusted/Entrust_Root_Certification_Authority_-_G4.pem
+OLD_FILES+=usr/share/certs/trusted/SecureSign_RootCA11.pem
+OLD_FILES+=usr/share/certs/trusted/Security_Communication_RootCA3.pem
+OLD_FILES+=usr/share/certs/trusted/SwissSign_Silver_CA_-_G2.pem
+OLD_FILES+=usr/share/certs/untrusted/AddTrust_External_Root.pem
+OLD_FILES+=usr/share/certs/untrusted/AddTrust_Low-Value_Services_Root.pem
+OLD_FILES+=usr/share/certs/untrusted/Staat_der_Nederlanden_Root_CA_-_G2.pem
+OLD_FILES+=usr/share/certs/untrusted/Cybertrust_Global_Root.pem
+OLD_FILES+=usr/share/certs/untrusted/DST_Root_CA_X3.pem
+OLD_FILES+=usr/share/certs/untrusted/GlobalSign_Root_CA_-_R2.pem
+OLD_FILES+=usr/share/certs/untrusted/QuoVadis_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/Sonera_Class_2_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/GeoTrust_Global_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/Staat_der_Nederlanden_EV_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/E-Tugra_Certification_Authority.pem
+OLD_FILES+=usr/share/certs/untrusted/Hongkong_Post_Root_CA_1.pem
+OLD_FILES+=usr/share/certs/untrusted/Security_Communication_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/Trustis_FPS_Root_CA.pem
+
 # 20250204: sys/vm/stack test symbols moved to /usr/lib/debug
 OLD_FILES+=usr/tests/sys/vm/stack/.debug/libsoxstack.so.debug
 OLD_DIRS+=usr/tests/sys/vm/stack/.debug
@@ -12120,8 +12149,6 @@ OLD_FILES+=usr/bin/llvm-pdbdump
 OLD_FILES+=usr/share/man/man2/pdwait4.2.gz
 # 20170610: chown-f_test replaced by chown_test
 OLD_FILES+=usr/tests/usr.sbin/chown/chown-f_test
-# 20170609: drop obsolete manpage link (if_rtwn.ko -> rtwn.ko)
-OLD_FILES+=usr/share/man/man4/if_rtwn.4.gz
 # 20170531: removal of groff
 OLD_FILES+=usr/bin/addftinfo
 OLD_FILES+=usr/bin/afmtodit
@@ -15055,8 +15082,6 @@ OLD_FILES+=usr/share/man/man4/lindev.4.gz
 # 20140425
 OLD_FILES+=usr/lib/libssp_p.a
 OLD_FILES+=usr/lib/libstand_p.a
-# 20140413: Removed NO_MANCOMPRESS from mount_fusefs
-OLD_FILES+=usr/share/man/man8/mount_fusefs.8
 # 20140314: AppleTalk
 OLD_DIRS+=usr/include/netatalk
 OLD_FILES+=usr/include/netatalk/aarp.h

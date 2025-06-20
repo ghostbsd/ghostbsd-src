@@ -34,23 +34,31 @@
 #ifndef _SYS_UCRED_H_
 #define	_SYS_UCRED_H_
 
+#include <sys/types.h>
 #if defined(_KERNEL) || defined(_WANT_UCRED)
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
 #endif
 #include <bsm/audit.h>
 
+#if defined(_KERNEL) || defined(_WANT_UCRED)
 struct loginclass;
 
-#define	XU_NGROUPS	16
+/*
+ * Flags for cr_flags.
+ */
+#define	CRED_FLAG_CAPMODE	0x00000001	/* In capability mode. */
 
-#if defined(_KERNEL) || defined(_WANT_UCRED)
 /*
  * Number of groups inlined in 'struct ucred'.  It must stay reasonably low as
  * it is also used by some functions to allocate an array of this size on the
  * stack.
  */
 #define	CRED_SMALLGROUPS_NB	16
+
+struct label;
+struct prison;
+struct uidinfo;
 
 /*
  * Credentials.
@@ -98,10 +106,7 @@ struct ucred {
 #define	FSCRED	((struct ucred *)-1)	/* filesystem credential */
 #endif /* _KERNEL || _WANT_UCRED */
 
-/*
- * Flags for cr_flags.
- */
-#define	CRED_FLAG_CAPMODE	0x00000001	/* In capability mode. */
+#define	XU_NGROUPS	16
 
 /*
  * This is the external representation of struct ucred.
@@ -121,14 +126,77 @@ struct xucred {
 /* This can be used for both ucred and xucred structures. */
 #define	cr_gid cr_groups[0]
 
+struct mac;
+/*
+ * Structure to pass as an argument to the setcred() system call.
+ */
+struct setcred {
+	uid_t	 sc_uid;		/* effective user id */
+	uid_t	 sc_ruid;		/* real user id */
+	uid_t	 sc_svuid;		/* saved user id */
+	gid_t	 sc_gid;		/* effective group id */
+	gid_t	 sc_rgid;		/* real group id */
+	gid_t	 sc_svgid;		/* saved group id */
+	u_int	 sc_pad;		/* see 32-bit compat structure */
+	u_int	 sc_supp_groups_nb;	/* number of supplementary groups */
+	gid_t	*sc_supp_groups;	/* supplementary groups */
+	struct mac *sc_label;		/* MAC label */
+};
+/*
+ * Initializer for 'struct setcred' variables.
+ */
+#define	SETCRED_INITIALIZER	{ -1, -1, -1, -1, -1, -1, 0, 0, NULL, NULL }
+
+/*
+ * Flags to setcred().
+ */
+#define	SETCREDF_UID		(1u << 0)
+#define	SETCREDF_RUID		(1u << 1)
+#define	SETCREDF_SVUID		(1u << 2)
+#define	SETCREDF_GID		(1u << 3)
+#define	SETCREDF_RGID		(1u << 4)
+#define	SETCREDF_SVGID		(1u << 5)
+#define	SETCREDF_SUPP_GROUPS	(1u << 6)
+#define	SETCREDF_MAC_LABEL	(1u << 7)
+
 #ifdef _KERNEL
-struct proc;
+/*
+ * Masks of the currently valid flags to setcred().
+ *
+ * Please consider reserving some of the high bits in the 'flags' argument for
+ * versioning when almost all of them are in use.
+ */
+#define	SETCREDF_MASK	(SETCREDF_UID | SETCREDF_RUID | SETCREDF_SVUID | \
+    SETCREDF_GID | SETCREDF_RGID | SETCREDF_SVGID | SETCREDF_SUPP_GROUPS | \
+    SETCREDF_MAC_LABEL)
+
+struct setcred32 {
+#define	setcred32_copy_start	sc_uid
+	uid_t	 sc_uid;
+	uid_t	 sc_ruid;
+	uid_t	 sc_svuid;
+	gid_t	 sc_gid;
+	gid_t	 sc_rgid;
+	gid_t	 sc_svgid;
+	u_int	 sc_pad;
+	u_int	 sc_supp_groups_nb;
+#define	setcred32_copy_end	sc_supp_groups
+	uint32_t sc_supp_groups;	/* gid_t [*] */
+	uint32_t sc_label;		/* struct mac32 [*] */
+};
+
 struct thread;
+
+/* Common native and 32-bit compatibility entry point. */
+int user_setcred(struct thread *td, const u_int flags,
+    const void *const uwcred, const size_t size, bool is_32bit);
+
+struct proc;
 
 struct credbatch {
 	struct ucred *cred;
-	int users;
-	int ref;
+	u_int users;
+	long ref;
 };
 
 static inline void
@@ -185,6 +253,13 @@ group_is_primary(const gid_t gid, const struct ucred *const cred)
 bool	group_is_supplementary(const gid_t gid, const struct ucred *const cred);
 bool	groupmember(gid_t gid, const struct ucred *cred);
 bool	realgroupmember(gid_t gid, const struct ucred *cred);
+
+#else /* !_KERNEL */
+
+__BEGIN_DECLS
+int	setcred(u_int flags, const struct setcred *wcred, size_t size);
+__END_DECLS
+
 #endif /* _KERNEL */
 
 #endif /* !_SYS_UCRED_H_ */

@@ -45,6 +45,7 @@
 #include <disk.h>
 #include <dev_net.h>
 #include <net.h>
+#include <inttypes.h>
 
 #include <efi.h>
 #include <efilib.h>
@@ -923,7 +924,7 @@ acpi_detect(void)
 		if ((rsdp = efi_get_table(&acpi)) == NULL)
 			return;
 
-	sprintf(buf, "0x%016llx", (unsigned long long)rsdp);
+	sprintf(buf, "0x%016"PRIxPTR, (uintptr_t)rsdp);
 	setenv("acpi.rsdp", buf, 1);
 	revision = rsdp->Revision;
 	if (revision == 0)
@@ -945,12 +946,45 @@ acpi_detect(void)
 	}
 }
 
+static void
+efi_smbios_detect(void)
+{
+	VOID *smbios_v2_ptr = NULL;
+	UINTN k;
+
+	for (k = 0; k < ST->NumberOfTableEntries; k++) {
+		EFI_GUID *guid;
+		VOID *const VT = ST->ConfigurationTable[k].VendorTable;
+		char buf[40];
+		bool is_smbios_v2, is_smbios_v3;
+
+		guid = &ST->ConfigurationTable[k].VendorGuid;
+		is_smbios_v2 = memcmp(guid, &smbios, sizeof(*guid)) == 0;
+		is_smbios_v3 = memcmp(guid, &smbios3, sizeof(*guid)) == 0;
+
+		if (!is_smbios_v2 && !is_smbios_v3)
+			continue;
+
+		snprintf(buf, sizeof(buf), "%p", VT);
+		setenv("hint.smbios.0.mem", buf, 1);
+		if (is_smbios_v2)
+			/*
+			 * We will parse a v2 table only if we don't find a v3
+			 * table.  In the meantime, store the address.
+			 */
+			smbios_v2_ptr = VT;
+		else if (smbios_detect(VT) != NULL)
+			/* v3 parsing succeeded, we are done. */
+			return;
+	}
+	if (smbios_v2_ptr != NULL)
+		(void)smbios_detect(smbios_v2_ptr);
+}
+
 EFI_STATUS
 main(int argc, CHAR16 *argv[])
 {
-	EFI_GUID *guid;
 	int howto, i, uhowto;
-	UINTN k;
 	bool has_kbd, is_last;
 	char *s;
 	EFI_DEVICE_PATH *imgpath;
@@ -966,26 +1000,14 @@ main(int argc, CHAR16 *argv[])
 	archsw.arch_getdev = efi_getdev;
 	archsw.arch_copyin = efi_copyin;
 	archsw.arch_copyout = efi_copyout;
-#ifdef __amd64__
+#if defined(__amd64__) || defined(__i386__)
 	archsw.arch_hypervisor = x86_hypervisor;
 #endif
 	archsw.arch_readin = efi_readin;
 	archsw.arch_zfs_probe = efi_zfs_probe;
 
 #if !defined(__arm__)
-	for (k = 0; k < ST->NumberOfTableEntries; k++) {
-		guid = &ST->ConfigurationTable[k].VendorGuid;
-		if (!memcmp(guid, &smbios, sizeof(EFI_GUID)) ||
-		    !memcmp(guid, &smbios3, sizeof(EFI_GUID))) {
-			char buf[40];
-
-			snprintf(buf, sizeof(buf), "%p",
-			    ST->ConfigurationTable[k].VendorTable);
-			setenv("hint.smbios.0.mem", buf, 1);
-			smbios_detect(ST->ConfigurationTable[k].VendorTable);
-			break;
-		}
-	}
+	efi_smbios_detect();
 #endif
 
         /* Get our loaded image protocol interface structure. */
