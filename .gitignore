@@ -29,3 +29,5 @@ tags
 .clangd
 .ccls-cache
 sys/*/compile
+.idea
+.vscode
