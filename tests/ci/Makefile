@@ -33,13 +33,18 @@ EXTRA_MAKE_FLAGS?=
 TARGET=		${MACHINE}
 .endif
 .if !defined(TARGET_ARCH) || empty(TARGET_ARCH)
-.if ${TARGET} == ${MACHINE}
+.  if ${TARGET} == ${MACHINE}
 TARGET_ARCH=	${MACHINE_ARCH}
-.else
+.  else
 TARGET_ARCH=	${TARGET}
-.endif
+.  endif
 .endif
 IMAKE=		${MAKE} TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH}
+
+.if !defined(CIENV) || empty(CIENV)
+CIENV=		local
+LOG_TARGET=	> ${.CURDIR}/_.${TARGET_ARCH}.${.TARGET} 2>&1 || (echo "${.TARGET} failed, check _.${TARGET_ARCH}.${.TARGET} for details" ; false)
+.endif
 
 .if defined(CROSS_TOOLCHAIN) || !empty(CROSS_TOOLCHAIN)
 CROSS_TOOLCHAIN_PARAM=	"CROSS_TOOLCHAIN=${CROSS_TOOLCHAIN}"
@@ -47,20 +52,20 @@ CROSS_TOOLCHAIN_PARAM=	"CROSS_TOOLCHAIN=${CROSS_TOOLCHAIN}"
 
 # Define OSRELEASE by using newvers.sh
 .if !defined(OSRELEASE) || empty(OSRELEASE)
-.for _V in TYPE BRANCH REVISION
-. if !defined(${_V}) || empty(${_V})
+.  for _V in TYPE BRANCH REVISION
+.    if !defined(${_V}) || empty(${_V})
 ${_V}!=	eval $$(awk '/^${_V}=/{print}' ${.CURDIR}/../../sys/conf/newvers.sh); echo $$${_V}
-. endif
-.endfor
-.for _V in ${TARGET_ARCH}
-.if !empty(TARGET:M${_V})
+.    endif
+.  endfor
+.  for _V in ${TARGET_ARCH}
+.    if !empty(TARGET:M${_V})
 OSRELEASE=	${TYPE}-${REVISION}-${BRANCH}-${TARGET}
 VOLUME_LABEL=	${REVISION:C/[.-]/_/g}_${BRANCH:C/[.-]/_/g}_${TARGET}
-.else
+.    else
 OSRELEASE=	${TYPE}-${REVISION}-${BRANCH}-${TARGET}-${TARGET_ARCH}
 VOLUME_LABEL=	${REVISION:C/[.-]/_/g}_${BRANCH:C/[.-]/_/g}_${TARGET_ARCH}
-.endif
-.endfor
+.    endif
+.  endfor
 .endif
 
 .if exists(${.CURDIR}/tools/ci.conf) && !defined(CICONF)
@@ -73,6 +78,7 @@ CIIMAGE=	ci-${OSRELEASE}-${GITREV}-${KERNCONF}.${FORMAT}
 CIDISK?=	${.OBJDIR}/${CIIMAGE}
 VMSIZE?=	6g
 CITYPE?=	full
+KYUA_TEST_FILTERS?=
 META_TAR!=mktemp /tmp/meta.XXXXXX
 META_DIR!=mktemp -d /tmp/meta.XXXXXX
 META_DIROUT!=mktemp -d /tmp/meta.XXXXXX
@@ -104,13 +110,13 @@ TIMEOUT_VM=$$((${TIMEOUT_EXPECT} - 120))
 .	include "${.CURDIR}/Makefile.${TARGET_ARCH}"
 .endif
 .if ${TARGET_ARCH} != ${MACHINE_ARCH}
-.if ( ${TARGET_ARCH} != "i386" ) || ( ${MACHINE_ARCH} != "amd64" )
+.  if ( ${TARGET_ARCH} != "i386" ) || ( ${MACHINE_ARCH} != "amd64" )
 QEMUSTATIC=/usr/local/bin/qemu-${QEMU_ARCH}-static
 QEMUTGT=portinstall-qemu
-.endif
+.  endif
 .endif
 QEMUTGT?=
-QEMU_DEVICES?=-device virtio-blk,drive=hd0
+QEMU_DEVICES?=
 QEMU_EXTRA_PARAM?=
 QEMU_MACHINE?=virt
 QEMUBIN=/usr/local/bin/qemu-system-${QEMU_ARCH}
@@ -134,7 +140,8 @@ METAMODE?=-DWITH_META_MODE
 .endif
 
 CLEANFILES+=	${.OBJDIR}/${CIIMAGE} ${.OBJDIR}/ci.img ${META_TAR}
-CLEANDIRS+=	${.OBJDIR}/ci-buildimage
+IMAGEDIR=	${.OBJDIR}/ci-buildimage
+CLEANDIRS+=	${IMAGEDIR}
 
 portinstall: portinstall-pkg portinstall-qemu portinstall-expect portinstall-${TARGET_ARCH:tl} .PHONY
 
@@ -157,7 +164,7 @@ portinstall-expect: portinstall-pkg .PHONY
 .endif
 
 beforeclean: .PHONY
-	chflags -R noschg ${.OBJDIR}/${.TARGET}
+	chflags -R noschg ${IMAGEDIR}
 
 .include <bsd.obj.mk>
 clean: beforeclean .PHONY
@@ -168,17 +175,14 @@ ci-buildworld: .PHONY
 	@echo "Building world for ${TARGET_ARCH}"
 	${IMAKE} -j${PARALLEL_JOBS} -C ${WORLDDIR} ${METAMODE} \
 		${CROSS_TOOLCHAIN_PARAM} __MAKE_CONF=${MAKECONF} SRCCONF=${SRCCONF} \
-		${EXTRA_MAKE_FLAGS} buildworld > ${.CURDIR}/_.${TARGET_ARCH}.${.TARGET} 2>&1 || \
-		(echo "${.TARGET} failed, check _.${TARGET_ARCH}.${.TARGET} for details" ; false)
-
+		${EXTRA_MAKE_FLAGS} buildworld ${LOG_TARGET}
 
 ci-buildkernel: ci-buildworld-${TARGET_ARCH:tl} .PHONY
 	@echo "Building kernel for ${TARGET_ARCH}"
 	${IMAKE} -j${PARALLEL_JOBS} -C ${WORLDDIR} ${METAMODE} \
 		${CROSS_TOOLCHAIN_PARAM} __MAKE_CONF=${MAKECONF} SRCCONF=${SRCCONF} \
 		${EXTRA_MAKE_FLAGS} KERNCONF=${KERNCONF} \
-		buildkernel > ${.CURDIR}/_.${TARGET_ARCH}.${.TARGET} 2>&1 || \
-		(echo "${.TARGET} failed, check _.${TARGET_ARCH}.${.TARGET} for details" ; false)
+		buildkernel ${LOG_TARGET}
 
 ci-buildimage: ${QEMUTGT} ci-buildkernel-${TARGET_ARCH:tl} .PHONY
 	@echo "Building ci image for ${TARGET_ARCH}"
@@ -188,9 +192,7 @@ ci-buildimage: ${QEMUTGT} ci-buildkernel-${TARGET_ARCH:tl} .PHONY
 		${RELEASEDIR}/scripts/mk-vmimage.sh \
 		-C ${RELEASEDIR}/tools/vmimage.subr -d ${.OBJDIR}/${.TARGET} -F ${VMFS} \
 		-i ${.OBJDIR}/ci.img -s ${VMSIZE} -f ${FORMAT} \
-		-S ${WORLDDIR} -o ${.OBJDIR}/${CIIMAGE} -c ${CICONF} \
-		> ${.CURDIR}/_.${TARGET_ARCH}.${.TARGET} 2>&1 || \
-		(echo "${.TARGET} failed, check _.${TARGET_ARCH}.${.TARGET} for details" ; false)
+		-S ${WORLDDIR} -o ${.OBJDIR}/${CIIMAGE} -c ${CICONF} ${LOG_TARGET}
 	touch ${.TARGET}
 
 ci-set-smoke-var: .PHONY
@@ -205,6 +207,7 @@ ci-create-meta: .PHONY
 
 ci-extract-meta: .PHONY
 	tar xfv ${META_TAR} -C ${META_DIROUT}
+	rm -rf ${META_TAR} ${META_DIR}
 	@echo "Extracted kyua reports to ${META_DIROUT}"
 
 ci-runtest: ci-buildimage-${TARGET_ARCH:tl} portinstall .PHONY
@@ -235,8 +238,10 @@ ci-runtest: ci-buildimage-${TARGET_ARCH:tl} portinstall .PHONY
 		-nographic \
 		-no-reboot \
 		${QEMU_EXTRA_PARAM} \
-		-drive if=none,file=${CIDISK},format=raw,id=hd0 \
-		-drive if=none,file=${META_TAR},format=raw,id=hd1 \
+		-device virtio-blk,drive=hd0 \
+		-device virtio-blk,drive=hd1 \
+		-blockdev driver=raw,node-name=hd0,file.driver=file,file.filename=${CIDISK} \
+		-blockdev driver=raw,node-name=hd1,file.driver=file,file.filename=${META_TAR} \
 		${QEMU_DEVICES}
 .endif
 
@@ -254,7 +259,7 @@ ci-checktarget: .PHONY
 
 ci-smoke: ci-set-smoke-var ci-create-meta ci-checktarget .WAIT ci-runtest-${TARGET_ARCH:tl} .PHONY
 
-ci-full: ci-set-full-var ci-create-meta ci-checktarget .WAIT ci-runtest-${TARGET_ARCH:tl} ci-extract-meta .PHONY
+ci-full: ci-set-full-var ci-create-meta ci-checktarget .WAIT ci-runtest-${TARGET_ARCH:tl} .WAIT ci-extract-meta .PHONY
 
 ci: ci-${CITYPE:tl} .PHONY
 

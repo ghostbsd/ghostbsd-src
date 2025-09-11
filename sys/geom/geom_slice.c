@@ -57,7 +57,7 @@ g_slice_alloc(unsigned nslice, unsigned scsize)
 {
 	struct g_slicer *gsp;
 
-	gsp = g_malloc(sizeof *gsp, M_WAITOK | M_ZERO);
+	gsp = g_malloc(sizeof(*gsp), M_WAITOK | M_ZERO);
 	if (scsize > 0)
 		gsp->softc = g_malloc(scsize, M_WAITOK | M_ZERO);
 	else
@@ -463,9 +463,9 @@ g_slice_conf_hot(struct g_geom *gp, u_int idx, off_t offset, off_t length, int r
 	}
 	gsl = gsp->hotspot;
 	if(idx >= gsp->nhotspot) {
-		gsl2 = g_malloc((idx + 1) * sizeof *gsl2, M_WAITOK | M_ZERO);
+		gsl2 = g_malloc((idx + 1) * sizeof(*gsl2), M_WAITOK | M_ZERO);
 		if (gsp->hotspot != NULL)
-			bcopy(gsp->hotspot, gsl2, gsp->nhotspot * sizeof *gsl2);
+			bcopy(gsp->hotspot, gsl2, gsp->nhotspot * sizeof(*gsl2));
 		gsp->hotspot = gsl2;
 		if (gsp->hotspot != NULL)
 			g_free(gsl);
@@ -529,7 +529,7 @@ g_slice_new(struct g_class *mp, u_int slices, struct g_provider *pp, struct g_co
 
 	g_topology_assert();
 	vp = (void **)extrap;
-	gp = g_new_geomf(mp, "%s", pp->name);
+	gp = g_new_geom(mp, pp->name);
 	gsp = g_slice_alloc(slices, extra);
 	gsp->start = start;
 	gp->softc = gsp;

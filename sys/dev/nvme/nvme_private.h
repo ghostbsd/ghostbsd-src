@@ -123,6 +123,8 @@ struct nvme_request {
 struct nvme_async_event_request {
 	struct nvme_controller		*ctrlr;
 	struct nvme_request		*req;
+	struct task			task;
+	struct mtx			mtx;
 	struct nvme_completion		cpl;
 	uint32_t			log_page_id;
 	uint32_t			log_page_size;
@@ -307,8 +309,6 @@ struct nvme_controller {
 	bool				isr_warned;
 	bool				is_initialized;
 
-	STAILQ_HEAD(, nvme_request)	fail_req;
-
 	/* Host Memory Buffer */
 	int				hmb_nchunks;
 	size_t				hmb_chunk;
@@ -459,8 +459,7 @@ int	nvme_detach(device_t dev);
  * vast majority of these without waiting for a tick plus scheduling delays. Since
  * these are on startup, this drastically reduces startup time.
  */
-static __inline
-void
+static __inline void
 nvme_completion_poll(struct nvme_completion_poll_status *status)
 {
 	int timeout = ticks + 10 * hz;

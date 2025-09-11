@@ -85,7 +85,8 @@ enum random_entropy_source {
 	RANDOM_FS_ATIME,
 	RANDOM_UMA,	/* Special!! UMA/SLAB Allocator */
 	RANDOM_CALLOUT,
-	RANDOM_ENVIRONMENTAL_END = RANDOM_CALLOUT,
+	RANDOM_RANDOMDEV,
+	RANDOM_ENVIRONMENTAL_END = RANDOM_RANDOMDEV,
 	/* Fast hardware random-number sources from here on. */
 	RANDOM_PURE_START,
 	RANDOM_PURE_OCTEON = RANDOM_PURE_START,
@@ -140,9 +141,6 @@ random_harvest_direct(const void *entropy, u_int size, enum random_entropy_sourc
 	if (hc_source_mask & (1 << origin))
 		random_harvest_direct_(entropy, size, origin);
 }
-
-void random_harvest_register_source(enum random_entropy_source);
-void random_harvest_deregister_source(enum random_entropy_source);
 
 #if defined(RANDOM_ENABLE_UMA)
 #define random_harvest_fast_uma(a, b, c)	random_harvest_fast(a, b, c)

@@ -181,9 +181,9 @@
  * 0x0100000000000000 - 0xf0ffffffffffffff   does not exist (hole)
  * 0xff00000000000000 - 0xff00ffffffffffff   recursive page table (2048TB slot)
  * 0xff01000000000000 - 0xff20ffffffffffff   direct map (32 x 2048TB slots)
- * 0xff21000000000000 - 0xffff807fffffffff   unused
- * 0xffff808000000000 - 0xffff847fffffffff   large map (can be tuned up)
- * 0xffff848000000000 - 0xfffff77fffffffff   unused (large map extends there)
+ * 0xff21000000000000 - 0xff40ffffffffffff   large map
+ * 0xff41000000000000 - 0xffff7fffffffffff   unused
+ * 0xffff800000000000 - 0xfffff5ffffffffff   unused (start of kernel pml4 entry)
  * 0xfffff60000000000 - 0xfffff7ffffffffff   2TB KMSAN origin map, optional
  * 0xfffff78000000000 - 0xfffff7bfffffffff   512GB KASAN shadow map, optional
  * 0xfffff80000000000 - 0xfffffbffffffffff   4TB unused
@@ -200,16 +200,14 @@
 #define	VM_MIN_KERNEL_ADDRESS		kva_layout.km_low
 #define	VM_MAX_KERNEL_ADDRESS		kva_layout.km_high
 
-#define	KASAN_MIN_ADDRESS	KV4ADDR(KASANPML4I, 0, 0, 0)
-#define	KASAN_MAX_ADDRESS	KV4ADDR(KASANPML4I + NKASANPML4E, 0, 0, 0)
+#define	KASAN_MIN_ADDRESS		(kva_layout.kasan_shadow_low)
+#define	KASAN_MAX_ADDRESS		(kva_layout.kasan_shadow_high)
 
-#define	KMSAN_SHAD_MIN_ADDRESS	KV4ADDR(KMSANSHADPML4I, 0, 0, 0)
-#define	KMSAN_SHAD_MAX_ADDRESS	KV4ADDR(KMSANSHADPML4I + NKMSANSHADPML4E, \
-					0, 0, 0)
+#define	KMSAN_SHAD_MIN_ADDRESS		(kva_layout.kmsan_shadow_low)
+#define	KMSAN_SHAD_MAX_ADDRESS		(kva_layout.kmsan_shadow_high)
 
-#define	KMSAN_ORIG_MIN_ADDRESS	KV4ADDR(KMSANORIGPML4I, 0, 0, 0)
-#define	KMSAN_ORIG_MAX_ADDRESS	KV4ADDR(KMSANORIGPML4I + NKMSANORIGPML4E, \
-					0, 0, 0)
+#define	KMSAN_ORIG_MIN_ADDRESS		(kva_layout.kmsan_origin_low)
+#define	KMSAN_ORIG_MAX_ADDRESS		(kva_layout.kmsan_origin_high)
 
 /*
  * Formally kernel mapping starts at KERNBASE, but kernel linker

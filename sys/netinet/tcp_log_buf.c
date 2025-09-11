@@ -61,6 +61,9 @@
 #include <net/vnet.h>
 
 #include <netinet/in.h>
+#ifdef DDB
+#include <netinet/in_kdtrace.h>
+#endif
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/tcp_var.h>
@@ -2878,7 +2881,7 @@ tcp_log_sendfile(struct socket *so, off_t offset, size_t nbytes, int flags)
 	/* double check log state now that we have the lock */
 	if (inp->inp_flags & INP_DROPPED)
 		goto done;
-	if (tp->_t_logstate != TCP_LOG_STATE_OFF) {
+	if (tcp_bblogging_on(tp)) {
 		struct timeval tv;
 		tcp_log_eventspecific_t log;
 

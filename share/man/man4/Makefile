@@ -1,9 +1,15 @@
 .include <src.opts.mk>
 
+MANGROUPS=	MAN
+MANPACKAGE=	kernel
+
 # If you add a new file here, please consider adding an entry to the
 # hardware notes template (website/archetypes/release/hardware.adoc in
 # the doc repository); otherwise the automatically generated hardware
 # notes will not include your driver.
+
+# If you enable a driver for a different architecture, please remember
+# to update the arch specifier in the document title of the manual.
 
 MAN=	aac.4 \
 	aacraid.4 \
@@ -58,7 +64,6 @@ MAN=	aac.4 \
 	atkbdc.4 \
 	${_atopcase.4} \
 	atp.4 \
-	${_atf_test_case.4} \
 	${_atrtc.4} \
 	${_attimer.4} \
 	audit.4 \
@@ -592,8 +597,10 @@ MAN=	aac.4 \
 	tty.4 \
 	tun.4 \
 	tws.4 \
+	u2f.4 \
 	udp.4 \
 	udplite.4 \
+	${_ufshci.4} \
 	unionfs.4 \
 	ure.4 \
 	vale.4 \
@@ -843,7 +850,7 @@ _cpuctl.4=	cpuctl.4
 _dpms.4=	dpms.4
 _ftgpio.4=	ftgpio.4
 _ftwd.4=	ftwd.4
-_hn.4=		_hn.4
+_hn.4=		hn.4
 _hpt27xx.4=	hpt27xx.4
 _hptiop.4=	hptiop.4
 _hptmv.4=	hptmv.4
@@ -937,6 +944,10 @@ MLINKS+=hwt.4	spe.4
 .endif
 .endif
 
+.if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "aarch64"
+_ufshci.4=	ufshci.4
+.endif
+
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386" || \
 	 ${MACHINE_CPUARCH} == "aarch64"
 _gve.4=		gve.4
@@ -1018,9 +1029,11 @@ MAN+=		mlx5io.4
 .endif
 
 .if ${MK_TESTS} != "no"
+MANGROUPS+=	TESTS
 ATF=            ${SRCTOP}/contrib/atf
 .PATH:          ${ATF}/doc
-_atf_test_case.4=	atf-test-case.4
+TESTS=		atf-test-case.4
+TESTSPACKAGE=	tests
 .endif
 
 .if ${MK_PF} != "no"

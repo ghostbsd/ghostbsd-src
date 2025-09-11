@@ -153,6 +153,8 @@ static volatile sig_atomic_t romeo_must_die = 0;
 
 static const char *configfile = CF;
 
+static	char	vm_guest[80];
+
 static void devdlog(int priority, const char* message, ...)
 	__printflike(2, 3);
 static void event_loop(void);
@@ -867,6 +869,8 @@ process_event(char *buffer)
 	cfg.set_variable("timestamp", timestr);
 	free(timestr);
 
+	cfg.set_variable("vm_guest", vm_guest);
+
 	// Match doesn't have a device, and the format is a little
 	// different, so handle it separately.
 	switch (type) {
@@ -1107,6 +1111,14 @@ event_loop(void)
 			err(1, "select");
 		} else if (rv == 0)
 			check_clients();
+		/*
+		 * Aside from the socket type, both sockets use the same
+		 * protocol, so we can process clients the same way.
+		 */
+		if (FD_ISSET(stream_fd, &fds))
+			new_client(stream_fd, SOCK_STREAM);
+		if (FD_ISSET(seqpacket_fd, &fds))
+			new_client(seqpacket_fd, SOCK_SEQPACKET);
 		if (FD_ISSET(fd, &fds)) {
 			rv = read(fd, buffer, sizeof(buffer) - 1);
 			if (rv > 0) {
@@ -1135,14 +1147,6 @@ event_loop(void)
 				break;
 			}
 		}
-		if (FD_ISSET(stream_fd, &fds))
-			new_client(stream_fd, SOCK_STREAM);
-		/*
-		 * Aside from the socket type, both sockets use the same
-		 * protocol, so we can process clients the same way.
-		 */
-		if (FD_ISSET(seqpacket_fd, &fds))
-			new_client(seqpacket_fd, SOCK_SEQPACKET);
 	}
 	cfg.remove_pidfile();
 	close(seqpacket_fd);
@@ -1204,27 +1208,6 @@ new_action(const char *cmd)
 eps *
 new_match(const char *var, const char *re)
 {
-	/*
-	 * In FreeBSD 14, we changed the system=kern to system=kernel for the
-	 * resume message to match all the other 'kernel' messages. Generate a
-	 * warning for the life of 14.x that we've 'fixed' the file on the fly,
-	 * but make it a fatal error in 15.x and newer.
-	 */
-	if (strcmp(var, "kern") == 0) {
-#if __FreeBSD_version < 1500000
-		devdlog(LOG_WARNING,
-		    "Changing deprecated system='kern' to new name 'kernel' in %s line %d.",
-		    curr_cf, lineno);
-		free(const_cast<char *>(var));
-		var = strdup("kernel");
-#elif  __FreeBSD_version < 1600000
-		errx(1, "Encountered deprecated system=\"kern\" rule in %s line %d",
-		    curr_cf, lineno);
-#else
-#error "Remove this gross hack"
-#endif
-	}
-
 	eps *e = new match(cfg, var, re);
 	free(const_cast<char *>(var));
 	free(const_cast<char *>(re));
@@ -1322,6 +1305,7 @@ int
 main(int argc, char **argv)
 {
 	int ch;
+	size_t len;
 
 	check_devd_enabled();
 	while ((ch = getopt(argc, argv, "df:l:nq")) != -1) {
@@ -1344,6 +1328,12 @@ main(int argc, char **argv)
 		default:
 			usage();
 		}
+	}
+
+	len = sizeof(vm_guest);
+	if (sysctlbyname("kern.vm_guest", vm_guest, &len, NULL, 0) < 0) {
+		devdlog(LOG_ERR,
+		    "sysctlbyname(kern.vm_guest) failed: %d\n", errno);
 	}
 
 	cfg.parse();
