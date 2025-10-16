@@ -51,6 +51,36 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20251006: Remove libnss_tacplus.a (it never should have been installed)
+OLD_FILES+=usr/lib/libnss_tacplus.a
+
+# 20251003: kgdb python scripts moved
+OLD_FILES+=usr/libexec/kgdb/acttrace.py
+OLD_DIRS+=usr/libexec/kgdb
+
+# 20251001: test helper sendto-IP_MULTICAST_IF renamed
+OLD_FILES+=usr/tests/sys/netinet/sendto-IP_MULTICAST_IF
+
+# 20250930: Rename wlanstats to wlanstat
+OLD_FILES+=usr/sbin/wlanstats
+OLD_FILES+=usr/share/man/man8/wlanstats.8.gz
+
+# 20250929: Remove ftpd(8)
+OLD_FILES+=etc/rc.d/ftpd
+OLD_FILES+=usr/libexec/ftpd
+OLD_FILES+=usr/share/man/man5/ftpchroot.5.gz
+OLD_FILES+=usr/share/man/man8/ftpd.8.gz
+
+# 20250917: VREF macro removed
+OLD_FILES+=usr/share/man/man9/VREF.9.gz
+
+# 20250917: Remove a miscapitalized manual
+OLD_FILES+=usr/share/man/man9/vnet.9.gz
+OLD_FILES+=usr/share/man/man9/vimage.9.gz
+
+# 20250911: This tool is no longer needed
+OLD_FILES+=usr/tests/bin/cp/sparse
+
 # 20250826: Remove a misspelled manual
 OLD_FILES+=usr/share/man/man3/sysdecode_syscallnames.3.gz
 

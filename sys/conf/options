@@ -231,6 +231,7 @@ SYSVSEM		opt_sysvipc.h
 SYSVSHM		opt_sysvipc.h
 SW_WATCHDOG	opt_watchdog.h
 TCPHPTS
+TCP_HPTS_KTEST	opt_inet.h
 TCP_REQUEST_TRK opt_global.h
 TCP_ACCOUNTING	opt_global.h
 TCP_BBR		opt_inet.h
@@ -1004,7 +1005,7 @@ IICHID_DEBUG	opt_hid.h
 IICHID_SAMPLING	opt_hid.h
 HKBD_DFLT_KEYMAP	opt_hkbd.h
 HIDRAW_MAKE_UHID_ALIAS	opt_hid.h
-U2F_MAKE_UHID_ALIAS	opt_hid.h
+U2F_DROP_UHID_ALIAS	opt_hid.h
 
 # kenv options
 # The early kernel environment (loader environment, config(8)-provided static)

@@ -30,6 +30,7 @@ ATF_TESTS_SH=	arp \
 
 ATF_TESTS_PYTEST+=	carp.py
 ATF_TESTS_PYTEST+=	igmp.py
+ATF_TESTS_PYTEST+=	tcp_hpts_test.py
 
 LIBADD.so_reuseport_lb_test=	pthread
 LIBADD.udp_bindings=		pthread
@@ -48,7 +49,7 @@ TEST_METADATA.forward+=	required_programs="python"	\
 TEST_METADATA.output+=	required_programs="python"
 TEST_METADATA.redirect+= required_programs="python"
 
-PROGS=	udp_dontroute tcp_user_cookie sendto-IP_MULTICAST_IF
+PROGS=	udp_dontroute tcp_user_cookie multicast-send multicast-receive
 
 ${PACKAGE}FILES+=		redirect.py
 

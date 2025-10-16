@@ -82,7 +82,8 @@ gbh_nblkptrs(uint64_t size) {
 static inline zio_eck_t *
 gbh_eck(zio_gbh_phys_t *gbh, uint64_t size) {
 	ASSERT(IS_P2ALIGNED(size, sizeof (blkptr_t)));
-	return ((zio_eck_t *)((uintptr_t)gbh + (size_t)size - sizeof (zio_eck_t)));
+	return ((zio_eck_t *)((uintptr_t)gbh + (size_t)size -
+	    sizeof (zio_eck_t)));
 }
 
 static inline blkptr_t *
@@ -717,6 +718,7 @@ extern void zio_handle_ignored_writes(zio_t *zio);
 extern hrtime_t zio_handle_io_delay(zio_t *zio);
 extern void zio_handle_import_delay(spa_t *spa, hrtime_t elapsed);
 extern void zio_handle_export_delay(spa_t *spa, hrtime_t elapsed);
+extern hrtime_t zio_handle_ready_delay(zio_t *zio);
 
 /*
  * Checksum ereport functions

@@ -55,6 +55,9 @@ exhaust_body()
 	jexec echo ifconfig ${epair_echo}b 198.51.100.2/24 up
 	jexec echo /usr/sbin/inetd -p ${PWD}/inetd-echo.pid $(atf_get_srcdir)/echo_inetd.conf
 
+	# Disable checksum offload on one of the interfaces to ensure pf handles that
+	jexec nat ifconfig ${epair_nat}a -txcsum
+
 	# Enable pf!
 	jexec nat pfctl -e
 	pft_set_rules nat \
@@ -474,6 +477,7 @@ no_addrs_random_cleanup()
 	pft_cleanup
 }
 
+atf_test_case "nat_pass" "cleanup"
 nat_pass_head()
 {
 	atf_set descr 'IPv4 NAT on pass rule'
@@ -505,6 +509,7 @@ nat_pass_cleanup()
 	pft_cleanup
 }
 
+atf_test_case "nat_match" "cleanup"
 nat_match_head()
 {
 	atf_set descr 'IPv4 NAT on match rule'
@@ -644,6 +649,7 @@ map_e_pass_cleanup()
 	pft_cleanup
 }
 
+atf_test_case "binat_compat" "cleanup"
 binat_compat_head()
 {
 	atf_set descr 'IPv4 BINAT with nat ruleset'
@@ -710,6 +716,7 @@ binat_compat_cleanup()
 	kill $(cat ${PWD}/inetd_tester.pid)
 }
 
+atf_test_case "binat_match" "cleanup"
 binat_match_head()
 {
 	atf_set descr 'IPv4 BINAT with nat ruleset'
@@ -810,6 +817,50 @@ empty_pool_cleanup()
 	pft_cleanup
 }
 
+atf_test_case "dummynet_mask" "cleanup"
+dummynet_mask_head()
+{
+	atf_set descr 'Verify that dummynet uses the pre-nat address for masking'
+	atf_set require.user root
+}
+
+dummynet_mask_body()
+{
+	dummynet_init
+
+	epair_srv=$(vnet_mkepair)
+	epair_cl=$(vnet_mkepair)
+
+	ifconfig ${epair_cl}b 192.0.2.2/24 up
+	route add default 192.0.2.1
+
+	vnet_mkjail srv ${epair_srv}a
+	jexec srv ifconfig ${epair_srv}a 198.51.100.2/24 up
+
+	vnet_mkjail gw ${epair_srv}b ${epair_cl}a
+	jexec gw ifconfig ${epair_srv}b 198.51.100.1/24 up
+	jexec gw ifconfig ${epair_cl}a 192.0.2.1/24 up
+	jexec gw sysctl net.inet.ip.forwarding=1
+
+	jexec gw dnctl pipe 1 config delay 100 mask src-ip 0xffffff00
+	jexec gw pfctl -e
+	pft_set_rules gw \
+	    "nat on ${epair_srv}b inet from 192.0.2.0/24 to any -> (${epair_srv}b)" \
+	    "pass out dnpipe 1"
+
+	atf_check -s exit:0 -o ignore \
+	    ping -c  3 198.51.100.2
+
+	# Now check that dummynet looked at the correct address
+	atf_check -s exit:0 -o match:"ip.*192.0.2.0/0" \
+	    jexec gw dnctl pipe show
+}
+
+dummynet_mask_cleanup()
+{
+	pft_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "exhaust"
@@ -828,4 +879,5 @@ atf_init_test_cases()
 	atf_add_test_case "binat_compat"
 	atf_add_test_case "binat_match"
 	atf_add_test_case "empty_pool"
+	atf_add_test_case "dummynet_mask"
 }

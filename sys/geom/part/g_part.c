@@ -122,13 +122,13 @@ struct g_part_alias_list {
 	{ "ntfs", G_PART_ALIAS_MS_NTFS },
 	{ "openbsd-data", G_PART_ALIAS_OPENBSD_DATA },
 	{ "prep-boot", G_PART_ALIAS_PREP_BOOT },
-        { "solaris-boot", G_PART_ALIAS_SOLARIS_BOOT },
-        { "solaris-root", G_PART_ALIAS_SOLARIS_ROOT },
-        { "solaris-swap", G_PART_ALIAS_SOLARIS_SWAP },
-        { "solaris-backup", G_PART_ALIAS_SOLARIS_BACKUP },
-        { "solaris-var", G_PART_ALIAS_SOLARIS_VAR },
-        { "solaris-home", G_PART_ALIAS_SOLARIS_HOME },
-        { "solaris-altsec", G_PART_ALIAS_SOLARIS_ALTSEC },
+	{ "solaris-boot", G_PART_ALIAS_SOLARIS_BOOT },
+	{ "solaris-root", G_PART_ALIAS_SOLARIS_ROOT },
+	{ "solaris-swap", G_PART_ALIAS_SOLARIS_SWAP },
+	{ "solaris-backup", G_PART_ALIAS_SOLARIS_BACKUP },
+	{ "solaris-var", G_PART_ALIAS_SOLARIS_VAR },
+	{ "solaris-home", G_PART_ALIAS_SOLARIS_HOME },
+	{ "solaris-altsec", G_PART_ALIAS_SOLARIS_ALTSEC },
 	{ "solaris-reserved", G_PART_ALIAS_SOLARIS_RESERVED },
 	{ "u-boot-env", G_PART_ALIAS_U_BOOT_ENV },
 	{ "vmware-reserved", G_PART_ALIAS_VMRESERVED },
@@ -552,8 +552,6 @@ g_part_parm_provider(struct gctl_req *req, const char *name,
 	pname = gctl_get_asciiparam(req, name);
 	if (pname == NULL)
 		return (ENOATTR);
-	if (strncmp(pname, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
-		pname += sizeof(_PATH_DEV) - 1;
 	pp = g_provider_by_name(pname);
 	if (pp == NULL) {
 		gctl_error(req, "%d %s '%s'", EINVAL, name, pname);

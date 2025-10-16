@@ -285,6 +285,7 @@ enum pf_rule_type_t {
 	PF_RT_MAX_PKT_SIZE	= 83, /* u16 */
 	PF_RT_TYPE_2		= 84, /* u16 */
 	PF_RT_CODE_2		= 85, /* u16 */
+	PF_RT_EXPTIME		= 86, /* time_t */
 };
 
 enum pf_addrule_type_t {
@@ -352,6 +353,8 @@ enum pf_get_status_types_t {
 	PF_GS_CHKSUM		= 14, /* byte array */
 	PF_GS_PCOUNTERS		= 15, /* u64 array */
 	PF_GS_BCOUNTERS		= 16, /* u64 array */
+	PF_GS_NCOUNTERS		= 17, /* nested, */
+	PF_GS_FRAGMENTS		= 18, /* u64, */
 };
 
 enum pf_natlook_types_t {

@@ -231,6 +231,25 @@ get_cntxct(bool physical)
 	return (val);
 }
 
+#ifdef __aarch64__
+/*
+ * Read the self-syncronized counter. These cannot be read speculatively so
+ * don't need an isb before them.
+ */
+static uint64_t
+get_cntxctss(bool physical)
+{
+	uint64_t val;
+
+	if (physical)
+		val = READ_SPECIALREG(CNTPCTSS_EL0_REG);
+	else
+		val = READ_SPECIALREG(CNTVCTSS_EL0_REG);
+
+	return (val);
+}
+#endif
+
 static int
 set_ctrl(uint32_t val, bool physical)
 {
@@ -631,6 +650,7 @@ arm_tmr_attach(device_t dev)
 	pcell_t clock;
 #endif
 #ifdef __aarch64__
+	uint64_t id_aa64mmfr0_el1;
 	int user_phys;
 #endif
 	int error;
@@ -641,6 +661,11 @@ arm_tmr_attach(device_t dev)
 		return (ENXIO);
 
 	sc->get_cntxct = &get_cntxct;
+#ifdef __aarch64__
+	if (get_kernel_reg(ID_AA64MMFR0_EL1, &id_aa64mmfr0_el1) &&
+	    ID_AA64MMFR0_ECV_VAL(id_aa64mmfr0_el1) >= ID_AA64MMFR0_ECV_IMPL)
+		sc->get_cntxct = &get_cntxctss;
+#endif
 #ifdef FDT
 	/* Get the base clock frequency */
 	node = ofw_bus_get_node(dev);
@@ -889,7 +914,7 @@ wfxt_check(const struct cpu_feat *feat __unused, u_int midr __unused)
 
 	if (!get_kernel_reg(ID_AA64ISAR2_EL1, &id_aa64isar2))
 		return (FEAT_ALWAYS_DISABLE);
-	if (ID_AA64ISAR2_WFxT_VAL(id_aa64isar2) >= ID_AA64ISAR2_WFxT_NONE)
+	if (ID_AA64ISAR2_WFxT_VAL(id_aa64isar2) >= ID_AA64ISAR2_WFxT_IMPL)
 		return (FEAT_DEFAULT_ENABLE);
 
 	return (FEAT_ALWAYS_DISABLE);
@@ -905,8 +930,15 @@ wfxt_enable(const struct cpu_feat *feat __unused,
 	return (true);
 }
 
+static void
+wfxt_disabled(const struct cpu_feat *feat __unused)
+{
+	if (PCPU_GET(cpuid) == 0)
+		update_special_reg(ID_AA64ISAR2_EL1, ID_AA64ISAR2_WFxT_MASK, 0);
+}
+
 CPU_FEAT(feat_wfxt, "WFE and WFI instructions with timeout",
-    wfxt_check, NULL, wfxt_enable,
+    wfxt_check, NULL, wfxt_enable, wfxt_disabled,
     CPU_FEAT_AFTER_DEV | CPU_FEAT_SYSTEM);
 #endif
 
