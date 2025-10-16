@@ -73,6 +73,9 @@ typedef enum {
 #define	CPU_FEAT_PER_CPU	0x00000000
 #define	CPU_FEAT_SYSTEM		0x00000010
 
+#define	CPU_FEAT_USER_ENABLED	0x40000000
+#define	CPU_FEAT_USER_DISABLED	0x80000000
+
 struct cpu_feat;
 
 typedef cpu_feat_en (cpu_feat_check)(const struct cpu_feat *, u_int);
@@ -80,12 +83,14 @@ typedef bool (cpu_feat_has_errata)(const struct cpu_feat *, u_int,
     u_int **, u_int *);
 typedef bool (cpu_feat_enable)(const struct cpu_feat *, cpu_feat_errata,
     u_int *, u_int);
+typedef void (cpu_feat_disabled)(const struct cpu_feat *);
 
 struct cpu_feat {
 	const char		*feat_name;
 	cpu_feat_check		*feat_check;
 	cpu_feat_has_errata	*feat_has_errata;
 	cpu_feat_enable		*feat_enable;
+	cpu_feat_disabled	*feat_disabled;
 	uint32_t		 feat_flags;
 	bool			 feat_enabled;
 };
@@ -93,12 +98,13 @@ SET_DECLARE(cpu_feat_set, struct cpu_feat);
 
 SYSCTL_DECL(_hw_feat);
 
-#define	CPU_FEAT(name, descr, check, has_errata, enable, flags)	\
+#define	CPU_FEAT(name, descr, check, has_errata, enable, disabled, flags) \
 static struct cpu_feat name = {						\
 	.feat_name		= #name,				\
 	.feat_check		= check,				\
 	.feat_has_errata	= has_errata,				\
 	.feat_enable		= enable,				\
+	.feat_disabled		= disabled,				\
 	.feat_flags		= flags,				\
 	.feat_enabled		= false,				\
 };									\

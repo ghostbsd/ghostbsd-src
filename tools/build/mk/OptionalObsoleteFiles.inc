@@ -161,7 +161,26 @@ OLD_FILES+=usr/share/man/man8/bhyveload.8.gz
 OLD_DIRS+=usr/share/examples/bhyve
 .endif
 
-.if ${MK_BLACKLIST} == no
+.if ${MK_BLOCKLIST} == no
+OLD_FILES+=etc/blocklistd.conf
+OLD_FILES+=etc/rc.d/blocklistd
+OLD_FILES+=usr/include/blocklist.h
+OLD_FILES+=usr/lib/libblocklist.a
+OLD_FILES+=usr/lib/libblocklist_p.a
+OLD_FILES+=usr/lib/libblocklist.so
+OLD_LIBS+=usr/lib/libblocklist.so.0
+OLD_FILES+=usr/libexec/blocklistd-helper
+OLD_FILES+=usr/sbin/blocklistctl
+OLD_FILES+=usr/sbin/blocklistd
+OLD_FILES+=usr/share/man/man3/blocklist.3.gz
+OLD_FILES+=usr/share/man/man3/blocklist_close.3.gz
+OLD_FILES+=usr/share/man/man3/blocklist_open.3.gz
+OLD_FILES+=usr/share/man/man3/blocklist_r.3.gz
+OLD_FILES+=usr/share/man/man3/blocklist_sa.3.gz
+OLD_FILES+=usr/share/man/man3/blocklist_sa_r.3.gz
+OLD_FILES+=usr/share/man/man5/blocklistd.conf.5.gz
+OLD_FILES+=usr/share/man/man8/blocklistctl.8.gz
+OLD_FILES+=usr/share/man/man8/blocklistd.8.gz
 OLD_FILES+=etc/blacklistd.conf
 OLD_FILES+=etc/rc.d/blacklistd
 OLD_FILES+=usr/include/blacklist.h
@@ -2045,21 +2064,14 @@ OLD_FILES+=usr/share/man/man8/phttpget.8.gz
 .endif
 
 .if ${MK_FTP} == no
-OLD_FILES+=etc/ftpusers
-OLD_FILES+=etc/newsyslog.conf.d/ftp.conf
 OLD_FILES+=etc/pam.d/ftp
 OLD_FILES+=etc/pam.d/ftpd
-OLD_FILES+=etc/rc.d/ftpd
-OLD_FILES+=etc/syslog.d/ftp.conf
 OLD_FILES+=usr/bin/ftp
 OLD_FILES+=usr/bin/gate-ftp
 OLD_FILES+=usr/bin/pftp
-OLD_FILES+=usr/libexec/ftpd
 OLD_FILES+=usr/share/man/man1/ftp.1.gz
 OLD_FILES+=usr/share/man/man1/gate-ftp.1.gz
 OLD_FILES+=usr/share/man/man1/pftp.1.gz
-OLD_FILES+=usr/share/man/man5/ftpchroot.5.gz
-OLD_FILES+=usr/share/man/man8/ftpd.8.gz
 .endif
 
 .if ${MK_GAMES} == no
@@ -8203,7 +8215,11 @@ OLD_FILES+=usr/include/atf-c/tc.h
 OLD_FILES+=usr/include/atf-c/tp.h
 OLD_FILES+=usr/include/atf-c/utils.h
 OLD_LIBS+=usr/lib/libprivateatf-c++.so.2
+OLD_FILES+=usr/lib/libprivateatf-c++.so
+OLD_FILES+=usr/lib/libprivateatf-c++.a
 OLD_LIBS+=usr/lib/libprivateatf-c.so.1
+OLD_FILES+=usr/lib/libprivateatf-c.so
+OLD_FILES+=usr/lib/libprivateatf-c.a
 OLD_FILES+=usr/share/examples/kyua/kyua.conf
 OLD_FILES+=usr/share/examples/kyua/Kyuafile.top
 OLD_FILES+=usr/share/kyua/misc/context.html

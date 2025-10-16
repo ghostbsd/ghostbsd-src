@@ -12,6 +12,78 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20251015:
+	The "FreeBSD-unbound" package is renamed to "FreeBSD-local-unbound".
+	If you have set-optional or set-base installed, the new package will
+	be installed automatically, otherwise you should manually install the
+	new package and remove the old one.
+
+	This change only affects pkgbase users.
+
+20251001:
+	The deprecated ftpd(8) has been removed.  Users who still need ftpd
+	can install the ftp/freebsd-ftpd port.  pkgbase users should remove
+	the orphaned FreeBSD-ftpd package.
+
+20251012:
+	Blacklist has been renamed upstream to Blocklist.  If you have it
+	configured, rename all configuration files, firewall anchors or
+	sentinel files to reflect the new nomenclature.  Old setups will
+	continue to work emitting a warning.
+
+20251002:
+	Audio-related utilities including mixer(8) and virtual_oss(8) have
+	moved to the new FreeBSD-sound package.  If you have set-optional or
+	set-base installed this package will be installed automatically,
+	otherwise you should install it manually if you need these utilities.
+
+20250929:
+	Both drm-kmod and nividia-drm ports had to be updated to either no
+	longer conflict on LinuxKPI vs. native PCI changes and/or to keep
+	working after some LinuxKPI PCI adjustments which were previously
+	hidden behind native PCI.
+	Bump __FreeBSD_version so users will pick up updated packages.
+
+20250924:
+	Several changes which affect pkgbase users (only):
+
+	powerd has been moved to a new FreeBSD-powerd package.  If you have
+	FreeBSD-set-minimal installed, the new package will be installed
+	automatically, otherwise you may want to install it by hand.
+
+	libpmc and related utilities (/usr/sbin/pmc*) have moved to the new
+	FreeBSD-pmc package.  If you use these, you may want to install the
+	package.
+
+	The libbz2 package has been renamed to bzip2, and /usr/bin/bzip2 has
+	been moved to the new package.  If you have set-minimal installed,
+	the new package will be added automatically, otherwise you may want
+	to manually install it.
+
+20250918:
+	The MANSPLITPKG knob has been turned off by default, so pkgbase builds
+	will no longer generate "-man" subpackages; instead the manpages will
+	be shipped in the packages they belong to.  If you want to continue
+	building split man packages, set WITH_MANSPLITPKG=1.
+
+20250918:
+	mandoc (including /usr/bin/man) has been moved to a new package,
+	FreeBSD-mandoc.  If you have the minimal set installed, this package
+	will be installed automatically, otherwise you may want to install it.
+
+20250918:
+	Kyua has been moved to the FreeBSD-kyua package, and ATF has been moved
+	to the FreeBSD-atf* packages.  If you have FreeBSD-tests installed,
+	these packages will be installed automatically, otherwise you should
+	manually install them if you need these tools.
+
+	This only affects pkgbase users.
+
+20250916:
+	If SRCCONF is unset and a file named src.conf is present at
+	the top of the source tree, it will now be used instead of
+	/etc/src.conf.
+
 20250905:
 	__FreeBSD_version 1500064 after branching stable/15 from main.
 

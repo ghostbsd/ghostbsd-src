@@ -69,9 +69,12 @@ distribution:
 		${DESTDIR}/etc/version
 
 .if ${MK_UNBOUND} != "no"
-	if [ ! -e ${DESTDIR}/etc/unbound ]; then \
-		${INSTALL_SYMLINK} -T "package=unbound" \
-		../var/unbound ${DESTDIR}/etc/unbound; \
+# If NO_ROOT is defined, we are doing a stage install and always need to
+# install the /etc/unbound symlink, otherwise, don't overwrite the user's
+# existing symlink.
+	if [ "${NO_ROOT:Dtrue}" = true -o ! -e ${DESTDIR}/etc/unbound ]; then \
+		${INSTALL_SYMLINK} -Tpackage=local-unbound ../var/unbound \
+			${DESTDIR}/etc/unbound; \
 	fi
 .endif
 .if ${MK_SENDMAIL} != "no"
@@ -87,12 +90,16 @@ distribution:
 .if ${MK_MAIL} != "no"
 	cd ${.CURDIR}/mail; ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
 	    -T "package=runtime,config" ${ETCMAIL} ${DESTDIR}/etc/mail
-	if [ -d ${DESTDIR}/etc/mail -a -f ${DESTDIR}/etc/mail/aliases -a \
-	      ! -f ${DESTDIR}/etc/aliases ]; then \
-		${INSTALL_SYMLINK} -T "package=runtime" \
-		mail/aliases ${DESTDIR}/etc/aliases; \
+# If NO_ROOT is defined, we are doing a stage install and always need to
+# install the /etc/aliases symlink, otherwise, don't overwrite the user's
+# existing symlink.
+	if [ "${NO_ROOT:Dtrue}" = true -o \( -f ${DESTDIR}/etc/mail/aliases -a \
+	   ! -f ${DESTDIR}/etc/aliases \) ]; then \
+		${INSTALL_SYMLINK} -Tpackage=runtime mail/aliases \
+			${DESTDIR}/etc/aliases; \
 	fi
-.endif
+.endif	# ${MK_MAIL} != "no"
+
 .if ${MK_SENDMAIL} != "no"
 	cd ${.CURDIR}/mail; ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
 		-T "package=sendmail" ${ETCMAIL_SENDMAIL} ${DESTDIR}/etc/mail
