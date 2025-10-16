@@ -1,4 +1,6 @@
 .\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 1997 David E. O'Brien
 .\"
 .\" All rights reserved.
@@ -23,7 +25,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd September 24, 2023
+.Dd September 10, 2025
 .Dt PORTS 7
 .Os
 .Sh NAME
@@ -163,7 +165,7 @@ target.
 Configure
 .Va OPTIONS
 for this port using
-.Xr dialog4ports 1 .
+.Xr portconfig 1 Pq Pa ports/ports-mgmt/portconfig .
 .It Cm fetch
 Fetch all of the files needed to build this port from the sites
 listed in
@@ -245,7 +247,7 @@ configured.
 Configure
 .Va OPTIONS
 for this port and all its dependencies using
-.Xr dialog4ports 1 .
+.Xr portconfig 1 Pq Pa ports/ports-mgmt/portconfig .
 .It Cm fetch-list
 Show the list of files to fetch in order to build the port (but not its
 dependencies).
@@ -681,7 +683,7 @@ WITH_DEBUG_PORTS=	mail/dovecot security/krb5
 .Pp
 It is also possible to use the debug variables on the command line:
 .Bd -literal -offset 2n
-.Li # Ic make -DWITH_DEBUG DEBUG_FLAGS="-g -O0" build
+.Li # Ic make WITH_DEBUG DEBUG_FLAGS="-g -O0" build
 .Ed
 .Pp
 See the

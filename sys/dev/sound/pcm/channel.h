@@ -5,6 +5,10 @@
  * Portions Copyright (c) Ryan Beasley <ryan.beasley@gmail.com> - GSoC 2006
  * Copyright (c) 1999 Cameron Grant <cg@FreeBSD.org>
  * All rights reserved.
+ * Copyright (c) 2024-2025 The FreeBSD Foundation
+ *
+ * Portions of this software were developed by Christos Margiolis
+ * <christos@FreeBSD.org> under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -404,7 +408,7 @@ enum {
 
 #define CHN_F_RESET		(CHN_F_BUSY | CHN_F_DEAD |		\
 				 CHN_F_VIRTUAL | CHN_F_HAS_VCHAN |	\
-				 CHN_F_VCHAN_DYNAMIC |			\
+				 CHN_F_VCHAN_DYNAMIC | CHN_F_NBIO |	\
 				 CHN_F_PASSTHROUGH | CHN_F_EXCLUSIVE)
 
 #define CHN_F_MMAP_INVALID	(CHN_F_DEAD | CHN_F_RUNNING)

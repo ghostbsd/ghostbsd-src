@@ -67,6 +67,7 @@ CONFS=	DAEMON \
 	nfsd \
 	nfsuserd \
 	nisdomain \
+	noshutdown \
 	${_nscd} \
 	ntpdate \
 	${_opensm} \
@@ -315,7 +316,9 @@ SMRCDPACKAGE=	sendmail
 
 .if ${MK_NUAGEINIT} != "no"
 CONFGROUPS+=	NIUAGEINIT
-NIUAGEINIT=		nuageinit
+NIUAGEINIT=		nuageinit \
+			nuageinit_post_net \
+			nuageinit_user_data_script
 NIUAGEINITPACKAGE=	nuageinit
 .endif
 

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007 - 2022 Intel Corporation */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #ifndef ADF_4XXX_HW_DATA_H_
 #define ADF_4XXX_HW_DATA_H_
 
@@ -87,6 +87,12 @@
 #define ADF_4XXX_SYM_OBJ "qat_4xxx_sym.bin"
 #define ADF_4XXX_ASYM_OBJ "qat_4xxx_asym.bin"
 #define ADF_4XXX_ADMIN_OBJ "qat_4xxx_admin.bin"
+#define ADF_402XX_FW "qat_402xx_fw"
+#define ADF_402XX_MMP "qat_402xx_mmp_fw"
+#define ADF_402XX_DC_OBJ "qat_402xx_dc.bin"
+#define ADF_402XX_SYM_OBJ "qat_402xx_sym.bin"
+#define ADF_402XX_ASYM_OBJ "qat_402xx_asym.bin"
+#define ADF_402XX_ADMIN_OBJ "qat_402xx_admin.bin"
 
 /* Only 3 types of images can be loaded including the admin image */
 #define ADF_4XXX_MAX_OBJ 3
@@ -105,7 +111,7 @@ enum icp_qat_4xxx_slice_mask {
 	ICP_ACCEL_4XXX_MASK_COMPRESS_SLICE = BIT(3),
 	ICP_ACCEL_4XXX_MASK_UCS_SLICE = BIT(4),
 	ICP_ACCEL_4XXX_MASK_EIA3_SLICE = BIT(5),
-	ICP_ACCEL_4XXX_MASK_SMX_SLICE = BIT(6),
+	ICP_ACCEL_4XXX_MASK_SMX_SLICE = BIT(7),
 };
 
 void adf_init_hw_data_4xxx(struct adf_hw_device_data *hw_data, u32 id);

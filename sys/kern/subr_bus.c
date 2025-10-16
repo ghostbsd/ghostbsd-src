@@ -51,6 +51,7 @@
 #include <sys/smp.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <sys/taskqueue.h>
 #include <sys/bus.h>
 #include <sys/cpuset.h>
 #ifdef INTRNG
@@ -119,6 +120,8 @@ struct device_prop_elm {
 	device_prop_dtr_t dtr;
 	LIST_ENTRY(device_prop_elm) link;
 };
+
+TASKQUEUE_DEFINE_THREAD(bus);
 
 static void device_destroy_props(device_t dev);
 
@@ -277,6 +280,9 @@ device_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	struct sbuf sb;
 	device_t dev = (device_t)arg1;
 	device_t iommu;
+#ifdef IOMMU
+	device_t requester;
+#endif
 	int error;
 	uint16_t rid;
 	const char *c;
@@ -311,9 +317,15 @@ device_sysctl_handler(SYSCTL_HANDLER_ARGS)
 		}
 		rid = 0;
 #ifdef IOMMU
-		iommu_get_requester(dev, &rid);
+		error = iommu_get_requester(dev, &requester, &rid);
+		/*
+		 * Do not return requester error from sysctl, iommu
+		 * unit might be assigned by other means.
+		 */
+#else
+		error = ENXIO;
 #endif
-		if (rid != 0)
+		if (error == 0)
 			sbuf_printf(&sb, "%srid=%#x", c, rid);
 		break;
 	default:

@@ -96,7 +96,7 @@
 #
 # Once you have installed the necessary cross toolchain, simply pass
 # CROSS_TOOLCHAIN=${TARGET_ARCH}-gccN while building with the above steps,
-# e.g., `make buildworld CROSS_TOOLCHAIN=amd64-gcc6`.
+# e.g., `make buildworld CROSS_TOOLCHAIN=amd64-gcc13`.
 #
 # The ${TARGET_ARCH}-gccN packages are provided as flavors of the
 # devel/freebsd-gccN ports.
@@ -179,7 +179,7 @@ TGTS=	all all-man buildenv buildenvvars buildetc buildkernel buildworld \
 	create-packages-world create-packages-kernel \
 	create-packages-kernel-repo create-packages-world-repo \
 	create-packages-source create-packages \
-	update-packages packages installconfig real-packages real-update-packages \
+	installconfig real-packages real-update-packages \
 	sign-packages package-pkg print-dir test-system-compiler test-system-linker \
 	test-includes
 
@@ -223,6 +223,8 @@ META_TGT_WHITELIST+=	build${libcompat}
 .ORDER: buildworld distribute
 .ORDER: buildworld distributeworld
 .ORDER: buildworld buildkernel
+.ORDER: buildworld packages
+.ORDER: buildworld update-packages
 .ORDER: distrib-dirs distribute
 .ORDER: distrib-dirs distributeworld
 .ORDER: distrib-dirs installworld
@@ -236,6 +238,8 @@ META_TGT_WHITELIST+=	build${libcompat}
 .ORDER: buildkernel installkernel.debug
 .ORDER: buildkernel reinstallkernel
 .ORDER: buildkernel reinstallkernel.debug
+.ORDER: buildkernel packages
+.ORDER: buildkernel update-packages
 .ORDER: kernel-toolchain buildkernel
 
 # Only sanitize PATH on FreeBSD.
@@ -525,6 +529,9 @@ kernels: .PHONY
 worlds: .PHONY
 	@cd ${.CURDIR}; ${SUB_MAKE} UNIVERSE_TARGET=buildworld universe
 
+packages update-packages: .PHONY
+	${_+_}@cd ${.CURDIR}; ${_MAKE} DISTDIR=/ ${.TARGET}
+
 #
 # universe
 #
@@ -551,7 +558,7 @@ TARGET_ARCHES_${target}= ${MACHINE_ARCH_LIST_${target}}
 .endfor
 
 .if defined(USE_GCC_TOOLCHAINS)
-_DEFAULT_GCC_VERSION=	gcc12
+_DEFAULT_GCC_VERSION=	gcc14
 _GCC_VERSION=		${"${USE_GCC_TOOLCHAINS:Mgcc*}" != "":?${USE_GCC_TOOLCHAINS}:${_DEFAULT_GCC_VERSION}}
 TOOLCHAINS_amd64=	amd64-${_GCC_VERSION}
 TOOLCHAINS_arm=		armv6-${_GCC_VERSION} armv7-${_GCC_VERSION}

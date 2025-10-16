@@ -121,7 +121,7 @@ static const struct fileops procdesc_ops = {
  * died.
  */
 int
-procdesc_find(struct thread *td, int fd, cap_rights_t *rightsp,
+procdesc_find(struct thread *td, int fd, const cap_rights_t *rightsp,
     struct proc **p)
 {
 	struct procdesc *pd;
@@ -132,7 +132,7 @@ procdesc_find(struct thread *td, int fd, cap_rights_t *rightsp,
 	if (error)
 		return (error);
 	if (fp->f_type != DTYPE_PROCDESC) {
-		error = EBADF;
+		error = EINVAL;
 		goto out;
 	}
 	pd = fp->f_data;
@@ -168,7 +168,8 @@ procdesc_pid(struct file *fp_procdesc)
  * Retrieve the PID associated with a process descriptor.
  */
 int
-kern_pdgetpid(struct thread *td, int fd, cap_rights_t *rightsp, pid_t *pidp)
+kern_pdgetpid(struct thread *td, int fd, const cap_rights_t *rightsp,
+    pid_t *pidp)
 {
 	struct file *fp;
 	int error;

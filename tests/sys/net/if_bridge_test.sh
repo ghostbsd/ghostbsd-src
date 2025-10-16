@@ -245,7 +245,8 @@ static_body()
 	    jexec one ifconfig ${bridge} static ${epair}a 00:01:02:03:04:05
 
 	# List addresses
-	atf_check -s exit:0 -o ignore \
+	atf_check -s exit:0 \
+	    -o match:"00:01:02:03:04:05 Vlan0 ${epair}a 0 flags=1<STATIC>" \
 	    jexec one ifconfig ${bridge} addr
 
 	# Delete with bad address format
@@ -262,6 +263,72 @@ static_body()
 }
 
 static_cleanup()
+{
+	vnet_cleanup
+}
+
+atf_test_case "vstatic" "cleanup"
+vstatic_head()
+{
+	atf_set descr 'Bridge VLAN static address test'
+	atf_set require.user root
+}
+
+vstatic_body()
+{
+	vnet_init
+	vnet_init_bridge
+
+	epair=$(vnet_mkepair)
+	bridge=$(vnet_mkbridge)
+
+	vnet_mkjail one ${bridge} ${epair}a
+
+	ifconfig ${epair}b up
+
+	jexec one ifconfig ${bridge} up
+	jexec one ifconfig ${epair}a up
+	jexec one ifconfig ${bridge} addm ${epair}a
+
+	# Wrong interface
+	atf_check -s exit:1 -o ignore -e ignore jexec one \
+	    ifconfig ${bridge} static ${epair}b 00:01:02:03:04:05 vlan 10
+
+	# Bad address format
+	atf_check -s exit:1 -o ignore -e ignore jexec one \
+	    ifconfig ${bridge} static ${epair}a 00:01:02:03:04 vlan 10
+
+	# Invalid VLAN ID
+	atf_check -s exit:1 -o ignore -e ignore jexec one \
+	    ifconfig ${bridge} static ${epair}a 00:01:02:03:04:05 vlan 5000
+
+	# Correct add
+	atf_check -s exit:0 -o ignore jexec one \
+	    ifconfig ${bridge} static ${epair}a 00:01:02:03:04:05 vlan 10
+
+	# List addresses
+	atf_check -s exit:0 \
+	    -o match:"00:01:02:03:04:05 Vlan10 ${epair}a 0 flags=1<STATIC>" \
+	    jexec one ifconfig ${bridge} addr
+
+	# Delete with bad address format
+	atf_check -s exit:1 -o ignore -e ignore jexec one \
+	    ifconfig ${bridge} deladdr 00:01:02:03:04 vlan 10
+
+	# Delete with unlisted address
+	atf_check -s exit:1 -o ignore -e ignore jexec one \
+	    ifconfig ${bridge} deladdr 00:01:02:03:04:06 vlan 10
+
+	# Delete with wrong vlan id
+	atf_check -s exit:1 -o ignore -e ignore jexec one \
+	    ifconfig ${bridge} deladdr 00:01:02:03:04:05 vlan 20
+
+	# Correct delete
+	atf_check -s exit:0 -o ignore jexec one \
+	    ifconfig ${bridge} deladdr 00:01:02:03:04:05 vlan 10
+}
+
+vstatic_cleanup()
 {
 	vnet_cleanup
 }
@@ -519,6 +586,25 @@ gif_body()
 		jexec one ping -c 1 -s 1200 198.51.100.2
 	atf_check -s exit:0 -o ignore \
 		jexec one ping -c 1 -s 2000 198.51.100.2
+
+	# Assigning IP addresses on the gif tunneling interfaces
+	jexec one sysctl net.link.bridge.member_ifaddrs=1
+	atf_check -s exit:0 -o ignore \
+		jexec one ifconfig ${gif_one} 192.168.0.224/24 192.168.169.254
+	atf_check -s exit:0 -o ignore \
+		jexec one ifconfig ${gif_one} inet6 no_dad 2001:db8::1/64
+	jexec one ifconfig ${bridge_one} deletem ${gif_one}
+	atf_check -s exit:0 -o ignore \
+		jexec one ifconfig ${bridge_one} addm ${gif_one}
+
+	jexec two sysctl net.link.bridge.member_ifaddrs=0
+	atf_check -s exit:0 -o ignore \
+		jexec two ifconfig ${gif_two} 192.168.169.254/24 192.168.0.224
+	atf_check -s exit:0 -o ignore \
+		jexec two ifconfig ${gif_two} inet6 no_dad 2001:db8::2/64
+	jexec two ifconfig ${bridge_two} deletem ${gif_two}
+	atf_check -s exit:0 -o ignore \
+		jexec two ifconfig ${bridge_two} addm ${gif_two}
 }
 
 gif_cleanup()
@@ -537,7 +623,7 @@ get_mtu()
 {
 	intf=$1
 
-	ifconfig ${intf} ether | awk '$5 == "mtu" { print $6 }'
+	ifconfig ${intf} | awk '$5 == "mtu" { print $6 }'
 }
 
 check_mtu()
@@ -546,7 +632,7 @@ check_mtu()
 	expected=$2
 
 	mtu=$(get_mtu $intf)
-	if [ $mtu -ne $expected ];
+	if [ "$mtu" -ne "$expected" ];
 	then
 		atf_fail "Expected MTU of $expected on $intf but found $mtu"
 	fi
@@ -703,12 +789,139 @@ many_bridge_members_cleanup()
 	vnet_cleanup
 }
 
+atf_test_case "member_ifaddrs_enabled" "cleanup"
+member_ifaddrs_enabled_head()
+{
+	atf_set descr 'bridge with member_ifaddrs=1'
+	atf_set require.user root
+}
+
+member_ifaddrs_enabled_body()
+{
+	vnet_init
+	vnet_init_bridge
+
+	ep=$(vnet_mkepair)
+	ifconfig ${ep}a inet 192.0.2.1/24 up
+
+	vnet_mkjail one ${ep}b
+	jexec one sysctl net.link.bridge.member_ifaddrs=1
+	jexec one ifconfig ${ep}b inet 192.0.2.2/24 up
+	jexec one ifconfig bridge0 create addm ${ep}b
+
+	atf_check -s exit:0 -o ignore ping -c3 -t1 192.0.2.2
+}
+
+member_ifaddrs_enabled_cleanup()
+{
+	vnet_cleanup
+}
+
+atf_test_case "member_ifaddrs_disabled" "cleanup"
+member_ifaddrs_disabled_head()
+{
+	atf_set descr 'bridge with member_ifaddrs=0'
+	atf_set require.user root
+}
+
+member_ifaddrs_disabled_body()
+{
+	vnet_init
+	vnet_init_bridge
+
+	vnet_mkjail one
+	jexec one sysctl net.link.bridge.member_ifaddrs=0
+
+	bridge=$(jexec one ifconfig bridge create)
+
+	# adding an interface with an IPv4 address
+	ep=$(jexec one ifconfig epair create)
+	jexec one ifconfig ${ep} 192.0.2.1/32
+	atf_check -s exit:1 -e ignore jexec one ifconfig ${bridge} addm ${ep}
+
+	# adding an interface with an IPv6 address
+	ep=$(jexec one ifconfig epair create)
+	jexec one ifconfig ${ep} inet6 2001:db8::1/128
+	atf_check -s exit:1 -e ignore jexec one ifconfig ${bridge} addm ${ep}
+
+	# adding an interface with an IPv6 link-local address
+	ep=$(jexec one ifconfig epair create)
+	jexec one ifconfig ${ep} inet6 -ifdisabled auto_linklocal up
+	atf_check -s exit:1 -e ignore jexec one ifconfig ${bridge} addm ${ep}
+
+	# adding an IPv4 address to a member
+	ep=$(jexec one ifconfig epair create)
+	jexec one ifconfig ${bridge} addm ${ep}
+	atf_check -s exit:1 -e ignore jexec one ifconfig ${ep} inet 192.0.2.2/32
+
+	# adding an IPv6 address to a member
+	ep=$(jexec one ifconfig epair create)
+	jexec one ifconfig ${bridge} addm ${ep}
+	atf_check -s exit:1 -e ignore jexec one ifconfig ${ep} inet6 2001:db8::1/128
+}
+
+member_ifaddrs_disabled_cleanup()
+{
+	vnet_cleanup
+}
+
+#
+# Test kern/287150: when member_ifaddrs=0, and a physical interface which is in
+# a bridge also has a vlan(4) on it, tagged packets are not correctly passed to
+# vlan(4).
+atf_test_case "member_ifaddrs_vlan" "cleanup"
+member_ifaddrs_vlan_head()
+{
+	atf_set descr 'kern/287150: vlan and bridge on the same interface'
+	atf_set require.user root
+}
+
+member_ifaddrs_vlan_body()
+{
+	vnet_init
+	vnet_init_bridge
+
+	epone=$(vnet_mkepair)
+	eptwo=$(vnet_mkepair)
+
+	# The first jail has an epair with an IP address on vlan 20.
+	vnet_mkjail one ${epone}a
+	atf_check -s exit:0 jexec one ifconfig ${epone}a up
+	atf_check -s exit:0 jexec one \
+	    ifconfig ${epone}a.20 create inet 192.0.2.1/24 up
+
+	# The second jail has an epair with an IP address on vlan 20,
+	# which is also in a bridge.
+	vnet_mkjail two ${epone}b
+
+	jexec two ifconfig
+	atf_check -s exit:0 -o save:bridge jexec two ifconfig bridge create
+	bridge=$(cat bridge)
+	atf_check -s exit:0 jexec two ifconfig ${bridge} addm ${epone}b up
+
+	atf_check -s exit:0 -o ignore jexec two \
+	    sysctl net.link.bridge.member_ifaddrs=0
+	atf_check -s exit:0 jexec two ifconfig ${epone}b up
+	atf_check -s exit:0 jexec two \
+	    ifconfig ${epone}b.20 create inet 192.0.2.2/24 up
+
+	# Make sure the two jails can communicate over the vlan.
+	atf_check -s exit:0 -o ignore jexec one ping -c 3 -t 1 192.0.2.2
+	atf_check -s exit:0 -o ignore jexec two ping -c 3 -t 1 192.0.2.1
+}
+
+member_ifaddrs_vlan_cleanup()
+{
+	vnet_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "bridge_transmit_ipv4_unicast"
 	atf_add_test_case "stp"
 	atf_add_test_case "stp_vlan"
 	atf_add_test_case "static"
+	atf_add_test_case "vstatic"
 	atf_add_test_case "span"
 	atf_add_test_case "inherit_mac"
 	atf_add_test_case "delete_with_members"
@@ -718,4 +931,7 @@ atf_init_test_cases()
 	atf_add_test_case "mtu"
 	atf_add_test_case "vlan"
 	atf_add_test_case "many_bridge_members"
+	atf_add_test_case "member_ifaddrs_enabled"
+	atf_add_test_case "member_ifaddrs_disabled"
+	atf_add_test_case "member_ifaddrs_vlan"
 }

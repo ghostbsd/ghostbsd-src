@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #ifndef ADF_ACCEL_DEVICES_H_
 #define ADF_ACCEL_DEVICES_H_
 
 #include "qat_freebsd.h"
 #include "adf_cfg_common.h"
 #include "adf_pfvf_msg.h"
+
+#include "opt_qat.h"
 
 #define ADF_CFG_NUM_SERVICES 4
 
@@ -37,12 +39,16 @@
 #define ADF_4XXXIOV_PCI_DEVICE_ID 0x4941
 #define ADF_401XX_PCI_DEVICE_ID 0x4942
 #define ADF_401XXIOV_PCI_DEVICE_ID 0x4943
+#define ADF_402XX_PCI_DEVICE_ID 0x4944
+#define ADF_402XXIOV_PCI_DEVICE_ID 0x4945
 
 #define IS_QAT_GEN3(ID) ({ (ID == ADF_C4XXX_PCI_DEVICE_ID); })
 static inline bool
 IS_QAT_GEN4(const unsigned int id)
 {
 	return (id == ADF_4XXX_PCI_DEVICE_ID || id == ADF_401XX_PCI_DEVICE_ID ||
+		id == ADF_402XX_PCI_DEVICE_ID ||
+		id == ADF_402XXIOV_PCI_DEVICE_ID ||
 		id == ADF_4XXXIOV_PCI_DEVICE_ID ||
 		id == ADF_401XXIOV_PCI_DEVICE_ID);
 }
@@ -446,6 +452,7 @@ struct adf_hw_device_data {
 	uint8_t num_accel;
 	uint8_t num_logical_accel;
 	uint8_t num_engines;
+	bool get_ring_to_svc_done;
 	int (*get_storage_enabled)(struct adf_accel_dev *accel_dev,
 				   uint32_t *storage_enabled);
 	u8 query_storage_cap;
@@ -683,10 +690,18 @@ struct adf_accel_dev {
 	struct sysctl_oid *ras_reset;
 	struct sysctl_oid *pke_replay_dbgfile;
 	struct sysctl_oid *misc_error_dbgfile;
+	struct sysctl_oid *fw_version_oid;
+	struct sysctl_oid *mmp_version_oid;
+	struct sysctl_oid *hw_version_oid;
+	struct sysctl_oid *cnv_error_oid;
 	struct list_head list;
 	struct adf_accel_pci accel_pci_dev;
 	struct adf_accel_compat_manager *cm;
 	u8 compat_ver;
+#ifdef QAT_DISABLE_SAFE_DC_MODE
+	struct sysctl_oid *safe_dc_mode;
+	u8 disable_safe_dc_mode;
+#endif /* QAT_DISABLE_SAFE_DC_MODE */
 	union {
 		struct {
 			/* vf_info is non-zero when SR-IOV is init'ed */
@@ -711,5 +726,6 @@ struct adf_accel_dev {
 	bool is_vf;
 	u32 accel_id;
 	void *lac_dev;
+	struct mutex lock; /* protect accel_dev during start/stop e.t.c */
 };
 #endif

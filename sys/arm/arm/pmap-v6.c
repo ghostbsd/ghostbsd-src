@@ -1561,6 +1561,11 @@ static int sp_enabled = 1;
 SYSCTL_INT(_vm_pmap, OID_AUTO, sp_enabled, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
     &sp_enabled, 0, "Are large page mappings enabled?");
 
+static int pmap_growkernel_panic = 0;
+SYSCTL_INT(_vm_pmap, OID_AUTO, growkernel_panic, CTLFLAG_RDTUN,
+    &pmap_growkernel_panic, 0,
+    "panic on failure to allocate kernel page table page");
+
 bool
 pmap_ps_enabled(pmap_t pmap __unused)
 {
@@ -2017,8 +2022,8 @@ pmap_extract_and_hold(pmap_t pmap, vm_offset_t va, vm_prot_t prot)
 /*
  *  Grow the number of kernel L2 page table entries, if needed.
  */
-void
-pmap_growkernel(vm_offset_t addr)
+static int
+pmap_growkernel_nopanic(vm_offset_t addr)
 {
 	vm_page_t m;
 	vm_paddr_t pt2pg_pa, pt2_pa;
@@ -2071,7 +2076,7 @@ pmap_growkernel(vm_offset_t addr)
 			m = vm_page_alloc_noobj(VM_ALLOC_INTERRUPT |
 			    VM_ALLOC_WIRED | VM_ALLOC_ZERO);
 			if (m == NULL)
-				panic("%s: no memory to grow kernel", __func__);
+				return (KERN_RESOURCE_SHORTAGE);
 			m->pindex = pte1_index(kernel_vm_end) & ~PT2PG_MASK;
 
 			/*
@@ -2096,6 +2101,18 @@ pmap_growkernel(vm_offset_t addr)
 			break;
 		}
 	}
+	return (KERN_SUCCESS);
+}
+
+int
+pmap_growkernel(vm_offset_t addr)
+{
+	int rv;
+
+	rv = pmap_growkernel_nopanic(addr);
+	if (rv != KERN_SUCCESS && pmap_growkernel_panic)
+		panic("pmap_growkernel: no memory to grow kernel");
+	return (rv);
 }
 
 static int
@@ -5732,7 +5749,7 @@ pmap_page_set_memattr(vm_page_t m, vm_memattr_t ma)
 
 	CTR5(KTR_PMAP, "%s: page %p - 0x%08X oma: %d, ma: %d", __func__, m,
 	    VM_PAGE_TO_PHYS(m), oma, ma);
-	if ((m->flags & PG_FICTITIOUS) != 0)
+	if (ma == oma || (m->flags & PG_FICTITIOUS) != 0)
 		return;
 #if 0
 	/*
@@ -5749,22 +5766,20 @@ pmap_page_set_memattr(vm_page_t m, vm_memattr_t ma)
 	 * If page is not mapped by sf buffer, map the page
 	 * transient and do invalidation.
 	 */
-	if (ma != oma) {
-		pa = VM_PAGE_TO_PHYS(m);
-		sched_pin();
-		pc = get_pcpu();
-		cmap2_pte2p = pc->pc_cmap2_pte2p;
-		mtx_lock(&pc->pc_cmap_lock);
-		if (pte2_load(cmap2_pte2p) != 0)
-			panic("%s: CMAP2 busy", __func__);
-		pte2_store(cmap2_pte2p, PTE2_KERN_NG(pa, PTE2_AP_KRW,
-		    vm_memattr_to_pte2(ma)));
-		dcache_wbinv_poc((vm_offset_t)pc->pc_cmap2_addr, pa, PAGE_SIZE);
-		pte2_clear(cmap2_pte2p);
-		tlb_flush((vm_offset_t)pc->pc_cmap2_addr);
-		sched_unpin();
-		mtx_unlock(&pc->pc_cmap_lock);
-	}
+	pa = VM_PAGE_TO_PHYS(m);
+	sched_pin();
+	pc = get_pcpu();
+	cmap2_pte2p = pc->pc_cmap2_pte2p;
+	mtx_lock(&pc->pc_cmap_lock);
+	if (pte2_load(cmap2_pte2p) != 0)
+		panic("%s: CMAP2 busy", __func__);
+	pte2_store(cmap2_pte2p, PTE2_KERN_NG(pa, PTE2_AP_KRW,
+	    vm_memattr_to_pte2(ma)));
+	dcache_wbinv_poc((vm_offset_t)pc->pc_cmap2_addr, pa, PAGE_SIZE);
+	pte2_clear(cmap2_pte2p);
+	tlb_flush((vm_offset_t)pc->pc_cmap2_addr);
+	sched_unpin();
+	mtx_unlock(&pc->pc_cmap_lock);
 }
 
 /*

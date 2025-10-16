@@ -142,6 +142,18 @@ ieee80211_crypto_attach(struct ieee80211com *ic)
 {
 	/* NB: we assume everything is pre-zero'd */
 	ciphers[IEEE80211_CIPHER_NONE] = &ieee80211_cipher_none;
+
+	/*
+	 * Default set of net80211 supported ciphers.
+	 *
+	 * These are the default set that all drivers are expected to
+	 * support, either/or in hardware and software.
+	 *
+	 * Drivers can add their own support to this and the
+	 * hardware cipher list (ic_cryptocaps.)
+	 */
+	ic->ic_sw_cryptocaps = IEEE80211_CRYPTO_WEP |
+	    IEEE80211_CRYPTO_TKIP | IEEE80211_CRYPTO_AES_CCM;
 }
 
 /*
@@ -151,6 +163,27 @@ void
 ieee80211_crypto_detach(struct ieee80211com *ic)
 {
 }
+
+/*
+ * Set the supported ciphers for software encryption.
+ */
+void
+ieee80211_crypto_set_supported_software_ciphers(struct ieee80211com *ic,
+    uint32_t cipher_set)
+{
+	ic->ic_sw_cryptocaps = cipher_set;
+}
+
+/*
+ * Set the supported ciphers for hardware encryption.
+ */
+void
+ieee80211_crypto_set_supported_hardware_ciphers(struct ieee80211com *ic,
+    uint32_t cipher_set)
+{
+	ic->ic_cryptocaps = cipher_set;
+}
+
 
 /*
  * Setup crypto support for a vap.
@@ -391,14 +424,15 @@ ieee80211_crypto_newkey(struct ieee80211vap *vap,
 			 */
 			IEEE80211_DPRINTF(vap, IEEE80211_MSG_CRYPTO,
 			    "%s: driver override for cipher %s, flags "
-			    "0x%x -> 0x%x\n", __func__, cip->ic_name,
-			    oflags, key->wk_flags);
+			    "%b -> %b\n", __func__, cip->ic_name,
+			    oflags, IEEE80211_KEY_BITS,
+			    key->wk_flags, IEEE80211_KEY_BITS);
 			keyctx = cip->ic_attach(vap, key);
 			if (keyctx == NULL) {
 				IEEE80211_DPRINTF(vap, IEEE80211_MSG_CRYPTO,
 				    "%s: unable to attach cipher %s with "
-				    "flags 0x%x\n", __func__, cip->ic_name,
-				    key->wk_flags);
+				    "flags %b\n", __func__, cip->ic_name,
+				    key->wk_flags, IEEE80211_KEY_BITS);
 				key->wk_flags = oflags;	/* restore old flags */
 				vap->iv_stats.is_crypto_attachfail++;
 				return 0;
@@ -423,9 +457,9 @@ _ieee80211_crypto_delkey(struct ieee80211vap *vap, struct ieee80211_key *key)
 	KASSERT(key->wk_cipher != NULL, ("No cipher!"));
 
 	IEEE80211_DPRINTF(vap, IEEE80211_MSG_CRYPTO,
-	    "%s: %s keyix %u flags 0x%x rsc %ju tsc %ju len %u\n",
+	    "%s: %s keyix %u flags %b rsc %ju tsc %ju len %u\n",
 	    __func__, key->wk_cipher->ic_name,
-	    key->wk_keyix, key->wk_flags,
+	    key->wk_keyix, key->wk_flags, IEEE80211_KEY_BITS,
 	    key->wk_keyrsc[IEEE80211_NONQOS_TID], key->wk_keytsc,
 	    key->wk_keylen);
 
@@ -491,9 +525,9 @@ ieee80211_crypto_setkey(struct ieee80211vap *vap, struct ieee80211_key *key)
 	KASSERT(cip != NULL, ("No cipher!"));
 
 	IEEE80211_DPRINTF(vap, IEEE80211_MSG_CRYPTO,
-	    "%s: %s keyix %u flags 0x%x mac %s rsc %ju tsc %ju len %u\n",
+	    "%s: %s keyix %u flags %b mac %s rsc %ju tsc %ju len %u\n",
 	    __func__, cip->ic_name, key->wk_keyix,
-	    key->wk_flags, ether_sprintf(key->wk_macaddr),
+	    key->wk_flags, IEEE80211_KEY_BITS, ether_sprintf(key->wk_macaddr),
 	    key->wk_keyrsc[IEEE80211_NONQOS_TID], key->wk_keytsc,
 	    key->wk_keylen);
 
@@ -511,9 +545,9 @@ ieee80211_crypto_setkey(struct ieee80211vap *vap, struct ieee80211_key *key)
 	 */
 	if (!cip->ic_setkey(key)) {
 		IEEE80211_DPRINTF(vap, IEEE80211_MSG_CRYPTO,
-		    "%s: cipher %s rejected key index %u len %u flags 0x%x\n",
+		    "%s: cipher %s rejected key index %u len %u flags %b\n",
 		    __func__, cip->ic_name, key->wk_keyix,
-		    key->wk_keylen, key->wk_flags);
+		    key->wk_keylen, key->wk_flags, IEEE80211_KEY_BITS);
 		vap->iv_stats.is_crypto_setkey_cipher++;
 		return 0;
 	}
@@ -716,20 +750,22 @@ ieee80211_crypto_demic(struct ieee80211vap *vap, struct ieee80211_key *k,
 	 * Handle demic / mic errors from hardware-decrypted offload devices.
 	 */
 	if ((rxs != NULL) && (rxs->c_pktflags & IEEE80211_RX_F_DECRYPTED)) {
-		if (rxs->c_pktflags & IEEE80211_RX_F_FAIL_MIC) {
+		if ((rxs->c_pktflags & IEEE80211_RX_F_FAIL_MMIC) != 0) {
 			/*
-			 * Hardware has said MIC failed.  We don't care about
+			 * Hardware has said MMIC failed.  We don't care about
 			 * whether it was stripped or not.
 			 *
 			 * Eventually - teach the demic methods in crypto
 			 * modules to handle a NULL key and not to dereference
 			 * it.
 			 */
-			ieee80211_notify_michael_failure(vap, wh, -1);
+			ieee80211_notify_michael_failure(vap, wh,
+			    IEEE80211_KEYIX_NONE);
 			return (0);
 		}
 
-		if (rxs->c_pktflags & IEEE80211_RX_F_MMIC_STRIP) {
+		if ((rxs->c_pktflags &
+		    (IEEE80211_RX_F_MIC_STRIP|IEEE80211_RX_F_MMIC_STRIP)) != 0) {
 			/*
 			 * Hardware has decrypted and not indicated a
 			 * MIC failure and has stripped the MIC.

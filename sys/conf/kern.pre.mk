@@ -8,7 +8,11 @@
 # the rest of /usr/src, but they still always process SRCCONF even though
 # the normal mechanisms to prevent that (compiling out of tree) won't
 # work. To ensure they do work, we have to duplicate thee few lines here.
+.if exists(${SRCTOP}/src.conf)
+SRCCONF?=	${SRCTOP}/src.conf
+.else
 SRCCONF?=	/etc/src.conf
+.endif
 .if (exists(${SRCCONF}) || ${SRCCONF} != "/etc/src.conf") && !target(_srcconf_included_)
 .include "${SRCCONF}"
 _srcconf_included_:
@@ -340,6 +344,10 @@ MLXFW_C=	${OFED_C_NOIMP} \
 BNXT_CFLAGS=	-I$S/dev/bnxt/bnxt_en ${OFEDCFLAGS}
 BNXT_C_NOIMP=	${CC} -c -o ${.TARGET} ${BNXT_CFLAGS} ${WERROR}
 BNXT_C=		${BNXT_C_NOIMP} ${.IMPSRC}
+
+# IP Filter
+IPFILTER_CFLAGS=	-I$S/netpfil/ipfilter
+IPFILTER_C=		${NORMAL_C} -Wno-unused ${IPFILTER_CFLAGS}
 
 GEN_CFILES= $S/$M/$M/genassym.c ${MFILES:T:S/.m$/.c/}
 SYSTEM_CFILES= config.c env.c hints.c vnode_if.c

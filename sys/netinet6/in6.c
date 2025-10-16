@@ -88,6 +88,7 @@
 #include <net/if_var.h>
 #include <net/if_private.h>
 #include <net/if_types.h>
+#include <net/if_bridgevar.h>
 #include <net/route.h>
 #include <net/route/route_ctl.h>
 #include <net/route/nhop.h>
@@ -589,7 +590,7 @@ in6_control_ioctl(u_long cmd, void *data,
 #endif
 		error = in6_addifaddr(ifp, ifra, ia);
 		ia = NULL;
-		break;
+		goto out;
 
 	case SIOCDIFADDR_IN6:
 		in6_purgeifaddr(ia);
@@ -1236,6 +1237,13 @@ in6_addifaddr(struct ifnet *ifp, struct in6_aliasreq *ifra, struct in6_ifaddr *i
 	int carp_attached = 0;
 	int error;
 
+	/* Check if this interface is a bridge member */
+	if (ifp->if_bridge != NULL && ifp->if_type != IFT_GIF &&
+	    bridge_member_ifaddrs_p != NULL && !bridge_member_ifaddrs_p()) {
+		error = EINVAL;
+		goto out;
+	}
+
 	/*
 	 * first, make or update the interface address structure,
 	 * and link it to the list.
@@ -1280,8 +1288,8 @@ in6_addifaddr(struct ifnet *ifp, struct in6_aliasreq *ifra, struct in6_ifaddr *i
 	 */
 	bzero(&pr0, sizeof(pr0));
 	pr0.ndpr_ifp = ifp;
-	pr0.ndpr_plen = in6_mask2len(&ifra->ifra_prefixmask.sin6_addr,
-	    NULL);
+	pr0.ndpr_plen = ia->ia_plen =
+	    in6_mask2len(&ifra->ifra_prefixmask.sin6_addr, NULL);
 	if (pr0.ndpr_plen == 128) {
 		/* we don't need to install a host route. */
 		goto aifaddr_out;
@@ -1475,16 +1483,16 @@ in6_unlink_ifa(struct in6_ifaddr *ia, struct ifnet *ifp)
 	 * positive reference.
 	 */
 	remove_lle = 0;
-	if (ia->ia6_ndpr == NULL) {
-		nd6log((LOG_NOTICE,
-		    "in6_unlink_ifa: autoconf'ed address "
-		    "%s has no prefix\n", ip6_sprintf(ip6buf, IA6_IN6(ia))));
-	} else {
+	if (ia->ia6_ndpr != NULL) {
 		ia->ia6_ndpr->ndpr_addrcnt--;
 		/* Do not delete lles within prefix if refcont != 0 */
 		if (ia->ia6_ndpr->ndpr_addrcnt == 0)
 			remove_lle = 1;
 		ia->ia6_ndpr = NULL;
+	} else if (ia->ia_plen < 128) {
+		nd6log((LOG_NOTICE,
+		    "in6_unlink_ifa: autoconf'ed address "
+		    "%s has no prefix\n", ip6_sprintf(ip6buf, IA6_IN6(ia))));
 	}
 
 	nd6_rem_ifa_lle(ia, remove_lle);
@@ -2107,31 +2115,6 @@ in6if_do_dad(struct ifnet *ifp)
 }
 
 /*
- * Calculate max IPv6 MTU through all the interfaces and store it
- * to in6_maxmtu.
- */
-void
-in6_setmaxmtu(void)
-{
-	struct epoch_tracker et;
-	unsigned long maxmtu = 0;
-	struct ifnet *ifp;
-
-	NET_EPOCH_ENTER(et);
-	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
-		/* this function can be called during ifnet initialization */
-		if (!ifp->if_afdata[AF_INET6])
-			continue;
-		if ((ifp->if_flags & IFF_LOOPBACK) == 0 &&
-		    IN6_LINKMTU(ifp) > maxmtu)
-			maxmtu = IN6_LINKMTU(ifp);
-	}
-	NET_EPOCH_EXIT(et);
-	if (maxmtu)	/* update only when maxmtu is positive */
-		V_in6_maxmtu = maxmtu;
-}
-
-/*
  * Provide the length of interface identifiers to be used for the link attached
  * to the given interface.  The length should be defined in "IPv6 over
  * xxx-link" document.  Note that address architecture might also define
@@ -2636,6 +2619,8 @@ void
 in6_domifdetach(struct ifnet *ifp, void *aux)
 {
 	struct in6_ifextra *ext = (struct in6_ifextra *)aux;
+
+	MPASS(ifp->if_afdata[AF_INET6] == NULL);
 
 	mld_domifdetach(ifp);
 	scope6_ifdetach(ext->scope6_id);

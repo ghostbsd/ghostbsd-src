@@ -66,6 +66,7 @@ typedef struct ifconfig_context if_ctx;
 typedef	void c_func(if_ctx *ctx, const char *cmd, int arg);
 typedef	void c_func2(if_ctx *ctx, const char *arg1, const char *arg2);
 typedef	void c_func3(if_ctx *ctx, const char *cmd, const char *arg);
+typedef	int  c_funcv(if_ctx *ctx, int argc, const char *const *argv);
 
 struct cmd {
 	const char *c_name;
@@ -74,11 +75,13 @@ struct cmd {
 #define	NEXTARG2	0xfffffe	/* has 2 following args */
 #define	OPTARG		0xfffffd	/* has optional following arg */
 #define	SPARAM		0xfffffc	/* parameter is string c_sparameter */
+#define	ARGVECTOR	0xfffffb	/* takes argument vector */
 	const char *c_sparameter;
 	union {
 		c_func	*c_func;
 		c_func2	*c_func2;
 		c_func3	*c_func3;
+		c_funcv	*c_funcv;
 	} c_u;
 	int	c_iscloneop;
 	struct cmd *c_next;
@@ -117,6 +120,13 @@ void	callback_register(callback_func *, void *);
     .c_name = (name),				\
     .c_parameter = NEXTARG2,			\
     .c_u = { .c_func2 = (func) },		\
+    .c_iscloneop = 0,				\
+    .c_next = NULL,				\
+}
+#define	DEF_CMD_VARG(name, func) {		\
+    .c_name = (name),				\
+    .c_parameter = ARGVECTOR,			\
+    .c_u = { .c_funcv = (func) },		\
     .c_iscloneop = 0,				\
     .c_next = NULL,				\
 }
@@ -238,7 +248,6 @@ struct ifconfig_args {
 	const char *matchgroup;		/* Group name to match */
 	const char *nogroup;		/* Group name to exclude */
 	const struct afswtch *afp;	/* AF we're operating on */
-	const char *jail_name;	/* Jail name or jail id specified */
 };
 
 struct option {
@@ -259,6 +268,8 @@ void	setifcap(if_ctx *ctx, const char *, int value);
 void	setifcapnv(if_ctx *ctx, const char *vname, const char *arg);
 
 void	Perror(const char *cmd);
+void	print_bits(const char *btype, uint32_t *v, const int v_count,
+		const char **names, const int n_count);
 void	printb(const char *s, unsigned value, const char *bits);
 
 void	ifmaybeload(struct ifconfig_args *args, const char *name);

@@ -1691,6 +1691,27 @@ SYSCTL_PROC(_machdep, OID_AUTO, efi_map,
     efi_map_sysctl_handler, "S,efi_map_header",
     "Raw EFI Memory Map");
 
+static int
+efi_arch_sysctl_handler(SYSCTL_HANDLER_ARGS)
+{
+	char *arch;
+	caddr_t kmdp;
+
+	kmdp = preload_search_by_type("elf kernel");
+	if (kmdp == NULL)
+		kmdp = preload_search_by_type("elf64 kernel");
+
+	arch = (char *)preload_search_info(kmdp,
+	    MODINFO_METADATA | MODINFOMD_EFI_ARCH);
+	if (arch == NULL)
+		return (0);
+
+	return (SYSCTL_OUT_STR(req, arch));
+}
+SYSCTL_PROC(_machdep, OID_AUTO, efi_arch,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    efi_arch_sysctl_handler, "A", "EFI Firmware Architecture");
+
 void
 spinlock_enter(void)
 {
@@ -1786,10 +1807,8 @@ set_pcb_flags_fsgsbase(struct pcb *pcb, const u_int flags)
 	    (pcb->pcb_flags & PCB_FULL_IRET) == 0) {
 		r = intr_disable();
 		if ((pcb->pcb_flags & PCB_FULL_IRET) == 0) {
-			if (rfs() == _ufssel)
-				pcb->pcb_fsbase = rdfsbase();
-			if (rgs() == _ugssel)
-				pcb->pcb_gsbase = rdmsr(MSR_KGSBASE);
+			pcb->pcb_fsbase = rdfsbase();
+			pcb->pcb_gsbase = rdmsr(MSR_KGSBASE);
 		}
 		set_pcb_flags_raw(pcb, flags);
 		intr_restore(r);
@@ -1812,6 +1831,39 @@ clear_pcb_flags(struct pcb *pcb, const u_int flags)
 	__asm __volatile("andl %1,%0"
 	    : "=m" (pcb->pcb_flags) : "ir" (~flags), "m" (pcb->pcb_flags)
 	    : "cc", "memory");
+}
+
+extern const char wrmsr_early_safe_gp_handler[];
+static struct region_descriptor wrmsr_early_safe_orig_efi_idt;
+
+void
+wrmsr_early_safe_start(void)
+{
+	struct region_descriptor efi_idt;
+	struct gate_descriptor *gpf_descr;
+
+	sidt(&wrmsr_early_safe_orig_efi_idt);
+	efi_idt.rd_limit = 32 * sizeof(idt0[0]);
+	efi_idt.rd_base = (uintptr_t)idt0;
+	lidt(&efi_idt);
+
+	gpf_descr = &idt0[IDT_GP];
+	gpf_descr->gd_looffset = (uintptr_t)wrmsr_early_safe_gp_handler;
+	gpf_descr->gd_hioffset = (uintptr_t)wrmsr_early_safe_gp_handler >> 16;
+	gpf_descr->gd_selector = rcs();
+	gpf_descr->gd_type = SDT_SYSTGT;
+	gpf_descr->gd_p = 1;
+}
+
+void
+wrmsr_early_safe_end(void)
+{
+	struct gate_descriptor *gpf_descr;
+
+	lidt(&wrmsr_early_safe_orig_efi_idt);
+
+	gpf_descr = &idt0[IDT_GP];
+	memset(gpf_descr, 0, sizeof(*gpf_descr));
 }
 
 #ifdef KDB

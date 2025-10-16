@@ -55,7 +55,6 @@
 #include <sys/osd.h>
 #include <sys/priority.h>
 #include <sys/rtprio.h>			/* XXX. */
-#include <sys/runq.h>
 #include <sys/resource.h>
 #include <sys/sigio.h>
 #include <sys/signal.h>
@@ -1252,7 +1251,7 @@ int	cpu_procctl(struct thread *td, int idtype, id_t id, int com,
 void	cpu_set_syscall_retval(struct thread *, int);
 int	cpu_set_upcall(struct thread *, void (*)(void *), void *,
 	    stack_t *);
-int	cpu_set_user_tls(struct thread *, void *tls_base);
+int	cpu_set_user_tls(struct thread *, void *tls_base, int flags);
 void	cpu_thread_alloc(struct thread *);
 void	cpu_thread_clean(struct thread *);
 void	cpu_thread_exit(struct thread *);

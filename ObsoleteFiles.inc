@@ -51,6 +51,50 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20251006: Remove libnss_tacplus.a (it never should have been installed)
+OLD_FILES+=usr/lib/libnss_tacplus.a
+
+# 20250812: Remove a bogus manlink
+OLD_FILES+=usr/share/man/man3/quota_statfs.3.gz
+
+# 20250805: Test case renamed
+OLD_FILES+=usr/tests/usr.bin/xargs/regress.n2147483647.out
+
+# 20250728: Machine versions of 'runq.h' do not exist anymore
+OLD_FILES+=usr/include/machine/runq.h
+
+# 20250708: replace yaml.lua with lyaml
+OLD_FILES+=usr/share/flua/yaml.lua
+
+# 20250524: don't install zoneinfo version
+OLD_FILES+=usr/share/zoneinfo/version
+
+# 20250521: NDFREE(9) -> NDFREE_PNBUF(9)
+OLD_FILES+=usr/share/man/man9/NDFREE.9.gz
+
+# 20250419: removal of iwlwifi firmware files
+OLD_FILES+=usr/share/doc/legal/intel_iwlwifi_firmware.LICENCE
+
+# 20250310: caroot bundle updated
+OLD_FILES+=usr/share/certs/trusted/Entrust_Root_Certification_Authority_-_G4.pem
+OLD_FILES+=usr/share/certs/trusted/SecureSign_RootCA11.pem
+OLD_FILES+=usr/share/certs/trusted/Security_Communication_RootCA3.pem
+OLD_FILES+=usr/share/certs/trusted/SwissSign_Silver_CA_-_G2.pem
+OLD_FILES+=usr/share/certs/untrusted/AddTrust_External_Root.pem
+OLD_FILES+=usr/share/certs/untrusted/AddTrust_Low-Value_Services_Root.pem
+OLD_FILES+=usr/share/certs/untrusted/Staat_der_Nederlanden_Root_CA_-_G2.pem
+OLD_FILES+=usr/share/certs/untrusted/Cybertrust_Global_Root.pem
+OLD_FILES+=usr/share/certs/untrusted/DST_Root_CA_X3.pem
+OLD_FILES+=usr/share/certs/untrusted/GlobalSign_Root_CA_-_R2.pem
+OLD_FILES+=usr/share/certs/untrusted/QuoVadis_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/Sonera_Class_2_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/GeoTrust_Global_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/Staat_der_Nederlanden_EV_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/E-Tugra_Certification_Authority.pem
+OLD_FILES+=usr/share/certs/untrusted/Hongkong_Post_Root_CA_1.pem
+OLD_FILES+=usr/share/certs/untrusted/Security_Communication_Root_CA.pem
+OLD_FILES+=usr/share/certs/untrusted/Trustis_FPS_Root_CA.pem
+
 # 20250204: sys/vm/stack test symbols moved to /usr/lib/debug
 OLD_FILES+=usr/tests/sys/vm/stack/.debug/libsoxstack.so.debug
 OLD_DIRS+=usr/tests/sys/vm/stack/.debug
@@ -530,6 +574,9 @@ OLD_FILES+=usr/include/c++/v1/__type_traits/is_trivially_move_assignable.h
 OLD_FILES+=usr/include/c++/v1/__type_traits/is_trivially_move_constructible.h
 OLD_FILES+=usr/include/c++/v1/__type_traits/operation_traits.h
 OLD_FILES+=usr/include/c++/v1/experimental/__memory
+
+# 20241112: move p9fs from section 5 to section 4
+OLD_FILES+=usr/share/man/man5/p9fs.5.gz
 
 # 20240827: retire fips.so
 OLD_LIBS+=usr/lib/ossl-modules/fips.so
@@ -3644,9 +3691,9 @@ OLD_FILES+=usr/share/man/man4/twa.4.gz
 OLD_FILES+=usr/share/man/man9/kernel_vmount.9.gz
 
 # 20211115: vm_page busy functions removed
-OLD_FILES+=share/man/man9/vm_page_sbusy.9.gz
-OLD_FILES+=share/man/man9/vm_page_xbusy.9.gz
-OLD_FILES+=share/man/man9/vm_page_sleep_if_busy.9.gz
+OLD_FILES+=usr/share/man/man9/vm_page_sbusy.9.gz
+OLD_FILES+=usr/share/man/man9/vm_page_xbusy.9.gz
+OLD_FILES+=usr/share/man/man9/vm_page_sleep_if_busy.9.gz
 
 # 20211113: new clang import which bumps version from 12.0.1 to 13.0.0
 OLD_FILES+=usr/lib/clang/12.0.1/include/cuda_wrappers/algorithm
@@ -12120,8 +12167,6 @@ OLD_FILES+=usr/bin/llvm-pdbdump
 OLD_FILES+=usr/share/man/man2/pdwait4.2.gz
 # 20170610: chown-f_test replaced by chown_test
 OLD_FILES+=usr/tests/usr.sbin/chown/chown-f_test
-# 20170609: drop obsolete manpage link (if_rtwn.ko -> rtwn.ko)
-OLD_FILES+=usr/share/man/man4/if_rtwn.4.gz
 # 20170531: removal of groff
 OLD_FILES+=usr/bin/addftinfo
 OLD_FILES+=usr/bin/afmtodit
@@ -15055,8 +15100,6 @@ OLD_FILES+=usr/share/man/man4/lindev.4.gz
 # 20140425
 OLD_FILES+=usr/lib/libssp_p.a
 OLD_FILES+=usr/lib/libstand_p.a
-# 20140413: Removed NO_MANCOMPRESS from mount_fusefs
-OLD_FILES+=usr/share/man/man8/mount_fusefs.8
 # 20140314: AppleTalk
 OLD_DIRS+=usr/include/netatalk
 OLD_FILES+=usr/include/netatalk/aarp.h

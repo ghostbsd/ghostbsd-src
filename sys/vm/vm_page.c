@@ -391,11 +391,15 @@ vm_page_blacklist_load(char **list, char **end)
 		ptr = preload_fetch_addr(mod);
 		len = preload_fetch_size(mod);
         }
-	*list = ptr;
-	if (ptr != NULL)
-		*end = ptr + len;
-	else
+
+	if (ptr != NULL && len > 0) {
+		*list = ptr;
+		*end = ptr + len - 1;
+	} else {
+		*list = NULL;
 		*end = NULL;
+	}
+
 	return;
 }
 
@@ -650,40 +654,39 @@ vm_page_startup(vm_offset_t vaddr)
 		pa += PAGE_SIZE;
 	}
 #endif
+
 	/*
-	 * Compute the number of pages of memory that will be available for
-	 * use, taking into account the overhead of a page structure per page.
-	 * In other words, solve
-	 *	"available physical memory" - round_page(page_range *
-	 *	    sizeof(struct vm_page)) = page_range * PAGE_SIZE 
-	 * for page_range.  
+	 * Determine the lowest and highest physical addresses and, in the case
+	 * of VM_PHYSSEG_SPARSE, the exact size of the available physical
+	 * memory.  vm_phys_early_startup() already checked that phys_avail[]
+	 * has at least one element.
 	 */
+#ifdef VM_PHYSSEG_SPARSE
+	size = phys_avail[1] - phys_avail[0];
+#endif
 	low_avail = phys_avail[0];
 	high_avail = phys_avail[1];
-	for (i = 0; i < vm_phys_nsegs; i++) {
-		if (vm_phys_segs[i].start < low_avail)
-			low_avail = vm_phys_segs[i].start;
-		if (vm_phys_segs[i].end > high_avail)
-			high_avail = vm_phys_segs[i].end;
-	}
-	/* Skip the first chunk.  It is already accounted for. */
 	for (i = 2; phys_avail[i + 1] != 0; i += 2) {
+#ifdef VM_PHYSSEG_SPARSE
+		size += phys_avail[i + 1] - phys_avail[i];
+#endif
 		if (phys_avail[i] < low_avail)
 			low_avail = phys_avail[i];
 		if (phys_avail[i + 1] > high_avail)
 			high_avail = phys_avail[i + 1];
 	}
-	first_page = low_avail / PAGE_SIZE;
+	for (i = 0; i < vm_phys_nsegs; i++) {
 #ifdef VM_PHYSSEG_SPARSE
-	size = 0;
-	for (i = 0; i < vm_phys_nsegs; i++)
 		size += vm_phys_segs[i].end - vm_phys_segs[i].start;
-	for (i = 0; phys_avail[i + 1] != 0; i += 2)
-		size += phys_avail[i + 1] - phys_avail[i];
-#elif defined(VM_PHYSSEG_DENSE)
+#endif
+		if (vm_phys_segs[i].start < low_avail)
+			low_avail = vm_phys_segs[i].start;
+		if (vm_phys_segs[i].end > high_avail)
+			high_avail = vm_phys_segs[i].end;
+	}
+	first_page = low_avail / PAGE_SIZE;
+#ifdef VM_PHYSSEG_DENSE
 	size = high_avail - low_avail;
-#else
-#error "Either VM_PHYSSEG_DENSE or VM_PHYSSEG_SPARSE must be defined."
 #endif
 
 #ifdef PMAP_HAS_PAGE_ARRAY
@@ -746,8 +749,7 @@ vm_page_startup(vm_offset_t vaddr)
 	 * physical pages.
 	 */
 	for (i = 0; phys_avail[i + 1] != 0; i += 2)
-		if (vm_phys_avail_size(i) != 0)
-			vm_phys_add_seg(phys_avail[i], phys_avail[i + 1]);
+		vm_phys_add_seg(phys_avail[i], phys_avail[i + 1]);
 
 	/*
 	 * Initialize the physical memory allocator.
@@ -1835,15 +1837,10 @@ vm_page_replace(vm_page_t mnew, vm_object_t object, vm_pindex_t pindex,
  *	Move the given memory entry from its
  *	current object to the specified target object/offset.
  *
- *	Note: swap associated with the page must be invalidated by the move.  We
- *	      have to do this for several reasons:  (1) we aren't freeing the
- *	      page, (2) we are dirtying the page, (3) the VM system is probably
- *	      moving the page from object A to B, and will then later move
- *	      the backing store from A to B and we can't have a conflict.
- *
- *	Note: we *always* dirty the page.  It is necessary both for the
- *	      fact that we moved it, and because we may be invalidating
- *	      swap.
+ *	This routine dirties the page if it is valid, as callers are expected to
+ *	transfer backing storage only after moving the page.  Dirtying the page
+ *	ensures that the destination object retains the most recent copy of the
+ *	page.
  *
  *	The objects must be locked.
  */
@@ -1884,7 +1881,8 @@ vm_page_rename(vm_page_t m, vm_object_t new_object, vm_pindex_t new_pindex)
 	m->object = new_object;
 
 	vm_page_insert_radixdone(m, new_object, mpred);
-	vm_page_dirty(m);
+	if (vm_page_any_valid(m))
+		vm_page_dirty(m);
 	vm_pager_page_inserted(new_object, m);
 	return (0);
 }
@@ -1942,7 +1940,9 @@ vm_page_alloc_after(vm_object_t object, vm_pindex_t pindex,
 	vm_page_t m;
 	int domain;
 
-	vm_domainset_iter_page_init(&di, object, pindex, &domain, &req);
+	if (vm_domainset_iter_page_init(&di, object, pindex, &domain, &req) != 0)
+		return (NULL);
+
 	do {
 		m = vm_page_alloc_domain_after(object, pindex, domain, req,
 		    mpred);
@@ -2173,15 +2173,27 @@ vm_page_alloc_contig(vm_object_t object, vm_pindex_t pindex, int req,
     vm_paddr_t boundary, vm_memattr_t memattr)
 {
 	struct vm_domainset_iter di;
+	vm_page_t bounds[2];
 	vm_page_t m;
 	int domain;
+	int start_segind;
 
-	vm_domainset_iter_page_init(&di, object, pindex, &domain, &req);
+	start_segind = -1;
+
+	if (vm_domainset_iter_page_init(&di, object, pindex, &domain, &req) != 0)
+		return (NULL);
+
 	do {
 		m = vm_page_alloc_contig_domain(object, pindex, domain, req,
 		    npages, low, high, alignment, boundary, memattr);
 		if (m != NULL)
 			break;
+		if (start_segind == -1)
+			start_segind = vm_phys_lookup_segind(low);
+		if (vm_phys_find_range(bounds, start_segind, domain,
+		    npages, low, high) == -1) {
+			vm_domainset_iter_ignore(&di, domain);
+		}
 	} while (vm_domainset_iter_page(&di, object, &domain) == 0);
 
 	return (m);
@@ -2440,7 +2452,9 @@ vm_page_alloc_noobj(int req)
 	vm_page_t m;
 	int domain;
 
-	vm_domainset_iter_page_init(&di, NULL, 0, &domain, &req);
+	if (vm_domainset_iter_page_init(&di, NULL, 0, &domain, &req) != 0)
+		return (NULL);
+
 	do {
 		m = vm_page_alloc_noobj_domain(domain, req);
 		if (m != NULL)
@@ -2465,7 +2479,9 @@ vm_page_alloc_noobj_contig(int req, u_long npages, vm_paddr_t low,
 	vm_page_t m;
 	int domain;
 
-	vm_domainset_iter_page_init(&di, NULL, 0, &domain, &req);
+	if (vm_domainset_iter_page_init(&di, NULL, 0, &domain, &req) != 0)
+		return (NULL);
+
 	do {
 		m = vm_page_alloc_noobj_contig_domain(domain, req, npages, low,
 		    high, alignment, boundary, memattr);
@@ -3025,7 +3041,7 @@ unlock:
  *	"npages" must be greater than zero.  Both "alignment" and "boundary"
  *	must be a power of two.
  */
-bool
+int
 vm_page_reclaim_contig_domain_ext(int domain, int req, u_long npages,
     vm_paddr_t low, vm_paddr_t high, u_long alignment, vm_paddr_t boundary,
     int desired_runs)
@@ -3033,14 +3049,15 @@ vm_page_reclaim_contig_domain_ext(int domain, int req, u_long npages,
 	struct vm_domain *vmd;
 	vm_page_t bounds[2], m_run, _m_runs[NRUNS], *m_runs;
 	u_long count, minalign, reclaimed;
-	int error, i, min_reclaim, nruns, options, req_class, segind;
-	bool ret;
+	int error, i, min_reclaim, nruns, options, req_class;
+	int segind, start_segind;
+	int ret;
 
 	KASSERT(npages > 0, ("npages is 0"));
 	KASSERT(powerof2(alignment), ("alignment is not a power of 2"));
 	KASSERT(powerof2(boundary), ("boundary is not a power of 2"));
 
-	ret = false;
+	ret = ENOMEM;
 
 	/*
 	 * If the caller wants to reclaim multiple runs, try to allocate
@@ -3080,6 +3097,8 @@ vm_page_reclaim_contig_domain_ext(int domain, int req, u_long npages,
 	if (curproc == pageproc && req_class != VM_ALLOC_INTERRUPT)
 		req_class = VM_ALLOC_SYSTEM;
 
+	start_segind = vm_phys_lookup_segind(low);
+
 	/*
 	 * Return if the number of free pages cannot satisfy the requested
 	 * allocation.
@@ -3096,14 +3115,17 @@ vm_page_reclaim_contig_domain_ext(int domain, int req, u_long npages,
 	 * the reclamation of reservations and superpages each time.
 	 */
 	for (options = VPSC_NORESERV;;) {
+		bool phys_range_exists = false;
+
 		/*
 		 * Find the highest runs that satisfy the given constraints
 		 * and restrictions, and record them in "m_runs".
 		 */
 		count = 0;
-		segind = vm_phys_lookup_segind(low);
+		segind = start_segind;
 		while ((segind = vm_phys_find_range(bounds, segind, domain,
 		    npages, low, high)) != -1) {
+			phys_range_exists = true;
 			while ((m_run = vm_page_scan_contig(npages, bounds[0],
 			    bounds[1], alignment, boundary, options))) {
 				bounds[0] = m_run + npages;
@@ -3111,6 +3133,11 @@ vm_page_reclaim_contig_domain_ext(int domain, int req, u_long npages,
 				count++;
 			}
 			segind++;
+		}
+
+		if (!phys_range_exists) {
+			ret = ERANGE;
+			goto done;
 		}
 
 		/*
@@ -3129,7 +3156,7 @@ vm_page_reclaim_contig_domain_ext(int domain, int req, u_long npages,
 			if (error == 0) {
 				reclaimed += npages;
 				if (reclaimed >= min_reclaim) {
-					ret = true;
+					ret = 0;
 					goto done;
 				}
 			}
@@ -3144,7 +3171,8 @@ vm_page_reclaim_contig_domain_ext(int domain, int req, u_long npages,
 		else if (options == VPSC_NOSUPER)
 			options = VPSC_ANY;
 		else if (options == VPSC_ANY) {
-			ret = reclaimed != 0;
+			if (reclaimed != 0)
+				ret = 0;
 			goto done;
 		}
 	}
@@ -3154,7 +3182,7 @@ done:
 	return (ret);
 }
 
-bool
+int
 vm_page_reclaim_contig_domain(int domain, int req, u_long npages,
     vm_paddr_t low, vm_paddr_t high, u_long alignment, vm_paddr_t boundary)
 {
@@ -3162,20 +3190,30 @@ vm_page_reclaim_contig_domain(int domain, int req, u_long npages,
 	    alignment, boundary, 1));
 }
 
-bool
+int
 vm_page_reclaim_contig(int req, u_long npages, vm_paddr_t low, vm_paddr_t high,
     u_long alignment, vm_paddr_t boundary)
 {
 	struct vm_domainset_iter di;
-	int domain;
-	bool ret;
+	int domain, ret, status;
 
-	vm_domainset_iter_page_init(&di, NULL, 0, &domain, &req);
+	ret = ERANGE;
+
+	if (vm_domainset_iter_page_init(&di, NULL, 0, &domain, &req) != 0)
+		return (ret);
+
 	do {
-		ret = vm_page_reclaim_contig_domain(domain, req, npages, low,
+		status = vm_page_reclaim_contig_domain(domain, req, npages, low,
 		    high, alignment, boundary);
-		if (ret)
-			break;
+		if (status == 0)
+			return (0);
+		else if (status == ERANGE)
+			vm_domainset_iter_ignore(&di, domain);
+		else {
+			KASSERT(status == ENOMEM, ("Unrecognized error %d "
+			    "from vm_page_reclaim_contig_domain()", status));
+			ret = ENOMEM;
+		}
 	} while (vm_domainset_iter_page(&di, NULL, &domain) == 0);
 
 	return (ret);
@@ -4555,7 +4593,7 @@ vm_page_grab_pflags(int allocflags)
 
 	pflags = allocflags &
 	    ~(VM_ALLOC_NOWAIT | VM_ALLOC_WAITOK | VM_ALLOC_WAITFAIL |
-	    VM_ALLOC_NOBUSY | VM_ALLOC_IGN_SBUSY);
+	    VM_ALLOC_NOBUSY | VM_ALLOC_IGN_SBUSY | VM_ALLOC_NOCREAT);
 	if ((allocflags & VM_ALLOC_NOWAIT) == 0)
 		pflags |= VM_ALLOC_WAITFAIL;
 	if ((allocflags & VM_ALLOC_IGN_SBUSY) != 0)

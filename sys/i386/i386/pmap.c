@@ -625,15 +625,6 @@ __CONCAT(PMTYPE, bootstrap)(vm_paddr_t firstaddr)
 	res = atop(firstaddr - (vm_paddr_t)KERNLOAD);
 
 	/*
-	 * Add a physical memory segment (vm_phys_seg) corresponding to the
-	 * preallocated kernel page table pages so that vm_page structures
-	 * representing these pages will be created.  The vm_page structures
-	 * are required for promotion of the corresponding kernel virtual
-	 * addresses to superpage mappings.
-	 */
-	vm_phys_early_add_seg(KPTphys, KPTphys + ptoa(nkpt));
-
-	/*
 	 * Initialize the first available kernel virtual address.
 	 * However, using "firstaddr" may waste a few pages of the
 	 * kernel virtual address space, because pmap_cold() may not
@@ -2242,7 +2233,7 @@ __CONCAT(PMTYPE, release)(pmap_t pmap)
 /*
  * grow the number of kernel page table entries, if needed
  */
-static void
+static int
 __CONCAT(PMTYPE, growkernel)(vm_offset_t addr)
 {
 	vm_paddr_t ptppaddr;
@@ -2266,7 +2257,7 @@ __CONCAT(PMTYPE, growkernel)(vm_offset_t addr)
 		nkpg = vm_page_alloc_noobj(VM_ALLOC_INTERRUPT | VM_ALLOC_WIRED |
 		    VM_ALLOC_ZERO);
 		if (nkpg == NULL)
-			panic("pmap_growkernel: no memory to grow kernel");
+			return (KERN_RESOURCE_SHORTAGE);
 		nkpg->pindex = kernel_vm_end >> PDRSHIFT;
 		nkpt++;
 
@@ -2281,6 +2272,8 @@ __CONCAT(PMTYPE, growkernel)(vm_offset_t addr)
 			break;
 		}
 	}
+
+	return (KERN_SUCCESS);
 }
 
 /***************************************************
@@ -5523,6 +5516,8 @@ __CONCAT(PMTYPE, unmapdev)(void *p, vm_size_t size)
 static void
 __CONCAT(PMTYPE, page_set_memattr)(vm_page_t m, vm_memattr_t ma)
 {
+	if (m->md.pat_mode == ma)
+		return;
 
 	m->md.pat_mode = ma;
 	if ((m->flags & PG_FICTITIOUS) != 0)

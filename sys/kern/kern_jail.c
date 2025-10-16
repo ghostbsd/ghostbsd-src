@@ -226,6 +226,7 @@ static struct bool_flags pr_flag_allow[NBBY * NBPW] = {
 #ifdef VIMAGE
 	{"allow.nfsd", "allow.nonfsd", PR_ALLOW_NFSD},
 #endif
+	{"allow.routing", "allow.norouting", PR_ALLOW_ROUTING},
 };
 static unsigned pr_allow_all = PR_ALLOW_ALL_STATIC;
 const size_t pr_flag_allow_size = sizeof(pr_flag_allow);
@@ -2518,6 +2519,15 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 
 	/* By now, all parameters should have been noted. */
 	TAILQ_FOREACH(opt, opts, link) {
+		if (!opt->seen &&
+		    (strstr(opt->name, JAIL_META_PRIVATE ".") == opt->name ||
+		    strstr(opt->name, JAIL_META_SHARED ".") == opt->name)) {
+			/* Communicate back a missing key. */
+			free(opt->value, M_MOUNT);
+			opt->value = NULL;
+			opt->len = 0;
+			continue;
+		}
 		if (!opt->seen && strcmp(opt->name, "errmsg")) {
 			error = EINVAL;
 			vfs_opterror(opts, "unknown parameter: %s", opt->name);
@@ -3422,7 +3432,7 @@ prison_check_af(struct ucred *cred, int af)
 	pr = cred->cr_prison;
 #ifdef VIMAGE
 	/* Prisons with their own network stack are not limited. */
-	if (prison_owns_vnet(cred))
+	if (prison_owns_vnet(pr))
 		return (0);
 #endif
 
@@ -3487,7 +3497,7 @@ prison_if(struct ucred *cred, const struct sockaddr *sa)
 	KASSERT(sa != NULL, ("%s: sa is NULL", __func__));
 
 #ifdef VIMAGE
-	if (prison_owns_vnet(cred))
+	if (prison_owns_vnet(cred->cr_prison))
 		return (0);
 #endif
 
@@ -3604,7 +3614,7 @@ jailed_without_vnet(struct ucred *cred)
 	if (!jailed(cred))
 		return (false);
 #ifdef VIMAGE
-	if (prison_owns_vnet(cred))
+	if (prison_owns_vnet(cred->cr_prison))
 		return (false);
 #endif
 
@@ -3667,20 +3677,17 @@ getjailname(struct ucred *cred, char *name, size_t len)
 
 #ifdef VIMAGE
 /*
- * Determine whether the prison represented by cred owns
- * its vnet rather than having it inherited.
- *
- * Returns true in case the prison owns the vnet, false otherwise.
+ * Determine whether the prison owns its VNET.
  */
 bool
-prison_owns_vnet(struct ucred *cred)
+prison_owns_vnet(struct prison *pr)
 {
 
 	/*
 	 * vnets cannot be added/removed after jail creation,
 	 * so no need to lock here.
 	 */
-	return ((cred->cr_prison->pr_flags & PR_VNET) != 0);
+	return ((pr->pr_flags & PR_VNET) != 0);
 }
 #endif
 
@@ -3939,6 +3946,7 @@ prison_priv_check(struct ucred *cred, int priv)
 		 * Allow jailed processes to manipulate process UNIX
 		 * credentials in any way they see fit.
 		 */
+	case PRIV_CRED_SETCRED:
 	case PRIV_CRED_SETUID:
 	case PRIV_CRED_SETEUID:
 	case PRIV_CRED_SETGID:
@@ -4141,6 +4149,16 @@ prison_priv_check(struct ucred *cred, int priv)
 			return (0);
 		return (EPERM);
 
+		/*
+		 * Conditionally allow privileged process in the jail to modify
+		 * the routing table.
+		 */
+	case PRIV_NET_ROUTE:
+		if (cred->cr_prison->pr_allow & PR_ALLOW_ROUTING)
+			return (0);
+		else
+			return (EPERM);
+
 	default:
 		/*
 		 * In all remaining cases, deny the privilege request.  This
@@ -4204,7 +4222,7 @@ prison_path(struct prison *pr1, struct prison *pr2)
 /*
  * Jail-related sysctls.
  */
-static SYSCTL_NODE(_security, OID_AUTO, jail, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+SYSCTL_NODE(_security, OID_AUTO, jail, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Jails");
 
 #if defined(INET) || defined(INET6)
@@ -4331,7 +4349,7 @@ sysctl_jail_vnet(SYSCTL_HANDLER_ARGS)
 #ifdef VIMAGE
 	struct ucred *cred = req->td->td_ucred;
 
-	havevnet = jailed(cred) && prison_owns_vnet(cred);
+	havevnet = jailed(cred) && prison_owns_vnet(cred->cr_prison);
 #else
 	havevnet = 0;
 #endif
@@ -4603,6 +4621,8 @@ SYSCTL_JAIL_PARAM(_allow, suser, CTLTYPE_INT | CTLFLAG_RW,
 SYSCTL_JAIL_PARAM(_allow, nfsd, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Mountd/nfsd may run in the jail");
 #endif
+SYSCTL_JAIL_PARAM(_allow, routing, CTLTYPE_INT | CTLFLAG_RW,
+    "B", "Jail may modify routing table");
 
 SYSCTL_JAIL_PARAM_SUBNODE(allow, mount, "Jail mount/unmount permission flags");
 SYSCTL_JAIL_PARAM(_allow_mount, , CTLTYPE_INT | CTLFLAG_RW,

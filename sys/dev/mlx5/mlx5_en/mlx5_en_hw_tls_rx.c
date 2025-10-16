@@ -387,11 +387,12 @@ static int
 mlx5e_tls_rx_tag_import(void *arg, void **store, int cnt, int domain, int flags)
 {
 	struct mlx5e_tls_rx_tag *ptag;
+	struct mlx5_core_dev *mdev = arg;
 	int i;
 
 	for (i = 0; i != cnt; i++) {
 		ptag = malloc_domainset(sizeof(*ptag), M_MLX5E_TLS_RX,
-		    mlx5_dev_domainset(arg), flags | M_ZERO);
+		    mlx5_dev_domainset(mdev), flags | M_ZERO);
 		mtx_init(&ptag->mtx, "mlx5-tls-rx-tag-mtx", NULL, MTX_DEF);
 		INIT_WORK(&ptag->work, mlx5e_tls_rx_work);
 		store[i] = ptag;
@@ -637,7 +638,8 @@ mlx5e_tls_rx_set_params(void *ctx, struct inpcb *inp, const struct tls_session_p
 		return (EINVAL);
 
 	MLX5_SET64(sw_tls_rx_cntx, ctx, param.initial_record_number, tls_sn_he);
-	MLX5_SET(sw_tls_rx_cntx, ctx, param.resync_tcp_sn, tcp_sn_he);
+	MLX5_SET(sw_tls_rx_cntx, ctx, param.resync_tcp_sn, 0);
+	MLX5_SET(sw_tls_rx_cntx, ctx, progress.next_record_tcp_sn, tcp_sn_he);
 
 	return (0);
 }

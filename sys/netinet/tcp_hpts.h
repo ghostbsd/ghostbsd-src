@@ -26,8 +26,8 @@
 #ifndef __tcp_hpts_h__
 #define __tcp_hpts_h__
 
-/* Number of useconds in a hpts tick */
-#define HPTS_TICKS_PER_SLOT 10
+/* Number of useconds represented by an hpts slot */
+#define HPTS_USECS_PER_SLOT 10
 #define HPTS_MS_TO_SLOTS(x) ((x * 100) + 1)
 #define HPTS_USEC_TO_SLOTS(x) ((x+9) /10)
 #define HPTS_USEC_IN_SEC 1000000
@@ -91,8 +91,8 @@ struct hpts_diag {
 #define DYNAMIC_MAX_SLEEP 5000	/* 5ms */
 
 /* Thresholds for raising/lowering sleep */
-#define TICKS_INDICATE_MORE_SLEEP 100		/* This would be 1ms */
-#define TICKS_INDICATE_LESS_SLEEP 1000		/* This would indicate 10ms */
+#define SLOTS_INDICATE_MORE_SLEEP 100		/* This would be 1ms */
+#define SLOTS_INDICATE_LESS_SLEEP 1000		/* This would indicate 10ms */
 /**
  *
  * Dynamic adjustment of sleeping times is done in "new" mode
@@ -102,10 +102,10 @@ struct hpts_diag {
  * When we are in the "new" mode i.e. conn_cnt > conn_cnt_thresh
  * then we do a dynamic adjustment on the time we sleep.
  * Our threshold is if the lateness of the first client served (in ticks) is
- * greater than or equal too ticks_indicate_more_sleep (10ms
+ * greater than or equal too slots_indicate_more_sleep (10ms
  * or 10000 ticks). If we were that late, the actual sleep time
  * is adjusted down by 50%. If the ticks_ran is less than
- * ticks_indicate_more_sleep (100 ticks or 1000usecs).
+ * slots_indicate_more_sleep (100 ticks or 1000usecs).
  *
  */
 
@@ -149,8 +149,7 @@ uint32_t tcp_hpts_insert_diag(struct tcpcb *tp, uint32_t slot, int32_t line,
 #define	tcp_hpts_insert(inp, slot)	\
 	tcp_hpts_insert_diag((inp), (slot), __LINE__, NULL)
 
-void __tcp_set_hpts(struct tcpcb *tp, int32_t line);
-#define tcp_set_hpts(a) __tcp_set_hpts(a, __LINE__)
+void tcp_set_hpts(struct tcpcb *tp);
 
 void tcp_set_inp_to_drop(struct inpcb *inp, uint16_t reason);
 
@@ -165,25 +164,25 @@ extern int32_t tcp_min_hptsi_time;
  * The following functions should also be available
  * to userspace as well.
  */
-static __inline uint32_t
-tcp_tv_to_hptstick(const struct timeval *sv)
+static inline uint32_t
+tcp_tv_to_hpts_slot(const struct timeval *sv)
 {
-	return ((sv->tv_sec * 100000) + (sv->tv_usec / HPTS_TICKS_PER_SLOT));
+	return ((sv->tv_sec * 100000) + (sv->tv_usec / HPTS_USECS_PER_SLOT));
 }
 
-static __inline uint32_t
+static inline uint32_t
 tcp_tv_to_usectick(const struct timeval *sv)
 {
 	return ((uint32_t) ((sv->tv_sec * HPTS_USEC_IN_SEC) + sv->tv_usec));
 }
 
-static __inline uint32_t
+static inline uint32_t
 tcp_tv_to_mssectick(const struct timeval *sv)
 {
 	return ((uint32_t) ((sv->tv_sec * HPTS_MSEC_IN_SEC) + (sv->tv_usec/HPTS_USEC_IN_MSEC)));
 }
 
-static __inline uint64_t
+static inline uint64_t
 tcp_tv_to_lusectick(const struct timeval *sv)
 {
 	return ((uint64_t)((sv->tv_sec * HPTS_USEC_IN_SEC) + sv->tv_usec));
@@ -196,10 +195,10 @@ extern int32_t tcp_min_hptsi_time;
 static inline int32_t
 get_hpts_min_sleep_time(void)
 {
-	return (tcp_min_hptsi_time + HPTS_TICKS_PER_SLOT);
+	return (tcp_min_hptsi_time + HPTS_USECS_PER_SLOT);
 }
 
-static __inline uint32_t
+static inline uint32_t
 tcp_gethptstick(struct timeval *sv)
 {
 	struct timeval tv;
@@ -207,10 +206,10 @@ tcp_gethptstick(struct timeval *sv)
 	if (sv == NULL)
 		sv = &tv;
 	microuptime(sv);
-	return (tcp_tv_to_hptstick(sv));
+	return (tcp_tv_to_hpts_slot(sv));
 }
 
-static __inline uint64_t
+static inline uint64_t
 tcp_get_u64_usecs(struct timeval *tv)
 {
 	struct timeval tvd;
@@ -221,7 +220,7 @@ tcp_get_u64_usecs(struct timeval *tv)
 	return (tcp_tv_to_lusectick(tv));
 }
 
-static __inline uint32_t
+static inline uint32_t
 tcp_get_usecs(struct timeval *tv)
 {
 	struct timeval tvd;

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #include "qat_freebsd.h"
 #include "adf_cfg.h"
 #include "adf_common_drv.h"
@@ -892,6 +892,7 @@ qat_uclo_get_dev_type(struct icp_qat_fw_loader_handle *handle)
 		return ICP_QAT_AC_C4XXX_DEV_TYPE;
 	case ADF_4XXX_PCI_DEVICE_ID:
 	case ADF_401XX_PCI_DEVICE_ID:
+	case ADF_402XX_PCI_DEVICE_ID:
 		return ICP_QAT_AC_4XXX_A_DEV_TYPE;
 	default:
 		pr_err("QAT: unsupported device 0x%x\n",
@@ -1618,11 +1619,17 @@ qat_uclo_map_auth_fw(struct icp_qat_fw_loader_handle *handle,
 	unsigned int length, simg_offset = sizeof(*auth_chunk);
 	unsigned int device_id = pci_get_device(GET_DEV(handle->accel_dev));
 
+	if (size <= ICP_QAT_AE_IMG_OFFSET(device_id)) {
+		pr_err("QAT: error, input image size too small %d\n", size);
+		return EINVAL;
+	}
+
 	if (size >
 	    (ICP_QAT_AE_IMG_OFFSET(device_id) + ICP_QAT_CSS_MAX_IMAGE_LEN)) {
 		pr_err("QAT: error, input image size overflow %d\n", size);
 		return EINVAL;
 	}
+
 	length = (css_hdr->fw_type == CSS_AE_FIRMWARE) ?
 	    ICP_QAT_CSS_AE_SIMG_LEN(device_id) + simg_offset :
 	    size + ICP_QAT_CSS_FWSK_PAD_LEN(device_id) + simg_offset;
@@ -1823,11 +1830,6 @@ qat_uclo_wr_mimage(struct icp_qat_fw_loader_handle *handle,
 				      pci_get_device(
 					  GET_DEV(handle->accel_dev)));
 			return status;
-		}
-		if (pci_get_device(GET_DEV(handle->accel_dev)) ==
-		    ADF_C3XXX_PCI_DEVICE_ID) {
-			pr_err("QAT: C3XXX doesn't support unsigned MMP\n");
-			return EINVAL;
 		}
 		status = qat_uclo_wr_sram_by_words(handle,
 						   handle->hal_sram_offset,

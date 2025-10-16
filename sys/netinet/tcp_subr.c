@@ -85,6 +85,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/ip_var.h>
+#include <netinet/icmp_var.h>
 #ifdef INET6
 #include <netinet/icmp6.h>
 #include <netinet/ip6.h>
@@ -691,14 +692,14 @@ out:
 static int
 sysctl_net_inet_default_tcp_functions(SYSCTL_HANDLER_ARGS)
 {
-	int error = ENOENT;
 	struct tcp_function_set fs;
 	struct tcp_function_block *blk;
+	int error;
 
-	memset(&fs, 0, sizeof(fs));
+	memset(&fs, 0, sizeof(struct tcp_function_set));
 	rw_rlock(&tcp_function_lock);
 	blk = find_tcp_fb_locked(V_tcp_func_set_ptr, NULL);
-	if (blk) {
+	if (blk != NULL) {
 		/* Found him */
 		strcpy(fs.function_set_name, blk->tfb_tcp_block_name);
 		fs.pcbcnt = blk->tfb_refcnt;
@@ -2155,7 +2156,7 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 			union tcp_log_stackspecific log;
 			struct timeval tv;
 
-			memset(&log.u_bbr, 0, sizeof(log.u_bbr));
+			memset(&log, 0, sizeof(log));
 			log.u_bbr.inhpts = tcp_in_hpts(tp);
 			log.u_bbr.flex8 = 4;
 			log.u_bbr.pkts_out = tp->t_maxseg;
@@ -2221,38 +2222,57 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 }
 
 /*
+ * Check that no more than V_tcp_ack_war_cnt per V_tcp_ack_war_time_window
+ * are sent. *epoch_end is the end of the current epoch and is updated, if the
+ * current epoch ended in the past. *ack_cnt is the counter used during the
+ * current epoch. It might be reset and incremented.
+ * The function returns true if a challenge ACK should be sent.
+ */
+bool
+tcp_challenge_ack_check(sbintime_t *epoch_end, uint32_t *ack_cnt)
+{
+	sbintime_t now;
+
+	/*
+	 * The sending of a challenge ACK could be triggered by a blind attacker
+	 * to detect an existing TCP connection. To mitigate that, increment
+	 * also the global counter which would be incremented if the attacker
+	 * would have guessed wrongly.
+	 */
+	(void)badport_bandlim(BANDLIM_TCP_RST);
+
+	if (V_tcp_ack_war_time_window == 0 || V_tcp_ack_war_cnt == 0) {
+		/* ACK war protection is disabled. */
+		return (true);
+	} else {
+		/* Start new epoch, if the previous one is already over. */
+		now = getsbinuptime();
+		if (*epoch_end < now) {
+			*ack_cnt = 0;
+			*epoch_end = now + V_tcp_ack_war_time_window * SBT_1MS;
+		}
+		/*
+		 * Send a challenge ACK, if less than tcp_ack_war_cnt have been
+		 * sent in the current epoch.
+		 */
+		if (*ack_cnt < V_tcp_ack_war_cnt) {
+			(*ack_cnt)++;
+			return (true);
+		} else {
+			return (false);
+		}
+	}
+}
+
+/*
  * Send a challenge ack (no data, no SACK option), but not more than
  * V_tcp_ack_war_cnt per V_tcp_ack_war_time_window (per TCP connection).
  */
 void
 tcp_send_challenge_ack(struct tcpcb *tp, struct tcphdr *th, struct mbuf *m)
 {
-	sbintime_t now;
-	bool send_challenge_ack;
-
-	if (V_tcp_ack_war_time_window == 0 || V_tcp_ack_war_cnt == 0) {
-		/* ACK war protection is disabled. */
-		send_challenge_ack = true;
-	} else {
-		/* Start new epoch, if the previous one is already over. */
-		now = getsbinuptime();
-		if (tp->t_challenge_ack_end < now) {
-			tp->t_challenge_ack_cnt = 0;
-			tp->t_challenge_ack_end = now +
-			    V_tcp_ack_war_time_window * SBT_1MS;
-		}
-		/*
-		 * Send a challenge ACK, if less than tcp_ack_war_cnt have been
-		 * sent in the current epoch.
-		 */
-		if (tp->t_challenge_ack_cnt < V_tcp_ack_war_cnt) {
-			send_challenge_ack = true;
-			tp->t_challenge_ack_cnt++;
-		} else {
-			send_challenge_ack = false;
-		}
-	}
-	if (send_challenge_ack) {
+	if (tcp_challenge_ack_check(&tp->t_challenge_ack_end,
+	    &tp->t_challenge_ack_cnt)) {
 		tcp_respond(tp, mtod(m, void *), th, m, tp->rcv_nxt,
 		    tp->snd_nxt, TH_ACK);
 		tp->last_ack_sent = tp->rcv_nxt;
@@ -2751,6 +2771,8 @@ tcp_getcred(SYSCTL_HANDLER_ARGS)
 	struct inpcb *inp;
 	int error;
 
+	if (req->newptr == NULL)
+		return (EINVAL);
 	error = priv_check(req->td, PRIV_NETINET_GETCRED);
 	if (error)
 		return (error);
@@ -2793,6 +2815,8 @@ tcp6_getcred(SYSCTL_HANDLER_ARGS)
 	int mapped = 0;
 #endif
 
+	if (req->newptr == NULL)
+		return (EINVAL);
 	error = priv_check(req->td, PRIV_NETINET_GETCRED);
 	if (error)
 		return (error);
@@ -4384,7 +4408,7 @@ tcp_req_log_req_info(struct tcpcb *tp, struct tcp_sendfile_track *req,
 		union tcp_log_stackspecific log;
 		struct timeval tv;
 
-		memset(&log.u_bbr, 0, sizeof(log.u_bbr));
+		memset(&log, 0, sizeof(log));
 		log.u_bbr.inhpts = tcp_in_hpts(tp);
 		log.u_bbr.flex8 = val;
 		log.u_bbr.rttProp = req->timestamp;

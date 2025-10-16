@@ -240,7 +240,7 @@ nfsrvd_getattr(struct nfsrv_descript *nd, int isdgram,
 {
 	struct nfsvattr nva;
 	fhandle_t fh;
-	int at_root = 0, error = 0, supports_nfsv4acls;
+	int at_root = 0, error = 0, ret, supports_nfsv4acls;
 	struct nfsreferral *refp;
 	nfsattrbit_t attrbits, tmpbits;
 	struct mount *mp;
@@ -249,6 +249,8 @@ nfsrvd_getattr(struct nfsrv_descript *nd, int isdgram,
 	uint64_t mounted_on_fileno = 0;
 	accmode_t accmode;
 	struct thread *p = curthread;
+	size_t atsiz;
+	bool xattrsupp;
 
 	if (nd->nd_repstat)
 		goto out;
@@ -306,6 +308,15 @@ nfsrvd_getattr(struct nfsrv_descript *nd, int isdgram,
 				    &nva, &attrbits, p);
 			if (nd->nd_repstat == 0) {
 				supports_nfsv4acls = nfs_supportsnfsv4acls(vp);
+				xattrsupp = false;
+				if (NFSISSET_ATTRBIT(&attrbits,
+				    NFSATTRBIT_XATTRSUPPORT)) {
+					ret = VOP_GETEXTATTR(vp,
+					    EXTATTR_NAMESPACE_USER,
+					    "xxx", NULL, &atsiz, nd->nd_cred,
+					    p);
+					xattrsupp = ret != EOPNOTSUPP;
+				}
 				mp = vp->v_mount;
 				if (nfsrv_enable_crossmntpt != 0 &&
 				    vp->v_type == VDIR &&
@@ -339,7 +350,8 @@ nfsrvd_getattr(struct nfsrv_descript *nd, int isdgram,
 					(void)nfsvno_fillattr(nd, mp, vp, &nva,
 					    &fh, 0, &attrbits, nd->nd_cred, p,
 					    isdgram, 1, supports_nfsv4acls,
-					    at_root, mounted_on_fileno);
+					    at_root, mounted_on_fileno,
+					    xattrsupp);
 					vfs_unbusy(mp);
 				}
 				vrele(vp);
@@ -2829,7 +2841,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 	int how = NFSCREATE_UNCHECKED;
 	int32_t cverf[2], tverf[2] = { 0, 0 };
 	vnode_t vp = NULL, dirp = NULL;
-	struct nfsvattr nva, dirfor, diraft;
+	struct nfsvattr nva, dirfor, diraft, nva2;
 	struct nameidata named;
 	nfsv4stateid_t stateid, delegstateid;
 	nfsattrbit_t attrbits;
@@ -3076,11 +3088,23 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 			}
 			break;
 		    case NFSCREATE_EXCLUSIVE:
-			exclusive_flag = 1;
 			if (nd->nd_repstat == 0 && named.ni_vp == NULL)
 				nva.na_mode = 0;
-			break;
+			/* FALLTHROUGH */
 		    case NFSCREATE_EXCLUSIVE41:
+			if (nd->nd_repstat == 0 && named.ni_vp != NULL) {
+				nd->nd_repstat = nfsvno_getattr(named.ni_vp,
+				    &nva2, nd, p, 1, NULL);
+				if (nd->nd_repstat == 0) {
+					tverf[0] = nva2.na_atime.tv_sec;
+					tverf[1] = nva2.na_atime.tv_nsec;
+					if (cverf[0] != tverf[0] ||
+					     cverf[1] != tverf[1])
+						nd->nd_repstat = EEXIST;
+				}
+				if (nd->nd_repstat != 0)
+					done_namei = true;
+			}
 			exclusive_flag = 1;
 			break;
 		    }
@@ -3170,16 +3194,8 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		    NFSACCCHK_VPISLOCKED, NULL);
 	}
 
-	if (!nd->nd_repstat) {
+	if (!nd->nd_repstat)
 		nd->nd_repstat = nfsvno_getattr(vp, &nva, nd, p, 1, NULL);
-		if (!nd->nd_repstat) {
-			tverf[0] = nva.na_atime.tv_sec;
-			tverf[1] = nva.na_atime.tv_nsec;
-		}
-	}
-	if (!nd->nd_repstat && exclusive_flag && (cverf[0] != tverf[0] ||
-	    cverf[1] != tverf[1]))
-		nd->nd_repstat = EEXIST;
 	/*
 	 * Do the open locking/delegation stuff.
 	 */

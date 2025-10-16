@@ -21,7 +21,7 @@
 .\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
-.Dd February 2, 2024
+.Dd July 3, 2025
 .Dt LOADER.CONF 5
 .Os
 .Sh NAME
@@ -116,6 +116,13 @@ option in this manner,
 .Va beastie_disable
 must be set to
 .Dq Li YES .
+.It Ar boot_*
+See list in
+.Xr loader.efi 8
+since those flags apply to all boot loaders.
+.It Ar boot_verbose
+Set to "yes" to get the same effect as boot -v or booting verbose from the
+loader menu.
 .It Ar exec
 Immediately executes a
 .Xr loader 8
@@ -331,8 +338,8 @@ replacing it with
 character (useful for embedded products and such).
 .It Va screen.font
 Set font size for framebuffer mode.
-Default font size is selected based on screen resolution, to achieve
-terminal dimensions 80x24.
+The default font size is selected based on screen resolution.
+Note that the terminal's size may vary.
 .It Va screen.textmode
 Value
 .Dq 0
@@ -403,6 +410,12 @@ be displayed.
 If set to
 .Dq YES ,
 the beastie boot menu will be skipped.
+.It Va loader_gfx
+If set to
+.Dq NO ,
+the ASCII art version of the brand and logo will be used even if graphical
+versions are available.
+Additionally, the menu frame will be drawn with ASCII art as well.
 .It Va loader_logo Pq Dq Li orbbw
 Selects a desired logo in the beastie boot menu.
 Possible values are:

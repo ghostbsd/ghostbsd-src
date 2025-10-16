@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #include <linux/iopoll.h>
 #include <adf_accel_devices.h>
 #include <adf_cfg.h>
@@ -212,57 +212,77 @@ adf_4xxx_get_hw_cap(struct adf_accel_dev *accel_dev)
 {
 	device_t pdev = accel_dev->accel_pci_dev.pci_dev;
 	u32 fusectl1;
-	u32 capabilities;
+	u32 capabilities_sym, capabilities_sym_cipher, capabilities_sym_auth,
+	    capabilities_asym, capabilities_dc, capabilities_other;
+
+	capabilities_other = ICP_ACCEL_CAPABILITIES_RL;
 
 	/* Read accelerator capabilities mask */
 	fusectl1 = pci_read_config(pdev, ADF_4XXX_FUSECTL1_OFFSET, 4);
-	capabilities = ICP_ACCEL_CAPABILITIES_CRYPTO_SYMMETRIC |
-	    ICP_ACCEL_CAPABILITIES_CRYPTO_ASYMMETRIC |
-	    ICP_ACCEL_CAPABILITIES_CIPHER |
-	    ICP_ACCEL_CAPABILITIES_AUTHENTICATION |
-	    ICP_ACCEL_CAPABILITIES_COMPRESSION |
+
+	capabilities_sym_cipher = ICP_ACCEL_CAPABILITIES_HKDF |
+	    ICP_ACCEL_CAPABILITIES_SM4 | ICP_ACCEL_CAPABILITIES_CHACHA_POLY |
+	    ICP_ACCEL_CAPABILITIES_AESGCM_SPC | ICP_ACCEL_CAPABILITIES_AES_V2;
+	capabilities_sym_auth = ICP_ACCEL_CAPABILITIES_SM3 |
+	    ICP_ACCEL_CAPABILITIES_SHA3 | ICP_ACCEL_CAPABILITIES_SHA3_EXT;
+
+	/* A set bit in fusectl1 means the feature is OFF in this SKU */
+	if (fusectl1 & ICP_ACCEL_4XXX_MASK_CIPHER_SLICE) {
+		capabilities_sym_cipher &= ~ICP_ACCEL_CAPABILITIES_HKDF;
+		capabilities_sym_cipher &= ~ICP_ACCEL_CAPABILITIES_SM4;
+	}
+
+	if (fusectl1 & ICP_ACCEL_4XXX_MASK_UCS_SLICE) {
+		capabilities_sym_cipher &= ~ICP_ACCEL_CAPABILITIES_CHACHA_POLY;
+		capabilities_sym_cipher &= ~ICP_ACCEL_CAPABILITIES_AESGCM_SPC;
+		capabilities_sym_cipher &= ~ICP_ACCEL_CAPABILITIES_AES_V2;
+	}
+
+	if (fusectl1 & ICP_ACCEL_4XXX_MASK_AUTH_SLICE) {
+		capabilities_sym_auth &= ~ICP_ACCEL_CAPABILITIES_SM3;
+		capabilities_sym_auth &= ~ICP_ACCEL_CAPABILITIES_SHA3;
+		capabilities_sym_auth &= ~ICP_ACCEL_CAPABILITIES_SHA3_EXT;
+	}
+
+	if (fusectl1 & ICP_ACCEL_4XXX_MASK_SMX_SLICE) {
+		capabilities_sym_cipher &= ~ICP_ACCEL_CAPABILITIES_SM4;
+		capabilities_sym_auth &= ~ICP_ACCEL_CAPABILITIES_SM3;
+	}
+
+	if (capabilities_sym_cipher)
+		capabilities_sym_cipher |= ICP_ACCEL_CAPABILITIES_CIPHER;
+
+	if (capabilities_sym_auth)
+		capabilities_sym_auth |= ICP_ACCEL_CAPABILITIES_AUTHENTICATION;
+
+	capabilities_sym = capabilities_sym_cipher | capabilities_sym_auth;
+
+	if (capabilities_sym)
+		capabilities_sym |= ICP_ACCEL_CAPABILITIES_CRYPTO_SYMMETRIC;
+
+	capabilities_asym = ICP_ACCEL_CAPABILITIES_CRYPTO_ASYMMETRIC |
+	    ICP_ACCEL_CAPABILITIES_SM2 | ICP_ACCEL_CAPABILITIES_ECEDMONT;
+
+	if (fusectl1 & ICP_ACCEL_4XXX_MASK_PKE_SLICE) {
+		capabilities_asym &= ~ICP_ACCEL_CAPABILITIES_CRYPTO_ASYMMETRIC;
+		capabilities_asym &= ~ICP_ACCEL_CAPABILITIES_SM2;
+		capabilities_asym &= ~ICP_ACCEL_CAPABILITIES_ECEDMONT;
+	}
+
+	capabilities_dc = ICP_ACCEL_CAPABILITIES_COMPRESSION |
 	    ICP_ACCEL_CAPABILITIES_LZ4_COMPRESSION |
 	    ICP_ACCEL_CAPABILITIES_LZ4S_COMPRESSION |
-	    ICP_ACCEL_CAPABILITIES_SHA3 | ICP_ACCEL_CAPABILITIES_HKDF |
-	    ICP_ACCEL_CAPABILITIES_SHA3_EXT | ICP_ACCEL_CAPABILITIES_SM3 |
-	    ICP_ACCEL_CAPABILITIES_SM4 | ICP_ACCEL_CAPABILITIES_CHACHA_POLY |
-	    ICP_ACCEL_CAPABILITIES_AESGCM_SPC | ICP_ACCEL_CAPABILITIES_AES_V2 |
-	    ICP_ACCEL_CAPABILITIES_RL | ICP_ACCEL_CAPABILITIES_ECEDMONT |
 	    ICP_ACCEL_CAPABILITIES_CNV_INTEGRITY64;
 
-	if (fusectl1 & ICP_ACCEL_4XXX_MASK_CIPHER_SLICE) {
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_CRYPTO_SYMMETRIC;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_HKDF;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_CIPHER;
-	}
-	if (fusectl1 & ICP_ACCEL_4XXX_MASK_AUTH_SLICE) {
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_AUTHENTICATION;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_SHA3;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_SHA3_EXT;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_CIPHER;
-	}
-	if (fusectl1 & ICP_ACCEL_MASK_PKE_SLICE) {
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_CRYPTO_ASYMMETRIC;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_ECEDMONT;
-	}
 	if (fusectl1 & ICP_ACCEL_4XXX_MASK_COMPRESS_SLICE) {
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_COMPRESSION;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_LZ4_COMPRESSION;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_LZ4S_COMPRESSION;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_CNV_INTEGRITY64;
-	}
-	if (fusectl1 & ICP_ACCEL_4XXX_MASK_SMX_SLICE) {
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_SM3;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_SM4;
-	}
-	if (fusectl1 & ICP_ACCEL_4XXX_MASK_UCS_SLICE) {
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_CHACHA_POLY;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_AESGCM_SPC;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_AES_V2;
-		capabilities &= ~ICP_ACCEL_CAPABILITIES_CIPHER;
+		capabilities_dc &= ~ICP_ACCEL_CAPABILITIES_COMPRESSION;
+		capabilities_dc &= ~ICP_ACCEL_CAPABILITIES_LZ4_COMPRESSION;
+		capabilities_dc &= ~ICP_ACCEL_CAPABILITIES_LZ4S_COMPRESSION;
+		capabilities_dc &= ~ICP_ACCEL_CAPABILITIES_CNV_INTEGRITY64;
 	}
 
-	return capabilities;
+	return capabilities_sym | capabilities_dc | capabilities_asym |
+	    capabilities_other;
 }
 
 static u32
@@ -516,8 +536,8 @@ adf_exit_accel_units(struct adf_accel_dev *accel_dev)
 }
 
 static const char *
-get_obj_name(struct adf_accel_dev *accel_dev,
-	     enum adf_accel_unit_services service)
+get_obj_name_4xxx(struct adf_accel_dev *accel_dev,
+		  enum adf_accel_unit_services service)
 {
 	switch (service) {
 	case ADF_ACCEL_ASYM:
@@ -528,6 +548,24 @@ get_obj_name(struct adf_accel_dev *accel_dev,
 		return ADF_4XXX_DC_OBJ;
 	case ADF_ACCEL_ADMIN:
 		return ADF_4XXX_ADMIN_OBJ;
+	default:
+		return NULL;
+	}
+}
+
+static const char *
+get_obj_name_402xx(struct adf_accel_dev *accel_dev,
+		   enum adf_accel_unit_services service)
+{
+	switch (service) {
+	case ADF_ACCEL_ASYM:
+		return ADF_402XX_ASYM_OBJ;
+	case ADF_ACCEL_CRYPTO:
+		return ADF_402XX_SYM_OBJ;
+	case ADF_ACCEL_COMPRESSION:
+		return ADF_402XX_DC_OBJ;
+	case ADF_ACCEL_ADMIN:
+		return ADF_402XX_ADMIN_OBJ;
 	default:
 		return NULL;
 	}
@@ -709,6 +747,10 @@ adf_4xxx_send_admin_init(struct adf_accel_dev *accel_dev)
 	memset(&req, 0, sizeof(req));
 	memset(&resp, 0, sizeof(resp));
 	req.cmd_id = ICP_QAT_FW_INIT_ME;
+#ifdef QAT_DISABLE_SAFE_DC_MODE
+	if (accel_dev->disable_safe_dc_mode)
+		req.fw_flags = ICP_QAT_FW_INIT_DISABLE_SAFE_DC_MODE_FLAG;
+#endif /* QAT_DISABLE_SAFE_DC_MODE */
 	if (adf_send_admin(accel_dev, &req, &resp, ae_mask)) {
 		device_printf(GET_DEV(accel_dev),
 			      "Error sending init message\n");
@@ -958,8 +1000,23 @@ adf_init_hw_data_4xxx(struct adf_hw_device_data *hw_data, u32 id)
 	hw_data->clock_frequency = ADF_4XXX_AE_FREQ;
 	hw_data->get_sku = get_sku;
 	hw_data->heartbeat_ctr_num = ADF_NUM_HB_CNT_PER_AE;
-	hw_data->fw_name = ADF_4XXX_FW;
-	hw_data->fw_mmp_name = ADF_4XXX_MMP;
+	switch (id) {
+	case ADF_402XX_PCI_DEVICE_ID:
+		hw_data->fw_name = ADF_402XX_FW;
+		hw_data->fw_mmp_name = ADF_402XX_MMP;
+		hw_data->asym_ae_active_thd_mask = DEFAULT_4XXX_ASYM_AE_MASK;
+		break;
+	case ADF_401XX_PCI_DEVICE_ID:
+		hw_data->fw_name = ADF_4XXX_FW;
+		hw_data->fw_mmp_name = ADF_4XXX_MMP;
+		hw_data->asym_ae_active_thd_mask = DEFAULT_401XX_ASYM_AE_MASK;
+		break;
+
+	default:
+		hw_data->fw_name = ADF_4XXX_FW;
+		hw_data->fw_mmp_name = ADF_4XXX_MMP;
+		hw_data->asym_ae_active_thd_mask = DEFAULT_4XXX_ASYM_AE_MASK;
+	}
 	hw_data->init_admin_comms = adf_init_admin_comms;
 	hw_data->exit_admin_comms = adf_exit_admin_comms;
 	hw_data->send_admin_init = adf_4xxx_send_admin_init;
@@ -978,7 +1035,13 @@ adf_init_hw_data_4xxx(struct adf_hw_device_data *hw_data, u32 id)
 	hw_data->get_ring_svc_map_data = get_ring_svc_map_data;
 	hw_data->admin_ae_mask = ADF_4XXX_ADMIN_AE_MASK;
 	hw_data->get_objs_num = get_objs_num;
-	hw_data->get_obj_name = get_obj_name;
+	switch (id) {
+	case ADF_402XX_PCI_DEVICE_ID:
+		hw_data->get_obj_name = get_obj_name_402xx;
+		break;
+	default:
+		hw_data->get_obj_name = get_obj_name_4xxx;
+	}
 	hw_data->get_obj_cfg_ae_mask = get_obj_cfg_ae_mask;
 	hw_data->get_service_type = adf_4xxx_get_service_type;
 	hw_data->set_msix_rttable = set_msix_default_rttable;
@@ -989,20 +1052,14 @@ adf_init_hw_data_4xxx(struct adf_hw_device_data *hw_data, u32 id)
 	hw_data->get_hb_clock = get_hb_clock;
 	hw_data->int_timer_init = adf_int_timer_init;
 	hw_data->int_timer_exit = adf_int_timer_exit;
+	hw_data->pre_reset = adf_dev_pre_reset;
+	hw_data->post_reset = adf_dev_post_reset;
+	hw_data->disable_arb = adf_disable_arb;
 	hw_data->get_heartbeat_status = adf_get_heartbeat_status;
 	hw_data->get_ae_clock = get_ae_clock;
 	hw_data->measure_clock = measure_clock;
 	hw_data->query_storage_cap = 1;
 	hw_data->ring_pair_reset = adf_gen4_ring_pair_reset;
-
-	switch (id) {
-	case ADF_401XX_PCI_DEVICE_ID:
-		hw_data->asym_ae_active_thd_mask = DEFAULT_401XX_ASYM_AE_MASK;
-		break;
-	case ADF_4XXX_PCI_DEVICE_ID:
-	default:
-		hw_data->asym_ae_active_thd_mask = DEFAULT_4XXX_ASYM_AE_MASK;
-	}
 
 	adf_gen4_init_hw_csr_info(&hw_data->csr_info);
 	adf_gen4_init_pf_pfvf_ops(&hw_data->csr_info.pfvf_ops);

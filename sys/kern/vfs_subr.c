@@ -81,6 +81,7 @@
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
+#include <sys/user.h>
 #include <sys/vmmeter.h>
 #include <sys/vnode.h>
 #include <sys/watchdog.h>
@@ -98,10 +99,6 @@
 #include <vm/vm_kern.h>
 #include <vm/vnode_pager.h>
 #include <vm/uma.h>
-
-#if defined(DEBUG_VFS_LOCKS) && (!defined(INVARIANTS) || !defined(WITNESS))
-#error DEBUG_VFS_LOCKS requires INVARIANTS and WITNESS
-#endif
 
 #ifdef DDB
 #include <ddb/ddb.h>
@@ -721,18 +718,17 @@ vntblinit(void *dummy __unused)
 	int cpu, physvnodes, virtvnodes;
 
 	/*
-	 * Desiredvnodes is a function of the physical memory size and the
-	 * kernel's heap size.  Generally speaking, it scales with the
-	 * physical memory size.  The ratio of desiredvnodes to the physical
-	 * memory size is 1:16 until desiredvnodes exceeds 98,304.
-	 * Thereafter, the
-	 * marginal ratio of desiredvnodes to the physical memory size is
-	 * 1:64.  However, desiredvnodes is limited by the kernel's heap
-	 * size.  The memory required by desiredvnodes vnodes and vm objects
-	 * must not exceed 1/10th of the kernel's heap size.
+	 * 'desiredvnodes' is the minimum of a function of the physical memory
+	 * size and another of the kernel heap size (UMA limit, a portion of the
+	 * KVA).
+	 *
+	 * Currently, on 64-bit platforms, 'desiredvnodes' is set to
+	 * 'virtvnodes' up to a physical memory cutoff of ~1722MB, after which
+	 * 'physvnodes' applies instead.  With the current automatic tuning for
+	 * 'maxfiles' (32 files/MB), 'desiredvnodes' is always greater than it.
 	 */
-	physvnodes = maxproc + pgtok(vm_cnt.v_page_count) / 64 +
-	    3 * min(98304 * 16, pgtok(vm_cnt.v_page_count)) / 64;
+	physvnodes = maxproc + pgtok(vm_cnt.v_page_count) / 32 +
+	    min(98304 * 16, pgtok(vm_cnt.v_page_count)) / 32;
 	virtvnodes = vm_kmem_size / (10 * (sizeof(struct vm_object) +
 	    sizeof(struct vnode) + NC_SZ * ncsizefactor + NFS_NCLNODE_SZ));
 	desiredvnodes = min(physvnodes, virtvnodes);
@@ -1166,6 +1162,7 @@ vattr_null(struct vattr *vap)
 	vap->va_gen = VNOVAL;
 	vap->va_vaflags = 0;
 	vap->va_filerev = VNOVAL;
+	vap->va_bsdflags = 0;
 }
 
 /*
@@ -1962,11 +1959,24 @@ vn_alloc_hard(struct mount *mp, u_long rnumvnodes, bool bumped)
 
 	mtx_lock(&vnode_list_mtx);
 
+	/*
+	 * Reload 'numvnodes', as since we acquired the lock, it may have
+	 * changed significantly if we waited, and 'rnumvnodes' above was only
+	 * actually passed if 'bumped' is true (else it is 0).
+	 */
+	rnumvnodes = atomic_load_long(&numvnodes);
+	if (rnumvnodes + !bumped < desiredvnodes) {
+		vn_alloc_cyclecount = 0;
+		mtx_unlock(&vnode_list_mtx);
+		goto alloc;
+	}
+
 	rfreevnodes = vnlru_read_freevnodes();
 	if (vn_alloc_cyclecount++ >= rfreevnodes) {
 		vn_alloc_cyclecount = 0;
 		vstir = true;
 	}
+
 	/*
 	 * Grow the vnode cache if it will not be above its target max
 	 * after growing.  Otherwise, if the free list is nonempty, try
@@ -2149,6 +2159,8 @@ freevnode(struct vnode *vp)
 {
 	struct bufobj *bo;
 
+	ASSERT_VOP_UNLOCKED(vp, __func__);
+
 	/*
 	 * The vnode has been marked for destruction, so free it.
 	 *
@@ -2187,12 +2199,16 @@ freevnode(struct vnode *vp)
 	mac_vnode_destroy(vp);
 #endif
 	if (vp->v_pollinfo != NULL) {
+		int error __diagused;
+
 		/*
 		 * Use LK_NOWAIT to shut up witness about the lock. We may get
 		 * here while having another vnode locked when trying to
 		 * satisfy a lookup and needing to recycle.
 		 */
-		VOP_LOCK(vp, LK_EXCLUSIVE | LK_NOWAIT);
+		error = VOP_LOCK(vp, LK_EXCLUSIVE | LK_NOWAIT);
+		VNASSERT(error == 0, vp,
+		    ("freevnode: cannot lock vp %p for pollinfo destroy", vp));
 		destroy_vpollinfo(vp->v_pollinfo);
 		VOP_UNLOCK(vp);
 		vp->v_pollinfo = NULL;
@@ -5653,102 +5669,69 @@ extattr_check_cred(struct vnode *vp, int attrnamespace, struct ucred *cred,
 	}
 }
 
-#ifdef DEBUG_VFS_LOCKS
-int vfs_badlock_ddb = 1;	/* Drop into debugger on violation. */
-SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_ddb, CTLFLAG_RW, &vfs_badlock_ddb, 0,
-    "Drop into debugger on lock violation");
-
-int vfs_badlock_mutex = 1;	/* Check for interlock across VOPs. */
-SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_mutex, CTLFLAG_RW, &vfs_badlock_mutex,
-    0, "Check for interlock across VOPs");
-
-int vfs_badlock_print = 1;	/* Print lock violations. */
-SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_print, CTLFLAG_RW, &vfs_badlock_print,
-    0, "Print lock violations");
-
-int vfs_badlock_vnode = 1;	/* Print vnode details on lock violations. */
-SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_vnode, CTLFLAG_RW, &vfs_badlock_vnode,
-    0, "Print vnode details on lock violations");
-
-#ifdef KDB
-int vfs_badlock_backtrace = 1;	/* Print backtrace at lock violations. */
-SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_backtrace, CTLFLAG_RW,
-    &vfs_badlock_backtrace, 0, "Print backtrace at lock violations");
-#endif
-
-static void
-vfs_badlock(const char *msg, const char *str, struct vnode *vp)
-{
-
-#ifdef KDB
-	if (vfs_badlock_backtrace)
-		kdb_backtrace();
-#endif
-	if (vfs_badlock_vnode)
-		vn_printf(vp, "vnode ");
-	if (vfs_badlock_print)
-		printf("%s: %p %s\n", str, (void *)vp, msg);
-	if (vfs_badlock_ddb)
-		kdb_enter(KDB_WHY_VFSLOCK, "lock violation");
-}
-
+#ifdef INVARIANTS
 void
 assert_vi_locked(struct vnode *vp, const char *str)
 {
-
-	if (vfs_badlock_mutex && !mtx_owned(VI_MTX(vp)))
-		vfs_badlock("interlock is not locked but should be", str, vp);
+	VNASSERT(mtx_owned(VI_MTX(vp)), vp,
+	    ("%s: vnode interlock is not locked but should be", str));
 }
 
 void
 assert_vi_unlocked(struct vnode *vp, const char *str)
 {
-
-	if (vfs_badlock_mutex && mtx_owned(VI_MTX(vp)))
-		vfs_badlock("interlock is locked but should not be", str, vp);
+	VNASSERT(!mtx_owned(VI_MTX(vp)), vp,
+	    ("%s: vnode interlock is locked but should not be", str));
 }
 
 void
 assert_vop_locked(struct vnode *vp, const char *str)
 {
+	bool locked;
+
 	if (KERNEL_PANICKED() || vp == NULL)
 		return;
 
 #ifdef WITNESS
-	if ((vp->v_irflag & VIRF_CROSSMP) == 0 &&
-	    witness_is_owned(&vp->v_vnlock->lock_object) == -1)
+	locked = !((vp->v_irflag & VIRF_CROSSMP) == 0 &&
+	    witness_is_owned(&vp->v_vnlock->lock_object) == -1);
 #else
-	int locked = VOP_ISLOCKED(vp);
-	if (locked == 0 || locked == LK_EXCLOTHER)
+	int state = VOP_ISLOCKED(vp);
+	locked = state != 0 && state != LK_EXCLOTHER;
 #endif
-		vfs_badlock("is not locked but should be", str, vp);
+	VNASSERT(locked, vp, ("%s: vnode is not locked but should be", str));
 }
 
 void
 assert_vop_unlocked(struct vnode *vp, const char *str)
 {
+	bool locked;
+
 	if (KERNEL_PANICKED() || vp == NULL)
 		return;
 
 #ifdef WITNESS
-	if ((vp->v_irflag & VIRF_CROSSMP) == 0 &&
-	    witness_is_owned(&vp->v_vnlock->lock_object) == 1)
+	locked = (vp->v_irflag & VIRF_CROSSMP) == 0 &&
+	    witness_is_owned(&vp->v_vnlock->lock_object) == 1;
 #else
-	if (VOP_ISLOCKED(vp) == LK_EXCLUSIVE)
+	locked = VOP_ISLOCKED(vp) == LK_EXCLUSIVE;
 #endif
-		vfs_badlock("is locked but should not be", str, vp);
+	VNASSERT(!locked, vp, ("%s: vnode is locked but should not be", str));
 }
 
 void
 assert_vop_elocked(struct vnode *vp, const char *str)
 {
+	bool locked;
+
 	if (KERNEL_PANICKED() || vp == NULL)
 		return;
 
-	if (VOP_ISLOCKED(vp) != LK_EXCLUSIVE)
-		vfs_badlock("is not exclusive locked but should be", str, vp);
+	locked = VOP_ISLOCKED(vp) == LK_EXCLUSIVE;
+	VNASSERT(locked, vp,
+	    ("%s: vnode is not exclusive locked but should be", str));
 }
-#endif /* DEBUG_VFS_LOCKS */
+#endif /* INVARIANTS */
 
 void
 vop_rename_fail(struct vop_rename_args *ap)
@@ -5769,7 +5752,7 @@ vop_rename_pre(void *ap)
 {
 	struct vop_rename_args *a = ap;
 
-#ifdef DEBUG_VFS_LOCKS
+#ifdef INVARIANTS
 	if (a->a_tvp)
 		ASSERT_VI_UNLOCKED(a->a_tvp, "VOP_RENAME");
 	ASSERT_VI_UNLOCKED(a->a_tdvp, "VOP_RENAME");
@@ -5805,7 +5788,7 @@ vop_rename_pre(void *ap)
 		vhold(a->a_tvp);
 }
 
-#ifdef DEBUG_VFS_LOCKS
+#ifdef INVARIANTS
 void
 vop_fplookup_vexec_debugpre(void *ap __unused)
 {
@@ -5918,13 +5901,7 @@ vop_strategy_debugpre(void *ap)
 	if ((bp->b_flags & B_CLUSTER) != 0)
 		return;
 
-	if (!KERNEL_PANICKED() && !BUF_ISLOCKED(bp)) {
-		if (vfs_badlock_print)
-			printf(
-			    "VOP_STRATEGY: bp is not locked but should be\n");
-		if (vfs_badlock_ddb)
-			kdb_enter(KDB_WHY_VFSLOCK, "lock violation");
-	}
+	BUF_ASSERT_LOCKED(bp);
 }
 
 void
@@ -5973,7 +5950,7 @@ vop_need_inactive_debugpost(void *ap, int rc)
 
 	ASSERT_VI_LOCKED(a->a_vp, "VOP_NEED_INACTIVE");
 }
-#endif
+#endif /* INVARIANTS */
 
 void
 vop_create_pre(void *ap)
@@ -6099,7 +6076,7 @@ vop_mkdir_post(void *ap, int rc)
 		VFS_KNOTE_LOCKED(dvp, NOTE_WRITE | NOTE_LINK);
 }
 
-#ifdef DEBUG_VFS_LOCKS
+#ifdef INVARIANTS
 void
 vop_mkdir_debugpost(void *ap, int rc)
 {
@@ -6416,7 +6393,7 @@ const struct filterops fs_filtops = {
 	.f_isfd = 0,
 	.f_attach = filt_fsattach,
 	.f_detach = filt_fsdetach,
-	.f_event = filt_fsevent
+	.f_event = filt_fsevent,
 };
 
 static int
@@ -6451,6 +6428,8 @@ sysctl_vfs_ctl(SYSCTL_HANDLER_ARGS)
 	int error;
 	struct mount *mp;
 
+	if (req->newptr == NULL)
+		return (EINVAL);
 	error = SYSCTL_IN(req, &vc, sizeof(vc));
 	if (error)
 		return (error);
@@ -6492,20 +6471,26 @@ static int	filt_vfsread(struct knote *kn, long hint);
 static int	filt_vfswrite(struct knote *kn, long hint);
 static int	filt_vfsvnode(struct knote *kn, long hint);
 static void	filt_vfsdetach(struct knote *kn);
+static int	filt_vfsdump(struct proc *p, struct knote *kn,
+		    struct kinfo_knote *kin);
+
 static const struct filterops vfsread_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_vfsdetach,
-	.f_event = filt_vfsread
+	.f_event = filt_vfsread,
+	.f_userdump = filt_vfsdump,
 };
 static const struct filterops vfswrite_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_vfsdetach,
-	.f_event = filt_vfswrite
+	.f_event = filt_vfswrite,
+	.f_userdump = filt_vfsdump,
 };
 static const struct filterops vfsvnode_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_vfsdetach,
-	.f_event = filt_vfsvnode
+	.f_event = filt_vfsvnode,
+	.f_userdump = filt_vfsdump,
 };
 
 static void
@@ -6527,7 +6512,7 @@ vfs_knlunlock(void *arg)
 static void
 vfs_knl_assert_lock(void *arg, int what)
 {
-#ifdef DEBUG_VFS_LOCKS
+#ifdef INVARIANTS
 	struct vnode *vp = arg;
 
 	if (what == LA_LOCKED)
@@ -6652,6 +6637,41 @@ filt_vfsvnode(struct knote *kn, long hint)
 	res = (kn->kn_fflags != 0);
 	VI_UNLOCK(vp);
 	return (res);
+}
+
+static int
+filt_vfsdump(struct proc *p, struct knote *kn, struct kinfo_knote *kin)
+{
+	struct vattr va;
+	struct vnode *vp;
+	char *fullpath, *freepath;
+	int error;
+
+	kin->knt_extdata = KNOTE_EXTDATA_VNODE;
+
+	vp = kn->kn_fp->f_vnode;
+	kin->knt_vnode.knt_vnode_type = vntype_to_kinfo(vp->v_type);
+
+	va.va_fsid = VNOVAL;
+	vn_lock(vp, LK_SHARED | LK_RETRY);
+	error = VOP_GETATTR(vp, &va, curthread->td_ucred);
+	VOP_UNLOCK(vp);
+	if (error != 0)
+		return (error);
+	kin->knt_vnode.knt_vnode_fsid = va.va_fsid;
+	kin->knt_vnode.knt_vnode_fileid = va.va_fileid;
+
+	freepath = NULL;
+	fullpath = "-";
+	error = vn_fullpath(vp, &fullpath, &freepath);
+	if (error == 0) {
+		strlcpy(kin->knt_vnode.knt_vnode_fullpath, fullpath,
+		    sizeof(kin->knt_vnode.knt_vnode_fullpath));
+	}
+	if (freepath != NULL)
+		free(freepath, M_TEMP);
+
+	return (0);
 }
 
 int

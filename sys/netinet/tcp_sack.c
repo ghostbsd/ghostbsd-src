@@ -570,6 +570,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 	 */
 	if (SEQ_LT(tp->snd_una, th_ack) && !TAILQ_EMPTY(&tp->snd_holes)) {
 		left_edge_delta = th_ack - tp->snd_una;
+		delivered_data += left_edge_delta;
 		sack_blocks[num_sack_blks].start = tp->snd_una;
 		sack_blocks[num_sack_blks++].end = th_ack;
 		/*
@@ -577,7 +578,6 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 		 * due to DSACK blocks
 		 */
 		if (SEQ_LT(tp->snd_fack, th_ack)) {
-			delivered_data += th_ack - tp->snd_una;
 			tp->snd_fack = th_ack;
 			sack_changed = SACK_CHANGE;
 		}
@@ -770,7 +770,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 				cur->end = sblkp->start;
 				cur->rxmit = SEQ_MIN(cur->rxmit, cur->end);
 				if ((tp->t_flags & TF_LRD) && SEQ_GEQ(cur->rxmit, cur->end))
-					cur->rxmit = tp->snd_recover;
+					cur->rxmit = SEQ_MAX(cur->rxmit, tp->snd_recover);
 			} else {
 				/*
 				 * ACKs some data in middle of a hole; need
@@ -790,7 +790,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 					cur->rxmit = SEQ_MIN(cur->rxmit,
 					    cur->end);
 					if ((tp->t_flags & TF_LRD) && SEQ_GEQ(cur->rxmit, cur->end))
-						cur->rxmit = tp->snd_recover;
+						cur->rxmit = SEQ_MAX(cur->rxmit, tp->snd_recover);
 					delivered_data += (sblkp->end - sblkp->start);
 				}
 			}

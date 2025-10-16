@@ -300,6 +300,22 @@ hdac_pin_patch(struct hdaa_widget *w)
 			patch_str = "as=2";
 			break;
 		}
+	} else if (id == HDA_CODEC_CX20590 &&
+	    subid == LENOVO_T420S_SUBVENDOR) {
+		switch (nid) {
+		case 25:
+			patch_str = "as=1 seq=15";
+			break;
+		case 27:
+			patch_str = "as=2 seq=15";
+			break;
+		case 31:
+			patch_str = "as=1 seq=0";
+			break;
+		case 35:
+			patch_str = "as=2 seq=0";
+			break;
+		}
 	} else if (id == HDA_CODEC_ALC235 && subid == ASUS_GL553VE_SUBVENDOR) {
 		switch (nid) {
 		case 33:
@@ -338,6 +354,27 @@ hdac_pin_patch(struct hdaa_widget *w)
 			break;
 		case 11:
 			patch_str = "as=3 seq=15 color=Black loc=Left";
+			break;
+		}
+	} else if (id == HDA_CODEC_ALC295 &&
+	    subid == FRAMEWORK_LAPTOP_0005_SUBVENDOR) {
+		switch (nid) {
+		case 20:
+			/*
+			 * This pin is a duplicate of pin 23 (both as=1 seq=0),
+			 * which ends up in the driver disabling the
+			 * association altogether. Since sound quality from pin
+			 * 23 seems to be better, configure this one as a back
+			 * speaker.
+			 */
+			patch_str = "as=1 seq=2";
+			break;
+		}
+	} else if (id == HDA_CODEC_ALC295 &&
+	    subid == FRAMEWORK_LAPTOP_0006_SUBVENDOR) {
+		switch (nid) {
+		case 33:
+			patch_str = "as=1 seq=15 color=Black loc=Left";
 			break;
 		}
 	} else if (id == HDA_CODEC_ALC230 &&

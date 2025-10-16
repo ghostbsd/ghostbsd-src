@@ -375,7 +375,7 @@ kern_fstatfs(struct thread *td, int fd, struct statfs *buf)
 	int error;
 
 	AUDIT_ARG_FD(fd);
-	error = getvnode_path(td, fd, &cap_fstatfs_rights, &fp);
+	error = getvnode_path(td, fd, &cap_fstatfs_rights, NULL, &fp);
 	if (error != 0)
 		return (error);
 	vp = fp->f_vnode;
@@ -898,12 +898,17 @@ sys_fchdir(struct thread *td, struct fchdir_args *uap)
 	struct mount *mp;
 	struct file *fp;
 	int error;
+	uint8_t fdflags;
 
 	AUDIT_ARG_FD(uap->fd);
-	error = getvnode_path(td, uap->fd, &cap_fchdir_rights,
+	error = getvnode_path(td, uap->fd, &cap_fchdir_rights, &fdflags,
 	    &fp);
 	if (error != 0)
 		return (error);
+	if ((fdflags & UF_RESOLVE_BENEATH) != 0) {
+		fdrop(fp, td);
+		return (ENOTCAPABLE);
+	}
 	vp = fp->f_vnode;
 	vrefact(vp);
 	fdrop(fp, td);
@@ -1252,6 +1257,10 @@ success:
 		else
 #endif
 			fcaps = NULL;
+		if ((nd.ni_resflags & NIRES_BENEATH) != 0)
+			flags |= O_RESOLVE_BENEATH;
+		else
+			flags &= ~O_RESOLVE_BENEATH;
 		error = finstall_refed(td, fp, &indx, flags, fcaps);
 		/* On success finstall_refed() consumes fcaps. */
 		if (error != 0) {
@@ -1939,7 +1948,7 @@ kern_funlinkat(struct thread *td, int dfd, const char *path, int fd,
 
 	fp = NULL;
 	if (fd != FD_NONE) {
-		error = getvnode_path(td, fd, &cap_no_rights, &fp);
+		error = getvnode_path(td, fd, &cap_no_rights, NULL, &fp);
 		if (error != 0)
 			return (error);
 	}
@@ -2746,7 +2755,7 @@ setfflags(struct thread *td, struct vnode *vp, u_long flags)
 	 * if they are allowed to set flags and programs assume that
 	 * chown can't fail when done as root.
 	 */
-	if (vp->v_type == VCHR || vp->v_type == VBLK) {
+	if (VN_ISDEV(vp)) {
 		error = priv_check(td, PRIV_VFS_CHFLAGS_DEV);
 		if (error != 0)
 			return (error);
@@ -4325,13 +4334,13 @@ out:
  * semantics.
  */
 int
-getvnode_path(struct thread *td, int fd, cap_rights_t *rightsp,
-    struct file **fpp)
+getvnode_path(struct thread *td, int fd, const cap_rights_t *rightsp,
+    uint8_t *flagsp, struct file **fpp)
 {
 	struct file *fp;
 	int error;
 
-	error = fget_unlocked(td, fd, rightsp, &fp);
+	error = fget_unlocked_flags(td, fd, rightsp, flagsp, &fp);
 	if (error != 0)
 		return (error);
 
@@ -4363,11 +4372,12 @@ getvnode_path(struct thread *td, int fd, cap_rights_t *rightsp,
  * A reference on the file entry is held upon returning.
  */
 int
-getvnode(struct thread *td, int fd, cap_rights_t *rightsp, struct file **fpp)
+getvnode(struct thread *td, int fd, const cap_rights_t *rightsp,
+    struct file **fpp)
 {
 	int error;
 
-	error = getvnode_path(td, fd, rightsp, fpp);
+	error = getvnode_path(td, fd, rightsp, NULL, fpp);
 	if (__predict_false(error != 0))
 		return (error);
 
@@ -4902,16 +4912,18 @@ int
 kern_copy_file_range(struct thread *td, int infd, off_t *inoffp, int outfd,
     off_t *outoffp, size_t len, unsigned int flags)
 {
-	struct file *infp, *outfp;
+	struct file *infp, *infp1, *outfp, *outfp1;
 	struct vnode *invp, *outvp;
 	int error;
 	size_t retlen;
 	void *rl_rcookie, *rl_wcookie;
-	off_t savinoff, savoutoff;
+	off_t inoff, outoff, savinoff, savoutoff;
+	bool foffsets_locked, foffsets_set;
 
 	infp = outfp = NULL;
 	rl_rcookie = rl_wcookie = NULL;
-	savinoff = -1;
+	foffsets_locked = false;
+	foffsets_set = false;
 	error = 0;
 	retlen = 0;
 
@@ -4953,13 +4965,37 @@ kern_copy_file_range(struct thread *td, int infd, off_t *inoffp, int outfd,
 		goto out;
 	}
 
-	/* Set the offset pointers to the correct place. */
-	if (inoffp == NULL)
-		inoffp = &infp->f_offset;
-	if (outoffp == NULL)
-		outoffp = &outfp->f_offset;
-	savinoff = *inoffp;
-	savoutoff = *outoffp;
+	/*
+	 * Figure out which file offsets we're reading from and writing to.
+	 * If the offsets come from the file descriptions, we need to lock them,
+	 * and locking both offsets requires a loop to avoid deadlocks.
+	 */
+	infp1 = outfp1 = NULL;
+	if (inoffp != NULL)
+		inoff = *inoffp;
+	else
+		infp1 = infp;
+	if (outoffp != NULL)
+		outoff = *outoffp;
+	else
+		outfp1 = outfp;
+	if (infp1 != NULL || outfp1 != NULL) {
+		if (infp1 == outfp1) {
+			/*
+			 * Overlapping ranges are not allowed.  A more thorough
+			 * check appears below, but we must not lock the same
+			 * offset twice.
+			 */
+			error = EINVAL;
+			goto out;
+		}
+		foffset_lock_pair(infp1, &inoff, outfp1, &outoff, 0);
+		foffsets_locked = true;
+	} else {
+		foffsets_set = true;
+	}
+	savinoff = inoff;
+	savoutoff = outoff;
 
 	invp = infp->f_vnode;
 	outvp = outfp->f_vnode;
@@ -4975,40 +5011,60 @@ kern_copy_file_range(struct thread *td, int infd, off_t *inoffp, int outfd,
 		goto out;
 
 	/*
+	 * Make sure that the ranges we check and lock below are valid.  Note
+	 * that len is clamped to SSIZE_MAX above.
+	 */
+	if (inoff < 0 || outoff < 0) {
+		error = EINVAL;
+		goto out;
+	}
+
+	/*
 	 * If infp and outfp refer to the same file, the byte ranges cannot
 	 * overlap.
 	 */
-	if (invp == outvp && ((savinoff <= savoutoff && savinoff + len >
-	    savoutoff) || (savinoff > savoutoff && savoutoff + len >
-	    savinoff))) {
+	if (invp == outvp && ((inoff <= outoff && inoff + len >
+	    outoff) || (inoff > outoff && outoff + len > inoff))) {
 		error = EINVAL;
 		goto out;
 	}
 
 	/* Range lock the byte ranges for both invp and outvp. */
 	for (;;) {
-		rl_wcookie = vn_rangelock_wlock(outvp, *outoffp, *outoffp +
-		    len);
-		rl_rcookie = vn_rangelock_tryrlock(invp, *inoffp, *inoffp +
-		    len);
+		rl_wcookie = vn_rangelock_wlock(outvp, outoff, outoff + len);
+		rl_rcookie = vn_rangelock_tryrlock(invp, inoff, inoff + len);
 		if (rl_rcookie != NULL)
 			break;
 		vn_rangelock_unlock(outvp, rl_wcookie);
-		rl_rcookie = vn_rangelock_rlock(invp, *inoffp, *inoffp + len);
+		rl_rcookie = vn_rangelock_rlock(invp, inoff, inoff + len);
 		vn_rangelock_unlock(invp, rl_rcookie);
 	}
 
 	retlen = len;
-	error = vn_copy_file_range(invp, inoffp, outvp, outoffp, &retlen,
+	error = vn_copy_file_range(invp, &inoff, outvp, &outoff, &retlen,
 	    flags, infp->f_cred, outfp->f_cred, td);
 out:
 	if (rl_rcookie != NULL)
 		vn_rangelock_unlock(invp, rl_rcookie);
 	if (rl_wcookie != NULL)
 		vn_rangelock_unlock(outvp, rl_wcookie);
-	if (savinoff != -1 && (error == EINTR || error == ERESTART)) {
-		*inoffp = savinoff;
-		*outoffp = savoutoff;
+	if ((foffsets_locked || foffsets_set) &&
+	    (error == EINTR || error == ERESTART)) {
+		inoff = savinoff;
+		outoff = savoutoff;
+	}
+	if (foffsets_locked) {
+		if (inoffp == NULL)
+			foffset_unlock(infp, inoff, 0);
+		else
+			*inoffp = inoff;
+		if (outoffp == NULL)
+			foffset_unlock(outfp, outoff, 0);
+		else
+			*outoffp = outoff;
+	} else if (foffsets_set) {
+		*inoffp = inoff;
+		*outoffp = outoff;
 	}
 	if (outfp != NULL)
 		fdrop(outfp, td);

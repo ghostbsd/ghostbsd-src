@@ -89,10 +89,9 @@ struct ktr_header {
  * is the public interface.
  */
 #define	KTRCHECK(td, type)	((td)->td_proc->p_traceflag & (1 << type))
-#define KTRPOINT(td, type)  (__predict_false(KTRCHECK((td), (type))))
-#define	KTRCHECKDRAIN(td)	(!(STAILQ_EMPTY(&(td)->td_proc->p_ktr)))
+#define	KTRPOINT(td, type)	(__predict_false(KTRCHECK((td), (type))))
 #define	KTRUSERRET(td) do {						\
-	if (__predict_false(KTRCHECKDRAIN(td)))				\
+	if (__predict_false(!STAILQ_EMPTY_ATOMIC(&(td)->td_proc->p_ktr))) \
 		ktruserret(td);						\
 } while (0)
 
@@ -351,6 +350,8 @@ void	ktrcapfail(enum ktr_cap_violation, const void *);
 	ktrstruct("cpuset_t", (s), l)
 #define	ktrsplice(s) \
 	ktrstruct("splice", (s), sizeof(struct splice))
+#define ktrthrparam(s) \
+	ktrstruct("thrparam", (s), sizeof(struct thr_param))
 extern u_int ktr_geniosize;
 #ifdef	KTRACE
 extern int ktr_filesize_limit_signal;

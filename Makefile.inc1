@@ -572,9 +572,14 @@ PKG_VERSION:=	${_PKG_REVISION}${EXTRA_REVISION:C/[[:space:]]//g}
 .endif
 .endif	# !defined(PKG_VERSION)
 
+.if make(*package*)
 .if !defined(PKG_TIMESTAMP)
+.if !empty(GIT_CMD) && exists(${GIT_CMD}) && exists(${SRCDIR}/.git)
+SOURCE_DATE_EPOCH!=	${GIT_CMD} -C ${SRCDIR} show -s --format=%ct HEAD
+.else
 TIMEEPOCHNOW=		%s
 SOURCE_DATE_EPOCH=	${TIMEEPOCHNOW:gmtime}
+.endif
 .else
 SOURCE_DATE_EPOCH=	${PKG_TIMESTAMP}
 .endif
@@ -585,6 +590,7 @@ PKG_WWW?=		https://www.FreeBSD.org
 .export PKG_NAME_PREFIX
 .export PKG_MAINTAINER
 .export PKG_WWW
+.endif
 
 .if !defined(_MKSHOWCONFIG)
 _CPUTYPE!=	MAKEFLAGS= CPUTYPE=${_TARGET_CPUTYPE} ${MAKE} -f /dev/null \
@@ -609,7 +615,10 @@ XPATH=		${WORLDTMP}/bin:${WORLDTMP}/usr/sbin:${WORLDTMP}/usr/bin
 # When building we want to find the cross tools before the host tools in ${BPATH}.
 # We also need to add UNIVERSE_TOOLCHAIN_PATH so that we can find the shared
 # toolchain files (clang, lld, etc.) during make universe/tinderbox
-STRICTTMPPATH=	${XPATH}:${BPATH}:${UNIVERSE_TOOLCHAIN_PATH}
+STRICTTMPPATH=	${XPATH}:${BPATH}
+.if defined(UNIVERSE_TOOLCHAIN_PATH)
+STRICTTMPPATH:=${STRICTTMPPATH}:${UNIVERSE_TOOLCHAIN_PATH}
+.endif
 # We should not be using tools from /usr/bin accidentally since this could cause
 # the build to break on other systems that don't have that tool. For now we
 # still allow using the old behaviour (inheriting $PATH) if
@@ -787,6 +796,7 @@ TMAKE=		\
 # TOOLS_PREFIX set in BMAKE
 XMAKE=		${BMAKE} \
 		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
+		MK_CLANG=${MK_CLANG_BOOTSTRAP} \
 		MK_LLDB=no \
 		MK_LLVM_BINUTILS=no \
 		MK_TESTS=no
@@ -1012,7 +1022,7 @@ DESTDIR_MTREE=	${DISTR_MTREECMD} ${DESTDIR_MTREEFLAGS}
 METALOG_SORT_CMD=	env -i LC_COLLATE=C sort
 
 # kernel stage
-KMAKEENV=	${WMAKEENV:NSYSROOT=*}
+KMAKEENV=	${WMAKEENV}
 KMAKE=		${TIME_ENV} ${KMAKEENV} ${MAKE} ${.MAKEFLAGS} ${KERNEL_FLAGS} KERNEL=${INSTKERNNAME}
 
 #
@@ -1057,7 +1067,7 @@ _cleanworldtmp: .PHONY
 # Note: for delete-old we need to set $PATH to also include the host $PATH
 # since otherwise a partial build with missing symlinks in ${WORLDTMP}/legacy/
 # will fail to run due to missing binaries. $WMAKE sets PATH to only ${TMPPATH}
-# so we remove that assingnment from $WMAKE and prepend the new $PATH
+# so we remove that assignment from $WMAKE and prepend the new $PATH
 	${_+_}@if [ -e "${WORLDTMP}" ]; then \
 		echo ">>> Deleting stale files in build tree..."; \
 		cd ${.CURDIR}; env PATH=${TMPPATH:Q}:${PATH:Q} ${WMAKE:NPATH=*} \
@@ -1370,7 +1380,7 @@ _sysctl=sysctl
 .endif
 
 ITOOLS=	[ awk cap_mkdb cat chflags chmod chown cmp cp \
-	date echo egrep find grep id install ${_install-info} \
+	date echo egrep find grep id install \
 	ln make mkdir mtree mv pwd_mkdb \
 	rm sed services_mkdb sh sort strip ${_sysctl} test time true uname wc
 
@@ -2094,7 +2104,9 @@ create-packages-source:	_pkgbootstrap _repodir .PHONY
 	${_+_}@cd ${.CURDIR}; \
 		${MAKE} -f Makefile.inc1 \
 			DESTDIR=${SSTAGEDIR} \
-			PKG_VERSION=${PKG_VERSION} create-source-packages
+			PKG_VERSION=${PKG_VERSION} \
+			SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+			create-source-packages
 
 create-packages: .PHONY create-packages-world create-packages-kernel create-packages-source
 
@@ -2276,7 +2288,10 @@ create-kernel-packages-extra-flavor${flavor:C,^""$,${_default_flavor},}-${_kerne
 
 sign-packages:	.PHONY
 	${_+_}@cd ${.CURDIR}; \
-		${MAKE} -f Makefile.inc1 PKG_VERSION=${PKG_VERSION} real-sign-packages
+		${MAKE} -f Makefile.inc1 \
+			PKG_VERSION=${PKG_VERSION} \
+			SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+			real-sign-packages
 
 real-sign-packages:	_pkgbootstrap .PHONY
 	printf "version = 2;\n" > ${WSTAGEDIR}/meta
@@ -2449,8 +2464,8 @@ ${_bt}-usr.sbin/kldxref: ${_bt_libelf_depend}
 # 13.0-CURRENT cycle, thus needs to be built on -older releases and stable
 # branches.
 .if ${BOOTSTRAPPING} < 1300059
-${_bt}-libexec/flua: ${_bt}-lib/liblua ${_bt}-lib/libucl
-_flua= lib/liblua lib/libucl libexec/flua
+${_bt}-libexec/flua: ${_bt}-lib/liblua
+_flua= lib/liblua libexec/flua
 .endif
 
 # r245440 mtree -N support added
@@ -2854,7 +2869,7 @@ _elftctools=	lib/libelftc \
 .endif
 
 .if ${MK_CLANG_BOOTSTRAP} != "no"
-_clang=		usr.bin/clang
+_clang=		usr.bin/clang/clang
 .endif
 .if ${MK_LLD_BOOTSTRAP} != "no"
 _lld=		usr.bin/clang/lld
@@ -3535,7 +3550,7 @@ check-old-libs: .PHONY
 list-old-dirs: .PHONY
 	@cd ${.CURDIR}; \
 	${MAKE} -f ${.CURDIR}/Makefile.inc1 ${.MAKEFLAGS} ${.TARGET} \
-	    -V OLD_DIRS | sed -E 's/[[:space:]]+/\n/g' | sort -r
+	    -V "OLD_DIRS:ts\n" | sort -r
 
 delete-old-dirs: .PHONY
 	@echo ">>> Removing old directories"

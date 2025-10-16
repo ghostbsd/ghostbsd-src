@@ -76,7 +76,6 @@
 #include <vm/uma.h>
 
 #include <net/bpf.h>
-#include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <net/if_clone.h>
@@ -280,7 +279,6 @@ static void	if_input_default(struct ifnet *, struct mbuf *);
 static int	if_requestencap_default(struct ifnet *, struct if_encap_req *);
 static int	if_setflag(struct ifnet *, int, int, int *, int);
 static int	if_transmit_default(struct ifnet *ifp, struct mbuf *m);
-static void	if_unroute(struct ifnet *, int flag, int fam);
 static int	if_delmulti_locked(struct ifnet *, struct ifmultiaddr *, int);
 static void	do_link_state_change(void *, int);
 static int	if_getgroup(struct ifgroupreq *, struct ifnet *);
@@ -435,7 +433,6 @@ vnet_if_init(const void *unused __unused)
 
 	CK_STAILQ_INIT(&V_ifnet);
 	CK_STAILQ_INIT(&V_ifg_head);
-	vnet_if_clone_init();
 }
 VNET_SYSINIT(vnet_if_init, SI_SUB_INIT_IF, SI_ORDER_SECOND, vnet_if_init,
     NULL);
@@ -874,7 +871,7 @@ if_attach_internal(struct ifnet *ifp, bool vmove)
 		 */
 		namelen = strlen(ifp->if_xname);
 		/*
-		 * Always save enough space for any possiable name so we
+		 * Always save enough space for any possible name so we
 		 * can do a rename in place later.
 		 */
 		masklen = offsetof(struct sockaddr_dl, sdl_data[0]) + IFNAMSIZ;
@@ -934,26 +931,11 @@ if_attach_internal(struct ifnet *ifp, bool vmove)
 		}
 #endif
 	}
-#ifdef VIMAGE
-	else {
-		/*
-		 * Update the interface index in the link layer address
-		 * of the interface.
-		 */
-		for (ifa = ifp->if_addr; ifa != NULL;
-		    ifa = CK_STAILQ_NEXT(ifa, ifa_link)) {
-			if (ifa->ifa_addr->sa_family == AF_LINK) {
-				sdl = (struct sockaddr_dl *)ifa->ifa_addr;
-				sdl->sdl_index = ifp->if_index;
-			}
-		}
-	}
-#endif
-
-	if_link_ifnet(ifp);
 
 	if (domain_init_status >= 2)
 		if_attachdomain1(ifp);
+
+	if_link_ifnet(ifp);
 
 	EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
 	if (IS_DEFAULT_VNET(curvnet))
@@ -1123,6 +1105,7 @@ if_detach_internal(struct ifnet *ifp, bool vmove)
 	struct ifaddr *ifa;
 	int i;
 	struct domain *dp;
+	void *if_afdata[AF_MAX];
 #ifdef VIMAGE
 	bool shutdown;
 
@@ -1246,15 +1229,30 @@ finish_vnet_shutdown:
 	IF_AFDATA_LOCK(ifp);
 	i = ifp->if_afdata_initialized;
 	ifp->if_afdata_initialized = 0;
+	if (i != 0) {
+		/*
+		 * Defer the dom_ifdetach call.
+		 */
+		_Static_assert(sizeof(if_afdata) == sizeof(ifp->if_afdata),
+		    "array size mismatch");
+		memcpy(if_afdata, ifp->if_afdata, sizeof(if_afdata));
+		memset(ifp->if_afdata, 0, sizeof(ifp->if_afdata));
+	}
 	IF_AFDATA_UNLOCK(ifp);
 	if (i == 0)
 		return;
+	/*
+	 * XXXZL: This net epoch wait is not necessary if we have done right.
+	 * But if we do not, at least we can make a guarantee that threads those
+	 * enter net epoch will see NULL address family dependent data,
+	 * e.g. if_afdata[AF_INET6]. A clear NULL pointer derefence is much
+	 * better than writing to freed memory.
+	 */
+	NET_EPOCH_WAIT();
 	SLIST_FOREACH(dp, &domains, dom_next) {
-		if (dp->dom_ifdetach && ifp->if_afdata[dp->dom_family]) {
-			(*dp->dom_ifdetach)(ifp,
-			    ifp->if_afdata[dp->dom_family]);
-			ifp->if_afdata[dp->dom_family] = NULL;
-		}
+		if (dp->dom_ifdetach != NULL &&
+		    if_afdata[dp->dom_family] != NULL)
+			(*dp->dom_ifdetach)(ifp, if_afdata[dp->dom_family]);
 	}
 }
 
@@ -2099,25 +2097,6 @@ link_init_sdl(struct ifnet *ifp, struct sockaddr *paddr, u_char iftype)
 	return (sdl);
 }
 
-/*
- * Mark an interface down and notify protocols of
- * the transition.
- */
-static void
-if_unroute(struct ifnet *ifp, int flag, int fam)
-{
-
-	KASSERT(flag == IFF_UP, ("if_unroute: flag != IFF_UP"));
-
-	ifp->if_flags &= ~flag;
-	getmicrotime(&ifp->if_lastchange);
-	ifp->if_qflush(ifp);
-
-	if (ifp->if_carp)
-		(*carp_linkstate_p)(ifp);
-	rt_ifmsg(ifp, IFF_UP);
-}
-
 void	(*vlan_link_state_p)(struct ifnet *);	/* XXX: private from if_vlan */
 void	(*vlan_trunk_cap_p)(struct ifnet *);		/* XXX: private from if_vlan */
 struct ifnet *(*vlan_trunkdev_p)(struct ifnet *);
@@ -2192,7 +2171,14 @@ if_down(struct ifnet *ifp)
 {
 
 	EVENTHANDLER_INVOKE(ifnet_event, ifp, IFNET_EVENT_DOWN);
-	if_unroute(ifp, IFF_UP, AF_UNSPEC);
+
+	ifp->if_flags &= ~IFF_UP;
+	getmicrotime(&ifp->if_lastchange);
+	ifp->if_qflush(ifp);
+
+	if (ifp->if_carp)
+		(*carp_linkstate_p)(ifp);
+	rt_ifmsg(ifp, IFF_UP);
 }
 
 /*
@@ -4894,18 +4880,6 @@ void *
 if_gethandle(u_char type)
 {
 	return (if_alloc(type));
-}
-
-void
-if_bpfmtap(if_t ifp, struct mbuf *m)
-{
-	BPF_MTAP(ifp, m);
-}
-
-void
-if_etherbpfmtap(if_t ifp, struct mbuf *m)
-{
-	ETHER_BPF_MTAP(ifp, m);
 }
 
 void

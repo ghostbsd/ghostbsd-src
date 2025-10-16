@@ -466,7 +466,7 @@ smbfs_read(struct vop_read_args *ap)
 	SMBVDEBUG("\n");
 	if (vp->v_type != VREG && vp->v_type != VDIR)
 		return EPERM;
-	return smbfs_readvnode(vp, uio, ap->a_cred);
+	return smbfs_readvnode(vp, uio, ap->a_cred, NULL);
 }
 
 static int
@@ -748,7 +748,6 @@ smbfs_readdir(struct vop_readdir_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct uio *uio = ap->a_uio;
-	int error;
 
 	if (vp->v_type != VDIR)
 		return (EPERM);
@@ -758,8 +757,7 @@ smbfs_readdir(struct vop_readdir_args *ap)
 		return (EOPNOTSUPP);
 	}
 #endif
-	error = smbfs_readvnode(vp, uio, ap->a_cred);
-	return error;
+	return (smbfs_readvnode(vp, uio, ap->a_cred, ap->a_eofflag));
 }
 
 /* ARGSUSED */
@@ -1051,7 +1049,7 @@ smbfs_lookup(struct vop_lookup_args *ap)
 	struct smbfattr fattr, *fap;
 	struct smb_cred *scred;
 	char *name = cnp->cn_nameptr;
-	int flags = cnp->cn_flags;
+	uint64_t flags = cnp->cn_flags;
 	int nameiop = cnp->cn_nameiop;
 	int nmlen = cnp->cn_namelen;
 	int error, islastcn, isdot;

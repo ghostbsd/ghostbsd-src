@@ -141,6 +141,9 @@ MALLOC_DECLARE(M_PRISON);
 #define	DEFAULT_HOSTUUID	"00000000-0000-0000-0000-000000000000"
 #define	OSRELEASELEN	32
 
+#define	JAIL_META_PRIVATE	"meta"
+#define	JAIL_META_SHARED	"env"
+
 struct racct;
 struct prison_racct;
 
@@ -253,7 +256,8 @@ struct prison_racct {
 #define	PR_ALLOW_RESERVED_PORTS		0x00008000
 #define	PR_ALLOW_KMEM_ACCESS		0x00010000	/* reserved, not used yet */
 #define	PR_ALLOW_NFSD			0x00020000
-#define	PR_ALLOW_ALL_STATIC		0x000387ff
+#define	PR_ALLOW_ROUTING		0x00040000
+#define	PR_ALLOW_ALL_STATIC		0x000787ff
 
 /*
  * PR_ALLOW_DIFFERENCES determines which flags are able to be
@@ -373,6 +377,7 @@ extern struct	sx allprison_lock;
 /*
  * Sysctls to describe jail parameters.
  */
+SYSCTL_DECL(_security_jail);
 SYSCTL_DECL(_security_jail_param);
 
 #define SYSCTL_JAIL_PARAM_DECL(name)					\
@@ -427,7 +432,7 @@ void prison0_init(void);
 bool prison_allow(struct ucred *, unsigned);
 int prison_check(struct ucred *cred1, struct ucred *cred2);
 bool prison_check_nfsd(struct ucred *cred);
-bool prison_owns_vnet(struct ucred *);
+bool prison_owns_vnet(struct prison *pr);
 int prison_canseemount(struct ucred *cred, struct mount *mp);
 void prison_enforce_statfs(struct ucred *cred, struct mount *mp,
     struct statfs *sp);

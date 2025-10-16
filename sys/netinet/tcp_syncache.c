@@ -102,15 +102,15 @@
 
 #include <security/mac/mac_framework.h>
 
-VNET_DEFINE_STATIC(int, tcp_syncookies) = 1;
+VNET_DEFINE_STATIC(bool, tcp_syncookies) = true;
 #define	V_tcp_syncookies		VNET(tcp_syncookies)
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, syncookies, CTLFLAG_VNET | CTLFLAG_RW,
+SYSCTL_BOOL(_net_inet_tcp, OID_AUTO, syncookies, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(tcp_syncookies), 0,
     "Use TCP SYN cookies if the syncache overflows");
 
-VNET_DEFINE_STATIC(int, tcp_syncookiesonly) = 0;
+VNET_DEFINE_STATIC(bool, tcp_syncookiesonly) = false;
 #define	V_tcp_syncookiesonly		VNET(tcp_syncookiesonly)
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, syncookies_only, CTLFLAG_VNET | CTLFLAG_RW,
+SYSCTL_BOOL(_net_inet_tcp, OID_AUTO, syncookies_only, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(tcp_syncookiesonly), 0,
     "Use only TCP SYN cookies");
 
@@ -130,6 +130,7 @@ static void	 syncache_drop(struct syncache *, struct syncache_head *);
 static void	 syncache_free(struct syncache *);
 static void	 syncache_insert(struct syncache *, struct syncache_head *);
 static int	 syncache_respond(struct syncache *, const struct mbuf *, int);
+static void	 syncache_send_challenge_ack(struct syncache *, struct mbuf *);
 static struct	 socket *syncache_socket(struct syncache *, struct socket *,
 		    struct mbuf *m);
 static void	 syncache_timeout(struct syncache *sc, struct syncache_head *sch,
@@ -139,17 +140,18 @@ static void	 syncache_timer(void *);
 static uint32_t	 syncookie_mac(struct in_conninfo *, tcp_seq, uint8_t,
 		    uint8_t *, uintptr_t);
 static tcp_seq	 syncookie_generate(struct syncache_head *, struct syncache *);
-static struct syncache
-		*syncookie_lookup(struct in_conninfo *, struct syncache_head *,
-		    struct syncache *, struct tcphdr *, struct tcpopt *,
-		    struct socket *, uint16_t);
+static bool	syncookie_expand(struct in_conninfo *,
+		    const struct syncache_head *, struct syncache *,
+		    struct tcphdr *, struct tcpopt *, struct socket *,
+		    uint16_t);
 static void	syncache_pause(struct in_conninfo *);
 static void	syncache_unpause(void *);
 static void	 syncookie_reseed(void *);
 #ifdef INVARIANTS
-static int	 syncookie_cmp(struct in_conninfo *inc, struct syncache_head *sch,
-		    struct syncache *sc, struct tcphdr *th, struct tcpopt *to,
-		    struct socket *lso, uint16_t port);
+static void	syncookie_cmp(struct in_conninfo *,
+		    const struct syncache_head *, struct syncache *,
+		    struct tcphdr *, struct tcpopt *, struct socket *,
+		    uint16_t);
 #endif
 
 /*
@@ -560,9 +562,8 @@ syncache_timer(void *xsch)
 static inline bool
 syncache_cookiesonly(void)
 {
-
-	return (V_tcp_syncookies && (V_tcp_syncache.paused ||
-	    V_tcp_syncookiesonly));
+	return ((V_tcp_syncookies && V_tcp_syncache.paused) ||
+	    V_tcp_syncookiesonly);
 }
 
 /*
@@ -702,13 +703,7 @@ syncache_chkrst(struct in_conninfo *inc, struct tcphdr *th, struct mbuf *m,
 				    "sending challenge ACK\n",
 				    s, __func__,
 				    th->th_seq, sc->sc_irs + 1, sc->sc_wnd);
-			if (syncache_respond(sc, m, TH_ACK) == 0) {
-				TCPSTAT_INC(tcps_sndacks);
-				TCPSTAT_INC(tcps_sndtotal);
-			} else {
-				syncache_drop(sc, sch);
-				TCPSTAT_INC(tcps_sc_dropped);
-			}
+			syncache_send_challenge_ack(sc, m);
 		}
 	} else {
 		if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
@@ -976,6 +971,10 @@ syncache_socket(struct syncache *sc, struct socket *lso, struct mbuf *m)
 	if (sc->sc_rxmits > 1)
 		tp->snd_cwnd = 1;
 
+	/* Copy over the challenge ACK state. */
+	tp->t_challenge_ack_end = sc->sc_challenge_ack_end;
+	tp->t_challenge_ack_cnt = sc->sc_challenge_ack_cnt;
+
 #ifdef TCP_OFFLOAD
 	/*
 	 * Allow a TOE driver to install its hooks.  Note that we hold the
@@ -1092,40 +1091,50 @@ syncache_expand(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
 #endif
 
 	if (sc == NULL) {
-		/*
-		 * There is no syncache entry, so see if this ACK is
-		 * a returning syncookie.  To do this, first:
-		 *  A. Check if syncookies are used in case of syncache
-		 *     overflows
-		 *  B. See if this socket has had a syncache entry dropped in
-		 *     the recent past. We don't want to accept a bogus
-		 *     syncookie if we've never received a SYN or accept it
-		 *     twice.
-		 *  C. check that the syncookie is valid.  If it is, then
-		 *     cobble up a fake syncache entry, and return.
-		 */
-		if (locked && !V_tcp_syncookies) {
+		if (locked) {
+			/*
+			 * The syncache is currently in use (neither disabled,
+			 * nor paused), but no entry was found.
+			 */
+			if (!V_tcp_syncookies) {
+				/*
+				 * Since no syncookies are used in case of
+				 * a bucket overflow, don't even check for
+				 * a valid syncookie.
+				 */
+				SCH_UNLOCK(sch);
+				if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
+					log(LOG_DEBUG, "%s; %s: Spurious ACK, "
+					    "segment rejected "
+					    "(syncookies disabled)\n",
+					    s, __func__);
+				goto failed;
+			}
+			if (sch->sch_last_overflow <
+			    time_uptime - SYNCOOKIE_LIFETIME) {
+				/*
+				 * Since the bucket did not overflow recently,
+				 * don't even check for a valid syncookie.
+				 */
+				SCH_UNLOCK(sch);
+				if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
+					log(LOG_DEBUG, "%s; %s: Spurious ACK, "
+					    "segment rejected "
+					    "(no syncache entry)\n",
+					    s, __func__);
+				goto failed;
+			}
 			SCH_UNLOCK(sch);
-			if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
-				log(LOG_DEBUG, "%s; %s: Spurious ACK, "
-				    "segment rejected (syncookies disabled)\n",
-				    s, __func__);
-			goto failed;
-		}
-		if (locked && !V_tcp_syncookiesonly &&
-		    sch->sch_last_overflow < time_uptime - SYNCOOKIE_LIFETIME) {
-			SCH_UNLOCK(sch);
-			if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
-				log(LOG_DEBUG, "%s; %s: Spurious ACK, "
-				    "segment rejected (no syncache entry)\n",
-				    s, __func__);
-			goto failed;
 		}
 		bzero(&scs, sizeof(scs));
-		sc = syncookie_lookup(inc, sch, &scs, th, to, *lsop, port);
-		if (locked)
-			SCH_UNLOCK(sch);
-		if (sc == NULL) {
+		/*
+		 * Now check, if the syncookie is valid. If it is, create an on
+		 * stack syncache entry.
+		 */
+		if (syncookie_expand(inc, sch, &scs, th, to, *lsop, port)) {
+			sc = &scs;
+			TCPSTAT_INC(tcps_sc_recvcookie);
+		} else {
 			if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
 				log(LOG_DEBUG, "%s; %s: Segment failed "
 				    "SYNCOOKIE authentication, segment rejected "
@@ -1199,7 +1208,6 @@ syncache_expand(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
 		 */
 		if (sc->sc_flags & SCF_TIMESTAMP && to->to_flags & TOF_TS &&
 		    TSTMP_LT(to->to_tsval, sc->sc_tsreflect)) {
-			SCH_UNLOCK(sch);
 			if ((s = tcp_log_addrs(inc, th, NULL, NULL))) {
 				log(LOG_DEBUG,
 				    "%s; %s: SEG.TSval %u < TS.Recent %u, "
@@ -1207,6 +1215,7 @@ syncache_expand(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
 				    to->to_tsval, sc->sc_tsreflect);
 				free(s, M_TCPLOG);
 			}
+			SCH_UNLOCK(sch);
 			return (-1);  /* Do not send RST */
 		}
 
@@ -1255,6 +1264,38 @@ syncache_expand(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
 				return (-1);  /* Do not send RST */
 			}
 		}
+
+		/*
+		 * SEG.SEQ validation:
+		 * The SEG.SEQ must be in the window starting at our
+		 * initial receive sequence number + 1.
+		 */
+		if (SEQ_LEQ(th->th_seq, sc->sc_irs) ||
+		    SEQ_GT(th->th_seq, sc->sc_irs + sc->sc_wnd)) {
+			if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
+				log(LOG_DEBUG, "%s; %s: SEQ %u != IRS+1 %u, "
+				    "sending challenge ACK\n",
+				    s, __func__, th->th_seq, sc->sc_irs + 1);
+			syncache_send_challenge_ack(sc, m);
+			SCH_UNLOCK(sch);
+			free(s, M_TCPLOG);
+			return (-1);  /* Do not send RST */
+		}
+
+		/*
+		 * SEG.ACK validation:
+		 * SEG.ACK must match our initial send sequence number + 1.
+		 */
+		if (th->th_ack != sc->sc_iss + 1) {
+			if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
+				log(LOG_DEBUG, "%s; %s: ACK %u != ISS+1 %u, "
+				    "segment rejected\n",
+				    s, __func__, th->th_ack, sc->sc_iss + 1);
+			SCH_UNLOCK(sch);
+			free(s, M_TCPLOG);
+			return (0);  /* Do send RST, do not free sc. */
+		}
+
 		TAILQ_REMOVE(&sch->sch_bucket, sc, sc_hash);
 		sch->sch_length--;
 #ifdef TCP_OFFLOAD
@@ -1267,38 +1308,14 @@ syncache_expand(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
 		SCH_UNLOCK(sch);
 	}
 
-	/*
-	 * Segment validation:
-	 * ACK must match our initial sequence number + 1 (the SYN|ACK).
-	 */
-	if (th->th_ack != sc->sc_iss + 1) {
-		if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
-			log(LOG_DEBUG, "%s; %s: ACK %u != ISS+1 %u, segment "
-			    "rejected\n", s, __func__, th->th_ack, sc->sc_iss);
-		goto failed;
-	}
-
-	/*
-	 * The SEQ must fall in the window starting at the received
-	 * initial receive sequence number + 1 (the SYN).
-	 */
-	if (SEQ_LEQ(th->th_seq, sc->sc_irs) ||
-	    SEQ_GT(th->th_seq, sc->sc_irs + sc->sc_wnd)) {
-		if ((s = tcp_log_addrs(inc, th, NULL, NULL)))
-			log(LOG_DEBUG, "%s; %s: SEQ %u != IRS+1 %u, segment "
-			    "rejected\n", s, __func__, th->th_seq, sc->sc_irs);
-		goto failed;
-	}
-
 	*lsop = syncache_socket(sc, *lsop, m);
 
 	if (__predict_false(*lsop == NULL)) {
 		TCPSTAT_INC(tcps_sc_aborted);
 		TCPSTATES_DEC(TCPS_SYN_RECEIVED);
-	} else
+	} else if (sc != &scs)
 		TCPSTAT_INC(tcps_sc_completed);
 
-/* how do we find the inp for the new socket? */
 	if (sc != &scs)
 		syncache_free(sc);
 	return (1);
@@ -1673,7 +1690,7 @@ syncache_add(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
 			sc->sc_tsoff = tcp_new_ts_offset(inc);
 		}
 		if ((to->to_flags & TOF_SCALE) && (V_tcp_do_rfc1323 != 3)) {
-			int wscale = 0;
+			u_int wscale = 0;
 
 			/*
 			 * Pick the smallest possible scaling factor that
@@ -1723,13 +1740,13 @@ syncache_add(struct in_conninfo *inc, struct tcpopt *to, struct tcphdr *th,
 	if (V_tcp_do_ecn && (tp->t_flags2 & TF2_CANNOT_DO_ECN) == 0)
 		sc->sc_flags |= tcp_ecn_syncache_add(tcp_get_flags(th), iptos);
 
-	if (V_tcp_syncookies)
+	if (V_tcp_syncookies || V_tcp_syncookiesonly)
 		sc->sc_iss = syncookie_generate(sch, sc);
 	else
 		sc->sc_iss = arc4random();
 #ifdef INET6
 	if (autoflowlabel) {
-		if (V_tcp_syncookies)
+		if (V_tcp_syncookies || V_tcp_syncookiesonly)
 			sc->sc_flowlabel = sc->sc_iss;
 		else
 			sc->sc_flowlabel = ip6_randomflowlabel();
@@ -2051,6 +2068,18 @@ syncache_respond(struct syncache *sc, const struct mbuf *m0, int flags)
 	return (error);
 }
 
+static void
+syncache_send_challenge_ack(struct syncache *sc, struct mbuf *m)
+{
+	if (tcp_challenge_ack_check(&sc->sc_challenge_ack_end,
+	    &sc->sc_challenge_ack_cnt)) {
+		if (syncache_respond(sc, m, TH_ACK) == 0) {
+			TCPSTAT_INC(tcps_sndacks);
+			TCPSTAT_INC(tcps_sndtotal);
+		}
+	}
+}
+
 /*
  * The purpose of syncookies is to handle spoofed SYN flooding DoS attacks
  * that exceed the capacity of the syncache by avoiding the storage of any
@@ -2261,15 +2290,15 @@ syncookie_generate(struct syncache_head *sch, struct syncache *sc)
 	return (iss);
 }
 
-static struct syncache *
-syncookie_lookup(struct in_conninfo *inc, struct syncache_head *sch,
+static bool
+syncookie_expand(struct in_conninfo *inc, const struct syncache_head *sch,
     struct syncache *sc, struct tcphdr *th, struct tcpopt *to,
     struct socket *lso, uint16_t port)
 {
 	uint32_t hash;
 	uint8_t *secbits;
 	tcp_seq ack, seq;
-	int wnd, wscale = 0;
+	int wnd;
 	union syncookie cookie;
 
 	/*
@@ -2292,7 +2321,7 @@ syncookie_lookup(struct in_conninfo *inc, struct syncache_head *sch,
 
 	/* The recomputed hash matches the ACK if this was a genuine cookie. */
 	if ((ack & ~0xff) != (hash & ~0xff))
-		return (NULL);
+		return (false);
 
 	/* Fill in the syncache values. */
 	sc->sc_flags = 0;
@@ -2320,12 +2349,14 @@ syncookie_lookup(struct in_conninfo *inc, struct syncache_head *sch,
 
 	sc->sc_peer_mss = tcp_sc_msstab[cookie.flags.mss_idx];
 
-	/* We can simply recompute receive window scale we sent earlier. */
-	while (wscale < TCP_MAX_WINSHIFT && (TCP_MAXWIN << wscale) < sb_max)
-		wscale++;
-
 	/* Only use wscale if it was enabled in the orignal SYN. */
 	if (cookie.flags.wscale_idx > 0) {
+		u_int wscale = 0;
+
+		/* Recompute the receive window scale that was sent earlier. */
+		while (wscale < TCP_MAX_WINSHIFT &&
+		    (TCP_MAXWIN << wscale) < sb_max)
+			wscale++;
 		sc->sc_requested_r_scale = wscale;
 		sc->sc_requested_s_scale = tcp_sc_wstab[cookie.flags.wscale_idx];
 		sc->sc_flags |= SCF_WINSCALE;
@@ -2352,47 +2383,47 @@ syncookie_lookup(struct in_conninfo *inc, struct syncache_head *sch,
 
 	sc->sc_port = port;
 
-	TCPSTAT_INC(tcps_sc_recvcookie);
-	return (sc);
+	return (true);
 }
 
 #ifdef INVARIANTS
-static int
-syncookie_cmp(struct in_conninfo *inc, struct syncache_head *sch,
+static void
+syncookie_cmp(struct in_conninfo *inc, const struct syncache_head *sch,
     struct syncache *sc, struct tcphdr *th, struct tcpopt *to,
     struct socket *lso, uint16_t port)
 {
-	struct syncache scs, *scx;
+	struct syncache scs;
 	char *s;
 
 	bzero(&scs, sizeof(scs));
-	scx = syncookie_lookup(inc, sch, &scs, th, to, lso, port);
+	if (syncookie_expand(inc, sch, &scs, th, to, lso, port) &&
+	    (sc->sc_peer_mss != scs.sc_peer_mss ||
+	     sc->sc_requested_r_scale != scs.sc_requested_r_scale ||
+	     sc->sc_requested_s_scale != scs.sc_requested_s_scale ||
+	     (sc->sc_flags & SCF_SACK) != (scs.sc_flags & SCF_SACK))) {
 
-	if ((s = tcp_log_addrs(inc, th, NULL, NULL)) == NULL)
-		return (0);
+		if ((s = tcp_log_addrs(inc, th, NULL, NULL)) == NULL)
+			return;
 
-	if (scx != NULL) {
-		if (sc->sc_peer_mss != scx->sc_peer_mss)
+		if (sc->sc_peer_mss != scs.sc_peer_mss)
 			log(LOG_DEBUG, "%s; %s: mss different %i vs %i\n",
-			    s, __func__, sc->sc_peer_mss, scx->sc_peer_mss);
+			    s, __func__, sc->sc_peer_mss, scs.sc_peer_mss);
 
-		if (sc->sc_requested_r_scale != scx->sc_requested_r_scale)
+		if (sc->sc_requested_r_scale != scs.sc_requested_r_scale)
 			log(LOG_DEBUG, "%s; %s: rwscale different %i vs %i\n",
 			    s, __func__, sc->sc_requested_r_scale,
-			    scx->sc_requested_r_scale);
+			    scs.sc_requested_r_scale);
 
-		if (sc->sc_requested_s_scale != scx->sc_requested_s_scale)
+		if (sc->sc_requested_s_scale != scs.sc_requested_s_scale)
 			log(LOG_DEBUG, "%s; %s: swscale different %i vs %i\n",
 			    s, __func__, sc->sc_requested_s_scale,
-			    scx->sc_requested_s_scale);
+			    scs.sc_requested_s_scale);
 
-		if ((sc->sc_flags & SCF_SACK) != (scx->sc_flags & SCF_SACK))
+		if ((sc->sc_flags & SCF_SACK) != (scs.sc_flags & SCF_SACK))
 			log(LOG_DEBUG, "%s; %s: SACK different\n", s, __func__);
-	}
 
-	if (s != NULL)
 		free(s, M_TCPLOG);
-	return (0);
+	}
 }
 #endif /* INVARIANTS */
 

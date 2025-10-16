@@ -594,42 +594,24 @@ contrib/dev/acpica/components/utilities/utxface.c	optional acpi
 contrib/dev/acpica/components/utilities/utxferror.c	optional acpi
 contrib/dev/acpica/components/utilities/utxfinit.c	optional acpi
 contrib/dev/acpica/os_specific/service_layers/osgendbg.c	optional acpi acpi_debug
-netpfil/ipfilter/netinet/fil.c	optional ipfilter inet \
-	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_auth.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_fil_freebsd.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_frag.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_log.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_nat.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_proxy.c optional ipfilter inet \
-	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_state.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_lookup.c optional ipfilter inet \
-	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -Wno-error -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_pool.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_htable.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter ${NO_WTAUTOLOGICAL_POINTER_COMPARE}"
-netpfil/ipfilter/netinet/ip_sync.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/mlfk_ipl.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_nat6.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_rules.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_scan.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/ip_dstlist.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -Wno-unused -I$S/netpfil/ipfilter"
-netpfil/ipfilter/netinet/radix_ipf.c optional ipfilter inet \
-	compile-with "${NORMAL_C} -I$S/netpfil/ipfilter"
+netpfil/ipfilter/netinet/fil.c	optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_auth.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_fil_freebsd.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_frag.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_log.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_nat.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_proxy.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_state.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_lookup.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_pool.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_htable.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_sync.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/mlfk_ipl.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_nat6.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_rules.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_scan.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/ip_dstlist.c optional ipfilter inet compile-with "${IPFILTER_C}"
+netpfil/ipfilter/netinet/radix_ipf.c optional ipfilter inet compile-with "${IPFILTER_C}"
 contrib/libfdt/fdt.c		optional fdt
 contrib/libfdt/fdt_ro.c		optional fdt
 contrib/libfdt/fdt_rw.c		optional fdt
@@ -2300,6 +2282,8 @@ dev/ixgbe/ixgbe_x540.c		optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/ixgbe/ixgbe_x550.c		optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
+dev/ixgbe/ixgbe_e610.c		optional ix inet | ixv inet \
+	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/ixgbe/ixgbe_dcb.c		optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/ixgbe/ixgbe_dcb_82598.c	optional ix inet | ixv inet \
@@ -2479,6 +2463,11 @@ dev/mrsas/mrsas.c		optional mrsas
 dev/mrsas/mrsas_cam.c		optional mrsas
 dev/mrsas/mrsas_ioctl.c		optional mrsas
 dev/mrsas/mrsas_fp.c		optional mrsas
+dev/mpi3mr/mpi3mr.c		optional mpi3mr
+dev/mpi3mr/mpi3mr_pci.c		optional mpi3mr
+dev/mpi3mr/mpi3mr_app.c		optional mpi3mr
+dev/mpi3mr/mpi3mr_cam.c		optional mpi3mr \
+	compile-with "${LINUXKPI_C}"
 dev/msk/if_msk.c		optional msk
 dev/mvs/mvs.c			optional mvs
 dev/mvs/mvs_if.m		optional mvs
@@ -3416,6 +3405,7 @@ dev/virtio/balloon/virtio_balloon.c	optional	virtio_balloon
 dev/virtio/block/virtio_blk.c		optional	virtio_blk
 dev/virtio/console/virtio_console.c	optional	virtio_console
 dev/virtio/gpu/virtio_gpu.c		optional	virtio_gpu
+dev/virtio/p9fs/virtio_p9fs.c		optional	virtio_p9fs
 dev/virtio/random/virtio_random.c	optional	virtio_random
 dev/virtio/scsi/virtio_scsi.c		optional	virtio_scsi
 dev/vkbd/vkbd.c			optional vkbd
@@ -3564,6 +3554,12 @@ fs/nfsserver/nfs_nfsdcache.c	optional nfsd inet
 fs/nullfs/null_subr.c		optional nullfs
 fs/nullfs/null_vfsops.c		optional nullfs
 fs/nullfs/null_vnops.c		optional nullfs
+fs/p9fs/p9_client.c		optional p9fs
+fs/p9fs/p9_protocol.c		optional p9fs
+fs/p9fs/p9_transport.c		optional p9fs
+fs/p9fs/p9fs_subr.c		optional p9fs
+fs/p9fs/p9fs_vfsops.c		optional p9fs
+fs/p9fs/p9fs_vnops.c		optional p9fs
 fs/procfs/procfs.c		optional procfs
 fs/procfs/procfs_dbregs.c	optional procfs
 fs/procfs/procfs_fpregs.c	optional procfs
@@ -3778,6 +3774,7 @@ kern/kern_hhook.c		standard
 kern/kern_idle.c		standard
 kern/kern_intr.c		standard
 kern/kern_jail.c		standard
+kern/kern_jailmeta.c		standard
 kern/kern_kcov.c		optional kcov			\
 	compile-with "${NORMAL_C:N-fsanitize*} ${NORMAL_C:M-fsanitize=kernel-memory}"
 kern/kern_khelp.c		standard
@@ -4332,15 +4329,23 @@ netinet/cc/cc.c			optional cc_newreno inet | cc_vegas inet | \
 	cc_chd inet | cc_cdg inet | cc_newreno inet6 | cc_vegas inet6 | \
 	cc_htcp inet6 | cc_hd inet6 |cc_dctcp inet6 | cc_cubic inet6 | \
 	cc_chd inet6 | cc_cdg inet6
-netinet/cc/cc_cdg.c		optional inet cc_cdg tcp_hhook
-netinet/cc/cc_chd.c		optional inet cc_chd tcp_hhook
+netinet/cc/cc_cdg.c		optional inet cc_cdg tcp_hhook | \
+	inet6 cc_cdg tcp_hhook
+netinet/cc/cc_chd.c		optional inet cc_chd tcp_hhook | \
+	inet6 cc_chd tcp_hhook
 netinet/cc/cc_cubic.c		optional inet cc_cubic | inet6 cc_cubic
 netinet/cc/cc_dctcp.c		optional inet cc_dctcp | inet6 cc_dctcp
-netinet/cc/cc_hd.c		optional inet cc_hd tcp_hhook
+netinet/cc/cc_hd.c		optional inet cc_hd tcp_hhook | \
+	inet6 cc_hd tcp_hhook
 netinet/cc/cc_htcp.c		optional inet cc_htcp | inet6 cc_htcp
 netinet/cc/cc_newreno.c		optional inet cc_newreno | inet6 cc_newreno
-netinet/cc/cc_vegas.c		optional inet cc_vegas tcp_hhook
-netinet/khelp/h_ertt.c		optional inet tcp_hhook
+netinet/cc/cc_vegas.c		optional inet cc_vegas tcp_hhook | \
+	inet6 cc_vegas tcp_hhook
+netinet/khelp/h_ertt.c		optional inet tcp_hhook cc_cdg | \
+	inet tcp_hhook cc_chd | inet tcp_hhook cc_hd | \
+	inet tcp_hhook cc_vegas | inet6 tcp_hhook cc_cdg | \
+	inet6 tcp_hhook cc_chd | inet6 tcp_hhook cc_hd | \
+	inet6 tcp_hhook cc_vegas
 netinet/sctp_asconf.c		optional inet sctp | inet6 sctp
 netinet/sctp_auth.c		optional inet sctp | inet6 sctp
 netinet/sctp_bsd_addr.c		optional inet sctp | inet6 sctp
@@ -5159,10 +5164,11 @@ security/mac/mac_sysv_sem.c	optional mac
 security/mac/mac_sysv_shm.c	optional mac
 security/mac/mac_vfs.c		optional mac
 security/mac_biba/mac_biba.c	optional mac_biba
-security/mac_ddb/mac_ddb.c	optional mac_ddb
 security/mac_bsdextended/mac_bsdextended.c	optional mac_bsdextended
 security/mac_bsdextended/ugidfw_system.c	optional mac_bsdextended
 security/mac_bsdextended/ugidfw_vnode.c		optional mac_bsdextended
+security/mac_ddb/mac_ddb.c	optional mac_ddb
+security/mac_do/mac_do.c	optional mac_do
 security/mac_ifoff/mac_ifoff.c	optional mac_ifoff
 security/mac_ipacl/mac_ipacl.c	optional mac_ipacl
 security/mac_lomac/mac_lomac.c	optional mac_lomac

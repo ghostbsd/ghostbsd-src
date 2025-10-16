@@ -785,10 +785,14 @@ fuse_vnop_close(struct vop_close_args *ap)
 	struct mount *mp = vnode_mount(vp);
 	struct ucred *cred = ap->a_cred;
 	int fflag = ap->a_fflag;
-	struct thread *td = ap->a_td;
-	pid_t pid = td->td_proc->p_pid;
+	struct thread *td;
 	struct fuse_vnode_data *fvdat = VTOFUD(vp);
+	pid_t pid;
 	int err = 0;
+
+	/* NB: a_td will be NULL from some async kernel contexts */
+	td = ap->a_td ? ap->a_td : curthread;
+	pid = td->td_proc->p_pid;
 
 	if (fuse_isdeadfs(vp))
 		return 0;
@@ -796,6 +800,9 @@ fuse_vnop_close(struct vop_close_args *ap)
 		return 0;
 	if (fflag & IO_NDELAY)
 		return 0;
+
+	if (cred == NULL)
+		cred = td->td_ucred;
 
 	err = fuse_flush(vp, cred, pid, fflag);
 	if (err == 0 && (fvdat->flag & FN_ATIMECHANGE) && !vfs_isrdonly(mp)) {
@@ -825,7 +832,7 @@ fuse_vnop_close(struct vop_close_args *ap)
 	}
 	/* TODO: close the file handle, if we're sure it's no longer used */
 	if ((fvdat->flag & FN_SIZECHANGE) != 0) {
-		fuse_vnode_savesize(vp, cred, td->td_proc->p_pid);
+		fuse_vnode_savesize(vp, cred, pid);
 	}
 	return err;
 }
@@ -1204,36 +1211,20 @@ fuse_vnop_getattr(struct vop_getattr_args *ap)
 	struct vattr *vap = ap->a_vap;
 	struct ucred *cred = ap->a_cred;
 	struct thread *td = curthread;
-
 	int err = 0;
-	int dataflags;
 
-	dataflags = fuse_get_mpdata(vnode_mount(vp))->dataflags;
-
-	/* Note that we are not bailing out on a dead file system just yet. */
-
-	if (!(dataflags & FSESS_INITED)) {
-		if (!vnode_isvroot(vp)) {
-			fdata_set_dead(fuse_get_mpdata(vnode_mount(vp)));
-			err = ENOTCONN;
-			return err;
-		} else {
-			goto fake;
-		}
-	}
 	err = fuse_internal_getattr(vp, vap, cred, td);
 	if (err == ENOTCONN && vnode_isvroot(vp)) {
-		/* see comment in fuse_vfsop_statfs() */
-		goto fake;
-	} else {
-		return err;
+		/*
+		 * We want to seem a legitimate fs even if the daemon is dead,
+		 * so that, eg., we can still do path based unmounting after
+		 * the daemon dies.
+		 */
+		err = 0;
+		bzero(vap, sizeof(*vap));
+		vap->va_type = vnode_vtype(vp);
 	}
-
-fake:
-	bzero(vap, sizeof(*vap));
-	vap->va_type = vnode_vtype(vp);
-
-	return 0;
+	return err;
 }
 
 /*
@@ -1432,8 +1423,8 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 	struct timespec now;
 
 	int nameiop = cnp->cn_nameiop;
-	int flags = cnp->cn_flags;
-	int islastcn = flags & ISLASTCN;
+	bool isdotdot = cnp->cn_flags & ISDOTDOT;
+	bool islastcn = cnp->cn_flags & ISLASTCN;
 	struct mount *mp = vnode_mount(dvp);
 	struct fuse_data *data = fuse_get_mpdata(mp);
 	int default_permissions = data->dataflags & FSESS_DEFAULT_PERMISSIONS;
@@ -1466,8 +1457,7 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 		return err;
 
 	is_dot = cnp->cn_namelen == 1 && *(cnp->cn_nameptr) == '.';
-	if ((flags & ISDOTDOT) && !(data->dataflags & FSESS_EXPORT_SUPPORT))
-	{
+	if (isdotdot && !(data->dataflags & FSESS_EXPORT_SUPPORT)) {
 		if (!(VTOFUD(dvp)->flag & FN_PARENT_NID)) {
 			/*
 			 * Since the file system doesn't support ".." lookups,
@@ -1581,7 +1571,7 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 		}
 	} else {
 		/* Entry was found */
-		if (flags & ISDOTDOT) {
+		if (isdotdot) {
 			struct fuse_lookup_alloc_arg flaa;
 
 			flaa.nid = nid;
@@ -1740,7 +1730,7 @@ fuse_vnop_open(struct vop_open_args *ap)
 
 	if (fuse_isdeadfs(vp))
 		return ENXIO;
-	if (vp->v_type == VCHR || vp->v_type == VBLK || vp->v_type == VFIFO)
+	if (VN_ISDEV(vp) || vp->v_type == VFIFO)
 		return (EOPNOTSUPP);
 	if ((a_mode & (FREAD | FWRITE | FEXEC)) == 0)
 		return EINVAL;
@@ -1938,10 +1928,8 @@ fuse_vnop_readdir(struct vop_readdir_args *ap)
 	if (fuse_isdeadfs(vp)) {
 		return ENXIO;
 	}
-	if (				/* XXXIP ((uio_iovcnt(uio) > 1)) || */
-	    (uio_resid(uio) < sizeof(struct dirent))) {
+	if (uio_resid(uio) < sizeof(struct dirent))
 		return EINVAL;
-	}
 
 	tresid = uio->uio_resid;
 	err = fuse_filehandle_get_dir(vp, &fufh, cred, pid);

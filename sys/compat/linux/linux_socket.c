@@ -135,7 +135,6 @@ linux_to_bsd_ip_sockopt(int opt)
 		LINUX_RATELIMIT_MSG_NOTTESTED("IPv4 socket option IP_RECVTTL");
 		return (IP_RECVTTL);
 	case LINUX_IP_RECVTOS:
-		LINUX_RATELIMIT_MSG_NOTTESTED("IPv4 socket option IP_RECVTOS");
 		return (IP_RECVTOS);
 	case LINUX_IP_FREEBIND:
 		LINUX_RATELIMIT_MSG_NOTTESTED("IPv4 socket option IP_FREEBIND");
@@ -663,6 +662,8 @@ bsd_to_linux_ip_cmsg_type(int cmsg_type)
 	switch (cmsg_type) {
 	case IP_RECVORIGDSTADDR:
 		return (LINUX_IP_RECVORIGDSTADDR);
+	case IP_RECVTOS:
+		return (LINUX_IP_TOS);
 	}
 	return (-1);
 }
@@ -1856,7 +1857,7 @@ linux_recvmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 		lcm->cmsg_level = bsd_to_linux_sockopt_level(cm->cmsg_level);
 
 		if (lcm->cmsg_type == -1 ||
-		    cm->cmsg_level == -1) {
+		    lcm->cmsg_level == -1) {
 			LINUX_RATELIMIT_MSG_OPT2(
 			    "unsupported recvmsg cmsg level %d type %d",
 			    cm->cmsg_level, cm->cmsg_type);
@@ -2177,6 +2178,7 @@ static int
 linux_getsockopt_so_peergroups(struct thread *td,
     struct linux_getsockopt_args *args)
 {
+	l_gid_t *out = PTRIN(args->optval);
 	struct xucred xu;
 	socklen_t xulen, len;
 	int error, i;
@@ -2195,13 +2197,12 @@ linux_getsockopt_so_peergroups(struct thread *td,
 		return (error);
 	}
 
-	/*
-	 * "- 1" to skip the primary group.
-	 */
+	/* "- 1" to skip the primary group. */
 	for (i = 0; i < xu.cr_ngroups - 1; i++) {
-		error = copyout(xu.cr_groups + i + 1,
-		    (void *)(args->optval + i * sizeof(l_gid_t)),
-		    sizeof(l_gid_t));
+		/* Copy to cope with a possible type discrepancy. */
+		const l_gid_t g = xu.cr_groups[i + 1];
+
+		error = copyout(&g, out + i, sizeof(l_gid_t));
 		if (error != 0)
 			return (error);
 	}
@@ -2467,7 +2468,7 @@ sendfile_fallback(struct thread *td, struct file *fp, l_int out,
 		out_offset = 0;
 
 	flags = FOF_OFFSET | FOF_NOUPDATE;
-	bufsz = min(count, MAXPHYS);
+	bufsz = min(count, maxphys);
 	buf = malloc(bufsz, M_LINUX, M_WAITOK);
 	bytes_sent = 0;
 	while (bytes_sent < count) {

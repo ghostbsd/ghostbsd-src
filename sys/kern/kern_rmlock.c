@@ -337,9 +337,9 @@ rm_wowned(const struct rmlock *rm)
 }
 
 void
-rm_sysinit(void *arg)
+rm_sysinit(const void *arg)
 {
-	struct rm_args *args;
+	const struct rm_args *args;
 
 	args = arg;
 	rm_init_flags(args->ra_rm, args->ra_desc, args->ra_flags);
@@ -598,10 +598,10 @@ _rm_wlock_debug(struct rmlock *rm, const char *file, int line)
 		return;
 
 	KASSERT(kdb_active != 0 || !TD_IS_IDLETHREAD(curthread),
-	    ("rm_wlock() by idle thread %p on rmlock %s @ %s:%d",
-	    curthread, rm->lock_object.lo_name, file, line));
+	    ("rm_wlock() by idle thread %p on rmlock %p @ %s:%d",
+	    curthread, rm, file, line));
 	KASSERT(!rm_destroyed(rm),
-	    ("rm_wlock() of destroyed rmlock @ %s:%d", file, line));
+	    ("rm_wlock() of destroyed rmlock %p @ %s:%d", rm, file, line));
 	_rm_assert(rm, RA_UNLOCKED, file, line);
 
 	WITNESS_CHECKORDER(&rm->lock_object, LOP_NEWORDER | LOP_EXCLUSIVE,
@@ -622,7 +622,7 @@ _rm_wunlock_debug(struct rmlock *rm, const char *file, int line)
 		return;
 
 	KASSERT(!rm_destroyed(rm),
-	    ("rm_wunlock() of destroyed rmlock @ %s:%d", file, line));
+	    ("rm_wunlock() of destroyed rmlock %p @ %s:%d", rm, file, line));
 	_rm_assert(rm, RA_WLOCKED, file, line);
 	WITNESS_UNLOCK(&rm->lock_object, LOP_EXCLUSIVE, file, line);
 	LOCK_LOG_LOCK("RMWUNLOCK", &rm->lock_object, 0, 0, file, line);
@@ -643,16 +643,16 @@ _rm_rlock_debug(struct rmlock *rm, struct rm_priotracker *tracker,
 		critical_enter();
 		KASSERT(rm_trackers_present(get_pcpu(), rm,
 		    curthread) == 0,
-		    ("rm_rlock: recursed on non-recursive rmlock %s @ %s:%d\n",
-		    rm->lock_object.lo_name, file, line));
+		    ("rm_rlock: recursed on non-recursive rmlock %p @ %s:%d\n",
+		    rm, file, line));
 		critical_exit();
 	}
 #endif
 	KASSERT(kdb_active != 0 || !TD_IS_IDLETHREAD(curthread),
-	    ("rm_rlock() by idle thread %p on rmlock %s @ %s:%d",
-	    curthread, rm->lock_object.lo_name, file, line));
+	    ("rm_rlock() by idle thread %p on rmlock %p @ %s:%d",
+	    curthread, rm, file, line));
 	KASSERT(!rm_destroyed(rm),
-	    ("rm_rlock() of destroyed rmlock @ %s:%d", file, line));
+	    ("rm_rlock() of destroyed rmlock %p @ %s:%d", rm, file, line));
 	if (!trylock) {
 		KASSERT(!rm_wowned(rm),
 		    ("rm_rlock: wlock already held for %s @ %s:%d",
@@ -686,7 +686,7 @@ _rm_runlock_debug(struct rmlock *rm, struct rm_priotracker *tracker,
 		return;
 
 	KASSERT(!rm_destroyed(rm),
-	    ("rm_runlock() of destroyed rmlock @ %s:%d", file, line));
+	    ("rm_runlock() of destroyed rmlock %p @ %s:%d", rm, file, line));
 	_rm_assert(rm, RA_RLOCKED, file, line);
 	WITNESS_UNLOCK(&rm->lock_object, 0, file, line);
 	LOCK_LOG_LOCK("RMRUNLOCK", &rm->lock_object, 0, 0, file, line);
@@ -1010,7 +1010,8 @@ rms_rlock_fallback(struct rmslock *rms)
 
 	mtx_lock(&rms->mtx);
 	while (rms->writers > 0)
-		msleep(&rms->readers, &rms->mtx, PUSER - 1, mtx_name(&rms->mtx), 0);
+		msleep(&rms->readers, &rms->mtx, PRI_MAX_KERN,
+		    mtx_name(&rms->mtx), 0);
 	critical_enter();
 	rms_int_readers_inc(rms, rms_int_pcpu(rms));
 	mtx_unlock(&rms->mtx);
@@ -1197,7 +1198,7 @@ rms_wlock(struct rmslock *rms)
 	mtx_lock(&rms->mtx);
 	rms->writers++;
 	if (rms->writers > 1) {
-		msleep(&rms->owner, &rms->mtx, (PUSER - 1),
+		msleep(&rms->owner, &rms->mtx, PRI_MAX_KERN,
 		    mtx_name(&rms->mtx), 0);
 		MPASS(rms->readers == 0);
 		KASSERT(rms->owner == RMS_TRANSIENT,
@@ -1213,7 +1214,7 @@ rms_wlock(struct rmslock *rms)
 	rms_assert_no_pcpu_readers(rms);
 
 	if (rms->readers > 0) {
-		msleep(&rms->writers, &rms->mtx, (PUSER - 1),
+		msleep(&rms->writers, &rms->mtx, PRI_MAX_KERN,
 		    mtx_name(&rms->mtx), 0);
 	}
 

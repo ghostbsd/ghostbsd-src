@@ -1255,7 +1255,11 @@ ktls_enable_rx(struct socket *so, struct tls_enable *en)
 
 	/* Mark the socket as using TLS offload. */
 	SOCK_RECVBUF_LOCK(so);
-	if (__predict_false(so->so_rcv.sb_tls_info != NULL)) {
+	if (__predict_false(so->so_rcv.sb_tls_info != NULL))
+		error = EALREADY;
+	else if ((so->so_rcv.sb_flags & SB_SPLICED) != 0)
+		error = EINVAL;
+	if (error != 0) {
 		SOCK_RECVBUF_UNLOCK(so);
 		SOCK_IO_RECV_UNLOCK(so);
 		ktls_free(tls);
@@ -1355,12 +1359,16 @@ ktls_enable_tx(struct socket *so, struct tls_enable *en)
 	inp = so->so_pcb;
 	INP_WLOCK(inp);
 	SOCK_SENDBUF_LOCK(so);
-	if (__predict_false(so->so_snd.sb_tls_info != NULL)) {
+	if (__predict_false(so->so_snd.sb_tls_info != NULL))
+		error = EALREADY;
+	else if ((so->so_snd.sb_flags & SB_SPLICED) != 0)
+		error = EINVAL;
+	if (error != 0) {
 		SOCK_SENDBUF_UNLOCK(so);
 		INP_WUNLOCK(inp);
 		SOCK_IO_SEND_UNLOCK(so);
 		ktls_free(tls);
-		return (EALREADY);
+		return (error);
 	}
 	so->so_snd.sb_tls_seqno = be64dec(en->rec_seq);
 	so->so_snd.sb_tls_info = tls;
@@ -3181,8 +3189,9 @@ ktls_reclaim_thread(void *ctx)
 		 * backlogs of buffers to be encrypted, leading to
 		 * surges of traffic and potential NIC output drops.
 		 */
-		if (!vm_page_reclaim_contig_domain_ext(domain, VM_ALLOC_NORMAL,
-		    atop(ktls_maxlen), 0, ~0ul, PAGE_SIZE, 0, ktls_max_reclaim)) {
+		if (vm_page_reclaim_contig_domain_ext(domain, VM_ALLOC_NORMAL,
+		    atop(ktls_maxlen), 0, ~0ul, PAGE_SIZE, 0,
+		    ktls_max_reclaim) != 0) {
 			vm_wait_domain(domain);
 		} else {
 			sc->reclaims += ktls_max_reclaim;

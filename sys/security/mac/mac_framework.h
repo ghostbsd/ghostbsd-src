@@ -72,6 +72,7 @@ struct mbuf;
 struct mount;
 struct msg;
 struct msqid_kernel;
+struct pipepair;
 struct proc;
 struct semid_kernel;
 struct shmfd;
@@ -80,7 +81,6 @@ struct sockaddr;
 struct socket;
 struct sysctl_oid;
 struct sysctl_req;
-struct pipepair;
 struct thread;
 struct timespec;
 struct ucred;
@@ -115,6 +115,10 @@ int	mac_cred_check_setaudit(struct ucred *cred, struct auditinfo *ai);
 int	mac_cred_check_setaudit_addr(struct ucred *cred,
 	    struct auditinfo_addr *aia);
 int	mac_cred_check_setauid(struct ucred *cred, uid_t auid);
+void	mac_cred_setcred_enter(void);
+int	mac_cred_check_setcred(u_int flags, const struct ucred *old_cred,
+	    struct ucred *new_cred);
+void	mac_cred_setcred_exit(void);
 int	mac_cred_check_setegid(struct ucred *cred, gid_t egid);
 int	mac_cred_check_seteuid(struct ucred *cred, uid_t euid);
 int	mac_cred_check_setgid(struct ucred *cred, gid_t gid);
@@ -484,7 +488,7 @@ void	mac_sysvshm_init(struct shmid_kernel *);
 
 void	mac_thread_userret(struct thread *td);
 
-#if defined(MAC) && defined(DEBUG_VFS_LOCKS)
+#if defined(MAC) && defined(INVARIANTS)
 void	mac_vnode_assert_locked(struct vnode *vp, const char *func);
 #else
 #define mac_vnode_assert_locked(vp, func) do { } while (0)

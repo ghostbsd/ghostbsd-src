@@ -69,6 +69,11 @@ __enum_uint8_decl(vtype) {
 	VLASTTYPE = VMARKER,
 };
 
+/*
+ * We frequently need to test is something is a device node.
+ */
+#define VTYPE_ISDEV(vtype)	((vtype) == VCHR || (vtype) == VBLK)
+
 __enum_uint8_decl(vstate) {
 	VSTATE_UNINITIALIZED,
 	VSTATE_CONSTRUCTED,
@@ -199,6 +204,8 @@ struct vnode {
 	int	v_seqc_users;			/* i modifications pending */
 };
 
+#define VN_ISDEV(vp)		VTYPE_ISDEV((vp)->v_type)
+
 #ifndef DEBUG_LOCKS
 #ifdef _LP64
 /*
@@ -283,7 +290,7 @@ _Static_assert(sizeof(struct vnode) <= 448, "vnode size crosses 448 bytes");
 struct vattr {
 	__enum_uint8(vtype)	va_type;	/* vnode type (for create) */
 	u_short		va_mode;	/* files access mode and type */
-	u_short		va_padding0;
+	uint16_t	va_bsdflags;	/* same as st_bsdflags from stat(2) */
 	uid_t		va_uid;		/* owner user id */
 	gid_t		va_gid;		/* owner group id */
 	nlink_t		va_nlink;	/* number of references to file */
@@ -303,6 +310,8 @@ struct vattr {
 	u_int		va_vaflags;	/* operations flags, see below */
 	long		va_spare;	/* remain quad aligned */
 };
+
+#define VATTR_ISDEV(vap)	VTYPE_ISDEV((vap)->va_type)
 
 /*
  * Flags for va_vaflags.
@@ -533,7 +542,7 @@ extern struct vnodeop_desc *vnodeop_descs[];
 #define	VOPARG_OFFSETTO(s_type, s_offset, struct_p) \
     ((s_type)(((char*)(struct_p)) + (s_offset)))
 
-#ifdef DEBUG_VFS_LOCKS
+#ifdef INVARIANTS
 /*
  * Support code to aid in debugging VFS locking problems.  Not totally
  * reliable since if the thread sleeps between changing the lock
@@ -567,7 +576,7 @@ void	assert_vop_unlocked(struct vnode *vp, const char *str);
 	VNPASS(!seqc_in_modify(_vp->v_seqc), _vp);		\
 } while (0)
 
-#else /* !DEBUG_VFS_LOCKS */
+#else /* !INVARIANTS */
 
 #define	ASSERT_VI_LOCKED(vp, str)	((void)0)
 #define	ASSERT_VI_UNLOCKED(vp, str)	((void)0)
@@ -578,7 +587,7 @@ void	assert_vop_unlocked(struct vnode *vp, const char *str);
 #define ASSERT_VOP_IN_SEQC(vp)		((void)0)
 #define ASSERT_VOP_NOT_IN_SEQC(vp)	((void)0)
 
-#endif /* DEBUG_VFS_LOCKS */
+#endif /* INVARIANTS */
 
 /*
  * This call works for vnodes in the kernel.
@@ -708,6 +717,7 @@ int	speedup_syncer(void);
 int	vn_vptocnp(struct vnode **vp, char *buf, size_t *buflen);
 int	vn_getcwd(char *buf, char **retbuf, size_t *buflen);
 int	vn_fullpath(struct vnode *vp, char **retbuf, char **freebuf);
+int	vn_fullpath_jail(struct vnode *vp, char **retbuf, char **freebuf);
 int	vn_fullpath_global(struct vnode *vp, char **retbuf, char **freebuf);
 int	vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
 	    const char *hdrl_name, size_t hrdl_name_length, char **retbuf,
@@ -949,7 +959,7 @@ void	vop_symlink_pre(void *a);
 void	vop_symlink_post(void *a, int rc);
 int	vop_sigdefer(struct vop_vector *vop, struct vop_generic_args *a);
 
-#ifdef DEBUG_VFS_LOCKS
+#ifdef INVARIANTS
 void	vop_fdatasync_debugpre(void *a);
 void	vop_fdatasync_debugpost(void *a, int rc);
 void	vop_fplookup_vexec_debugpre(void *a);
@@ -991,10 +1001,10 @@ void	vop_rename_fail(struct vop_rename_args *ap);
 	AUDIT_ARG_VNODE1(ap->a_vp);						\
 	_error = mac_vnode_check_stat(_ap->a_active_cred, _ap->a_file_cred, _ap->a_vp);\
 	if (__predict_true(_error == 0)) {					\
-		ap->a_sb->st_padding0 = 0;					\
 		ap->a_sb->st_padding1 = 0;					\
 		bzero(_ap->a_sb->st_spare, sizeof(_ap->a_sb->st_spare));	\
 		ap->a_sb->st_filerev = 0;					\
+		ap->a_sb->st_bsdflags = 0;					\
 	}									\
 	_error;									\
 })
@@ -1191,6 +1201,7 @@ vn_get_state(struct vnode *vp)
 #define vfs_smr_exit()	smr_exit(VFS_SMR())
 #define vfs_smr_synchronize()	smr_synchronize(VFS_SMR())
 #define vfs_smr_entered_load(ptr)	smr_entered_load((ptr), VFS_SMR())
+#define VFS_SMR_ENTERED()		SMR_ENTERED(VFS_SMR())
 #define VFS_SMR_ASSERT_ENTERED()	SMR_ASSERT_ENTERED(VFS_SMR())
 #define VFS_SMR_ASSERT_NOT_ENTERED()	SMR_ASSERT_NOT_ENTERED(VFS_SMR())
 #define VFS_SMR_ZONE_SET(zone)	uma_zone_set_smr((zone), VFS_SMR())

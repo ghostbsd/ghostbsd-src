@@ -1004,7 +1004,7 @@ nfs_getattr(struct vop_getattr_args *ap)
 	 * cached attributes should be ignored.
 	 */
 	if (nmp->nm_fhsize > 0 && ncl_getattrcache(vp, &vattr) == 0) {
-		ncl_copy_vattr(vap, &vattr);
+		ncl_copy_vattr(vp, vap, &vattr);
 
 		/*
 		 * Get the local modify time for the case of a write
@@ -1655,7 +1655,7 @@ nfs_mknodrpc(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	int error = 0, attrflag, dattrflag;
 	u_int32_t rdev;
 
-	if (vap->va_type == VCHR || vap->va_type == VBLK)
+	if (VATTR_ISDEV(vap))
 		rdev = vap->va_rdev;
 	else if (vap->va_type == VFIFO || vap->va_type == VSOCK)
 		rdev = 0xffffffff;
@@ -3253,7 +3253,7 @@ nfs_advlock(struct vop_advlock_args *ap)
 	u_quad_t size;
 	struct nfsmount *nmp;
 
-	error = NFSVOPLOCK(vp, LK_SHARED);
+	error = NFSVOPLOCK(vp, LK_EXCLUSIVE);
 	if (error != 0)
 		return (EBADF);
 	nmp = VFSTONFS(vp->v_mount);
@@ -3290,11 +3290,6 @@ nfs_advlock(struct vop_advlock_args *ap)
 			cred = p->p_ucred;
 		else
 			cred = td->td_ucred;
-		NFSVOPLOCK(vp, LK_UPGRADE | LK_RETRY);
-		if (VN_IS_DOOMED(vp)) {
-			error = EBADF;
-			goto out;
-		}
 
 		/*
 		 * If this is unlocking a write locked region, flush and

@@ -263,8 +263,7 @@ kasan_mark(const void *addr, size_t size, size_t redzsize, uint8_t code)
 	if (__predict_false(!kasan_enabled))
 		return;
 
-	if ((vm_offset_t)addr >= DMAP_MIN_ADDRESS &&
-	    (vm_offset_t)addr < DMAP_MAX_ADDRESS)
+	if (kasan_md_unsupported((vm_offset_t)addr))
 		return;
 
 	KASSERT((vm_offset_t)addr >= VM_MIN_KERNEL_ADDRESS &&
@@ -836,6 +835,7 @@ ASAN_ATOMIC_FUNC_TESTANDSET(32, uint32_t);
 ASAN_ATOMIC_FUNC_TESTANDSET(64, uint64_t);
 ASAN_ATOMIC_FUNC_TESTANDSET(int, u_int);
 ASAN_ATOMIC_FUNC_TESTANDSET(long, u_long);
+ASAN_ATOMIC_FUNC_TESTANDSET(acq_long, u_long);
 ASAN_ATOMIC_FUNC_TESTANDSET(ptr, uintptr_t);
 
 ASAN_ATOMIC_FUNC_SWAP(32, uint32_t);

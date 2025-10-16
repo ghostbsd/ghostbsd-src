@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #include "qat_freebsd.h"
 #include <adf_accel_devices.h>
 #include <adf_common_drv.h>
@@ -8,6 +8,7 @@
 #include "adf_gen4_hw_data.h"
 #include "adf_fw_counters.h"
 #include "adf_cfg_device.h"
+#include "adf_dbgfs.h"
 #include <sys/types.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
@@ -21,12 +22,14 @@ static MALLOC_DEFINE(M_QAT_4XXXVF, "qat_4xxxvf", "qat_4xxxvf");
 		PCI_VENDOR_ID_INTEL, device_id                                 \
 	}
 
-static const struct pci_device_id adf_pci_tbl[] =
-    { ADF_SYSTEM_DEVICE(ADF_4XXXIOV_PCI_DEVICE_ID),
-      ADF_SYSTEM_DEVICE(ADF_401XXIOV_PCI_DEVICE_ID),
-      {
-	  0,
-      } };
+static const struct pci_device_id adf_pci_tbl[] = {
+	ADF_SYSTEM_DEVICE(ADF_4XXXIOV_PCI_DEVICE_ID),
+	ADF_SYSTEM_DEVICE(ADF_401XXIOV_PCI_DEVICE_ID),
+	ADF_SYSTEM_DEVICE(ADF_402XXIOV_PCI_DEVICE_ID),
+	{
+	    0,
+	}
+};
 
 static int
 adf_probe(device_t dev)
@@ -75,6 +78,7 @@ adf_cleanup_accel(struct adf_accel_dev *accel_dev)
 		switch (pci_get_device(accel_pci_dev->pci_dev)) {
 		case ADF_4XXXIOV_PCI_DEVICE_ID:
 		case ADF_401XXIOV_PCI_DEVICE_ID:
+		case ADF_402XXIOV_PCI_DEVICE_ID:
 			adf_clean_hw_data_4xxxiov(accel_dev->hw_device);
 			break;
 		default:
@@ -83,6 +87,7 @@ adf_cleanup_accel(struct adf_accel_dev *accel_dev)
 		free(accel_dev->hw_device, M_QAT_4XXXVF);
 		accel_dev->hw_device = NULL;
 	}
+	adf_dbgfs_exit(accel_dev);
 	adf_cfg_dev_remove(accel_dev);
 }
 
@@ -99,6 +104,7 @@ adf_attach(device_t dev)
 	struct adf_cfg_device *cfg_dev = NULL;
 
 	accel_dev = device_get_softc(dev);
+	mutex_init(&accel_dev->lock);
 	accel_dev->is_vf = true;
 	pf = adf_devmgr_pci_to_accel_dev(pci_find_pf(dev));
 
@@ -110,11 +116,13 @@ adf_attach(device_t dev)
 		accel_pci_dev->node = 0;
 
 	/* Add accel device to accel table */
-	if (adf_devmgr_add_dev(accel_dev, pf)) {
+	ret = adf_devmgr_add_dev(accel_dev, pf);
+	if (ret) {
 		device_printf(GET_DEV(accel_dev),
 			      "Failed to add new accelerator device.\n");
-		return -EFAULT;
+		goto out_err_lock;
 	}
+
 	/* Allocate and configure device configuration structure */
 	hw_data = malloc(sizeof(*hw_data), M_QAT_4XXXVF, M_WAITOK | M_ZERO);
 	accel_dev->hw_device = hw_data;
@@ -150,6 +158,8 @@ adf_attach(device_t dev)
 				 NULL,
 				 NULL,
 				 &accel_dev->dma_tag);
+	if (ret)
+		goto out_err;
 
 	hw_data->accel_capabilities_mask = adf_4xxxvf_get_hw_cap(accel_dev);
 
@@ -178,7 +188,11 @@ adf_attach(device_t dev)
 		bar->base_addr = rman_get_start(bar->virt_addr);
 		bar->size = rman_get_size(bar->virt_addr);
 	}
-	pci_enable_busmaster(dev);
+	ret = pci_enable_busmaster(dev);
+	if (ret)
+		goto out_err;
+
+	adf_dbgfs_init(accel_dev);
 
 	/* Completion for VF2PF request/response message exchange */
 	init_completion(&accel_dev->u1.vf.msg_received);
@@ -186,7 +200,7 @@ adf_attach(device_t dev)
 
 	ret = hw_data->config_device(accel_dev);
 	if (ret)
-		goto out_err;
+		goto out_err_disable;
 
 	ret = adf_dev_init(accel_dev);
 	if (!ret)
@@ -208,8 +222,13 @@ adf_attach(device_t dev)
 
 	return ret;
 
+out_err_disable:
+	pci_disable_busmaster(dev);
 out_err:
 	adf_cleanup_accel(accel_dev);
+out_err_lock:
+	mutex_destroy(&accel_dev->lock);
+
 	return ret;
 }
 
@@ -227,7 +246,9 @@ adf_detach(device_t dev)
 	clear_bit(ADF_STATUS_RESTARTING, &accel_dev->status);
 	adf_dev_stop(accel_dev);
 	adf_dev_shutdown(accel_dev);
+	pci_disable_busmaster(dev);
 	adf_cleanup_accel(accel_dev);
+	mutex_destroy(&accel_dev->lock);
 	return 0;
 }
 

@@ -2,7 +2,7 @@
  * sys-bsd.c - System-dependent procedures for setting up
  * PPP interfaces on bsd-4.4-ish systems (including 386BSD, NetBSD, etc.)
  *
- * SPDX-License-Identifier: BSD-1-Clause
+ * SPDX-License-Identifier: BSD-4.3TAHOE
  *
  * Copyright (c) 1989 Carnegie Mellon University.
  * All rights reserved.
@@ -221,7 +221,7 @@ arp_ClearProxy(struct bundle *bundle, struct in_addr addr, int s)
 
 /*
  * arp_EtherAddr - get the hardware address of an interface on the
- * the same subnet as ipaddr.
+ * same subnet as ipaddr.
  */
 
 int

@@ -64,7 +64,6 @@ static char sccsid[] = "@(#)inet.c	8.5 (Berkeley) 5/24/95";
 #include <netinet/tcp_seq.h>
 #define	TCPSTATES
 #include <netinet/tcp_fsm.h>
-#include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
@@ -344,7 +343,7 @@ protopr(u_long off, const char *name, int af1, int proto)
 					xo_emit(" {T:/%-11.11s}", "(state)");
 			}
 			if (xflag) {
-				xo_emit("{T:/%-6.6s} {T:/%-6.6s} "
+				xo_emit(" {T:/%-6.6s} {T:/%-6.6s} "
 				    "{T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} "
 				    "{T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s}",
 				    "R-HIWA", "S-HIWA", "R-LOWA", "S-LOWA",
@@ -906,7 +905,7 @@ void
 udp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 {
 	struct udpstat udpstat;
-	uint64_t delivered;
+	uint64_t delivered, noportbmcast;
 
 #ifdef INET6
 	if (udp_done != 0)
@@ -939,8 +938,11 @@ udp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/with no checksum}\n");
 	p1a(udps_noport, "{:dropped-no-socket/%ju} "
 	    "{N:/dropped due to no socket}\n");
-	p(udps_noportbcast, "{:dropped-broadcast-multicast/%ju} "
-	    "{N:/broadcast\\/multicast datagram%s undelivered}\n");
+	noportbmcast = udpstat.udps_noportmcast + udpstat.udps_noportbcast;
+	if (noportbmcast || sflag <= 1)
+		xo_emit("\t{:dropped-broadcast-multicast/%ju} "
+		    "{N:/broadcast\\/multicast datagram%s undelivered}\n",
+		    (uintmax_t)noportbmcast, plural(noportbmcast));
 	p1a(udps_fullsock, "{:dropped-full-socket-buffer/%ju} "
 	    "{N:/dropped due to full socket buffers}\n");
 	p1a(udpps_pcbhashmiss, "{:not-for-hashed-pcb/%ju} "
@@ -950,11 +952,10 @@ udp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 		    udpstat.udps_badlen -
 		    udpstat.udps_badsum -
 		    udpstat.udps_noport -
-		    udpstat.udps_noportbcast -
 		    udpstat.udps_fullsock;
 	if (delivered || sflag <= 1)
 		xo_emit("\t{:delivered-packets/%ju} {N:/delivered}\n",
-		    (uint64_t)delivered);
+		    (uintmax_t)delivered);
 	p(udps_opackets, "{:output-packets/%ju} {N:/datagram%s output}\n");
 	/* the next statistic is cumulative in udps_noportbcast */
 	p(udps_filtermcast, "{:multicast-source-filter-matches/%ju} "

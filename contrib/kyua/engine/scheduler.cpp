@@ -86,11 +86,11 @@ using utils::optional;
 ///
 /// TODO(jmmv): This is here only for testing purposes.  Maybe we should expose
 /// this setting as part of the user_config.
-datetime::delta scheduler::cleanup_timeout(60, 0);
+datetime::delta scheduler::cleanup_timeout(300, 0);
 
 
 /// Timeout for the test case execenv cleanup operation.
-datetime::delta scheduler::execenv_cleanup_timeout(60, 0);
+datetime::delta scheduler::execenv_cleanup_timeout(300, 0);
 
 
 /// Timeout for the test case listing operation.
@@ -1632,7 +1632,10 @@ scheduler::generate_config(const config::tree& user_config,
     if (user_config.is_set("unprivileged_user")) {
         const passwd::user& user =
             user_config.lookup< engine::user_node >("unprivileged_user");
+        // The property is duplicated using both ATF and Kyua naming styles
+        // for better UX.
         props["unprivileged-user"] = user.name;
+        props["unprivileged_user"] = user.name;
     }
 
     return props;

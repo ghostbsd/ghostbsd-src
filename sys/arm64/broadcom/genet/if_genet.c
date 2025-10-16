@@ -350,7 +350,7 @@ gen_attach(device_t dev)
 	}
 
 	/* If address was not found, create one based on the hostid and name. */
-	if (eaddr_found == 0)
+	if (!eaddr_found)
 		ether_gen_addr(sc->ifp, &eaddr);
 	/* Attach ethernet interface */
 	ether_ifattach(sc->ifp, eaddr.octet);
@@ -657,7 +657,7 @@ gen_bus_dma_teardown(struct gen_softc *sc)
 			    error);
 	}
 
-	if (sc->tx_buf_tag != NULL) {
+	if (sc->rx_buf_tag != NULL) {
 		for (i = 0; i < RX_DESC_COUNT; i++) {
 			error = bus_dmamap_destroy(sc->rx_buf_tag,
 			    sc->rx_ring_ent[i].map);
@@ -1036,7 +1036,7 @@ gen_start_locked(struct gen_softc *sc)
 				if_sendq_prepend(ifp, m);
 			break;
 		}
-		if_bpfmtap(ifp, m);
+		bpf_mtap_if(ifp, m);
 	}
 }
 

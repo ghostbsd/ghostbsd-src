@@ -92,7 +92,7 @@
 VNET_DEFINE_STATIC(bool, nolocaltimewait) = true;
 #define	V_nolocaltimewait	VNET(nolocaltimewait)
 SYSCTL_BOOL(_net_inet_tcp, OID_AUTO, nolocaltimewait,
-    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(nolocaltimewait), true,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(nolocaltimewait), 0,
     "Do not create TCP TIME_WAIT state for local connections");
 
 /*
@@ -128,7 +128,7 @@ tcp_twstart(struct tcpcb *tp)
 
 	if (V_nolocaltimewait && (
 #ifdef INET6
-	    isipv6 ? in6_localaddr(&inp->in6p_faddr) :
+	    isipv6 ? in6_localip(&inp->in6p_faddr) :
 #endif
 #ifdef INET
 	    in_localip(inp->inp_faddr)

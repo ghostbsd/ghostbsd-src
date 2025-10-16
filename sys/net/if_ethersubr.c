@@ -112,6 +112,7 @@ void	(*vlan_input_p)(struct ifnet *, struct mbuf *);
 
 /* if_bridge(4) support */
 void	(*bridge_dn_p)(struct mbuf *, struct ifnet *);
+bool	(*bridge_member_ifaddrs_p)(void);
 
 /* if_lagg(4) support */
 struct mbuf *(*lagg_input_ethernet_p)(struct ifnet *, struct mbuf *); 
@@ -711,7 +712,7 @@ ether_input_internal(struct ifnet *ifp, struct mbuf *m)
 		 * seen by upper protocol layers.
 		 */
 		if (!ETHER_IS_MULTICAST(eh->ether_dhost) &&
-		    bcmp(IF_LLADDR(ifp), eh->ether_dhost, ETHER_ADDR_LEN) != 0)
+		    memcmp(IF_LLADDR(ifp), eh->ether_dhost, ETHER_ADDR_LEN) != 0)
 			m->m_flags |= M_PROMISC;
 	}
 
@@ -996,7 +997,8 @@ ether_ifattach(struct ifnet *ifp, const u_int8_t *lla)
 	struct sockaddr_dl *sdl;
 
 	ifp->if_addrlen = ETHER_ADDR_LEN;
-	ifp->if_hdrlen = ETHER_HDR_LEN;
+	ifp->if_hdrlen = (ifp->if_capabilities & IFCAP_VLAN_MTU) != 0 ?
+	    ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN : ETHER_HDR_LEN;
 	ifp->if_mtu = ETHERMTU;
 	if_attach(ifp);
 	ifp->if_output = ether_output;
@@ -1542,6 +1544,8 @@ ether_gen_addr(struct ifnet *ifp, struct ether_addr *hwaddr)
 {
 	ether_gen_addr_byname(if_name(ifp), hwaddr);
 }
+
+__strong_reference(ether_bpf_mtap_if, if_etherbpfmtap);
 
 DECLARE_MODULE(ether, ether_mod, SI_SUB_INIT_IF, SI_ORDER_ANY);
 MODULE_VERSION(ether, 1);

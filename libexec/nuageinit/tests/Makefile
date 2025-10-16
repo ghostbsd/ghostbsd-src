@@ -8,6 +8,8 @@ ${PACKAGE}FILES+=	adduser.lua
 ${PACKAGE}FILES+=	dirname.lua
 ${PACKAGE}FILES+=	err.lua
 ${PACKAGE}FILES+=	sethostname.lua
+${PACKAGE}FILES+=	settimezone.lua
 ${PACKAGE}FILES+=	warn.lua
+${PACKAGE}FILES+=	addfile.lua
 
 .include <bsd.test.mk>

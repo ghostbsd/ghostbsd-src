@@ -232,7 +232,6 @@ ufs_lookup_ino(struct vnode *vdp, struct vnode **vpp, struct componentname *cnp,
 
 	bmask = VFSTOUFS(vdp->v_mount)->um_mountp->mnt_stat.f_iosize - 1;
 
-#ifdef DEBUG_VFS_LOCKS
 	/*
 	 * Assert that the directory vnode is locked, and locked
 	 * exclusively for the last component lookup for modifying
@@ -250,7 +249,6 @@ ufs_lookup_ino(struct vnode *vdp, struct vnode **vpp, struct componentname *cnp,
 	if ((nameiop == CREATE || nameiop == DELETE || nameiop == RENAME) &&
 	    (flags & (LOCKPARENT | ISLASTCN)) == (LOCKPARENT | ISLASTCN))
 		ASSERT_VOP_ELOCKED(vdp, "ufs_lookup2");
-#endif
 
 restart:
 	bp = NULL;
@@ -1103,7 +1101,7 @@ ufs_direnter(struct vnode *dvp, struct vnode *tvp, struct direct *dirp,
  * to the size of the previous entry.
  */
 int
-ufs_dirremove(struct vnode *dvp, struct inode *ip, int flags, int isrmdir)
+ufs_dirremove(struct vnode *dvp, struct inode *ip, int flags, bool isrmdir)
 {
 	struct inode *dp;
 	struct direct *ep, *rep;
@@ -1226,7 +1224,7 @@ out:
  */
 int
 ufs_dirrewrite(struct inode *dp, struct inode *oip, ino_t newinum, int newtype,
-    int isrmdir)
+    u_int newparent)
 {
 	struct buf *bp;
 	struct direct *ep;
@@ -1269,7 +1267,8 @@ ufs_dirrewrite(struct inode *dp, struct inode *oip, ino_t newinum, int newtype,
 	if (!OFSFMT(vdp))
 		ep->d_type = newtype;
 	if (DOINGSOFTDEP(vdp)) {
-		softdep_setup_directory_change(bp, dp, oip, newinum, isrmdir);
+		softdep_setup_directory_change(bp, dp, oip, newinum,
+		    newparent);
 		bdwrite(bp);
 	} else {
 		if (DOINGASYNC(vdp)) {

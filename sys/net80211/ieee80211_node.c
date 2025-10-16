@@ -939,7 +939,7 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 {
 	struct ieee80211com *ic = vap->iv_ic;
 	struct ieee80211_node *ni;
-	int do_ht = 0;
+	bool do_ht;
 
 	ni = ieee80211_alloc_node(&ic->ic_sta, vap, se->se_macaddr,
 	    __func__, __LINE__);
@@ -1015,6 +1015,7 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 	 * association request/response, the only appropriate place
 	 * to setup the HT state is here.
 	 */
+	do_ht = false;
 	if (ni->ni_ies.htinfo_ie != NULL &&
 	    ni->ni_ies.htcap_ie != NULL &&
 	    vap->iv_flags_ht & IEEE80211_FHT_HT) {
@@ -1022,7 +1023,7 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 		ieee80211_ht_updateparams(ni,
 		    ni->ni_ies.htcap_ie,
 		    ni->ni_ies.htinfo_ie);
-		do_ht = 1;
+		do_ht = true;
 	}
 
 	/*
@@ -1031,7 +1032,7 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 	 *
 	 * For now, don't allow 2GHz VHT operation.
 	 */
-	if (ni->ni_ies.vhtopmode_ie != NULL &&
+	if (do_ht && ni->ni_ies.vhtopmode_ie != NULL &&
 	    ni->ni_ies.vhtcap_ie != NULL &&
 	    vap->iv_vht_flags & IEEE80211_FVHT_VHT) {
 		if (IEEE80211_IS_CHAN_2GHZ(ni->ni_chan)) {
@@ -2209,7 +2210,7 @@ ieee80211_node_delucastkey(struct ieee80211_node *ni)
 		IEEE80211_NODE_LOCK(nt);
 	nikey = NULL;
 	status = 1;		/* NB: success */
-	if (IEEE80211_KEY_UNDEFINED(&ni->ni_ucastkey)) {
+	if (!IEEE80211_KEY_UNDEFINED(&ni->ni_ucastkey)) {
 		keyix = ni->ni_ucastkey.wk_rxkeyix;
 		status = ieee80211_crypto_delkey(ni->ni_vap, &ni->ni_ucastkey);
 		if (nt->nt_keyixmap != NULL && keyix < nt->nt_keyixmax) {

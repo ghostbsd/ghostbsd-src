@@ -770,6 +770,7 @@ typedef struct {
 #define	DF_1_GLOBAL	0x00000002	/* Set the RTLD_GLOBAL for object */
 #define	DF_1_NODELETE	0x00000008	/* Set the RTLD_NODELETE for object */
 #define	DF_1_LOADFLTR	0x00000010	/* Immediate loading of filtees */
+#define	DF_1_INITFIRST	0x00000020	/* Initialize DSO first at runtime */
 #define	DF_1_NOOPEN     0x00000040	/* Do not allow loading on dlopen() */
 #define	DF_1_ORIGIN	0x00000080	/* Process $ORIGIN */
 #define	DF_1_INTERPOSE	0x00000400	/* Interpose all objects but main */
@@ -804,6 +805,7 @@ typedef struct {
 #define	NT_FREEBSD_FCTL_WXNEEDED	0x00000008
 #define	NT_FREEBSD_FCTL_LA48		0x00000010
 /* was ASG_DISABLE, do not reuse	0x00000020 */
+#define	NT_FREEBSD_FCTL_LA57		0x00000040
 
 /* Values for n_type.  Used in core files. */
 #define	NT_PRSTATUS	1	/* Process status. */
@@ -820,6 +822,7 @@ typedef struct {
 #define	NT_PROCSTAT_PSSTRINGS	15	/* Procstat ps_strings data. */
 #define	NT_PROCSTAT_AUXV	16	/* Procstat auxv data. */
 #define	NT_PTLWPINFO		17	/* Thread ptrace miscellaneous info. */
+#define	NT_PROCSTAT_KQUEUES	18	/* Procstat kqueues events. */
 #define	NT_PPC_VMX	0x100	/* PowerPC Altivec/VMX registers */
 #define	NT_PPC_VSX	0x102	/* PowerPC VSX registers */
 #define	NT_X86_SEGBASES	0x200	/* x86 FS/GS base addresses. */

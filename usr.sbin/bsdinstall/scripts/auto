@@ -35,6 +35,13 @@ f_include $BSDCFG_SHARE/dialog.subr
 ############################################################ GLOBALS
 
 #
+# List of environment variables that may be defined by the user, but modified
+# during the installation process. They are then restored when restarting this
+# script.
+#
+user_env_vars="BSDINSTALL_DISTSITE DISTRIBUTIONS WORKAROUND_GPTACTIVE WORKAROUND_LENOVO ZFSBOOT_PARTITION_SCHEME"
+
+#
 # Strings that should be moved to an i18n file and loaded with f_include_lang()
 #
 hline_arrows_tab_enter="Press arrows, TAB or ENTER"
@@ -90,6 +97,7 @@ error()
 		--yes-label "$msg_restart" \
 		--yesno "$prompt" $height $width
 	then
+		environment_restore
 		exec $0
 		# NOTREACHED
 	fi
@@ -138,12 +146,48 @@ dialog_workaround()
 		--yesno "$prompt" $height $width
 }
 
+# environment_restore
+#
+# Restore a list of environment variables when this script is restarted.
+#
+environment_restore()
+{
+	for var in $user_env_vars; do
+		eval "if [ -n \"\${ORIG_$var}\" -o -z \"\${ORIG_$var-z}\" ]; then $var=\${ORIG_$var}; else unset $var; fi"
+	done
+}
+
+# environment_save
+#
+# Save any user-defined environment variable that may be modified during the
+# installation process. They are then restored when restarting this script.
+#
+environment_save()
+{
+	for var in $user_env_vars; do
+		eval "if [ -n \"\${$var}\" -o -z \"\${$var-z}\" ]; then ORIG_$var=\${$var}; else unset ORIG_$var; fi"
+	done
+}
+
 ############################################################ MAIN
 
 f_dprintf "Began Installation at %s" "$( date )"
 
+environment_save
+
 rm -rf $BSDINSTALL_TMPETC
 mkdir $BSDINSTALL_TMPETC
+
+# Reset the ESP list
+: > ${TMPDIR:-"/tmp"}/bsdinstall-esps
+
+# With pkgbase, pkg OOM has been observed with QEMU-default 128 MiB memory size.
+# Ensure we have at least about 256 MiB (with an allowance for rounding etc.).
+physmem=$(($(sysctl -n hw.physmem) / 1048576))
+if [ $physmem -lt 200 ]; then
+        bsddialog --backtitle "$OSNAME Installer" --title "Warning" \
+	    --msgbox "Insufficient physical memory (${physmem} MiB) detected. At least 256 MiB is recommended. The installer or installed system may not function correctly." 0 0
+fi
 
 [ -f /usr/libexec/bsdinstall/local.pre-everything ] && f_dprintf "Running local.pre-everything" && sh /usr/libexec/bsdinstall/local.pre-everything "$BSDINSTALL_CHROOT"
 
@@ -443,7 +487,7 @@ if [ -z "$BSDINSTALL_SKIP_MANUAL" ]; then
 		clear
 		echo This shell is operating in a chroot in the new system. \
 		    When finished making configuration changes, type \"exit\".
-		chroot "$BSDINSTALL_CHROOT" /bin/sh 2>&1
+		chroot "$BSDINSTALL_CHROOT" /bin/sh -l 2>&1
 	fi
 fi
 

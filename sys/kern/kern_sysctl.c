@@ -518,7 +518,7 @@ sysctl_register_oid(struct sysctl_oid *oidp)
 	/* check for non-auto OID number collision */
 	if (oidp->oid_number >= 0 && oidp->oid_number < CTL_AUTO_START &&
 	    oid_number >= CTL_AUTO_START) {
-		printf("sysctl: OID number(%d) is already in use for '%s'\n",
+		panic("sysctl: OID number(%d) is already in use for '%s'\n",
 		    oidp->oid_number, oidp->oid_name);
 	}
 	/* update the OID number, if any */
@@ -2268,7 +2268,7 @@ sysctl_root(SYSCTL_HANDLER_ARGS)
 			priv = PRIV_SYSCTL_WRITEJAIL;
 #ifdef VIMAGE
 		else if ((oid->oid_kind & CTLFLAG_VNET) &&
-		     prison_owns_vnet(req->td->td_ucred))
+		     prison_owns_vnet(req->td->td_ucred->cr_prison))
 			priv = PRIV_SYSCTL_WRITEJAIL;
 #endif
 		else

@@ -2,6 +2,7 @@
 .include <src.opts.mk>
 
 ATF_TESTS_C+=		clearenv_test
+ATF_TESTS_C+=		cxa_atexit_test
 ATF_TESTS_C+=		dynthr_test
 ATF_TESTS_C+=		heapsort_test
 ATF_TESTS_C+=		mergesort_test
@@ -12,6 +13,7 @@ ATF_TESTS_C+=		qsort_b_test
 ATF_TESTS_C+=		qsort_r_compat_test
 ATF_TESTS_C+=		qsort_r_test
 ATF_TESTS_C+=		qsort_s_test
+ATF_TESTS_C+=		qsort_bench
 ATF_TESTS_C+=		quick_exit_test
 ATF_TESTS_C+=		set_constraint_handler_s_test
 ATF_TESTS_C+=		strfmon_test
@@ -79,5 +81,6 @@ LIBADD.${t}+=	netbsd util
 LIBADD.strtod_test+=		m
 
 SUBDIR+=	dynthr_mod
+SUBDIR+=	libatexit
 
 .include <bsd.test.mk>

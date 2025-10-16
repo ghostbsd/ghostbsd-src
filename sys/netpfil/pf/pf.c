@@ -191,6 +191,8 @@ VNET_DEFINE(size_t, pf_allrulecount);
 VNET_DEFINE(struct pf_krule *, pf_rulemarker);
 #endif
 
+#define PF_SCTP_MAX_ENDPOINTS		8
+
 struct pf_sctp_endpoint;
 RB_HEAD(pf_sctp_endpoints, pf_sctp_endpoint);
 struct pf_sctp_source {
@@ -333,7 +335,7 @@ static int		 pf_create_state(struct pf_krule *, struct pf_krule *,
 			    struct pf_krule *, struct pf_pdesc *,
 			    struct pf_ksrc_node *, struct pf_state_key *,
 			    struct pf_state_key *, struct mbuf *, int,
-			    u_int16_t, u_int16_t, int *, struct pfi_kkif *,
+			    int *, struct pfi_kkif *,
 			    struct pf_kstate **, int, u_int16_t, u_int16_t,
 			    int, struct pf_krule_slist *);
 static int		 pf_state_key_addr_setup(struct pf_pdesc *, struct mbuf *,
@@ -1365,15 +1367,28 @@ keyattach:
 						printf("\n");
 					}
 					s->timeout = PFTM_UNLINKED;
+					if (idx == PF_SK_STACK)
+						/*
+						 * Remove the wire key from
+						 * the hash. Other threads
+						 * can't be referencing it
+						 * because we still hold the
+						 * hash lock.
+						 */
+						pf_state_key_detach(s,
+						    PF_SK_WIRE);
 					PF_HASHROW_UNLOCK(ih);
 					KEYS_UNLOCK();
-					if (idx == PF_SK_WIRE) {
+					if (idx == PF_SK_WIRE)
+						/*
+						 * We've not inserted either key.
+						 * Free both.
+						 */
 						uma_zfree(V_pf_state_key_z, skw);
-						if (skw != sks)
-							uma_zfree(V_pf_state_key_z, sks);
-					} else {
-						pf_detach_state(s);
-					}
+					if (skw != sks)
+						uma_zfree(
+						    V_pf_state_key_z,
+						    sks);
 					return (EEXIST); /* collision! */
 				}
 			}
@@ -1616,6 +1631,7 @@ pf_state_insert(struct pfi_kkif *kif, struct pfi_kkif *orig_kif,
 	/* Returns with ID locked on success. */
 	if ((error = pf_state_key_attach(skw, sks, s)) != 0)
 		return (error);
+	skw = sks = NULL;
 
 	ih = &V_pf_idhash[PF_IDHASH(s)];
 	PF_HASHROW_ASSERT(ih);
@@ -1658,7 +1674,7 @@ pf_find_state_byid(uint64_t id, uint32_t creatorid)
 
 	pf_counter_u64_add(&V_pf_status.fcounters[FCNT_STATE_SEARCH], 1);
 
-	ih = &V_pf_idhash[(be64toh(id) % (V_pf_hashmask + 1))];
+	ih = &V_pf_idhash[PF_IDHASHID(id)];
 
 	PF_HASHROW_LOCK(ih);
 	LIST_FOREACH(s, &ih->states, entry)
@@ -3449,7 +3465,7 @@ pf_send_tcp(const struct pf_krule *r, sa_family_t af,
 
 static void
 pf_return(struct pf_krule *r, struct pf_krule *nr, struct pf_pdesc *pd,
-    struct pf_state_key *sk, int off, struct mbuf *m, struct tcphdr *th,
+    int off, struct mbuf *m, struct tcphdr *th,
     struct pfi_kkif *kif, u_int16_t bproto_sum, u_int16_t bip_sum, int hdrlen,
     u_short *reason, int rtableid)
 {
@@ -3459,12 +3475,12 @@ pf_return(struct pf_krule *r, struct pf_krule *nr, struct pf_pdesc *pd,
 
 	/* undo NAT changes, if they have taken place */
 	if (nr != NULL) {
-		PF_ACPY(saddr, &sk->addr[pd->sidx], af);
-		PF_ACPY(daddr, &sk->addr[pd->didx], af);
+		PF_ACPY(saddr, &pd->osrc, pd->af);
+		PF_ACPY(daddr, &pd->odst, pd->af);
 		if (pd->sport)
-			*pd->sport = sk->port[pd->sidx];
+			*pd->sport = pd->osport;
 		if (pd->dport)
-			*pd->dport = sk->port[pd->didx];
+			*pd->dport = pd->odport;
 		if (pd->proto_sum)
 			*pd->proto_sum = bproto_sum;
 		if (pd->ip_sum)
@@ -4744,6 +4760,9 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 		break;
 	}
 
+	pd->osport = sport;
+	pd->odport = dport;
+
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_FILTER].active.ptr);
 
 	/* check packet for BINAT/NAT/RDR */
@@ -5031,7 +5050,7 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 	    ((r->rule_flag & PFRULE_RETURNRST) ||
 	    (r->rule_flag & PFRULE_RETURNICMP) ||
 	    (r->rule_flag & PFRULE_RETURN))) {
-		pf_return(r, nr, pd, sk, off, m, th, kif, bproto_sum,
+		pf_return(r, nr, pd, off, m, th, kif, bproto_sum,
 		    bip_sum, hdrlen, &reason, r->rtableid);
 	}
 
@@ -5049,13 +5068,14 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 	    (pd->flags & PFDESC_TCP_NORM))) {
 		int action;
 		action = pf_create_state(r, nr, a, pd, nsn, nk, sk, m, off,
-		    sport, dport, &rewrite, kif, sm, tag, bproto_sum, bip_sum,
+		    &rewrite, kif, sm, tag, bproto_sum, bip_sum,
 		    hdrlen, &match_rules);
+		sk = nk = NULL;
 		if (action != PF_PASS) {
 			pd->act.log |= PF_LOG_FORCE;
 			if (action == PF_DROP &&
 			    (r->rule_flag & PFRULE_RETURN))
-				pf_return(r, nr, pd, sk, off, m, th, kif,
+				pf_return(r, nr, pd, off, m, th, kif,
 				    bproto_sum, bip_sum, hdrlen, &reason,
 				    pd->act.rtableid);
 			return (action);
@@ -5068,6 +5088,7 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 
 		uma_zfree(V_pf_state_key_z, sk);
 		uma_zfree(V_pf_state_key_z, nk);
+		sk = nk = NULL;
 	}
 
 	/* copy back packet headers if we performed NAT operations */
@@ -5101,8 +5122,8 @@ cleanup:
 static int
 pf_create_state(struct pf_krule *r, struct pf_krule *nr, struct pf_krule *a,
     struct pf_pdesc *pd, struct pf_ksrc_node *nsn, struct pf_state_key *nk,
-    struct pf_state_key *sk, struct mbuf *m, int off, u_int16_t sport,
-    u_int16_t dport, int *rewrite, struct pfi_kkif *kif, struct pf_kstate **sm,
+    struct pf_state_key *sk, struct mbuf *m, int off,
+    int *rewrite, struct pfi_kkif *kif, struct pf_kstate **sm,
     int tag, u_int16_t bproto_sum, u_int16_t bip_sum, int hdrlen,
     struct pf_krule_slist *match_rules)
 {
@@ -5265,7 +5286,8 @@ pf_create_state(struct pf_krule *r, struct pf_krule *nr, struct pf_krule *a,
 	if (nr == NULL) {
 		KASSERT((sk == NULL && nk == NULL), ("%s: nr %p sk %p, nk %p",
 		    __func__, nr, sk, nk));
-		sk = pf_state_key_setup(pd, m, off, pd->src, pd->dst, sport, dport);
+		sk = pf_state_key_setup(pd, m, off, pd->src, pd->dst,
+		    pd->osport, pd->odport);
 		if (sk == NULL)
 			goto csfailed;
 		nk = sk;
@@ -5281,6 +5303,7 @@ pf_create_state(struct pf_krule *r, struct pf_krule *nr, struct pf_krule *a,
 		goto drop;
 	} else
 		*sm = s;
+	sk = nk = NULL;
 
 	if (tag > 0)
 		s->tag = tag;
@@ -5289,15 +5312,12 @@ pf_create_state(struct pf_krule *r, struct pf_krule *nr, struct pf_krule *a,
 		pf_set_protostate(s, PF_PEER_SRC, PF_TCPS_PROXY_SRC);
 		/* undo NAT changes, if they have taken place */
 		if (nr != NULL) {
-			struct pf_state_key *skt = s->key[PF_SK_WIRE];
-			if (pd->dir == PF_OUT)
-				skt = s->key[PF_SK_STACK];
-			PF_ACPY(pd->src, &skt->addr[pd->sidx], pd->af);
-			PF_ACPY(pd->dst, &skt->addr[pd->didx], pd->af);
+			PF_ACPY(pd->src, &pd->osrc, pd->af);
+			PF_ACPY(pd->dst, &pd->odst, pd->af);
 			if (pd->sport)
-				*pd->sport = skt->port[pd->sidx];
+				*pd->sport = pd->osport;
 			if (pd->dport)
-				*pd->dport = skt->port[pd->didx];
+				*pd->dport = pd->odport;
 			if (pd->proto_sum)
 				*pd->proto_sum = bproto_sum;
 			if (pd->ip_sum)
@@ -6356,6 +6376,7 @@ pf_sctp_multihome_add_addr(struct pf_pdesc *pd, struct pf_addr *a, uint32_t v_ta
 	};
 	struct pf_sctp_source *i;
 	struct pf_sctp_endpoint *ep;
+	int count;
 
 	PF_SCTP_ENDPOINTS_LOCK();
 
@@ -6374,11 +6395,19 @@ pf_sctp_multihome_add_addr(struct pf_pdesc *pd, struct pf_addr *a, uint32_t v_ta
 	}
 
 	/* Avoid inserting duplicates. */
+	count = 0;
 	TAILQ_FOREACH(i, &ep->sources, entry) {
+		count++;
 		if (pf_addr_cmp(&i->addr, a, pd->af) == 0) {
 			PF_SCTP_ENDPOINTS_UNLOCK();
 			return;
 		}
+	}
+
+	/* Limit the number of addresses per endpoint. */
+	if (count >= PF_SCTP_MAX_ENDPOINTS) {
+		PF_SCTP_ENDPOINTS_UNLOCK();
+		return;
 	}
 
 	i = malloc(sizeof(*i), M_PFTEMP, M_NOWAIT);
@@ -8488,6 +8517,8 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 
 	pd.src = (struct pf_addr *)&h->ip_src;
 	pd.dst = (struct pf_addr *)&h->ip_dst;
+	PF_ACPY(&pd.osrc, pd.src, pd.af);
+	PF_ACPY(&pd.odst, pd.dst, pd.af);
 	pd.ip_sum = &h->ip_sum;
 	pd.proto = h->ip_p;
 	pd.tos = h->ip_tos & ~IPTOS_ECN_MASK;
@@ -9039,6 +9070,8 @@ pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb 
 
 	pd.src = (struct pf_addr *)&h->ip6_src;
 	pd.dst = (struct pf_addr *)&h->ip6_dst;
+	PF_ACPY(&pd.osrc, pd.src, pd.af);
+	PF_ACPY(&pd.odst, pd.dst, pd.af);
 	pd.tos = IPV6_DSCP(h);
 	pd.tot_len = ntohs(h->ip6_plen) + sizeof(struct ip6_hdr);
 

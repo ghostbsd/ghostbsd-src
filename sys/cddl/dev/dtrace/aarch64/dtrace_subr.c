@@ -124,32 +124,31 @@ dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 	(*func)(0, (uintptr_t)VM_MIN_KERNEL_ADDRESS);
 }
 
-void
-dtrace_xcall(processorid_t cpu, dtrace_xcall_t func, void *arg)
-{
-	cpuset_t cpus;
+static uint64_t nsec_scale;
 
-	if (cpu == DTRACE_CPUALL)
-		cpus = all_cpus;
-	else
-		CPU_SETOF(cpu, &cpus);
+#define SCALE_SHIFT	25
 
-	smp_rendezvous_cpus(cpus, smp_no_rendezvous_barrier, func,
-	    smp_no_rendezvous_barrier, arg);
-}
-
+/*
+ * Choose scaling factors which let us convert a cntvct_el0 value to nanoseconds
+ * without overflow, as in the amd64 implementation.
+ *
+ * Documentation for the ARM generic timer states that typical counter
+ * frequencies are in the range 1Mhz-50Mhz; in ARMv9 the frequency is fixed at
+ * 1GHz.  The lower bound of 1MHz forces the shift to be at most 25 bits.  At
+ * that frequency, the calculation (hi * scale) << (32 - shift) will not
+ * overflow for over 100 years, assuming that the counter value starts at 0 upon
+ * boot.
+ */
 static void
-dtrace_sync_func(void)
+dtrace_gethrtime_init(void *arg __unused)
 {
+	uint64_t freq;
 
+	freq = READ_SPECIALREG(cntfrq_el0);
+	nsec_scale = ((uint64_t)NANOSEC << SCALE_SHIFT) / freq;
 }
-
-void
-dtrace_sync(void)
-{
-
-	dtrace_xcall(DTRACE_CPUALL, (dtrace_xcall_t)dtrace_sync_func, NULL);
-}
+SYSINIT(dtrace_gethrtime_init, SI_SUB_DTRACE, SI_ORDER_ANY,
+    dtrace_gethrtime_init, NULL);
 
 /*
  * DTrace needs a high resolution time function which can be called from a
@@ -161,10 +160,13 @@ uint64_t
 dtrace_gethrtime(void)
 {
 	uint64_t count, freq;
+	uint32_t lo, hi;
 
 	count = READ_SPECIALREG(cntvct_el0);
-	freq = READ_SPECIALREG(cntfrq_el0);
-	return ((1000000000UL * count) / freq);
+	lo = count;
+	hi = count >> 32;
+	return (((lo * nsec_scale) >> SCALE_SHIFT) +
+	    ((hi * nsec_scale) << (32 - SCALE_SHIFT)));
 }
 
 /*

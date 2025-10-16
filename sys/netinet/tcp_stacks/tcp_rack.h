@@ -315,8 +315,6 @@ extern counter_u64_t rack_opts_arry[RACK_OPTS_SIZE];
 /*
  * Locking for the rack control block.
  * a) Locked by INP_WLOCK
- * b) Locked by the hpts-mutex
- *
  */
 #define RACK_GP_HIST 4	/* How much goodput history do we maintain? */
 
@@ -504,9 +502,10 @@ struct rack_control {
 	uint32_t input_pkt;
 	uint32_t saved_input_pkt;
 	uint32_t saved_rxt_clamp_val; 	/* The encoded value we used to setup clamping */
-	struct newreno rc_saved_beta;	/*
-					 * For newreno cc:
-					 * rc_saved_cc are the values we have had
+	uint32_t rc_saved_beta;
+	uint32_t rc_saved_beta_ecn;	/*
+					 * For newreno cc: rc_saved_beta and
+					 * rc_saved_beta_ecn are the values we have had
 					 * set by the user, if pacing is not happening
 					 * (i.e. its early and we have not turned on yet
 					 *  or it was turned off). The minute pacing
@@ -595,7 +594,7 @@ struct rack_control {
 
 struct tcp_rack {
 	/* First cache line 0x00 */
-	TAILQ_ENTRY(tcp_rack) r_hpts;	/* hptsi queue next Lock(b) */
+	TAILQ_ENTRY(tcp_rack) r_hpts;	/* unused */
 	int32_t(*r_substate) (struct mbuf *, struct tcphdr *,
 	    struct socket *, struct tcpcb *, struct tcpopt *,
 	    int32_t, int32_t, uint32_t, int, int, uint8_t);	/* Lock(a) */

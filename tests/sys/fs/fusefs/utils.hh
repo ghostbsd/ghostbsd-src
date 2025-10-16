@@ -55,6 +55,7 @@ bool is_unsafe_aio_enabled(void);
 extern const uint32_t libfuse_max_write;
 class FuseTest : public ::testing::Test {
 	protected:
+	uint32_t m_maxread;
 	uint32_t m_maxreadahead;
 	uint32_t m_maxwrite;
 	uint32_t m_init_flags;
@@ -68,6 +69,7 @@ class FuseTest : public ::testing::Test {
 	bool m_async;
 	bool m_noclusterr;
 	bool m_nointr;
+	bool m_no_auto_init;
 	unsigned m_time_gran;
 	MockFS *m_mock = NULL;
 	const static uint64_t FH = 0xdeadbeef1a7ebabe;
@@ -80,6 +82,7 @@ class FuseTest : public ::testing::Test {
 	unsigned long m_maxphys;
 
 	FuseTest():
+		m_maxread(0),
 		m_maxreadahead(0),
 		m_maxwrite(0),
 		m_init_flags(0),
@@ -93,6 +96,7 @@ class FuseTest : public ::testing::Test {
 		m_async(false),
 		m_noclusterr(false),
 		m_nointr(false),
+		m_no_auto_init(false),
 		m_time_gran(1),
 		m_fsname(""),
 		m_subtype(""),

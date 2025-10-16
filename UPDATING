@@ -12,6 +12,55 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20250916:
+	If SRCCONF is unset and a file named src.conf is present at
+	the top of the source tree, it will now be used instead of
+	/etc/src.conf.
+
+20250823:
+	Commit 3f61ececacd8 changed the internal KAPI between
+	the NFS modules.  As such, they all need to be rebuilt
+	from sources.
+
+20250822:
+	A build system bug which caused some files to be installed in the wrong
+	package has been fixed.  As a result some files have moved to different
+	packages; in particular, files under /usr/share/examples are now in the
+	new FreeBSD-examples package.
+
+	This change only affects pkgbase users.
+
+20250713:
+	LinuxKPI dma-mapping.h were pulled into the tree from drm-kmod.
+	LinuxKPI acpi changes effecting drivers and drm-kmod.
+	Bump __FreeBSD_version to 1403503 to be able to detect these changes.
+
+20250707:
+	Commit f5195b1a63df removed in6_maxmtu and its setter in6_setmaxmtu().
+	in6_maxmtu is used to store the max IPv6 MTU of all interfaces,
+	however it does not have any in-tree consumers since the introduction
+	from the KAME project. The removal should have little impact, and the
+	max IPv6 MTU can be easily retrieved by iterating over all the attached
+	interface if 3rd party modules need it.
+
+20250419:
+	LinuxKPI alloc routines were changed to return physically contiguous
+	memory where expected. These changes may require out-of-tree drivers
+	to be recompiled.
+	Bump __FreeBSD_version to 1402505 to be able to detect this change.
+
+20250419:
+	Intel iwlwifi firmware has been removed from the src repository.
+	Before updating their system, users of iwlwifi(4) or iwx(4) must
+	install the appropriate firmware for their chipset using fwget(8) or
+	building it from ports.
+
+20250403:
+	Commit 8aedc83c1cc2 ("New setcred() system call and associated MAC
+	hooks") introduces new MAC hooks for the new setcred() system call,
+	modifying the layout and size of 'struct mac_policy_ops'.  As a result,
+	all MAC modules need to be recompiled.
+
 20250228:
 	Commit 9fed5151903f modified the internal API between the
 	nfscommon and nfscl modules.  As such, both of these modules
@@ -22,6 +71,12 @@ and/or ports.
 	The layout of NFS file handles for the tarfs, cd9660, and ext2fs
 	file systems has changed.  An NFS server that exports any of these file
 	systems will need its clients to unmount and remount the exports.
+
+20241222:
+	The ng_ubt(4) driver now requires firmwares to be loaded on Realtek
+	adaptors with rtlbtfw(8) utility. It no longer attaches to devices
+	standing in bootloader mode. Firmware files are available in the
+	comms/rtlbt-firmware port.
 
 20240419:
 	Clang, llvm, lld, lldb, compiler-rt, libc++, libunwind and openmp have
@@ -236,7 +291,7 @@ and/or ports.
 	Bump _FreeBSD_version to 1400078 to be able to detect this change.
 
 20221212:
-	llvm-objump is now always installed as objdump.  Previously there was
+	llvm-objdump is now always installed as objdump.  Previously there was
 	no /usr/bin/objdump unless the WITH_LLVM_BINUTILS knob was used.
 
 	Some LLVM objdump options have a different output format compared to
@@ -1961,10 +2016,11 @@ COMMON ITEMS:
 	# Note: sometimes if you are running current you gotta do more than
 	# is listed here if you are upgrading from a really old current.
 
-	<make sure you have good level 0 dumps>
+	<make sure you have good level 0 dumps>		[2]
 	make buildworld
+	<make sure any needed PORTS_MODULES are set>	[1]
 	make buildkernel KERNCONF=YOUR_KERNEL_HERE
-	make installkernel KERNCONF=YOUR_KERNEL_HERE	[1]
+	make installkernel KERNCONF=YOUR_KERNEL_HERE
 	<reboot in single user>				[3]
 	etcupdate -p					[5]
 	make installworld
@@ -1998,10 +2054,11 @@ COMMON ITEMS:
 
 	To upgrade in-place from stable to current
 	----------------------------------------------
-	<make sure you have good level 0 dumps>
+	<make sure you have good level 0 dumps>		[2]
 	make buildworld					[9]
+	<make sure any needed PORTS_MODULES are set>	[1]
 	make buildkernel KERNCONF=YOUR_KERNEL_HERE	[8]
-	make installkernel KERNCONF=YOUR_KERNEL_HERE	[1]
+	make installkernel KERNCONF=YOUR_KERNEL_HERE
 	<reboot in single user>				[3]
 	etcupdate -p					[5]
 	make installworld
@@ -2032,7 +2089,12 @@ FOOTNOTES:
 	happens automatically. If all your modules come from ports, then adding
 	the port origin directories to PORTS_MODULES instead is also automatic
 	and effective, eg:
-	     PORTS_MODULES+=x11/nvidia-driver
+	     PORTS_MODULES+=graphics/drm-kmod graphics/nvidia-drm-kmod
+
+	[2] To make complete dumps on zfs(4), use bectl(8), which
+	creates bootable snapshots of configurable depth that are
+	selectable via the bootloader. For ufs(4), use dump(8) and
+	restore(8).
 
 	[3] From the bootblocks, boot -s, and then do
 		fsck -p

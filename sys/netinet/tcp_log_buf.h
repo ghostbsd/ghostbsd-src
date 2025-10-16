@@ -60,14 +60,6 @@ struct tcp_log_verbose
 	uint8_t		_pad[4];
 } ALIGN_TCP_LOG;
 
-/* Internal RACK state variables. */
-struct tcp_log_rack
-{
-	uint32_t	tlr_rack_rtt;		/* rc_rack_rtt */
-	uint8_t		tlr_state;		/* Internal RACK state */
-	uint8_t		_pad[3];		/* Padding */
-};
-
 struct tcp_log_bbr {
 	uint64_t cur_del_rate;
 	uint64_t delRate;
@@ -126,7 +118,6 @@ struct tcp_log_sendfile {
  */
 union tcp_log_stackspecific
 {
-	struct tcp_log_rack u_rack;
 	struct tcp_log_bbr u_bbr;
 	struct tcp_log_sendfile u_sf;
 	struct tcp_log_raw u_raw;	/* "raw" log access */
@@ -185,7 +176,6 @@ struct tcp_log_buffer
 	uint8_t		_pad[3];	/* Padding */
 	/* Per-stack info */
 	union tcp_log_stackspecific tlb_stackinfo;
-#define	tlb_rack	tlb_stackinfo.u_rack
 
 	/* The packet */
 	uint32_t	tlb_len;	/* The packet's data length */
@@ -546,12 +536,12 @@ struct tcpcb;
 			    NULL, NULL, 0, NULL);			\
 	} while (0)
 #endif /* TCP_LOG_FORCEVERBOSE */
+/* Assumes/requires the caller has already checked tcp_bblogging_on(tp). */
 #define	TCP_LOG_EVENTP(tp, th, rxbuf, txbuf, eventid, errornum, len, stackinfo, th_hostorder, tv) \
 	do {								\
-		if (tcp_bblogging_on(tp))				\
-			tcp_log_event(tp, th, rxbuf, txbuf, eventid,	\
-			    errornum, len, stackinfo, th_hostorder,	\
-			    NULL, NULL, 0, tv);				\
+		KASSERT(tcp_bblogging_on(tp), ("bblogging is off")); \
+		tcp_log_event(tp, th, rxbuf, txbuf, eventid, errornum, len,	\
+			stackinfo, th_hostorder, NULL, NULL, 0, tv); \
 	} while (0)
 
 #ifdef TCP_BLACKBOX
@@ -577,6 +567,9 @@ void tcp_log_flowend(struct tcpcb *tp);
 void tcp_log_sendfile(struct socket *so, off_t offset, size_t nbytes,
     int flags);
 int tcp_log_apply_ratio(struct tcpcb *tp, int ratio);
+#ifdef DDB
+void db_print_bblog_entries(struct tcp_log_stailq *log_entries, int indent);
+#endif
 #else /* !TCP_BLACKBOX */
 #define tcp_log_verbose	(false)
 

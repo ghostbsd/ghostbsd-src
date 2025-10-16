@@ -23,6 +23,7 @@ FILES=	\
 	bsd.confs.mk \
 	bsd.cpu.mk \
 	bsd.crunchgen.mk \
+	bsd.debug.mk \
 	bsd.dep.mk \
 	bsd.dirs.mk \
 	bsd.doc.mk \
@@ -52,6 +53,7 @@ FILES=	\
 	bsd.progs.mk \
 	bsd.snmpmod.mk \
 	bsd.subdir.mk \
+	bsd.suffixes-extra.mk \
 	bsd.suffixes-posix.mk \
 	bsd.suffixes.mk \
 	bsd.symver.mk \

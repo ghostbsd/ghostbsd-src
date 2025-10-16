@@ -154,6 +154,7 @@ MAC		opt_global.h
 MAC_BIBA	opt_dontuse.h
 MAC_BSDEXTENDED	opt_dontuse.h
 MAC_DDB		opt_dontuse.h
+MAC_DO		opt_dontuse.h
 MAC_IFOFF	opt_dontuse.h
 MAC_IPACL	opt_dontuse.h
 MAC_LOMAC	opt_dontuse.h
@@ -278,6 +279,7 @@ TMPFS		opt_dontuse.h
 UDF		opt_dontuse.h
 UNIONFS		opt_dontuse.h
 ZFS		opt_dontuse.h
+P9FS		opt_dontuse.h
 
 # Pseudofs debugging
 PSEUDOFS_TRACE	opt_pseudofs.h
@@ -1017,3 +1019,6 @@ HIDRAW_MAKE_UHID_ALIAS	opt_hid.h
 # This option is insecure except in controlled environments where the static
 # environment's contents are known to be safe.
 PRESERVE_EARLY_KENV	opt_global.h
+
+# Options for the Intel QuickAssist (QAT) driver.
+QAT_DISABLE_SAFE_DC_MODE	opt_qat.h
