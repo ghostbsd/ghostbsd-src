@@ -243,6 +243,9 @@ static struct bool_flags pr_flag_allow[NBBY * NBPW] = {
 	{"allow.unprivileged_parent_tampering",
 	    "allow.nounprivileged_parent_tampering",
 	    PR_ALLOW_UNPRIV_PARENT_TAMPER},
+#ifdef AUDIT
+	{"allow.setaudit", "allow.nosetaudit", PR_ALLOW_SETAUDIT},
+#endif
 };
 static unsigned pr_allow_all = PR_ALLOW_ALL_STATIC;
 const size_t pr_flag_allow_size = sizeof(pr_flag_allow);
@@ -991,7 +994,6 @@ int
 kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 {
 	struct file *jfp_out;
-	struct jaildesc *desc_in;
 	struct nameidata nd;
 #ifdef INET
 	struct prison_ip *ip4;
@@ -1033,13 +1035,13 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 	char numbuf[12];
 
 	mypr = td->td_ucred->cr_prison;
-	if (((flags & (JAIL_CREATE | JAIL_AT_DESC)) == JAIL_CREATE)
-	    && mypr->pr_childmax == 0)
+	if (((flags & (JAIL_CREATE | JAIL_AT_DESC)) == JAIL_CREATE) &&
+	    mypr->pr_childmax == 0)
 		return (EPERM);
 	if (flags & ~JAIL_SET_MASK)
 		return (EINVAL);
-	if ((flags & (JAIL_USE_DESC | JAIL_AT_DESC))
-	    == (JAIL_USE_DESC | JAIL_AT_DESC))
+	if ((flags & (JAIL_USE_DESC | JAIL_AT_DESC)) ==
+	    (JAIL_USE_DESC | JAIL_AT_DESC))
 		return (EINVAL);
 	prison_hold(mypr);
 
@@ -1095,24 +1097,13 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			 * descriptor's prison.
 			 */
 			prison_free(mypr);
-			error = jaildesc_find(td, jfd_in, &desc_in, &mypr,
-			    NULL);
+			error = jaildesc_find(td, jfd_in, &mypr, NULL);
 			if (error != 0) {
-				vfs_opterror(opts, error == ENOENT
-				    ? "descriptor to dead jail"
-				    : "not a jail descriptor");
+				vfs_opterror(opts, error == ENOENT ?
+				    "descriptor to dead jail" :
+				    "not a jail descriptor");
 				goto done_errmsg;
 			}
-			/*
-			 * Check file permissions using the current
-			 * credentials, and operation permissions
-			 * using the descriptor's credentials.
-			 */
-			error = vaccess(VREG, desc_in->jd_mode, desc_in->jd_uid,
-			    desc_in->jd_gid, VEXEC, td->td_ucred);
-			JAILDESC_UNLOCK(desc_in);
-			if (error != 0)
-				goto done_free;
 			if ((flags & JAIL_CREATE) && mypr->pr_childmax == 0) {
 				error = EPERM;
 				goto done_free;
@@ -1516,27 +1507,15 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 	}
 	if (flags & JAIL_USE_DESC) {
 		/* Get the jail from its descriptor. */
-		error = jaildesc_find(td, jfd_in, &desc_in, &pr, &jdcred);
+		error = jaildesc_find(td, jfd_in, &pr, &jdcred);
 		if (error) {
-			vfs_opterror(opts, error == ENOENT
-			    ? "descriptor to dead jail"
-			    : "not a jail descriptor");
+			vfs_opterror(opts, error == ENOENT ?
+			    "descriptor to dead jail" :
+			    "not a jail descriptor");
 			goto done_deref;
 		}
 		drflags |= PD_DEREF;
-		/*
-		 * Check file permissions using the current credentials,
-		 * and operation permissions using the descriptor's
-		 * credentials.
-		 */
-		error = vaccess(VREG, desc_in->jd_mode, desc_in->jd_uid,
-		    desc_in->jd_gid, VWRITE, td->td_ucred);
-		if (error == 0 && (flags & JAIL_ATTACH))
-			error = vaccess(VREG, desc_in->jd_mode, desc_in->jd_uid,
-			    desc_in->jd_gid, VEXEC, td->td_ucred);
-		JAILDESC_UNLOCK(desc_in);
-		if (error == 0)
-			error = priv_check_cred(jdcred, PRIV_JAIL_SET);
+		error = priv_check_cred(jdcred, PRIV_JAIL_SET);
 		if (error == 0 && (flags & JAIL_ATTACH))
 			error = priv_check_cred(jdcred, PRIV_JAIL_ATTACH);
 		crfree(jdcred);
@@ -2245,9 +2224,7 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 	 */
 	if (created) {
 		sx_assert(&allprison_lock, SX_XLOCKED);
-		mtx_lock(&ppr->pr_mtx);
-		knote_fork(ppr->pr_klist, pr->pr_id);
-		mtx_unlock(&ppr->pr_mtx);
+		prison_knote(ppr, NOTE_JAIL_CHILD | pr->pr_id);
 		mtx_lock(&pr->pr_mtx);
 		drflags |= PD_LOCKED;
 		pr->pr_state = PRISON_STATE_ALIVE;
@@ -2500,7 +2477,6 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 {
 	struct bool_flags *bf;
 	struct file *jfp_out;
-	struct jaildesc *desc_in;
 	struct jailsys_flags *jsf;
 	struct prison *pr, *mypr;
 	struct vfsopt *opt;
@@ -2512,8 +2488,8 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 
 	if (flags & ~JAIL_GET_MASK)
 		return (EINVAL);
-	if ((flags & (JAIL_USE_DESC | JAIL_AT_DESC))
-	    == (JAIL_USE_DESC | JAIL_AT_DESC))
+	if ((flags & (JAIL_USE_DESC | JAIL_AT_DESC)) ==
+	    (JAIL_USE_DESC | JAIL_AT_DESC))
 		return (EINVAL);
 
 	/* Get the parameter list. */
@@ -2547,19 +2523,14 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 		}
 		if (flags & JAIL_USE_DESC) {
 			/* Get the jail from its descriptor. */
-			error = jaildesc_find(td, jfd_in, &desc_in, &pr, NULL);
+			error = jaildesc_find(td, jfd_in, &pr, NULL);
 			if (error) {
-				vfs_opterror(opts, error == ENOENT
-				    ? "descriptor to dead jail"
-				    : "not a jail descriptor");
+				vfs_opterror(opts, error == ENOENT ?
+				    "descriptor to dead jail" :
+				    "not a jail descriptor");
 				goto done;
 			}
 			drflags |= PD_DEREF;
-			error = vaccess(VREG, desc_in->jd_mode, desc_in->jd_uid,
-			    desc_in->jd_gid, VREAD, td->td_ucred);
-			JAILDESC_UNLOCK(desc_in);
-			if (error != 0)
-				goto done;
 			mtx_lock(&pr->pr_mtx);
 			drflags |= PD_LOCKED;
 			if (!(prison_isalive(pr) || (flags & JAIL_DYING))) {
@@ -2573,19 +2544,13 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 		if (flags & JAIL_AT_DESC) {
 			/* Look up jails based on the descriptor's prison. */
 			prison_free(mypr);
-			error = jaildesc_find(td, jfd_in, &desc_in, &mypr,
-			    NULL);
+			error = jaildesc_find(td, jfd_in, &mypr, NULL);
 			if (error != 0) {
-				vfs_opterror(opts, error == ENOENT
-				    ? "descriptor to dead jail"
-				    : "not a jail descriptor");
+				vfs_opterror(opts, error == ENOENT ?
+				    "descriptor to dead jail" :
+				    "not a jail descriptor");
 				goto done;
 			}
-			error = vaccess(VREG, desc_in->jd_mode, desc_in->jd_uid,
-			    desc_in->jd_gid, VEXEC, td->td_ucred);
-			JAILDESC_UNLOCK(desc_in);
-			if (error != 0)
-				goto done;
 		}
 		if (flags & (JAIL_GET_DESC | JAIL_OWN_DESC)) {
 			/* Allocate a jail descriptor to return later. */
@@ -2916,23 +2881,14 @@ sys_jail_remove(struct thread *td, struct jail_remove_args *uap)
 int
 sys_jail_remove_jd(struct thread *td, struct jail_remove_jd_args *uap)
 {
-	struct jaildesc *jd;
 	struct prison *pr;
 	struct ucred *jdcred;
 	int error;
 
-	error = jaildesc_find(td, uap->fd, &jd, &pr, &jdcred);
+	error = jaildesc_find(td, uap->fd, &pr, &jdcred);
 	if (error)
 		return (error);
-	/*
-	 * Check file permissions using the current credentials, and
-	 * operation permissions using the descriptor's credentials.
-	 */
-	error = vaccess(VREG, jd->jd_mode, jd->jd_uid, jd->jd_gid, VWRITE,
-	    td->td_ucred);
-	JAILDESC_UNLOCK(jd);
-	if (error == 0)
-	    error = priv_check_cred(jdcred, PRIV_JAIL_REMOVE);
+	error = priv_check_cred(jdcred, PRIV_JAIL_REMOVE);
 	crfree(jdcred);
 	if (error) {
 		prison_free(pr);
@@ -3002,26 +2958,17 @@ sys_jail_attach(struct thread *td, struct jail_attach_args *uap)
 int
 sys_jail_attach_jd(struct thread *td, struct jail_attach_jd_args *uap)
 {
-	struct jaildesc *jd;
 	struct prison *pr;
 	struct ucred *jdcred;
 	int drflags, error;
 
 	sx_slock(&allprison_lock);
 	drflags = PD_LIST_SLOCKED;
-	error = jaildesc_find(td, uap->fd, &jd, &pr, &jdcred);
+	error = jaildesc_find(td, uap->fd, &pr, &jdcred);
 	if (error)
 		goto fail;
 	drflags |= PD_DEREF;
-	/*
-	 * Check file permissions using the current credentials, and
-	 * operation permissions using the descriptor's credentials.
-	 */
-	error = vaccess(VREG, jd->jd_mode, jd->jd_uid, jd->jd_gid, VEXEC,
-	    td->td_ucred);
-	JAILDESC_UNLOCK(jd);
-	if (error == 0)
-		error = priv_check_cred(jdcred, PRIV_JAIL_ATTACH);
+	error = priv_check_cred(jdcred, PRIV_JAIL_ATTACH);
 	crfree(jdcred);
 	if (error)
 		goto fail;
@@ -4345,7 +4292,6 @@ prison_priv_check(struct ucred *cred, int priv)
 		 */
 	case PRIV_KTRACE:
 
-#if 0
 		/*
 		 * Allow jailed processes to configure audit identity and
 		 * submit audit records (login, etc).  In the future we may
@@ -4354,6 +4300,11 @@ prison_priv_check(struct ucred *cred, int priv)
 		 */
 	case PRIV_AUDIT_GETAUDIT:
 	case PRIV_AUDIT_SETAUDIT:
+		if (cred->cr_prison->pr_allow & PR_ALLOW_SETAUDIT)
+			return (0);
+		else
+			return (EPERM);
+#if 0
 	case PRIV_AUDIT_SUBMIT:
 #endif
 
@@ -4991,7 +4942,6 @@ sysctl_jail_param(SYSCTL_HANDLER_ARGS)
  * jail creation time but cannot be changed in an existing jail.
  */
 SYSCTL_JAIL_PARAM(, jid, CTLTYPE_INT | CTLFLAG_RDTUN, "I", "Jail ID");
-SYSCTL_JAIL_PARAM(, desc, CTLTYPE_INT | CTLFLAG_RW, "I", "Jail descriptor");
 SYSCTL_JAIL_PARAM(, parent, CTLTYPE_INT | CTLFLAG_RD, "I", "Jail parent ID");
 SYSCTL_JAIL_PARAM_STRING(, name, CTLFLAG_RW, MAXHOSTNAMELEN, "Jail name");
 SYSCTL_JAIL_PARAM_STRING(, path, CTLFLAG_RDTUN, MAXPATHLEN, "Jail root path");
@@ -5091,6 +5041,10 @@ SYSCTL_JAIL_PARAM(_allow, settime, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may set system time");
 SYSCTL_JAIL_PARAM(_allow, routing, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may modify routing table");
+#ifdef AUDIT
+SYSCTL_JAIL_PARAM(_allow, setaudit, CTLTYPE_INT | CTLFLAG_RW,
+    "B", "Jail may set and get audit session state");
+#endif
 
 SYSCTL_JAIL_PARAM_SUBNODE(allow, mount, "Jail mount/unmount permission flags");
 SYSCTL_JAIL_PARAM(_allow_mount, , CTLTYPE_INT | CTLFLAG_RW,
@@ -5427,6 +5381,7 @@ prison_knote(struct prison *pr, long hint)
 	if (!locked)
 		mtx_lock(&pr->pr_mtx);
 	KNOTE_LOCKED(pr->pr_klist, hint);
+	jaildesc_knote(pr, hint);
 	if (!locked)
 		mtx_unlock(&pr->pr_mtx);
 }

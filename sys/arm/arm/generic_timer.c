@@ -889,7 +889,7 @@ wfxt_check(const struct cpu_feat *feat __unused, u_int midr __unused)
 
 	if (!get_kernel_reg(ID_AA64ISAR2_EL1, &id_aa64isar2))
 		return (FEAT_ALWAYS_DISABLE);
-	if (ID_AA64ISAR2_WFxT_VAL(id_aa64isar2) >= ID_AA64ISAR2_WFxT_NONE)
+	if (ID_AA64ISAR2_WFxT_VAL(id_aa64isar2) >= ID_AA64ISAR2_WFxT_IMPL)
 		return (FEAT_DEFAULT_ENABLE);
 
 	return (FEAT_ALWAYS_DISABLE);
@@ -905,8 +905,15 @@ wfxt_enable(const struct cpu_feat *feat __unused,
 	return (true);
 }
 
+static void
+wfxt_disabled(const struct cpu_feat *feat __unused)
+{
+	if (PCPU_GET(cpuid) == 0)
+		update_special_reg(ID_AA64ISAR2_EL1, ID_AA64ISAR2_WFxT_MASK, 0);
+}
+
 CPU_FEAT(feat_wfxt, "WFE and WFI instructions with timeout",
-    wfxt_check, NULL, wfxt_enable,
+    wfxt_check, NULL, wfxt_enable, wfxt_disabled,
     CPU_FEAT_AFTER_DEV | CPU_FEAT_SYSTEM);
 #endif
 

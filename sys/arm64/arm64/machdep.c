@@ -178,7 +178,8 @@ pan_check(const struct cpu_feat *feat __unused, u_int midr __unused)
 {
 	uint64_t id_aa64mfr1;
 
-	id_aa64mfr1 = READ_SPECIALREG(id_aa64mmfr1_el1);
+	if (!get_kernel_reg(ID_AA64MMFR1_EL1, &id_aa64mfr1))
+		return (FEAT_ALWAYS_DISABLE);
 	if (ID_AA64MMFR1_PAN_VAL(id_aa64mfr1) == ID_AA64MMFR1_PAN_NONE)
 		return (FEAT_ALWAYS_DISABLE);
 
@@ -207,9 +208,16 @@ pan_enable(const struct cpu_feat *feat __unused,
 	return (true);
 }
 
+static void
+pan_disabled(const struct cpu_feat *feat __unused)
+{
+	if (PCPU_GET(cpuid) == 0)
+		update_special_reg(ID_AA64MMFR1_EL1, ID_AA64MMFR1_PAN_MASK, 0);
+}
+
 CPU_FEAT(feat_pan, "Privileged access never",
-    pan_check, NULL, pan_enable,
-    CPU_FEAT_EARLY_BOOT | CPU_FEAT_PER_CPU);
+    pan_check, NULL, pan_enable, pan_disabled,
+    CPU_FEAT_AFTER_DEV | CPU_FEAT_PER_CPU);
 
 bool
 has_hyp(void)

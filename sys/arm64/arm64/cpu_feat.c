@@ -54,6 +54,21 @@ enable_cpu_feat(uint32_t stage)
 	SET_FOREACH(featp, cpu_feat_set) {
 		feat = *featp;
 
+		/* Read any tunable the user may have set */
+		if (stage == CPU_FEAT_EARLY_BOOT && PCPU_GET(cpuid) == 0) {
+			snprintf(tunable, sizeof(tunable), "hw.feat.%s",
+			    feat->feat_name);
+			if (TUNABLE_BOOL_FETCH(tunable, &val)) {
+				if (val) {
+					feat->feat_flags |=
+					    CPU_FEAT_USER_ENABLED;
+				} else {
+					feat->feat_flags |=
+					    CPU_FEAT_USER_DISABLED;
+				}
+			}
+		}
+
 		/* Run the enablement code at the correct stage of boot */
 		if ((feat->feat_flags & CPU_FEAT_STAGE_MASK) != stage)
 			continue;
@@ -63,25 +78,26 @@ enable_cpu_feat(uint32_t stage)
 		    PCPU_GET(cpuid) != 0)
 			continue;
 
-		if (feat->feat_check != NULL)
-			continue;
-
-		check_status = feat->feat_check(feat, midr);
+		if (feat->feat_check != NULL) {
+			check_status = feat->feat_check(feat, midr);
+		} else {
+			check_status = FEAT_DEFAULT_ENABLE;
+		}
 		/* Ignore features that are not present */
 		if (check_status == FEAT_ALWAYS_DISABLE)
-			continue;
+			goto next;
 
-		snprintf(tunable, sizeof(tunable), "hw.feat.%s",
-		    feat->feat_name);
-		if (TUNABLE_BOOL_FETCH(tunable, &val)) {
-			/* Is the feature disabled by the tunable? */
-			if (!val)
-				continue;
-			/* If enabled by the tunable then enable it */
-		} else if (check_status == FEAT_DEFAULT_DISABLE) {
-			/* No tunable set and disabled by default */
-			continue;
-		}
+		/* The user disabled the feature */
+		if ((feat->feat_flags & CPU_FEAT_USER_DISABLED) != 0)
+			goto next;
+
+		/*
+		 * The feature was disabled by default and the user
+		 * didn't enable it then skip.
+		 */
+		if (check_status == FEAT_DEFAULT_DISABLE &&
+		    (feat->feat_flags & CPU_FEAT_USER_ENABLED) == 0)
+			goto next;
 
 		/*
 		 * Check if the feature has any errata that may need a
@@ -122,6 +138,10 @@ enable_cpu_feat(uint32_t stage)
 		if (feat->feat_enable(feat, errata_status, errata_list,
 		    errata_count))
 			feat->feat_enabled = true;
+
+next:
+		if (!feat->feat_enabled && feat->feat_disabled != NULL)
+			feat->feat_disabled(feat);
 	}
 }
 

@@ -35,6 +35,7 @@
 #ifdef _KERNEL
 
 #include <sys/queue.h>
+#include <sys/selinfo.h>
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
 #include <sys/_types.h>
@@ -54,9 +55,7 @@ struct jaildesc {
 	LIST_ENTRY(jaildesc) jd_list;	/* (d,p) this prison's descs */
 	struct prison	*jd_prison;	/* (d) the prison */
 	struct mtx	 jd_lock;
-	uid_t		 jd_uid;	/* (d) nominal file owner */
-	gid_t		 jd_gid;	/* (d) nominal file group */
-	mode_t		 jd_mode;	/* (d) descriptor permissions */
+	struct selinfo	 jd_selinfo;	/* (d) event notification */
 	unsigned	 jd_flags;	/* (d) JDF_* flags */
 };
 
@@ -72,13 +71,16 @@ struct jaildesc {
 /*
  * Flags for the jd_flags field
  */
+#define	JDF_SELECTED	0x00000001	/* issue selwakeup() */
 #define	JDF_REMOVED	0x00000002	/* jail was removed */
+#define	JDF_OWNING	0x00000004	/* closing descriptor removes jail */
 
-int jaildesc_find(struct thread *td, int fd, struct jaildesc **jdp,
-    struct prison **prp, struct ucred **ucredp);
+int jaildesc_find(struct thread *td, int fd, struct prison **prp,
+    struct ucred **ucredp);
 int jaildesc_alloc(struct thread *td, struct file **fpp, int *fdp, int owning);
 void jaildesc_set_prison(struct file *jd, struct prison *pr);
 void jaildesc_prison_cleanup(struct prison *pr);
+void jaildesc_knote(struct prison *pr, long hint);
 
 #endif /* _KERNEL */
 

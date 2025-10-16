@@ -121,6 +121,8 @@ SUBDIR.${MK_AUTHPF}+=	authpf
 SUBDIR.${MK_AUTOFS}+=	autofs
 SUBDIR.${MK_BLACKLIST}+=	blacklistctl
 SUBDIR.${MK_BLACKLIST}+=	blacklistd
+SUBDIR.${MK_BLOCKLIST}+=	blocklistctl
+SUBDIR.${MK_BLOCKLIST}+=	blocklistd
 SUBDIR.${MK_BLUETOOTH}+=	bluetooth
 SUBDIR.${MK_BOOTPARAMD}+=	bootparamd
 SUBDIR.${MK_BSDINSTALL}+=	bsdinstall
@@ -128,6 +130,7 @@ SUBDIR.${MK_BSNMP}+=	bsnmpd
 .if ${MK_CAROOT} != "no"
 SUBDIR.${MK_OPENSSL}+=	certctl
 .endif
+SUBDIR.${MK_CUSE}+=	virtual_oss
 SUBDIR.${MK_CXGBETOOL}+=	cxgbetool
 SUBDIR.${MK_EFI}+=	efivar efidp efibootmgr efitable efiwake
 .if ${MK_OPENSSL} != "no"
@@ -209,7 +212,7 @@ SUBDIR.${MK_UTMPX}+=	ac
 SUBDIR.${MK_UTMPX}+=	lastlogin
 SUBDIR.${MK_UTMPX}+=	utx
 SUBDIR.${MK_WIRELESS}+=	wlandebug
-SUBDIR.${MK_WIRELESS}+=	wlanstats
+SUBDIR.${MK_WIRELESS}+=	wlanstat
 SUBDIR.${MK_WIRELESS}+=	wpa
 
 SUBDIR.${MK_TESTS}+=	tests

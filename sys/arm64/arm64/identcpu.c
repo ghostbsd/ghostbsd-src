@@ -232,6 +232,10 @@ static const struct cpu_parts cpu_parts_arm[] = {
 	{ CPU_PART_CORTEX_X2, "Cortex-X2" },
 	{ CPU_PART_CORTEX_X3, "Cortex-X3" },
 	{ CPU_PART_CORTEX_X4, "Cortex-X4" },
+	{ CPU_PART_C1_NANO, "C1-Nano" },
+	{ CPU_PART_C1_PRO, "C1-Pro" },
+	{ CPU_PART_C1_PREMIUM, "C1-Premium" },
+	{ CPU_PART_C1_ULTRA, "C1-Ultra" },
 	{ CPU_PART_NEOVERSE_E1, "Neoverse-E1" },
 	{ CPU_PART_NEOVERSE_N1, "Neoverse-N1" },
 	{ CPU_PART_NEOVERSE_N2, "Neoverse-N2" },
@@ -2349,7 +2353,7 @@ user_ctr_enable(const struct cpu_feat *feat __unused,
 }
 
 CPU_FEAT(trap_ctr, "Trap CTR_EL0",
-    user_ctr_check, user_ctr_has_errata, user_ctr_enable,
+    user_ctr_check, user_ctr_has_errata, user_ctr_enable, NULL,
     CPU_FEAT_AFTER_DEV | CPU_FEAT_PER_CPU);
 
 static bool
