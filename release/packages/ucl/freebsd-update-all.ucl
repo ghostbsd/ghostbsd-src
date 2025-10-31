@@ -1,0 +1,18 @@
+/*
+ * FreeBSD Update Package
+ */
+
+comment = "Binary updates for the FreeBSD base system"
+
+desc = <<EOD
+The freebsd-update(8) utility fetches and installs binary security and
+errata updates for the FreeBSD base system.  It can also be used to
+upgrade from one major or minor version of FreeBSD to another.
+
+freebsd-update(8) uses cryptographic signatures to verify the authenticity
+of downloaded updates, and includes support for rollback of failed updates.
+EOD
+
+annotations {
+	set = "minimal,minimal-jail"
+}
