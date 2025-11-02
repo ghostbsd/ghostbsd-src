@@ -31,6 +31,12 @@ jails, and an optional rc(8) service to start jails during system startup using
 the /etc/jail.conf configuration file.
 EOD
 
+deps {
+	"freebsd-update" {
+		version = "${VERSION}"
+	}
+}
+
 annotations {
 	set = "optional,optional-jail"
 }
