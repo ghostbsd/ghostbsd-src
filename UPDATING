@@ -27,6 +27,48 @@ NOTE TO PEOPLE WHO THINK THAT FreeBSD 16.x IS SLOW:
 	world, or to merely disable the most expensive debugging functionality
 	at runtime, run "ln -s 'abort:false,junk:false' /etc/malloc.conf".)
 
+20251110:
+	OpenPAM (including libpam and the PAM modules) has moved to the new
+	"pam" package.  The pam-lib subpackage, which includes libpam, will
+	be automatically installed when required.
+
+	If you have set-minimal(-jail) installed, the pam base package which
+	contains the PAM modules will also be automatically installed.
+	If you don't, you MUST manually install the FreeBSD-pam package if you
+	need to authenticate users, otherwise you won't be able to log in.
+
+	This change only affects pkgbase users.
+
+20251105:
+	pf(4) now supports nat64 via the af-to keyword.
+
+20251102:
+	Commit e5aa60d06958 changed the internal KAPI between
+	the NFS modules.  As such, they all need to be rebuilt
+	from sources.  __FreeBSD_version was bumped to 1600004 for this.
+
+20251025:
+	flua(1) has moved to the new FreeBSD-flua package.  If you use flua,
+	you may want to install this package if it's not otherwise installed
+	as a dependency of something else.  This change only affects pkgbase
+	users.
+
+20251021:
+	Bump __FreeBSD_version to 1600002 for LinuxKPI.  An embedded struct
+	has changed size and might possibly be an issue otherwise.
+
+20251016:
+	With the migration to OpenZFS in FreeBSD 13.x a number of ZFS sysctls
+	moved to new locations, but backwards compatibility aliases were
+	provided.  These aliases will be removed in the near future.  Please
+	update /etc/sysctl.conf to reference the new OIDs.  For example,
+
+	        vfs.zfs.min_auto_ashift=12
+
+	needs to be changed to
+
+	        vfs.zfs.vdev.min_auto_ashift=12
+
 20251015:
 	The "FreeBSD-unbound" package is renamed to "FreeBSD-local-unbound".
 	If you have set-optional or set-base installed, the new package will

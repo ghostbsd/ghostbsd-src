@@ -1007,7 +1007,7 @@ pf_src_node_exists(struct pf_ksrc_node **sn, struct pf_srchash *sh)
 	return (false);
 }
 
-static void
+void
 pf_free_src_node(struct pf_ksrc_node *sn)
 {
 
@@ -5965,6 +5965,7 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm,
 		ctx.nat_pool = &(ctx.nr->rdr);
 	}
 
+	*ctx.rm = &V_pf_default_rule;
 	if (ctx.nr && ctx.nr->natpass) {
 		r = ctx.nr;
 		ruleset = *ctx.rsm;

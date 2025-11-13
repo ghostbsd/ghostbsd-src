@@ -3713,11 +3713,12 @@ vput(struct vnode *vp)
 
 	ASSERT_VOP_LOCKED(vp, __func__);
 	ASSERT_VI_UNLOCKED(vp, __func__);
-	if (!refcount_release(&vp->v_usecount)) {
-		VOP_UNLOCK(vp);
+	if (refcount_release_if_last(&vp->v_usecount)) {
+		vput_final(vp, VPUT);
 		return;
 	}
-	vput_final(vp, VPUT);
+	VOP_UNLOCK(vp);
+	vrele(vp);
 }
 
 /*
@@ -6545,6 +6546,7 @@ const struct filterops fs_filtops = {
 	.f_attach = filt_fsattach,
 	.f_detach = filt_fsdetach,
 	.f_event = filt_fsevent,
+	.f_copy = knote_triv_copy,
 };
 
 static int
@@ -6624,24 +6626,28 @@ static int	filt_vfsvnode(struct knote *kn, long hint);
 static void	filt_vfsdetach(struct knote *kn);
 static int	filt_vfsdump(struct proc *p, struct knote *kn,
 		    struct kinfo_knote *kin);
+static int	filt_vfscopy(struct knote *kn, struct proc *p1);
 
 static const struct filterops vfsread_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_vfsdetach,
 	.f_event = filt_vfsread,
 	.f_userdump = filt_vfsdump,
+	.f_copy = filt_vfscopy,
 };
 static const struct filterops vfswrite_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_vfsdetach,
 	.f_event = filt_vfswrite,
 	.f_userdump = filt_vfsdump,
+	.f_copy = filt_vfscopy,
 };
 static const struct filterops vfsvnode_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_vfsdetach,
 	.f_event = filt_vfsvnode,
 	.f_userdump = filt_vfsdump,
+	.f_copy = filt_vfscopy,
 };
 
 static void
@@ -6822,6 +6828,16 @@ filt_vfsdump(struct proc *p, struct knote *kn, struct kinfo_knote *kin)
 	if (freepath != NULL)
 		free(freepath, M_TEMP);
 
+	return (0);
+}
+
+static int
+filt_vfscopy(struct knote *kn, struct proc *p1)
+{
+	struct vnode *vp;
+
+	vp = (struct vnode *)kn->kn_hook;
+	vhold(vp);
 	return (0);
 }
 

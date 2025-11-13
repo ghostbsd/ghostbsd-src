@@ -76,10 +76,6 @@
 #include <sys/mutex.h>
 #include <sys/condvar.h>
 
-#ifndef KOBJMETHOD_END
-#define KOBJMETHOD_END	{ NULL, NULL }
-#endif
-
 struct pcm_channel;
 struct pcm_feeder;
 struct snd_dbuf;
@@ -148,8 +144,6 @@ struct snd_mixer;
 #define RANGE(var, low, high) (var) = \
 	(((var)<(low))? (low) : ((var)>(high))? (high) : (var))
 
-#define DSP_DEFAULT_SPEED	8000
-
 extern int snd_unit;
 extern int snd_verbose;
 extern devclass_t pcm_devclass;
@@ -186,7 +180,6 @@ int sndstat_unregister(device_t dev);
 enum {
 	SCF_PCM,
 	SCF_MIDI,
-	SCF_SYNTH,
 };
 
 /*

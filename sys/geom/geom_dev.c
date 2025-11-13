@@ -82,6 +82,7 @@ static const struct filterops gdev_filterops_vnode = {
 	.f_isfd = 1,
 	.f_detach = gdev_filter_detach,
 	.f_event = gdev_filter_vnode,
+	.f_copy = knote_triv_copy,
 };
 
 static struct cdevsw g_dev_cdevsw = {
@@ -733,6 +734,10 @@ g_dev_done(struct bio *bp2)
 		g_trace(G_T_BIO, "g_dev_done(%p) had error %d",
 		    bp2, bp2->bio_error);
 		bp->bio_flags |= BIO_ERROR;
+		if ((bp2->bio_flags & BIO_EXTERR) != 0) {
+			bp->bio_flags |= BIO_EXTERR;
+			bp->bio_exterr = bp2->bio_exterr;
+		}
 	} else {
 		if (bp->bio_cmd == BIO_READ)
 			KNOTE_UNLOCKED(&sc->sc_selinfo.si_note, NOTE_READ);

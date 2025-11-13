@@ -45,7 +45,7 @@ user_env_vars="BSDINSTALL_DISTSITE DISTRIBUTIONS"
 # error [$msg]
 #
 # Display generic error message when a script fails. An optional message
-# argument can preceed the generic message. User is given the choice of
+# argument can precede the generic message. User is given the choice of
 # restarting the installer or exiting.
 #
 error() {
@@ -79,7 +79,7 @@ distbase() {
 
 	: ${DISTRIBUTIONS="base.txz"}; export DISTRIBUTIONS
 	if [ -f $BSDINSTALL_DISTDIR/MANIFEST ]; then
-		DISTMENU=`cut -f 4,5,6 $BSDINSTALL_DISTDIR/MANIFEST | grep -v -e ^kernel -e ^base`
+		DISTMENU=$(cut -f 1,5,6 $BSDINSTALL_DISTDIR/MANIFEST | grep -v -e ^kernel -e ^base | sed -E 's/\.txz//g')
 
 		if [ ! "$nonInteractive" == "YES" ]
 		then

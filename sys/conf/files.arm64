@@ -26,6 +26,10 @@ arm64/acpica/OsdEnvironment.c			optional acpi
 arm64/acpica/acpi_wakeup.c			optional acpi
 arm64/acpica/pci_cfgreg.c			optional acpi pci
 arm64/arm64/autoconf.c				standard
+arm64/spe/arm_spe_backend.c			optional hwt spe
+arm64/spe/arm_spe_dev.c				optional hwt spe
+arm64/spe/arm_spe_acpi.c			optional hwt spe acpi
+arm64/spe/arm_spe_fdt.c				optional hwt spe fdt
 arm64/arm64/bus_machdep.c			standard
 arm64/arm64/bus_space_asm.S			standard
 arm64/arm64/busdma_bounce.c			standard
@@ -55,6 +59,7 @@ arm64/arm64/gic_v3_acpi.c			optional acpi
 arm64/arm64/gic_v3_fdt.c			optional fdt
 arm64/arm64/hyp_stub.S				standard
 arm64/arm64/identcpu.c				standard
+arm64/arm64/kexec_support.c			standard
 arm64/arm64/locore.S				standard no-obj
 arm64/arm64/machdep.c				standard
 arm64/arm64/machdep_boot.c			standard
@@ -73,6 +78,7 @@ arm64/arm64/pmap.c				standard
 arm64/arm64/ptrace_machdep.c			standard
 arm64/arm64/sdt_machdep.c			optional kdtrace_hooks
 arm64/arm64/sigtramp.S				standard
+arm64/arm64/spec_workaround.c			standard
 arm64/arm64/stack_machdep.c			optional ddb | stack
 arm64/arm64/strcmp.S				standard
 arm64/arm64/strncmp.S				standard

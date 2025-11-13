@@ -103,9 +103,6 @@ enum vm_reg_name {
 #define	VM_INTINFO_HWEXCEPTION	(3 << 8)
 #define	VM_INTINFO_SWINTR	(4 << 8)
 
-#define	VM_MAX_NAMELEN	32
-#define VM_MAX_SUFFIXLEN 15
-
 #ifdef _KERNEL
 
 struct vm;
@@ -149,7 +146,7 @@ DECLARE_VMMOPS_FUNC(void, vmspace_free, (struct vmspace *vmspace));
 int vm_create(const char *name, struct vm **retvm);
 struct vcpu *vm_alloc_vcpu(struct vm *vm, int vcpuid);
 void vm_disable_vcpu_creation(struct vm *vm);
-void vm_slock_vcpus(struct vm *vm);
+void vm_lock_vcpus(struct vm *vm);
 void vm_unlock_vcpus(struct vm *vm);
 void vm_destroy(struct vm *vm);
 int vm_reinit(struct vm *vm);

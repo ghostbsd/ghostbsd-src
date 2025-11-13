@@ -56,7 +56,7 @@ TARGET_ARCH=	${TARGET}
 .endif
 .endif
 IMAKE=		${MAKE} TARGET_ARCH=${TARGET_ARCH} TARGET=${TARGET} \
-		    -DNO_ROOT -DDB_FROM_SRC
+		    -DNO_ROOT -DWITHOUT_QEMU -DDB_FROM_SRC
 DISTDIR=	dist
 
 # Define OSRELEASE by using newvers.sh
@@ -430,6 +430,8 @@ pkg-stage: dvd
 	mkdir -p ${.OBJDIR}/dvd/packages/repos/
 	cp ${.CURDIR}/scripts/FreeBSD_install_cdrom.conf \
 		${.OBJDIR}/dvd/packages/repos/
+	echo "./packages/repos type=dir uname=root gname=wheel mode=0755" >> dvd/METALOG
+	echo "./packages/repos/FreeBSD_install_cdrom.conf type=file uname=root gname=wheel mode=0644" >> dvd/METALOG
 .endif
 	touch ${.TARGET}
 

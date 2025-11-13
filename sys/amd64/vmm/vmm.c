@@ -31,7 +31,6 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/module.h>
 #include <sys/sysctl.h>
 #include <sys/malloc.h>
 #include <sys/pcpu.h>
@@ -189,8 +188,6 @@ struct vm {
 #define	VMM_CTR4(vcpu, format, p1, p2, p3, p4)				\
 	VCPU_CTR4((vcpu)->vm, (vcpu)->vcpuid, format, p1, p2, p3, p4)
 
-static int vmm_initialized;
-
 static void	vmmops_panic(void);
 
 static void
@@ -270,11 +267,7 @@ static int trap_wbinvd;
 SYSCTL_INT(_hw_vmm, OID_AUTO, trap_wbinvd, CTLFLAG_RDTUN, &trap_wbinvd, 0,
     "WBINVD triggers a VM-exit");
 
-u_int vm_maxcpu;
-SYSCTL_UINT(_hw_vmm, OID_AUTO, maxcpu, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
-    &vm_maxcpu, 0, "Maximum number of vCPUs");
-
-static void vcpu_notify_event_locked(struct vcpu *vcpu, bool lapic_intr);
+static void vcpu_notify_event_locked(struct vcpu *vcpu);
 
 /* global statistics */
 VMM_STAT(VCPU_MIGRATIONS, "vcpu migration across host cpus");
@@ -298,14 +291,6 @@ VMM_STAT(VMEXIT_REQIDLE, "number of times idle requested at exit");
 VMM_STAT(VMEXIT_USERSPACE, "number of vm exits handled in userspace");
 VMM_STAT(VMEXIT_RENDEZVOUS, "number of times rendezvous pending at exit");
 VMM_STAT(VMEXIT_EXCEPTION, "number of vm exits due to exceptions");
-
-/*
- * Upper limit on vm_maxcpu.  Limited by use of uint16_t types for CPU
- * counts as well as range of vpid values for VT-x and by the capacity
- * of cpuset_t masks.  The call to new_unrhdr() in vpid_init() in
- * vmx.c requires 'vm_maxcpu + 1 <= 0xffff', hence the '- 1' below.
- */
-#define	VM_MAXCPU	MIN(0xffff - 1, CPU_SETSIZE)
 
 #ifdef KTR
 static const char *
@@ -402,21 +387,11 @@ vm_exitinfo_cpuset(struct vcpu *vcpu)
 	return (&vcpu->exitinfo_cpuset);
 }
 
-static int
-vmm_init(void)
+int
+vmm_modinit(void)
 {
 	if (!vmm_is_hw_supported())
 		return (ENXIO);
-
-	vm_maxcpu = mp_ncpus;
-	TUNABLE_INT_FETCH("hw.vmm.maxcpu", &vm_maxcpu);
-
-	if (vm_maxcpu > VM_MAXCPU) {
-		printf("vmm: vm_maxcpu clamped to %u\n", VM_MAXCPU);
-		vm_maxcpu = VM_MAXCPU;
-	}
-	if (vm_maxcpu == 0)
-		vm_maxcpu = 1;
 
 	vmm_host_state_init();
 
@@ -431,69 +406,16 @@ vmm_init(void)
 	return (vmmops_modinit(vmm_ipinum));
 }
 
-static int
-vmm_handler(module_t mod, int what, void *arg)
+int
+vmm_modcleanup(void)
 {
-	int error;
-
-	switch (what) {
-	case MOD_LOAD:
-		if (vmm_is_hw_supported()) {
-			error = vmmdev_init();
-			if (error != 0)
-				break;
-			error = vmm_init();
-			if (error == 0)
-				vmm_initialized = 1;
-			else
-				(void)vmmdev_cleanup();
-		} else {
-			error = ENXIO;
-		}
-		break;
-	case MOD_UNLOAD:
-		if (vmm_is_hw_supported()) {
-			error = vmmdev_cleanup();
-			if (error == 0) {
-				vmm_suspend_p = NULL;
-				vmm_resume_p = NULL;
-				iommu_cleanup();
-				if (vmm_ipinum != IPI_AST)
-					lapic_ipi_free(vmm_ipinum);
-				error = vmmops_modcleanup();
-				/*
-				 * Something bad happened - prevent new
-				 * VMs from being created
-				 */
-				if (error)
-					vmm_initialized = 0;
-			}
-		} else {
-			error = 0;
-		}
-		break;
-	default:
-		error = 0;
-		break;
-	}
-	return (error);
+	vmm_suspend_p = NULL;
+	vmm_resume_p = NULL;
+	iommu_cleanup();
+	if (vmm_ipinum != IPI_AST)
+		lapic_ipi_free(vmm_ipinum);
+	return (vmmops_modcleanup());
 }
-
-static moduledata_t vmm_kmod = {
-	"vmm",
-	vmm_handler,
-	NULL
-};
-
-/*
- * vmm initialization has the following dependencies:
- *
- * - VT-x initialization requires smp_rendezvous() and therefore must happen
- *   after SMP is fully functional (after SI_SUB_SMP).
- * - vmm device initialization requires an initialized devfs.
- */
-DECLARE_MODULE(vmm, vmm_kmod, MAX(SI_SUB_SMP, SI_SUB_DEVFS) + 1, SI_ORDER_ANY);
-MODULE_VERSION(vmm, 1);
 
 static void
 vm_init(struct vm *vm, bool create)
@@ -562,9 +484,9 @@ vm_alloc_vcpu(struct vm *vm, int vcpuid)
 }
 
 void
-vm_slock_vcpus(struct vm *vm)
+vm_lock_vcpus(struct vm *vm)
 {
-	sx_slock(&vm->vcpus_init_lock);
+	sx_xlock(&vm->vcpus_init_lock);
 }
 
 void
@@ -573,28 +495,11 @@ vm_unlock_vcpus(struct vm *vm)
 	sx_unlock(&vm->vcpus_init_lock);
 }
 
-/*
- * The default CPU topology is a single thread per package.
- */
-u_int cores_per_package = 1;
-u_int threads_per_core = 1;
-
 int
 vm_create(const char *name, struct vm **retvm)
 {
 	struct vm *vm;
 	int error;
-
-	/*
-	 * If vmm.ko could not be successfully initialized then don't attempt
-	 * to create the virtual machine.
-	 */
-	if (!vmm_initialized)
-		return (ENXIO);
-
-	if (name == NULL || strnlen(name, VM_MAX_NAMELEN + 1) ==
-	    VM_MAX_NAMELEN + 1)
-		return (EINVAL);
 
 	vm = malloc(sizeof(struct vm), M_VM, M_WAITOK | M_ZERO);
 	error = vm_mem_init(&vm->mem, 0, VM_MAXUSER_ADDRESS_LA48);
@@ -609,8 +514,8 @@ vm_create(const char *name, struct vm **retvm)
 	    M_ZERO);
 
 	vm->sockets = 1;
-	vm->cores = cores_per_package;	/* XXX backwards compatibility */
-	vm->threads = threads_per_core;	/* XXX backwards compatibility */
+	vm->cores = 1;		/* XXX backwards compatibility */
+	vm->threads = 1;	/* XXX backwards compatibility */
 	vm->maxcpus = vm_maxcpu;
 
 	vm_init(vm, true);
@@ -724,12 +629,7 @@ vm_name(struct vm *vm)
 int
 vm_map_mmio(struct vm *vm, vm_paddr_t gpa, size_t len, vm_paddr_t hpa)
 {
-	vm_object_t obj;
-
-	if ((obj = vmm_mmio_alloc(vm_vmspace(vm), gpa, len, hpa)) == NULL)
-		return (ENOMEM);
-	else
-		return (0);
+	return (vmm_mmio_alloc(vm_vmspace(vm), gpa, len, hpa));
 }
 
 int
@@ -870,7 +770,7 @@ vm_assign_pptdev(struct vm *vm, int bus, int slot, int func)
 int
 vm_get_register(struct vcpu *vcpu, int reg, uint64_t *retval)
 {
-
+	/* Negative values represent VM control structure fields. */
 	if (reg >= VM_REG_LAST)
 		return (EINVAL);
 
@@ -882,6 +782,7 @@ vm_set_register(struct vcpu *vcpu, int reg, uint64_t val)
 {
 	int error;
 
+	/* Negative values represent VM control structure fields. */
 	if (reg >= VM_REG_LAST)
 		return (EINVAL);
 
@@ -990,6 +891,54 @@ save_guest_fpustate(struct vcpu *vcpu)
 
 static VMM_STAT(VCPU_IDLE_TICKS, "number of ticks vcpu was idle");
 
+/*
+ * Invoke the rendezvous function on the specified vcpu if applicable.  Return
+ * true if the rendezvous is finished, false otherwise.
+ */
+static bool
+vm_rendezvous(struct vcpu *vcpu)
+{
+	struct vm *vm = vcpu->vm;
+	int vcpuid;
+
+	mtx_assert(&vcpu->vm->rendezvous_mtx, MA_OWNED);
+	KASSERT(vcpu->vm->rendezvous_func != NULL,
+	    ("vm_rendezvous: no rendezvous pending"));
+
+	/* 'rendezvous_req_cpus' must be a subset of 'active_cpus' */
+	CPU_AND(&vm->rendezvous_req_cpus, &vm->rendezvous_req_cpus,
+	    &vm->active_cpus);
+
+	vcpuid = vcpu->vcpuid;
+	if (CPU_ISSET(vcpuid, &vm->rendezvous_req_cpus) &&
+	    !CPU_ISSET(vcpuid, &vm->rendezvous_done_cpus)) {
+		VMM_CTR0(vcpu, "Calling rendezvous func");
+		(*vm->rendezvous_func)(vcpu, vm->rendezvous_arg);
+		CPU_SET(vcpuid, &vm->rendezvous_done_cpus);
+	}
+	if (CPU_CMP(&vm->rendezvous_req_cpus,
+	    &vm->rendezvous_done_cpus) == 0) {
+		VMM_CTR0(vcpu, "Rendezvous completed");
+		CPU_ZERO(&vm->rendezvous_req_cpus);
+		vm->rendezvous_func = NULL;
+		wakeup(&vm->rendezvous_func);
+		return (true);
+	}
+	return (false);
+}
+
+static void
+vcpu_wait_idle(struct vcpu *vcpu)
+{
+	KASSERT(vcpu->state != VCPU_IDLE, ("vcpu already idle"));
+
+	vcpu->reqidle = 1;
+	vcpu_notify_event_locked(vcpu);
+	VMM_CTR1(vcpu, "vcpu state change from %s to "
+	    "idle requested", vcpu_state2str(vcpu->state));
+	msleep_spin(&vcpu->state, &vcpu->mtx, "vmstat", hz);
+}
+
 static int
 vcpu_set_state_locked(struct vcpu *vcpu, enum vcpu_state newstate,
     bool from_idle)
@@ -1004,13 +953,8 @@ vcpu_set_state_locked(struct vcpu *vcpu, enum vcpu_state newstate,
 	 * ioctl() operating on a vcpu at any point.
 	 */
 	if (from_idle) {
-		while (vcpu->state != VCPU_IDLE) {
-			vcpu->reqidle = 1;
-			vcpu_notify_event_locked(vcpu, false);
-			VMM_CTR1(vcpu, "vcpu state change from %s to "
-			    "idle requested", vcpu_state2str(vcpu->state));
-			msleep_spin(&vcpu->state, &vcpu->mtx, "vmstat", hz);
-		}
+		while (vcpu->state != VCPU_IDLE)
+			vcpu_wait_idle(vcpu);
 	} else {
 		KASSERT(vcpu->state != VCPU_IDLE, ("invalid transition from "
 		    "vcpu idle state"));
@@ -1062,6 +1006,95 @@ vcpu_set_state_locked(struct vcpu *vcpu, enum vcpu_state newstate,
 	return (0);
 }
 
+/*
+ * Try to lock all of the vCPUs in the VM while taking care to avoid deadlocks
+ * with vm_smp_rendezvous().
+ *
+ * The complexity here suggests that the rendezvous mechanism needs a rethink.
+ */
+int
+vcpu_set_state_all(struct vm *vm, enum vcpu_state newstate)
+{
+	cpuset_t locked;
+	struct vcpu *vcpu;
+	int error, i;
+	uint16_t maxcpus;
+
+	KASSERT(newstate != VCPU_IDLE,
+	    ("vcpu_set_state_all: invalid target state %d", newstate));
+
+	error = 0;
+	CPU_ZERO(&locked);
+	maxcpus = vm->maxcpus;
+
+	mtx_lock(&vm->rendezvous_mtx);
+restart:
+	if (vm->rendezvous_func != NULL) {
+		/*
+		 * If we have a pending rendezvous, then the initiator may be
+		 * blocked waiting for other vCPUs to execute the callback.  The
+		 * current thread may be a vCPU thread so we must not block
+		 * waiting for the initiator, otherwise we get a deadlock.
+		 * Thus, execute the callback on behalf of any idle vCPUs.
+		 */
+		for (i = 0; i < maxcpus; i++) {
+			vcpu = vm_vcpu(vm, i);
+			if (vcpu == NULL)
+				continue;
+			vcpu_lock(vcpu);
+			if (vcpu->state == VCPU_IDLE) {
+				(void)vcpu_set_state_locked(vcpu, VCPU_FROZEN,
+				    true);
+				CPU_SET(i, &locked);
+			}
+			if (CPU_ISSET(i, &locked)) {
+				/*
+				 * We can safely execute the callback on this
+				 * vCPU's behalf.
+				 */
+				vcpu_unlock(vcpu);
+				(void)vm_rendezvous(vcpu);
+				vcpu_lock(vcpu);
+			}
+			vcpu_unlock(vcpu);
+		}
+	}
+
+	/*
+	 * Now wait for remaining vCPUs to become idle.  This may include the
+	 * initiator of a rendezvous that is currently blocked on the rendezvous
+	 * mutex.
+	 */
+	CPU_FOREACH_ISCLR(i, &locked) {
+		if (i >= maxcpus)
+			break;
+		vcpu = vm_vcpu(vm, i);
+		if (vcpu == NULL)
+			continue;
+		vcpu_lock(vcpu);
+		while (vcpu->state != VCPU_IDLE) {
+			mtx_unlock(&vm->rendezvous_mtx);
+			vcpu_wait_idle(vcpu);
+			vcpu_unlock(vcpu);
+			mtx_lock(&vm->rendezvous_mtx);
+			if (vm->rendezvous_func != NULL)
+				goto restart;
+			vcpu_lock(vcpu);
+		}
+		error = vcpu_set_state_locked(vcpu, newstate, true);
+		vcpu_unlock(vcpu);
+		if (error != 0) {
+			/* Roll back state changes. */
+			CPU_FOREACH_ISSET(i, &locked)
+				(void)vcpu_set_state(vcpu, VCPU_IDLE, false);
+			break;
+		}
+		CPU_SET(i, &locked);
+	}
+	mtx_unlock(&vm->rendezvous_mtx);
+	return (error);
+}
+
 static void
 vcpu_require_state(struct vcpu *vcpu, enum vcpu_state newstate)
 {
@@ -1083,36 +1116,23 @@ vcpu_require_state_locked(struct vcpu *vcpu, enum vcpu_state newstate)
 static int
 vm_handle_rendezvous(struct vcpu *vcpu)
 {
-	struct vm *vm = vcpu->vm;
+	struct vm *vm;
 	struct thread *td;
-	int error, vcpuid;
 
-	error = 0;
-	vcpuid = vcpu->vcpuid;
 	td = curthread;
+	vm = vcpu->vm;
+
 	mtx_lock(&vm->rendezvous_mtx);
 	while (vm->rendezvous_func != NULL) {
-		/* 'rendezvous_req_cpus' must be a subset of 'active_cpus' */
-		CPU_AND(&vm->rendezvous_req_cpus, &vm->rendezvous_req_cpus, &vm->active_cpus);
-
-		if (CPU_ISSET(vcpuid, &vm->rendezvous_req_cpus) &&
-		    !CPU_ISSET(vcpuid, &vm->rendezvous_done_cpus)) {
-			VMM_CTR0(vcpu, "Calling rendezvous func");
-			(*vm->rendezvous_func)(vcpu, vm->rendezvous_arg);
-			CPU_SET(vcpuid, &vm->rendezvous_done_cpus);
-		}
-		if (CPU_CMP(&vm->rendezvous_req_cpus,
-		    &vm->rendezvous_done_cpus) == 0) {
-			VMM_CTR0(vcpu, "Rendezvous completed");
-			CPU_ZERO(&vm->rendezvous_req_cpus);
-			vm->rendezvous_func = NULL;
-			wakeup(&vm->rendezvous_func);
+		if (vm_rendezvous(vcpu))
 			break;
-		}
+
 		VMM_CTR0(vcpu, "Wait for rendezvous completion");
 		mtx_sleep(&vm->rendezvous_func, &vm->rendezvous_mtx, 0,
 		    "vmrndv", hz);
 		if (td_ast_pending(td, TDA_SUSPEND)) {
+			int error;
+
 			mtx_unlock(&vm->rendezvous_mtx);
 			error = thread_check_susp(td, true);
 			if (error != 0)
@@ -1394,7 +1414,7 @@ vm_handle_suspend(struct vcpu *vcpu, bool *retu)
 	 */
 	for (i = 0; i < vm->maxcpus; i++) {
 		if (CPU_ISSET(i, &vm->suspended_cpus)) {
-			vcpu_notify_event(vm_vcpu(vm, i), false);
+			vcpu_notify_event(vm_vcpu(vm, i));
 		}
 	}
 
@@ -1468,7 +1488,7 @@ vm_suspend(struct vm *vm, enum vm_suspend_how how)
 	 */
 	for (i = 0; i < vm->maxcpus; i++) {
 		if (CPU_ISSET(i, &vm->active_cpus))
-			vcpu_notify_event(vm_vcpu(vm, i), false);
+			vcpu_notify_event(vm_vcpu(vm, i));
 	}
 
 	return (0);
@@ -1948,7 +1968,7 @@ vm_inject_nmi(struct vcpu *vcpu)
 {
 
 	vcpu->nmi_pending = 1;
-	vcpu_notify_event(vcpu, false);
+	vcpu_notify_event(vcpu);
 	return (0);
 }
 
@@ -1975,7 +1995,7 @@ vm_inject_extint(struct vcpu *vcpu)
 {
 
 	vcpu->extint_pending = 1;
-	vcpu_notify_event(vcpu, false);
+	vcpu_notify_event(vcpu);
 	return (0);
 }
 
@@ -2146,14 +2166,14 @@ vm_suspend_cpu(struct vm *vm, struct vcpu *vcpu)
 		vm->debug_cpus = vm->active_cpus;
 		for (int i = 0; i < vm->maxcpus; i++) {
 			if (CPU_ISSET(i, &vm->active_cpus))
-				vcpu_notify_event(vm_vcpu(vm, i), false);
+				vcpu_notify_event(vm_vcpu(vm, i));
 		}
 	} else {
 		if (!CPU_ISSET(vcpu->vcpuid, &vm->active_cpus))
 			return (EINVAL);
 
 		CPU_SET_ATOMIC(vcpu->vcpuid, &vm->debug_cpus);
-		vcpu_notify_event(vcpu, false);
+		vcpu_notify_event(vcpu);
 	}
 	return (0);
 }
@@ -2261,7 +2281,7 @@ vm_set_x2apic_state(struct vcpu *vcpu, enum x2apic_state state)
  *   to the host_cpu to cause the vcpu to trap into the hypervisor.
  */
 static void
-vcpu_notify_event_locked(struct vcpu *vcpu, bool lapic_intr)
+vcpu_notify_event_locked(struct vcpu *vcpu)
 {
 	int hostcpu;
 
@@ -2269,12 +2289,7 @@ vcpu_notify_event_locked(struct vcpu *vcpu, bool lapic_intr)
 	if (vcpu->state == VCPU_RUNNING) {
 		KASSERT(hostcpu != NOCPU, ("vcpu running on invalid hostcpu"));
 		if (hostcpu != curcpu) {
-			if (lapic_intr) {
-				vlapic_post_intr(vcpu->vlapic, hostcpu,
-				    vmm_ipinum);
-			} else {
-				ipi_cpu(hostcpu, vmm_ipinum);
-			}
+			ipi_cpu(hostcpu, vmm_ipinum);
 		} else {
 			/*
 			 * If the 'vcpu' is running on 'curcpu' then it must
@@ -2292,10 +2307,21 @@ vcpu_notify_event_locked(struct vcpu *vcpu, bool lapic_intr)
 }
 
 void
-vcpu_notify_event(struct vcpu *vcpu, bool lapic_intr)
+vcpu_notify_event(struct vcpu *vcpu)
 {
 	vcpu_lock(vcpu);
-	vcpu_notify_event_locked(vcpu, lapic_intr);
+	vcpu_notify_event_locked(vcpu);
+	vcpu_unlock(vcpu);
+}
+
+void
+vcpu_notify_lapic(struct vcpu *vcpu)
+{
+	vcpu_lock(vcpu);
+	if (vcpu->state == VCPU_RUNNING && vcpu->hostcpu != curcpu)
+		vlapic_post_intr(vcpu->vlapic, vcpu->hostcpu, vmm_ipinum);
+	else
+		vcpu_notify_event_locked(vcpu);
 	vcpu_unlock(vcpu);
 }
 
@@ -2357,7 +2383,7 @@ restart:
 	 */
 	for (i = 0; i < vm->maxcpus; i++) {
 		if (CPU_ISSET(i, &dest))
-			vcpu_notify_event(vm_vcpu(vm, i), false);
+			vcpu_notify_event(vm_vcpu(vm, i));
 	}
 
 	return (vm_handle_rendezvous(vcpu));

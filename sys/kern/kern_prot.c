@@ -422,7 +422,7 @@ again:
  *	pid must be in same session (EPERM)
  *	pid can't have done an exec (EACCES)
  * if pgid != pid
- * 	there must exist some pid in same session having pgid (EPERM)
+ *	there must exist some pid in same session having pgid (EPERM)
  * pid must not be session leader (EPERM)
  */
 #ifndef _SYS_SYSPROTO_H_
@@ -696,7 +696,7 @@ kern_setcred(struct thread *const td, const u_int flags,
 	gid_t *groups = NULL;
 	gid_t smallgroups[CRED_SMALLGROUPS_NB];
 	int error;
-	bool cred_set;
+	bool cred_set = false;
 
 	/* Bail out on unrecognized flags. */
 	if (flags & ~SETCREDF_MASK)
@@ -832,23 +832,49 @@ kern_setcred(struct thread *const td, const u_int flags,
 	if (error != 0)
 		goto unlock_finish;
 
+#ifdef RACCT
 	/*
-	 * Set the new credentials, noting that they have changed.
+	 * Hold a reference to 'new_cred', as we need to call some functions on
+	 * it after proc_set_cred_enforce_proc_lim().
 	 */
+	crhold(new_cred);
+#endif
+
+	/* Set the new credentials. */
 	cred_set = proc_set_cred_enforce_proc_lim(p, new_cred);
 	if (cred_set) {
 		setsugid(p);
+#ifdef RACCT
+		/* Adjust RACCT counters. */
+		racct_proc_ucred_changed(p, old_cred, new_cred);
+#endif
 		to_free_cred = old_cred;
 		MPASS(error == 0);
-	} else
+	} else {
+#ifdef RACCT
+		/* Matches the crhold() just before the containing 'if'. */
+		crfree(new_cred);
+#endif
 		error = EAGAIN;
+	}
 
 unlock_finish:
 	PROC_UNLOCK(p);
+
 	/*
 	 * Part 3: After releasing the process lock, we perform cleanups and
 	 * finishing operations.
 	 */
+
+#ifdef RACCT
+	if (cred_set) {
+#ifdef RCTL
+		rctl_proc_ucred_changed(p, new_cred);
+#endif
+		/* Paired with the crhold() above. */
+		crfree(new_cred);
+	}
+#endif
 
 #ifdef MAC
 	if (mac_set_proc_data != NULL)
@@ -976,14 +1002,19 @@ sys_setuid(struct thread *td, struct setuid_args *uap)
 		change_euid(newcred, uip);
 		setsugid(p);
 	}
-	/*
-	 * This also transfers the proc count to the new user.
-	 */
-	proc_set_cred(p, newcred);
+
 #ifdef RACCT
 	racct_proc_ucred_changed(p, oldcred, newcred);
+#endif
+#ifdef RCTL
 	crhold(newcred);
 #endif
+	/*
+	 * Takes over 'newcred''s reference, so 'newcred' must not be used
+	 * besides this point except on RCTL where we took an additional
+	 * reference above.
+	 */
+	proc_set_cred(p, newcred);
 	PROC_UNLOCK(p);
 #ifdef RCTL
 	rctl_proc_ucred_changed(p, newcred);
@@ -1387,11 +1418,18 @@ sys_setreuid(struct thread *td, struct setreuid_args *uap)
 		change_svuid(newcred, newcred->cr_uid);
 		setsugid(p);
 	}
-	proc_set_cred(p, newcred);
 #ifdef RACCT
 	racct_proc_ucred_changed(p, oldcred, newcred);
+#endif
+#ifdef RCTL
 	crhold(newcred);
 #endif
+	/*
+	 * Takes over 'newcred''s reference, so 'newcred' must not be used
+	 * besides this point except on RCTL where we took an additional
+	 * reference above.
+	 */
+	proc_set_cred(p, newcred);
 	PROC_UNLOCK(p);
 #ifdef RCTL
 	rctl_proc_ucred_changed(p, newcred);
@@ -1533,11 +1571,18 @@ sys_setresuid(struct thread *td, struct setresuid_args *uap)
 		change_svuid(newcred, suid);
 		setsugid(p);
 	}
-	proc_set_cred(p, newcred);
 #ifdef RACCT
 	racct_proc_ucred_changed(p, oldcred, newcred);
+#endif
+#ifdef RCTL
 	crhold(newcred);
 #endif
+	/*
+	 * Takes over 'newcred''s reference, so 'newcred' must not be used
+	 * besides this point except on RCTL where we took an additional
+	 * reference above.
+	 */
+	proc_set_cred(p, newcred);
 	PROC_UNLOCK(p);
 #ifdef RCTL
 	rctl_proc_ucred_changed(p, newcred);
@@ -2762,7 +2807,7 @@ cru2xt(struct thread *td, struct xucred *xcr)
  * 'enforce_proc_lim' being true and if no new process can be accounted to the
  * new real UID because of the current limit (see the inner comment for more
  * details) and the caller does not have privilege (PRIV_PROC_LIMIT) to override
- * that.
+ * that.  In this case, the reference to 'newcred' is not taken over.
  */
 static bool
 _proc_set_cred(struct proc *p, struct ucred *newcred, bool enforce_proc_lim)
@@ -2771,10 +2816,6 @@ _proc_set_cred(struct proc *p, struct ucred *newcred, bool enforce_proc_lim)
 
 	MPASS(oldcred != NULL);
 	PROC_LOCK_ASSERT(p, MA_OWNED);
-	KASSERT(newcred->cr_users == 0, ("%s: users %d not 0 on cred %p",
-	    __func__, newcred->cr_users, newcred));
-	KASSERT(newcred->cr_ref == 1, ("%s: ref %ld not 1 on cred %p",
-	    __func__, newcred->cr_ref, newcred));
 
 	if (newcred->cr_ruidinfo != oldcred->cr_ruidinfo) {
 		/*
@@ -2800,8 +2841,10 @@ _proc_set_cred(struct proc *p, struct ucred *newcred, bool enforce_proc_lim)
 	    __func__, oldcred->cr_users, oldcred));
 	oldcred->cr_users--;
 	mtx_unlock(&oldcred->cr_mtx);
+	mtx_lock(&newcred->cr_mtx);
+	newcred->cr_users++;
+	mtx_unlock(&newcred->cr_mtx);
 	p->p_ucred = newcred;
-	newcred->cr_users = 1;
 	PROC_UPDATE_COW(p);
 	if (newcred->cr_ruidinfo != oldcred->cr_ruidinfo)
 		(void)chgproccnt(oldcred->cr_ruidinfo, -1, 0);

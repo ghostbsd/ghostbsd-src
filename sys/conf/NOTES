@@ -2655,10 +2655,6 @@ device		rndtest		# FIPS 140-2 entropy tester
 
 device		ccr		# Chelsio T6
 
-device		hifn		# Hifn 7951, 7781, etc.
-options 	HIFN_DEBUG	# enable debugging support: hw.hifn.debug
-options 	HIFN_RNDTEST	# enable rndtest support
-
 device		safe		# SafeNet 1141
 options 	SAFE_DEBUG	# enable debugging support: hw.safe.debug
 options 	SAFE_RNDTEST	# enable rndtest support
@@ -2801,7 +2797,7 @@ options 	MAXFILES=999
 
 # Random number generator
 # Alternative algorithm.
-#options 	RANDOM_FENESTRASX
+options 	RANDOM_FENESTRASX
 # Allow the CSPRNG algorithm to be loaded as a module.
 #options 	RANDOM_LOADABLE
 # Select this to allow high-rate but potentially expensive
@@ -2828,6 +2824,10 @@ options 	RANDOM_ENABLE_UMA	# slab allocator
 # if desired, however it cannot be recommended for use in any
 # environment.
 options 	RANDOM_ENABLE_ETHER	# ether_input
+
+options 	RANDOM_ENABLE_KBD
+options 	RANDOM_ENABLE_MOUSE
+options 	RANDOM_ENABLE_TPM	# implies TPM_HARVEST
 
 # Module to enable execution of application via emulators like QEMU
 options         IMGACT_BINMISC

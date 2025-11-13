@@ -736,10 +736,6 @@ BCE_NVRAM_WRITE_SUPPORT	opt_bce.h
 SOCKBUF_DEBUG		opt_global.h
 
 
-# options for hifn driver
-HIFN_DEBUG		opt_hifn.h
-HIFN_RNDTEST		opt_hifn.h
-
 # options for safenet driver
 SAFE_DEBUG		opt_safe.h
 SAFE_NO_RNG		opt_safe.h
@@ -960,6 +956,9 @@ RANDOM_LOADABLE	opt_global.h
 # the uma slab allocator.
 RANDOM_ENABLE_UMA	opt_global.h
 RANDOM_ENABLE_ETHER	opt_global.h
+RANDOM_ENABLE_KBD	opt_global.h
+RANDOM_ENABLE_MOUSE	opt_global.h
+RANDOM_ENABLE_TPM	opt_global.h
 
 # This options turns TPM into entropy source.
 TPM_HARVEST	opt_tpm.h

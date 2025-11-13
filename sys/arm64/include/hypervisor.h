@@ -30,6 +30,8 @@
 #ifndef _MACHINE_HYPERVISOR_H_
 #define	_MACHINE_HYPERVISOR_H_
 
+#include <machine/_armreg.h>
+
 /*
  * These registers are only useful when in hypervisor context,
  * e.g. specific to EL2, or controlling the hypervisor.
@@ -266,6 +268,7 @@
 #define	MDCR_EL2_TDRA		(0x1UL << MDCR_EL2_TDRA_SHIFT)
 #define	MDCR_EL2_E2PB_SHIFT	12
 #define	MDCR_EL2_E2PB_MASK	(0x3UL << MDCR_EL2_E2PB_SHIFT)
+#define	 MDCR_EL2_E2PB_EL1_0_NO_TRAP	(0x3UL << MDCR_EL2_E2PB_SHIFT)
 #define	MDCR_EL2_TPMS_SHIFT	14
 #define	MDCR_EL2_TPMS		(0x1UL << MDCR_EL2_TPMS_SHIFT)
 #define	MDCR_EL2_EnSPM_SHIFT	15
