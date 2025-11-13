@@ -520,6 +520,8 @@
     ..
     secure
         lib
+            libcrypto
+            ..
         ..
         libexec
         ..
@@ -1282,6 +1284,8 @@
         praudit
         ..
         pw
+        ..
+        quot
         ..
         rpcbind
         ..
