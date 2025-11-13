@@ -29,24 +29,29 @@
 
 return {
 	logo = {
-		graphic = {
-		    "            ,gggggg.   ",
-		    "         ,agg9*   .g)  ",
-		    "       .agg* ._.,gg*   ",
-		    "     ,gga*  (ggg*'     ",
-		    "    ,ga*      ,ga*     ",
-		    "   ,ga'     .ag*       ",
-		    "  ,ga'   .agga'        ",
-		    "  9g' .agg'g*,a        ",
-		    "  'gggg*',gga'         ",
-		    "       .gg*'           ",
-		    "     .gga*             ",
-		    "   .gga*               ",
-		    "  (ga*                 "
+        ascii = {
+            image = {
+                "            ,gggggg.   ",
+                "         ,agg9*   .g)  ",
+                "       .agg* ._.,gg*   ",
+                "     ,gga*  (ggg*'     ",
+                "    ,ga*      ,ga*     ",
+                "   ,ga'     .ag*       ",
+                "  ,ga'   .agga'        ",
+                "  9g' .agg'g*,a        ",
+                "  'gggg*',gga'         ",
+                "       .gg*'           ",
+                "     .gga*             ",
+                "   .gga*               ",
+                "  (ga*                 "
+            },
+            requires_color = false,
+            shift = {x = 5, y = 3},
 		},
-		requires_color = false,
-		shift = {x = 5, y = 3},
-		image = "/boot/images/ghostbsd-logo.png",
-		image_rl = 15
+		fb = {
+			image = "/boot/images/ghostbsd-logo.png",
+			width = 15,
+			shift = {x = 2, y = -2},
+		},
 	}
 }
