@@ -56,10 +56,6 @@ struct domain {
 		(uint32_t);
 	void	(*dom_rtdetach)		/* clean up routing table */
 		(struct rib_head *);
-	void	*(*dom_ifattach)(struct ifnet *);
-	void	(*dom_ifdetach)(struct ifnet *, void *);
-	int	(*dom_ifmtu)(struct ifnet *);
-					/* af-dependent data on ifnet */
 	struct	protosw *dom_protosw[];
 };
 

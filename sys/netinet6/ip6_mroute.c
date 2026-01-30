@@ -78,7 +78,6 @@
  * MROUTING Revision: 3.5.1.2 + PIM-SMv2 (pimd) Support
  */
 
-#include <sys/cdefs.h>
 #include "opt_inet6.h"
 
 #include <sys/param.h>
@@ -1583,7 +1582,7 @@ phyint_send(struct ip6_hdr *ip6, struct mif6 *mifp, struct mbuf *m)
 	 * Put the packet into the sending queue of the outgoing interface
 	 * if it would fit in the MTU of the interface.
 	 */
-	linkmtu = IN6_LINKMTU(ifp);
+	linkmtu = in6_ifmtu(ifp);
 	if (mb_copy->m_pkthdr.len <= linkmtu || linkmtu < IPV6_MMTU) {
 		struct sockaddr_in6 dst6;
 

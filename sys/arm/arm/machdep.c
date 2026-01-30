@@ -374,7 +374,7 @@ pcpu0_init(void)
 /*
  * Initialize proc0
  */
-void
+static void
 init_proc0(vm_offset_t kstack)
 {
 	proc_linkup0(&proc0, &thread0);
@@ -522,6 +522,9 @@ initarm(struct arm_boot_params *abp)
 
 	/* Do basic tuning, hz etc */
 	init_param1();
+
+	sched_instance_select();
+	/* link_elf_ireloc(); */
 
 	/*
 	 * Allocate a page for the system page mapped to 0xffff0000

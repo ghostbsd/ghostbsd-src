@@ -56,7 +56,6 @@
  */
 
 #include "assym.inc"
-#include "opt_sched.h"
 
 #include <sys/syscall.h>
 
@@ -187,15 +186,15 @@ save_tar:
 	sync				/* Make sure all of that finished */
 
 cpu_switchin:
-#if defined(SMP) && defined(SCHED_ULE)
+#if defined(SMP)
 	/* Wait for the new thread to become unblocked */
 	addis	%r6,%r2,TOC_REF(blocked_lock)@ha
 	ld	%r6,TOC_REF(blocked_lock)@l(%r6)
 blocked_loop:
 	ld	%r7,TD_LOCK(%r13)
 	cmpd	%r6,%r7 
-	beq-	blocked_loop
 	isync
+	beq-	blocked_loop
 #endif
 	
 	ld	%r17,TD_PCB(%r13)	/* Get new PCB */

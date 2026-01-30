@@ -1217,6 +1217,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_prefetch/cleanup.ksh \
 	functional/cli_root/zpool_prefetch/setup.ksh \
 	functional/cli_root/zpool_prefetch/zpool_prefetch_001_pos.ksh \
+	functional/cli_root/zpool_prefetch/zpool_prefetch_002_pos.ksh \
 	functional/cli_root/zpool_reguid/cleanup.ksh \
 	functional/cli_root/zpool_reguid/setup.ksh \
 	functional/cli_root/zpool_reguid/zpool_reguid_001_pos.ksh \
@@ -1481,6 +1482,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/dedup/dedup_legacy_fdt_upgrade.ksh \
 	functional/dedup/dedup_legacy_fdt_mixed.ksh \
 	functional/dedup/dedup_prune.ksh \
+	functional/dedup/dedup_prune_leak.ksh \
 	functional/dedup/dedup_quota.ksh \
 	functional/dedup/dedup_zap_shrink.ksh \
 	functional/delegate/cleanup.ksh \
@@ -2120,6 +2122,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/snapshot/snapshot_016_pos.ksh \
 	functional/snapshot/snapshot_017_pos.ksh \
 	functional/snapshot/snapshot_018_pos.ksh \
+	functional/snapshot/snapshot_019_pos.ksh \
 	functional/snapused/cleanup.ksh \
 	functional/snapused/setup.ksh \
 	functional/snapused/snapused_001_pos.ksh \

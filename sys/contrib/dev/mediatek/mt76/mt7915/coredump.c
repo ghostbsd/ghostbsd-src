@@ -1,5 +1,9 @@
-// SPDX-License-Identifier: ISC
+// SPDX-License-Identifier: BSD-3-Clause-Clear
 /* Copyright (C) 2022 MediaTek Inc. */
+
+#if defined(__FreeBSD__)
+#define	LINUXKPI_PARAM_PREFIX	mt7915_
+#endif
 
 #include <linux/devcoredump.h>
 #include <linux/kernel.h>

@@ -98,8 +98,6 @@ VNET_DEFINE(pfil_head_t, link_pfil_head);	/* Packet filter hooks */
 void	(*ng_ether_input_p)(struct ifnet *ifp, struct mbuf **mp);
 void	(*ng_ether_input_orphan_p)(struct ifnet *ifp, struct mbuf *m);
 int	(*ng_ether_output_p)(struct ifnet *ifp, struct mbuf **mp);
-void	(*ng_ether_attach_p)(struct ifnet *ifp);
-void	(*ng_ether_detach_p)(struct ifnet *ifp);
 
 /* if_bridge(4) support */
 void	(*bridge_dn_p)(struct mbuf *, struct ifnet *);
@@ -481,7 +479,7 @@ ether_output_frame(struct ifnet *ifp, struct mbuf *m)
 #if defined(INET6) && defined(INET)
 	/* draft-ietf-6man-ipv6only-flag */
 	/* Catch ETHERTYPE_IP, and ETHERTYPE_[REV]ARP if we are v6-only. */
-	if ((ND_IFINFO(ifp)->flags & ND6_IFF_IPV6_ONLY_MASK) != 0) {
+	if ((ifp->if_inet6->nd_flags & ND6_IFF_IPV6_ONLY_MASK) != 0) {
 		struct ether_header *eh;
 
 		eh = mtod(m, struct ether_header *);
@@ -547,7 +545,7 @@ ether_input_internal(struct ifnet *ifp, struct mbuf *m)
 #if defined(INET6) && defined(INET)
 	/* draft-ietf-6man-ipv6only-flag */
 	/* Catch ETHERTYPE_IP, and ETHERTYPE_[REV]ARP if we are v6-only. */
-	if ((ND_IFINFO(ifp)->flags & ND6_IFF_IPV6_ONLY_MASK) != 0) {
+	if ((ifp->if_inet6->nd_flags & ND6_IFF_IPV6_ONLY_MASK) != 0) {
 		switch (etype) {
 		case ETHERTYPE_IP:
 		case ETHERTYPE_ARP:
@@ -988,9 +986,6 @@ ether_ifattach(struct ifnet *ifp, const u_int8_t *lla)
 	ifp->if_input = ether_input;
 	ifp->if_resolvemulti = ether_resolvemulti;
 	ifp->if_requestencap = ether_requestencap;
-#ifdef VIMAGE
-	ifp->if_reassign = ether_reassign;
-#endif
 	if (ifp->if_baudrate == 0)
 		ifp->if_baudrate = IF_Mbps(10);		/* just a default */
 	ifp->if_broadcastaddr = etherbroadcastaddr;
@@ -1006,8 +1001,6 @@ ether_ifattach(struct ifnet *ifp, const u_int8_t *lla)
 		bcopy(lla, ifp->if_hw_addr, ifp->if_addrlen);
 
 	bpfattach(ifp, DLT_EN10MB, ETHER_HDR_LEN);
-	if (ng_ether_attach_p != NULL)
-		(*ng_ether_attach_p)(ifp);
 
 	/* Announce Ethernet MAC address if non-zero. */
 	for (i = 0; i < ifp->if_addrlen; i++)
@@ -1035,34 +1028,9 @@ ether_ifdetach(struct ifnet *ifp)
 	sdl = (struct sockaddr_dl *)(ifp->if_addr->ifa_addr);
 	uuid_ether_del(LLADDR(sdl));
 
-	if (ifp->if_l2com != NULL) {
-		KASSERT(ng_ether_detach_p != NULL,
-		    ("ng_ether_detach_p is NULL"));
-		(*ng_ether_detach_p)(ifp);
-	}
-
 	bpfdetach(ifp);
 	if_detach(ifp);
 }
-
-#ifdef VIMAGE
-void
-ether_reassign(struct ifnet *ifp, struct vnet *new_vnet, char *unused __unused)
-{
-
-	if (ifp->if_l2com != NULL) {
-		KASSERT(ng_ether_detach_p != NULL,
-		    ("ng_ether_detach_p is NULL"));
-		(*ng_ether_detach_p)(ifp);
-	}
-
-	if (ng_ether_attach_p != NULL) {
-		CURVNET_SET_QUIET(new_vnet);
-		(*ng_ether_attach_p)(ifp);
-		CURVNET_RESTORE();
-	}
-}
-#endif
 
 SYSCTL_DECL(_net_link);
 SYSCTL_NODE(_net_link, IFT_ETHER, ether, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,

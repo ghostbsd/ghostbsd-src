@@ -151,7 +151,7 @@ vnet_loif_init(const void *unused __unused)
 	struct ifc_data ifd = { .unit = 0 };
 	ifc_create_ifp(loname, &ifd, &V_loif);
 }
-VNET_SYSINIT(vnet_loif_init, SI_SUB_PSEUDO, SI_ORDER_ANY,
+VNET_SYSINIT(vnet_loif_init, SI_SUB_PROTO_IF, SI_ORDER_ANY,
     vnet_loif_init, NULL);
 
 #ifdef VIMAGE
@@ -219,9 +219,7 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 	if_inc_counter(ifp, IFCOUNTER_OBYTES, m->m_pkthdr.len);
 
-#ifdef RSS
 	M_HASHTYPE_CLEAR(m);
-#endif
 
 	/* BPF writes need to be handled specially. */
 	if (dst->sa_family == AF_UNSPEC || dst->sa_family == pseudo_AF_HDRCMPLT)

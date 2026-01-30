@@ -1,4 +1,4 @@
-/*	$NetBSD: spec.c,v 1.89 2014/04/24 17:22:41 christos Exp $	*/
+/*	$NetBSD: spec.c,v 1.94 2025/12/18 14:05:41 christos Exp $	*/
 
 /*-
  * Copyright (c) 1989, 1993
@@ -67,7 +67,7 @@
 #if 0
 static char sccsid[] = "@(#)spec.c	8.2 (Berkeley) 4/28/95";
 #else
-__RCSID("$NetBSD: spec.c,v 1.89 2014/04/24 17:22:41 christos Exp $");
+__RCSID("$NetBSD: spec.c,v 1.94 2025/12/18 14:05:41 christos Exp $");
 #endif
 #endif /* not lint */
 
@@ -100,7 +100,7 @@ static	dev_t	parsedev(char *);
 static	void	replacenode(NODE *, NODE *);
 static	void	set(char *, NODE *);
 static	void	unset(char *, NODE *);
-static	void	addchild(NODE *, NODE *);
+static	NODE	*addchild(NODE *, NODE *);
 static	int	nodecmp(const NODE *, const NODE *);
 static	int	appendfield(FILE *, int, const char *, ...) __printflike(3, 4);
 
@@ -224,10 +224,14 @@ noparent:		mtree_err("no parent node");
 			 */
 			if (strcmp(centry->name, ".") == 0 && centry->type == 0)
 				centry->type = F_DIR;
-			if (strcmp(centry->name, ".") != 0 ||
-			    centry->type != F_DIR)
+			if (strcmp(centry->name, ".") != 0)
 				mtree_err(
-				    "root node must be the directory `.'");
+				    "root node must be the directory `.',"
+				    " found `%s'", centry->name);
+			if (centry->type != F_DIR)
+				mtree_err(
+				    "root node must type %#x != %#x",
+				    F_DIR, centry->type);
 			last = root = centry;
 			root->parent = root;
 		} else if (pathparent != NULL) {
@@ -235,8 +239,7 @@ noparent:		mtree_err("no parent node");
 				 * full path entry; add or replace
 				 */
 			centry->parent = pathparent;
-			addchild(pathparent, centry);
-			last = centry;
+			last = addchild(pathparent, centry);
 		} else if (strcmp(centry->name, ".") == 0) {
 				/*
 				 * duplicate "." entry; always replace
@@ -248,8 +251,7 @@ noparent:		mtree_err("no parent node");
 				 * add or replace
 				 */
 			centry->parent = last;
-			addchild(last, centry);
-			last = centry;
+			last = addchild(last, centry);
 		} else {
 				/*
 				 * new relative child in parent dir
@@ -257,8 +259,7 @@ noparent:		mtree_err("no parent node");
 				 * add or replace
 				 */
 			centry->parent = last->parent;
-			addchild(last->parent, centry);
-			last = centry;
+			last = addchild(last->parent, centry);
 		}
 	}
 	return (root);
@@ -539,7 +540,8 @@ replacenode(NODE *cur, NODE *new)
 static void
 set(char *t, NODE *ip)
 {
-	int	type, value, len;
+	int	type, value;
+	size_t	len;
 	gid_t	gid;
 	uid_t	uid;
 	char	*kw, *val, *md, *ep;
@@ -716,7 +718,7 @@ unset(char *t, NODE *ip)
  *	a duplicate, insert it into the linked list referenced by
  *	pathparent->child.  Keep the list sorted if Sflag is set.
  */
-static void
+static NODE *
 addchild(NODE *pathparent, NODE *centry)
 {
 	NODE *samename;      /* node with the same name as centry */
@@ -735,7 +737,7 @@ addchild(NODE *pathparent, NODE *centry)
 	if (cur == NULL) {
 		/* centry is pathparent's first and only child node so far */
 		pathparent->child = centry;
-		return;
+		return centry;
 	}
 
 	/*
@@ -780,7 +782,7 @@ addchild(NODE *pathparent, NODE *centry)
 		replacenode(samename, centry);
 		if (samename == replacepos) {
 			/* The just-replaced node was in the correct position */
-			return;
+			return samename;
 		}
 		if (samename == insertpos || samename->prev == insertpos) {
 			/*
@@ -788,7 +790,7 @@ addchild(NODE *pathparent, NODE *centry)
 			 * or just after the replaced node, but that would
 			 * be equivalent to just retaining the replaced node.
 			 */
-			return;
+			return samename;
 		}
 
 		/*
@@ -798,7 +800,7 @@ addchild(NODE *pathparent, NODE *centry)
 		 *
 		 * Make centry point to the just-replaced node.	 Unlink
 		 * the just-replaced node from the list, and allow it to
-		 * be insterted in the correct position later.
+		 * be inserted in the correct position later.
 		 */
 		centry = samename;
 		if (centry->prev)
@@ -828,7 +830,7 @@ addchild(NODE *pathparent, NODE *centry)
 		if (centry->next)
 			centry->next->prev = centry;
 	}
-	return;
+	return centry;
 }
 
 /*
@@ -838,7 +840,7 @@ addchild(NODE *pathparent, NODE *centry)
  *	directories sort after non-directories, but otherwise sort in
  *	strcmp() order.
  *
- * Keep this in sync with dcmp() in create.c.
+ * Keep this in sync with dcmp() below.
  */
 static int
 nodecmp(const NODE *a, const NODE *b)
@@ -847,7 +849,30 @@ nodecmp(const NODE *a, const NODE *b)
 	if ((a->type & F_DIR) != 0) {
 		if ((b->type & F_DIR) == 0)
 			return 1;
-	} else if ((b->type & F_DIR) != 0)
+	} else if ((b->type & F_DIR) != 0) {
 		return -1;
+	}
 	return strcmp(a->name, b->name);
+}
+
+/*
+ * dcmp --
+ *    used as a comparison function passed to fts_open() to control
+ *    the order in which fts_read() returns results.    We make
+ *    directories sort after non-directories, but otherwise sort in
+ *    strcmp() order.
+ *
+ * Keep this in sync with nodecmp() above.
+ */
+int
+dcmp(const FTSENT *FTS_CONST *a, const FTSENT *FTS_CONST *b)
+{
+
+	if (S_ISDIR((*a)->fts_statp->st_mode)) {
+		if (!S_ISDIR((*b)->fts_statp->st_mode))
+			return 1;
+	} else if (S_ISDIR((*b)->fts_statp->st_mode)) {
+		return -1;
+	}
+	return strcmp((*a)->fts_name, (*b)->fts_name);
 }

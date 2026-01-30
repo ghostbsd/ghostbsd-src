@@ -35,6 +35,7 @@
 #include <sys/event.h>
 #include <sys/hwt.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
@@ -130,7 +131,7 @@ arm_spe_intr(void *arg)
 	uint64_t pmbsr;
 	uint64_t base, limit;
 	uint8_t ec;
-	struct arm_spe_info *info = &sc->spe_info[cpu_id];
+	struct arm_spe_info *info = sc->spe_info[cpu_id];
 	uint8_t i = info->buf_idx;
 	struct arm_spe_buf_info *buf = &info->buf_info[i];
 	struct arm_spe_buf_info *prev_buf = &info->buf_info[!i];
@@ -310,8 +311,9 @@ arm_spe_error(void *arg, int pending __unused)
 	struct kevent kev;
 	int ret;
 
-	smp_rendezvous_cpus(ctx->cpu_map, smp_no_rendezvous_barrier,
-	    arm_spe_disable, smp_no_rendezvous_barrier, NULL);
+	if (!CPU_EMPTY(&ctx->cpu_map))
+		smp_rendezvous_cpus(ctx->cpu_map, smp_no_rendezvous_barrier,
+		    arm_spe_disable, smp_no_rendezvous_barrier, NULL);
 
 	EV_SET(&kev, ARM_SPE_KQ_SHUTDOWN, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
 	ret = kqfd_register(ctx->kqueue_fd, &kev, ctx->hwt_td, M_WAITOK);

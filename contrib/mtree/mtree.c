@@ -1,4 +1,4 @@
-/*	$NetBSD: mtree.c,v 1.49 2014/04/24 17:22:41 christos Exp $	*/
+/*	$NetBSD: mtree.c,v 1.52 2025/12/18 18:17:26 christos Exp $	*/
 
 /*-
  * Copyright (c) 1989, 1990, 1993
@@ -43,7 +43,7 @@ __COPYRIGHT("@(#) Copyright (c) 1989, 1990, 1993\
 #if 0
 static char sccsid[] = "@(#)mtree.c	8.1 (Berkeley) 6/6/93";
 #else
-__RCSID("$NetBSD: mtree.c,v 1.49 2014/04/24 17:22:41 christos Exp $");
+__RCSID("$NetBSD: mtree.c,v 1.52 2025/12/18 18:17:26 christos Exp $");
 #endif
 #endif /* not lint */
 
@@ -73,19 +73,20 @@ static struct {
 };
 
 __dead static	void	usage(void);
+static int parsekeys(char **);
 
 int
 main(int argc, char **argv)
 {
 	int	ch, status;
 	unsigned int	i;
-	int	cflag, Cflag, Dflag, Uflag, wflag;
+	int	cflag, Cflag, Dflag, Uflag, wflag, rkeys;
 	char	*dir, *p;
 	FILE	*spec1, *spec2;
 
 	setprogname(argv[0]);
 
-	cflag = Cflag = Dflag = Uflag = wflag = 0;
+	cflag = Cflag = Dflag = Uflag = wflag = rkeys = 0;
 	dir = NULL;
 	init_excludes();
 	spec1 = stdin;
@@ -150,14 +151,9 @@ main(int argc, char **argv)
 			break;
 		case 'k':
 			keys = F_TYPE;
-			while ((p = strsep(&optarg, " \t,")) != NULL)
-				if (*p != '\0')
-					keys |= parsekey(p, NULL);
-			break;
+			/*FALLTHROUGH*/
 		case 'K':
-			while ((p = strsep(&optarg, " \t,")) != NULL)
-				if (*p != '\0')
-					keys |= parsekey(p, NULL);
+			keys |= parsekeys(&optarg);
 			break;
 		case 'l':
 			lflag = 1;
@@ -195,16 +191,14 @@ main(int argc, char **argv)
 			qflag = 1;
 			break;
 		case 'r':
-			rflag = 1;
+			rflag++;
 			break;
 		case 'R':
-			while ((p = strsep(&optarg, " \t,")) != NULL)
-				if (*p != '\0')
-					keys &= ~parsekey(p, NULL);
+			rkeys |= parsekeys(&optarg);
 			break;
 		case 's':
 			sflag = 1;
-			crc_total = ~strtol(optarg, &p, 0);
+			crc_total = (uint32_t)~strtol(optarg, &p, 0);
 			if (*p)
 				mtree_err("illegal seed value -- %s", optarg);
 			break;
@@ -242,6 +236,8 @@ main(int argc, char **argv)
 
 	if (argc)
 		usage();
+
+	keys &= ~rkeys;
 
 	switch (flavor) {
 	case F_FREEBSD9:
@@ -310,6 +306,18 @@ main(int argc, char **argv)
 	if (Uflag && (status == MISMATCHEXIT))
 		status = 0;
 	exit(status);
+}
+
+static int
+parsekeys(char **arg)
+{
+	const char *p;
+	int k = 0;
+
+	while ((p = strsep(arg, " \t,")) != NULL)
+		if (*p != '\0')
+			k |= parsekey(p, NULL);
+	return k;
 }
 
 static void

@@ -93,6 +93,11 @@ CWARNFLAGS.clang+=	-Wno-error=unused-but-set-parameter
 # Similar to gcc >= 8.1 -Wno-error=cast-function-type below
 CWARNFLAGS.clang+=	-Wno-error=cast-function-type-mismatch
 .endif
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 210000
+CXXWARNFLAGS.clang+=	-Wno-c++20-extensions
+CXXWARNFLAGS.clang+=	-Wno-c++23-lambda-attributes
+CXXWARNFLAGS.clang+=	-Wno-nullability-completeness
+.endif
 .endif # WARNS <= 6
 .if ${WARNS} <= 3
 CWARNFLAGS.clang+=	-Wno-tautological-compare -Wno-unused-value\
@@ -127,6 +132,9 @@ NO_WBITWISE_INSTEAD_OF_LOGICAL=	-Wno-bitwise-instead-of-logical
 NO_WARRAY_PARAMETER=	-Wno-array-parameter
 NO_WSTRICT_PROTOTYPES=	-Wno-strict-prototypes
 NO_WDEPRECATED_NON_PROTOTYPE=-Wno-deprecated-non-prototype
+.endif
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 210000
+NO_WCHARACTER_CONVERSION=-Wno-character-conversion
 .endif
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 50200
 NO_WUNUSED_BUT_SET_VARIABLE=-Wno-unused-but-set-variable
@@ -185,6 +193,11 @@ CWARNFLAGS+=	-Wno-error=address			\
 		-Wno-error=uninitialized		\
 		-Wno-error=unused-function		\
 		-Wno-error=unused-value
+
+# These warnings are raised by headers in libc++ so are disabled
+# globally for all C++
+CXXWARNFLAGS+=	-Wno-attributes				\
+		-Wno-deprecated-declarations
 .endif
 
 # GCC 6.1.0
@@ -236,7 +249,9 @@ CWARNFLAGS+=	-Wno-error=overflow
 .if ${COMPILER_VERSION} >= 120100
 # These warnings are raised by headers in libc++ so are disabled
 # globally for all C++
-CXXWARNFLAGS+=	-Wno-literal-suffix 			\
+CXXWARNFLAGS+=	-Wno-literal-suffix			\
+		-Wno-c++20-extensions			\
+		-Wno-attributes				\
 		-Wno-error=unknown-pragmas
 .endif
 

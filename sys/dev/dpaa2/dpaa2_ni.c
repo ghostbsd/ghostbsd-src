@@ -220,6 +220,9 @@ MALLOC_DEFINE(M_DPAA2_TXB, "dpaa2_txb", "DPAA2 DMA-mapped buffer (Tx)");
 #define	RXH_L4_B_2_3		(1 << 7) /* dst port in case of TCP/UDP/SCTP */
 #define	RXH_DISCARD		(1 << 31)
 
+/* Transmit checksum offload */
+#define DPAA2_CSUM_TX_OFFLOAD	(CSUM_IP | CSUM_DELAY_DATA | CSUM_DELAY_DATA_IPV6)
+
 /* Default Rx hash options, set during attaching. */
 #define DPAA2_RXH_DEFAULT	(RXH_IP_SRC | RXH_IP_DST | RXH_L4_B_0_1 | RXH_L4_B_2_3)
 
@@ -559,7 +562,9 @@ dpaa2_ni_attach(device_t dev)
 	if_settransmitfn(ifp, dpaa2_ni_transmit);
 	if_setqflushfn(ifp, dpaa2_ni_qflush);
 
-	if_setcapabilities(ifp, IFCAP_VLAN_MTU | IFCAP_HWCSUM | IFCAP_JUMBO_MTU);
+	if_sethwassist(sc->ifp, DPAA2_CSUM_TX_OFFLOAD);
+	if_setcapabilities(ifp, IFCAP_VLAN_MTU | IFCAP_HWCSUM |
+	    IFCAP_HWCSUM_IPV6 | IFCAP_JUMBO_MTU);
 	if_setcapenable(ifp, if_getcapabilities(ifp));
 
 	DPAA2_CMD_INIT(&cmd);
@@ -625,6 +630,12 @@ dpaa2_ni_attach(device_t dev)
 	if (error) {
 		device_printf(dev, "%s: failed to setup sysctls: error=%d\n",
 		    __func__, error);
+		goto close_ni;
+	}
+	error = dpaa2_ni_setup_if_caps(sc);
+	if (error) {
+		device_printf(dev, "%s: failed to setup interface capabilities: "
+		    "error=%d\n", __func__, error);
 		goto close_ni;
 	}
 
@@ -1569,8 +1580,7 @@ dpaa2_ni_setup_msi(struct dpaa2_ni_softc *sc)
 static int
 dpaa2_ni_setup_if_caps(struct dpaa2_ni_softc *sc)
 {
-	const bool en_rxcsum = if_getcapenable(sc->ifp) & IFCAP_RXCSUM;
-	const bool en_txcsum = if_getcapenable(sc->ifp) & IFCAP_TXCSUM;
+	bool en_rxcsum, en_txcsum;
 	device_t pdev = device_get_parent(sc->dev);
 	device_t dev = sc->dev;
 	device_t child = dev;
@@ -1581,6 +1591,17 @@ dpaa2_ni_setup_if_caps(struct dpaa2_ni_softc *sc)
 	int error;
 
 	DPAA2_CMD_INIT(&cmd);
+
+	/*
+	 * XXX-DSL: DPAA2 allows to validate L3/L4 checksums on reception and/or
+	 *          generate L3/L4 checksums on transmission without
+	 *          differentiating between IPv4/v6, i.e. enable for both
+	 *          protocols if requested.
+	 */
+	en_rxcsum = if_getcapenable(sc->ifp) &
+	    (IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6);
+	en_txcsum = if_getcapenable(sc->ifp) &
+	    (IFCAP_TXCSUM | IFCAP_TXCSUM_IPV6);
 
 	error = DPAA2_CMD_RC_OPEN(dev, child, &cmd, rcinfo->id, &rc_token);
 	if (error) {
@@ -1625,6 +1646,13 @@ dpaa2_ni_setup_if_caps(struct dpaa2_ni_softc *sc)
 		device_printf(dev, "%s: failed to %s L4 checksum generation\n",
 		    __func__, en_txcsum ? "enable" : "disable");
 		goto close_ni;
+	}
+
+	if (bootverbose) {
+		device_printf(dev, "%s: L3/L4 checksum validation %s\n",
+		    __func__, en_rxcsum ? "enabled" : "disabled");
+		device_printf(dev, "%s: L3/L4 checksum generation %s\n",
+		    __func__, en_txcsum ? "enabled" : "disabled");
 	}
 
 	(void)DPAA2_CMD_NI_CLOSE(dev, child, &cmd);
@@ -2574,13 +2602,13 @@ dpaa2_ni_ioctl(if_t ifp, u_long c, caddr_t data)
 		break;
 	case SIOCSIFCAP:
 		changed = if_getcapenable(ifp) ^ ifr->ifr_reqcap;
-		if (changed & IFCAP_HWCSUM) {
-			if ((ifr->ifr_reqcap & changed) & IFCAP_HWCSUM) {
-				if_setcapenablebit(ifp, IFCAP_HWCSUM, 0);
-			} else {
-				if_setcapenablebit(ifp, 0, IFCAP_HWCSUM);
-			}
+		if ((changed & (IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6)) != 0)
+			if_togglecapenable(ifp, IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6);
+		if ((changed & (IFCAP_TXCSUM | IFCAP_TXCSUM_IPV6)) != 0) {
+			if_togglecapenable(ifp, IFCAP_TXCSUM | IFCAP_TXCSUM_IPV6);
+			if_togglehwassist(ifp, DPAA2_CSUM_TX_OFFLOAD);
 		}
+
 		rc = dpaa2_ni_setup_if_caps(sc);
 		if (rc) {
 			printf("%s: failed to update iface capabilities: "

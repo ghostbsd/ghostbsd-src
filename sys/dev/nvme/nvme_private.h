@@ -76,7 +76,6 @@ MALLOC_DECLARE(M_NVME);
 #define NVME_INT_COAL_THRESHOLD (0)	/* 0-based */
 
 #define NVME_MAX_NAMESPACES	(16)
-#define NVME_MAX_CONSUMERS	(2)
 #define NVME_MAX_ASYNC_EVENTS	(8)
 
 #define NVME_ADMIN_TIMEOUT_PERIOD	(60)    /* in seconds */
@@ -113,7 +112,9 @@ struct nvme_request {
 	struct memdesc			payload;
 	nvme_cb_fn_t			cb_fn;
 	void				*cb_arg;
-	int32_t				retries;
+	int16_t				retries;
+	uint16_t			ioq;
+#define NVME_IOQ_DEFAULT		0xffff
 	bool				payload_valid;
 	bool				timeout;
 	bool				spare[2];		/* Future use */
@@ -205,7 +206,6 @@ struct nvme_namespace {
 	uint32_t			id;
 	uint32_t			flags;
 	struct cdev			*cdev;
-	void				*cons_cookie[NVME_MAX_CONSUMERS];
 	uint32_t			boundary;
 	struct mtx			lock;
 };
@@ -299,10 +299,7 @@ struct nvme_controller {
 	uint32_t			num_aers;
 	struct nvme_async_event_request	aer[NVME_MAX_ASYNC_EVENTS];
 
-	void				*cons_cookie[NVME_MAX_CONSUMERS];
-
 	uint32_t			is_resetting;
-	uint32_t			notification_sent;
 	u_int				fail_on_reset;
 
 	bool				is_failed;
@@ -496,6 +493,7 @@ _nvme_allocate_request(const int how, nvme_cb_fn_t cb_fn, void *cb_arg)
 
 	req = malloc(sizeof(*req), M_NVME, how | M_ZERO);
 	if (req != NULL) {
+		req->ioq = NVME_IOQ_DEFAULT;
 		req->cb_fn = cb_fn;
 		req->cb_arg = cb_arg;
 		req->timeout = true;
@@ -556,16 +554,29 @@ nvme_allocate_request_ccb(union ccb *ccb, const int how, nvme_cb_fn_t cb_fn,
 
 #define nvme_free_request(req)	free(req, M_NVME)
 
-void	nvme_notify_async_consumers(struct nvme_controller *ctrlr,
-				    const struct nvme_completion *async_cpl,
-				    uint32_t log_page_id, void *log_page_buffer,
-				    uint32_t log_page_size);
-void	nvme_notify_fail_consumers(struct nvme_controller *ctrlr);
-void	nvme_notify_new_controller(struct nvme_controller *ctrlr);
-void	nvme_notify_ns(struct nvme_controller *ctrlr, int nsid);
+static __inline void
+nvme_request_set_ioq(struct nvme_controller *ctrlr, struct nvme_request *req,
+    uint16_t ioq)
+{
+	/*
+	 * Note: NVMe queues are numbered 1-65535. The ioq here is numbered
+	 * 0-65534 to avoid off-by-one bugs, with 65535 being reserved for
+	 * DEFAULT.
+	 */
+	KASSERT(ioq == NVME_IOQ_DEFAULT || ioq < ctrlr->num_io_queues,
+	    ("ioq %d out of range 0..%d", ioq, ctrlr->num_io_queues));
+	if (ioq < 0 || ioq >= ctrlr->num_io_queues)
+		ioq = NVME_IOQ_DEFAULT;
+	req->ioq = ioq;
+}
+
+void	nvme_notify_async(struct nvme_controller *ctrlr,
+	    const struct nvme_completion *async_cpl,
+	    uint32_t log_page_id, void *log_page_buffer,
+	    uint32_t log_page_size);
+void	nvme_notify_fail(struct nvme_controller *ctrlr);
 
 void	nvme_ctrlr_shared_handler(void *arg);
-void	nvme_ctrlr_get_ident(const struct nvme_controller *ctrlr, uint8_t *sn);
 void	nvme_ctrlr_poll(struct nvme_controller *ctrlr);
 
 int	nvme_ctrlr_suspend(struct nvme_controller *ctrlr);

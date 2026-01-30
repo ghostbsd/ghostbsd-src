@@ -223,6 +223,9 @@ vdev_prop_get_inherited(vdev_t *vd, vdev_prop_t prop)
 		case VDEV_PROP_IO_T:
 			propval = vd->vdev_io_t;
 			break;
+		case VDEV_PROP_SLOW_IO_EVENTS:
+			propval = vd->vdev_slow_io_events;
+			break;
 		case VDEV_PROP_SLOW_IO_N:
 			propval = vd->vdev_slow_io_n;
 			break;
@@ -1528,7 +1531,8 @@ zfs_ereport_taskq_fini(void)
 {
 	mutex_enter(&recent_events_lock);
 	if (recent_events_cleaner_tqid != 0) {
-		taskq_cancel_id(system_delay_taskq, recent_events_cleaner_tqid);
+		taskq_cancel_id(system_delay_taskq, recent_events_cleaner_tqid,
+		    B_TRUE);
 		recent_events_cleaner_tqid = 0;
 	}
 	mutex_exit(&recent_events_lock);
@@ -1580,10 +1584,10 @@ zfs_ereport_zvol_post(const char *subclass, const char *name,
 	nvlist_t *aux;
 	char *r;
 
-	boolean_t locked = mutex_owned(&spa_namespace_lock);
-	if (!locked) mutex_enter(&spa_namespace_lock);
+	boolean_t locked = spa_namespace_held();
+	if (!locked) spa_namespace_enter(FTAG);
 	spa_t *spa = spa_lookup(name);
-	if (!locked) mutex_exit(&spa_namespace_lock);
+	if (!locked) spa_namespace_exit(FTAG);
 
 	if (spa == NULL)
 		return;

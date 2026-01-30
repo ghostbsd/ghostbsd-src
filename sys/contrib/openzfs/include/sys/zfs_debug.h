@@ -40,6 +40,7 @@ extern "C" {
 #endif
 
 #include <sys/nvpair.h>
+#include <sys/zfs_debug_os.h>
 
 extern int zfs_flags;
 extern int zfs_recover;
@@ -67,7 +68,7 @@ extern int zfs_dbgmsg_enable;
 extern void __set_error(const char *file, const char *func, int line, int err);
 extern void __zfs_dbgmsg(char *buf);
 extern void __dprintf(boolean_t dprint, const char *file, const char *func,
-    int line, const char *fmt, ...)  __attribute__((format(printf, 5, 6)));
+    int line, const char *fmt, ...)  __attribute__((format(__printf__, 5, 6)));
 
 /*
  * Some general principles for using zfs_dbgmsg():

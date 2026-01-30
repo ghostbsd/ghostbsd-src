@@ -58,6 +58,7 @@
 
 #if defined(__i386__) || defined(__amd64__)
 #include <machine/clock.h>
+#include <machine/intr_machdep.h>
 #include <machine/pci_cfgreg.h>
 #include <x86/cputypes.h>
 #include <x86/x86_var.h>
@@ -489,7 +490,6 @@ acpi_attach(device_t dev)
     ACPI_STATUS		status;
     int			error, state;
     UINT32		flags;
-    UINT8		TypeA, TypeB;
     char		*env;
     enum power_stype	stype;
 
@@ -616,7 +616,7 @@ acpi_attach(device_t dev)
 	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	&sc->acpi_lid_switch_stype, 0, acpi_stype_sysctl, "A",
 	"Lid ACPI sleep state. Set to s2idle or s2mem if you want to suspend "
-	"your laptop when close the lid.");
+	"your laptop when you close the lid.");
     SYSCTL_ADD_PROC(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "suspend_state", CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	NULL, 0, acpi_suspend_state_sysctl, "A",
@@ -626,7 +626,7 @@ acpi_attach(device_t dev)
 	OID_AUTO, "standby_state",
 	CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	&sc->acpi_standby_sx, 0, acpi_sleep_state_sysctl, "A",
-	"ACPI Sx state to use when going standby (S1 or S2).");
+	"ACPI Sx state to use when going standby (usually S1 or S2).");
     SYSCTL_ADD_INT(&sc->acpi_sysctl_ctx, SYSCTL_CHILDREN(sc->acpi_sysctl_tree),
 	OID_AUTO, "sleep_delay", CTLFLAG_RW, &sc->acpi_sleep_delay, 0,
 	"sleep delay in seconds");
@@ -672,24 +672,27 @@ acpi_attach(device_t dev)
     if (AcpiGbl_FADT.Flags & ACPI_FADT_RESET_REGISTER)
 	sc->acpi_handle_reboot = 1;
 
-#if !ACPI_REDUCED_HARDWARE
     /* Only enable S4BIOS by default if the FACS says it is available. */
     if (AcpiGbl_FACS != NULL && AcpiGbl_FACS->Flags & ACPI_FACS_S4_BIOS_PRESENT)
 	sc->acpi_s4bios = 1;
-#endif
 
     /*
-     * Probe all supported ACPI sleep states.  Awake (S0) is always supported.
+     * Probe all supported ACPI sleep states.  Awake (S0) is always supported,
+     * and suspend-to-idle is always supported on x86 only (at the moment).
      */
-    acpi_supported_sstates[ACPI_STATE_S0] = TRUE;
+    acpi_supported_sstates[ACPI_STATE_S0] = true;
     acpi_supported_stypes[POWER_STYPE_AWAKE] = true;
-    for (state = ACPI_STATE_S1; state <= ACPI_STATE_S5; state++)
-	if (ACPI_SUCCESS(AcpiEvaluateObject(ACPI_ROOT_OBJECT,
-	    __DECONST(char *, AcpiGbl_SleepStateNames[state]), NULL, NULL)) &&
-	    ACPI_SUCCESS(AcpiGetSleepTypeData(state, &TypeA, &TypeB))) {
-	    acpi_supported_sstates[state] = TRUE;
+#if defined(__i386__) || defined(__amd64__)
+    acpi_supported_stypes[POWER_STYPE_SUSPEND_TO_IDLE] = true;
+#endif
+    for (state = ACPI_STATE_S1; state <= ACPI_STATE_S5; state++) {
+	UINT8 TypeA, TypeB;
+
+	if (ACPI_SUCCESS(AcpiGetSleepTypeData(state, &TypeA, &TypeB))) {
+	    acpi_supported_sstates[state] = true;
 	    acpi_supported_stypes[acpi_sstate_to_stype(state)] = true;
 	}
+    }
 
     /*
      * Dispatch the default sleep type to devices.  The lid switch is set
@@ -705,13 +708,24 @@ acpi_attach(device_t dev)
     else if (acpi_supported_sstates[ACPI_STATE_S2])
 	sc->acpi_standby_sx = ACPI_STATE_S2;
 
-    /* Pick the first valid sleep type for the sleep button default. */
+    /*
+     * Pick the first valid sleep type for the sleep button default.  If that
+     * type was hibernate and we support s2idle, set it to that.  The sleep
+     * button prefers s2mem instead of s2idle at the moment as s2idle may not
+     * yet work reliably on all machines.  In the future, we should set this to
+     * s2idle when ACPI_FADT_LOW_POWER_S0 is set.
+     */
     sc->acpi_sleep_button_stype = POWER_STYPE_UNKNOWN;
     for (stype = POWER_STYPE_STANDBY; stype <= POWER_STYPE_HIBERNATE; stype++)
 	if (acpi_supported_stypes[stype]) {
 	    sc->acpi_sleep_button_stype = stype;
 	    break;
 	}
+    if (sc->acpi_sleep_button_stype == POWER_STYPE_HIBERNATE ||
+	sc->acpi_sleep_button_stype == POWER_STYPE_UNKNOWN) {
+	if (acpi_supported_stypes[POWER_STYPE_SUSPEND_TO_IDLE])
+	    sc->acpi_sleep_button_stype = POWER_STYPE_SUSPEND_TO_IDLE;
+    }
 
     acpi_enable_fixed_events(sc);
 
@@ -1116,6 +1130,7 @@ acpi_child_deleted(device_t dev, device_t child)
 
     if (acpi_get_device(dinfo->ad_handle) == child)
 	AcpiDetachData(dinfo->ad_handle, acpi_fake_objhandler);
+    free(dinfo, M_ACPIDEV);
 }
 
 /*
@@ -1525,7 +1540,7 @@ acpi_reserve_resources(device_t dev)
 	     * acpi_alloc_resource() will sub-alloc from the system
 	     * resource.
 	     */
-	    resource_list_reserve(rl, dev, children[i], rle->type, &rle->rid,
+	    resource_list_reserve(rl, dev, children[i], rle->type, rle->rid,
 		rle->start, rle->end, rle->count, 0);
 	}
     }
@@ -1562,7 +1577,7 @@ acpi_set_resource(device_t dev, device_t child, int type, int rid,
 }
 
 static struct resource *
-acpi_alloc_resource(device_t bus, device_t child, int type, int *rid,
+acpi_alloc_resource(device_t bus, device_t child, int type, int rid,
     rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 #ifndef INTRNG
@@ -1590,8 +1605,8 @@ acpi_alloc_resource(device_t bus, device_t child, int type, int *rid,
 	 * add the resource before allocating it.  Note that these
 	 * resources will not be reserved.
 	 */
-	if (!isdefault && resource_list_find(rl, type, *rid) == NULL)
-		resource_list_add(rl, type, *rid, start, end, count);
+	if (!isdefault && resource_list_find(rl, type, rid) == NULL)
+		resource_list_add(rl, type, rid, start, end, count);
 	res = resource_list_alloc(rl, bus, child, type, rid, start, end, count,
 	    flags);
 #ifndef INTRNG
@@ -1604,7 +1619,7 @@ acpi_alloc_resource(device_t bus, device_t child, int type, int *rid,
 	     *
 	     * XXX: Should we handle the lookup failing?
 	     */
-	    if (ACPI_SUCCESS(acpi_lookup_irq_resource(child, *rid, res, &ares)))
+	    if (ACPI_SUCCESS(acpi_lookup_irq_resource(child, rid, res, &ares)))
 		acpi_config_intr(child, &ares);
 	}
 #endif
@@ -1616,7 +1631,7 @@ acpi_alloc_resource(device_t bus, device_t child, int type, int *rid,
 	 * system resource regions.
 	 */
 	if (res == NULL && isdefault) {
-	    rle = resource_list_find(rl, type, *rid);
+	    rle = resource_list_find(rl, type, rid);
 	    if (rle != NULL) {
 		start = rle->start;
 		end = rle->end;
@@ -1770,13 +1785,13 @@ acpi_unmap_resource(device_t bus, device_t child, struct resource *r,
 
 /* Allocate an IO port or memory resource, given its GAS. */
 int
-acpi_bus_alloc_gas(device_t dev, int *type, int *rid, ACPI_GENERIC_ADDRESS *gas,
+acpi_bus_alloc_gas(device_t dev, int *type, int rid, ACPI_GENERIC_ADDRESS *gas,
     struct resource **res, u_int flags)
 {
     int error, res_type;
 
     error = ENOMEM;
-    if (type == NULL || rid == NULL || gas == NULL || res == NULL)
+    if (type == NULL || gas == NULL || res == NULL)
 	return (EINVAL);
 
     /* We only support memory and IO spaces. */
@@ -1802,14 +1817,14 @@ acpi_bus_alloc_gas(device_t dev, int *type, int *rid, ACPI_GENERIC_ADDRESS *gas,
     if (gas->Address == 0 || gas->BitWidth == 0)
 	return (EINVAL);
 
-    bus_set_resource(dev, res_type, *rid, gas->Address,
+    bus_set_resource(dev, res_type, rid, gas->Address,
 	gas->BitWidth / 8);
     *res = bus_alloc_resource_any(dev, res_type, rid, RF_ACTIVE | flags);
     if (*res != NULL) {
 	*type = res_type;
 	error = 0;
     } else
-	bus_delete_resource(dev, res_type, *rid);
+	bus_delete_resource(dev, res_type, rid);
 
     return (error);
 }
@@ -3314,7 +3329,8 @@ acpi_ReqSleepState(struct acpi_softc *sc, enum power_stype stype)
 
     return (0);
 #else
-    /* This platform does not support acpi suspend/resume. */
+    device_printf(sc->acpi_dev, "ACPI suspend not supported on this platform "
+	"(TODO suspend to idle should be, however)\n");
     return (EOPNOTSUPP);
 #endif
 }
@@ -3329,13 +3345,13 @@ acpi_ReqSleepState(struct acpi_softc *sc, enum power_stype stype)
 int
 acpi_AckSleepState(struct apm_clone_data *clone, int error)
 {
+    struct acpi_softc *sc = clone->acpi_sc;
+
 #if defined(__amd64__) || defined(__i386__)
-    struct acpi_softc *sc;
     int ret, sleeping;
 
     /* If no pending sleep type, return an error. */
     ACPI_LOCK(acpi);
-    sc = clone->acpi_sc;
     if (sc->acpi_next_stype == POWER_STYPE_AWAKE) {
     	ACPI_UNLOCK(acpi);
 	return (ENXIO);
@@ -3378,7 +3394,8 @@ acpi_AckSleepState(struct apm_clone_data *clone, int error)
     }
     return (ret);
 #else
-    /* This platform does not support acpi suspend/resume. */
+    device_printf(sc->acpi_dev, "ACPI suspend not supported on this platform "
+	"(TODO suspend to idle should be, however)\n");
     return (EOPNOTSUPP);
 #endif
 }
@@ -3417,27 +3434,133 @@ acpi_sleep_disable(struct acpi_softc *sc)
 }
 
 enum acpi_sleep_state {
-    ACPI_SS_NONE,
-    ACPI_SS_GPE_SET,
-    ACPI_SS_DEV_SUSPEND,
-    ACPI_SS_SLP_PREP,
-    ACPI_SS_SLEPT,
+    ACPI_SS_NONE	= 0,
+    ACPI_SS_GPE_SET	= 1 << 0,
+    ACPI_SS_DEV_SUSPEND	= 1 << 1,
+    ACPI_SS_SLP_PREP	= 1 << 2,
+    ACPI_SS_SLEPT	= 1 << 3,
 };
+
+static void
+do_standby(struct acpi_softc *sc, enum acpi_sleep_state *slp_state,
+    register_t rflags)
+{
+    ACPI_STATUS status;
+
+    status = AcpiEnterSleepState(sc->acpi_standby_sx);
+    intr_restore(rflags);
+    AcpiLeaveSleepStatePrep(sc->acpi_standby_sx);
+    if (ACPI_FAILURE(status)) {
+	device_printf(sc->acpi_dev, "AcpiEnterSleepState failed - %s\n",
+	    AcpiFormatException(status));
+	return;
+    }
+    *slp_state |= ACPI_SS_SLEPT;
+}
+
+static void
+do_sleep(struct acpi_softc *sc, enum acpi_sleep_state *slp_state,
+    register_t rflags, int state)
+{
+    int sleep_result;
+    ACPI_EVENT_STATUS power_button_status;
+
+    MPASS(state == ACPI_STATE_S3 || state == ACPI_STATE_S4);
+
+    sleep_result = acpi_sleep_machdep(sc, state);
+    acpi_wakeup_machdep(sc, state, sleep_result, 0);
+
+    if (sleep_result == 1 && state == ACPI_STATE_S3) {
+	/*
+	 * XXX According to ACPI specification SCI_EN bit should be restored
+	 * by ACPI platform (BIOS, firmware) to its pre-sleep state.
+	 * Unfortunately some BIOSes fail to do that and that leads to
+	 * unexpected and serious consequences during wake up like a system
+	 * getting stuck in SMI handlers.
+	 * This hack is picked up from Linux, which claims that it follows
+	 * Windows behavior.
+	 */
+	AcpiWriteBitRegister(ACPI_BITREG_SCI_ENABLE, ACPI_ENABLE_EVENT);
+
+	/*
+	 * Prevent misinterpretation of the wakeup by power button
+	 * as a request for power off.
+	 * Ideally we should post an appropriate wakeup event,
+	 * perhaps using acpi_event_power_button_wake or alike.
+	 *
+	 * Clearing of power button status after wakeup is mandated
+	 * by ACPI specification in section "Fixed Power Button".
+	 *
+	 * XXX As of ACPICA 20121114 AcpiGetEventStatus provides
+	 * status as 0/1 corresponding to inactive/active despite
+	 * its type being ACPI_EVENT_STATUS.  In other words,
+	 * we should not test for ACPI_EVENT_FLAG_SET for time being.
+	 */
+	if (ACPI_SUCCESS(AcpiGetEventStatus(ACPI_EVENT_POWER_BUTTON,
+	    &power_button_status)) && power_button_status != 0) {
+	    AcpiClearEvent(ACPI_EVENT_POWER_BUTTON);
+	    device_printf(sc->acpi_dev, "cleared fixed power button status\n");
+	}
+    }
+
+    intr_restore(rflags);
+
+    /* call acpi_wakeup_machdep() again with interrupt enabled */
+    acpi_wakeup_machdep(sc, state, sleep_result, 1);
+
+    AcpiLeaveSleepStatePrep(state);
+
+    if (sleep_result == -1)
+	return;
+
+    /* Re-enable ACPI hardware on wakeup from sleep state 4. */
+    if (state == ACPI_STATE_S4)
+	AcpiEnable();
+    *slp_state |= ACPI_SS_SLEPT;
+}
+
+#if defined(__i386__) || defined(__amd64__)
+static void
+do_idle(struct acpi_softc *sc, enum acpi_sleep_state *slp_state,
+    register_t rflags)
+{
+
+    intr_suspend();
+
+    /*
+     * The CPU will exit idle when interrupted, so we want to minimize the
+     * number of interrupts it can receive while idle.  We do this by only
+     * allowing SCI (system control interrupt) interrupts, which are used by
+     * the ACPI firmware to send wake GPEs to the OS.
+     *
+     * XXX We might still receive other spurious non-wake GPEs from noisy
+     * devices that can't be disabled, so this will need to end up being a
+     * suspend-to-idle loop which, when breaking out of idle, will check the
+     * reason for the wakeup and immediately idle the CPU again if it was not a
+     * proper wake event.
+     */
+    intr_enable_src(AcpiGbl_FADT.SciInterrupt);
+
+    cpu_idle(0);
+
+    intr_resume(false);
+    intr_restore(rflags);
+    *slp_state |= ACPI_SS_SLEPT;
+}
+#endif
 
 /*
  * Enter the desired system sleep state.
  *
- * Currently we support S1-S5 but S4 is only S4BIOS
+ * Currently we support S1-S5 and suspend-to-idle, but S4 is only S4BIOS.
  */
 static ACPI_STATUS
 acpi_EnterSleepState(struct acpi_softc *sc, enum power_stype stype)
 {
     register_t intr;
     ACPI_STATUS status;
-    ACPI_EVENT_STATUS power_button_status;
     enum acpi_sleep_state slp_state;
     int acpi_sstate;
-    int sleep_result;
 
     ACPI_FUNCTION_TRACE_U32((char *)(uintptr_t)__func__, stype);
 
@@ -3497,7 +3620,7 @@ acpi_EnterSleepState(struct acpi_softc *sc, enum power_stype stype)
 
     /* Enable any GPEs as appropriate and requested by the user. */
     acpi_wake_prep_walk(sc, stype);
-    slp_state = ACPI_SS_GPE_SET;
+    slp_state |= ACPI_SS_GPE_SET;
 
     /*
      * Inform all devices that we are going to sleep.  If at least one
@@ -3508,112 +3631,77 @@ acpi_EnterSleepState(struct acpi_softc *sc, enum power_stype stype)
      * bus interface does not provide for this.
      */
     if (DEVICE_SUSPEND(root_bus) != 0) {
-	device_printf(sc->acpi_dev, "device_suspend failed\n");
-	goto backout;
+        device_printf(sc->acpi_dev, "device_suspend failed\n");
+        goto backout;
     }
-    slp_state = ACPI_SS_DEV_SUSPEND;
+    slp_state |= ACPI_SS_DEV_SUSPEND;
 
-    status = AcpiEnterSleepStatePrep(acpi_sstate);
-    if (ACPI_FAILURE(status)) {
-	device_printf(sc->acpi_dev, "AcpiEnterSleepStatePrep failed - %s\n",
-		      AcpiFormatException(status));
-	goto backout;
+    if (stype != POWER_STYPE_SUSPEND_TO_IDLE) {
+	status = AcpiEnterSleepStatePrep(acpi_sstate);
+	if (ACPI_FAILURE(status)) {
+	    device_printf(sc->acpi_dev, "AcpiEnterSleepStatePrep failed - %s\n",
+		AcpiFormatException(status));
+	    goto backout;
+	}
+	slp_state |= ACPI_SS_SLP_PREP;
     }
-    slp_state = ACPI_SS_SLP_PREP;
 
     if (sc->acpi_sleep_delay > 0)
 	DELAY(sc->acpi_sleep_delay * 1000000);
 
     suspendclock();
     intr = intr_disable();
-    if (stype != POWER_STYPE_STANDBY) {
-	sleep_result = acpi_sleep_machdep(sc, acpi_sstate);
-	acpi_wakeup_machdep(sc, acpi_sstate, sleep_result, 0);
-
-	/*
-	 * XXX According to ACPI specification SCI_EN bit should be restored
-	 * by ACPI platform (BIOS, firmware) to its pre-sleep state.
-	 * Unfortunately some BIOSes fail to do that and that leads to
-	 * unexpected and serious consequences during wake up like a system
-	 * getting stuck in SMI handlers.
-	 * This hack is picked up from Linux, which claims that it follows
-	 * Windows behavior.
-	 */
-	if (sleep_result == 1 && stype != POWER_STYPE_HIBERNATE)
-	    AcpiWriteBitRegister(ACPI_BITREG_SCI_ENABLE, ACPI_ENABLE_EVENT);
-
-	if (sleep_result == 1 && stype == POWER_STYPE_SUSPEND_TO_MEM) {
-	    /*
-	     * Prevent mis-interpretation of the wakeup by power button
-	     * as a request for power off.
-	     * Ideally we should post an appropriate wakeup event,
-	     * perhaps using acpi_event_power_button_wake or alike.
-	     *
-	     * Clearing of power button status after wakeup is mandated
-	     * by ACPI specification in section "Fixed Power Button".
-	     *
-	     * XXX As of ACPICA 20121114 AcpiGetEventStatus provides
-	     * status as 0/1 corressponding to inactive/active despite
-	     * its type being ACPI_EVENT_STATUS.  In other words,
-	     * we should not test for ACPI_EVENT_FLAG_SET for time being.
-	     */
-	    if (ACPI_SUCCESS(AcpiGetEventStatus(ACPI_EVENT_POWER_BUTTON,
-		&power_button_status)) && power_button_status != 0) {
-		AcpiClearEvent(ACPI_EVENT_POWER_BUTTON);
-		device_printf(sc->acpi_dev,
-		    "cleared fixed power button status\n");
-	    }
-	}
-
-	intr_restore(intr);
-
-	/* call acpi_wakeup_machdep() again with interrupt enabled */
-	acpi_wakeup_machdep(sc, acpi_sstate, sleep_result, 1);
-
-	AcpiLeaveSleepStatePrep(acpi_sstate);
-
-	if (sleep_result == -1)
-		goto backout;
-
-	/* Re-enable ACPI hardware on wakeup from hibernate. */
-	if (stype == POWER_STYPE_HIBERNATE)
-	    AcpiEnable();
-    } else {
-	status = AcpiEnterSleepState(acpi_sstate);
-	intr_restore(intr);
-	AcpiLeaveSleepStatePrep(acpi_sstate);
-	if (ACPI_FAILURE(status)) {
-	    device_printf(sc->acpi_dev, "AcpiEnterSleepState failed - %s\n",
-			  AcpiFormatException(status));
-	    goto backout;
-	}
+    switch (stype) {
+    case POWER_STYPE_STANDBY:
+	do_standby(sc, &slp_state, intr);
+	break;
+    case POWER_STYPE_SUSPEND_TO_MEM:
+    case POWER_STYPE_HIBERNATE:
+	do_sleep(sc, &slp_state, intr, acpi_sstate);
+	break;
+    case POWER_STYPE_SUSPEND_TO_IDLE:
+#if defined(__i386__) || defined(__amd64__)
+	do_idle(sc, &slp_state, intr);
+	break;
+#endif
+    case POWER_STYPE_AWAKE:
+    case POWER_STYPE_POWEROFF:
+    case POWER_STYPE_COUNT:
+    case POWER_STYPE_UNKNOWN:
+	__unreachable();
     }
-    slp_state = ACPI_SS_SLEPT;
+    resumeclock();
 
     /*
      * Back out state according to how far along we got in the suspend
      * process.  This handles both the error and success cases.
      */
 backout:
-    if (slp_state >= ACPI_SS_SLP_PREP)
-	resumeclock();
-    if (slp_state >= ACPI_SS_GPE_SET) {
+    if ((slp_state & ACPI_SS_GPE_SET) != 0) {
 	acpi_wake_prep_walk(sc, stype);
 	sc->acpi_stype = POWER_STYPE_AWAKE;
+	slp_state &= ~ACPI_SS_GPE_SET;
     }
-    if (slp_state >= ACPI_SS_DEV_SUSPEND)
+    if ((slp_state & ACPI_SS_DEV_SUSPEND) != 0) {
 	DEVICE_RESUME(root_bus);
-    if (slp_state >= ACPI_SS_SLP_PREP)
+	slp_state &= ~ACPI_SS_DEV_SUSPEND;
+    }
+    if ((slp_state & ACPI_SS_SLP_PREP) != 0) {
 	AcpiLeaveSleepState(acpi_sstate);
-    if (slp_state >= ACPI_SS_SLEPT) {
+	slp_state &= ~ACPI_SS_SLP_PREP;
+    }
+    if ((slp_state & ACPI_SS_SLEPT) != 0) {
 #if defined(__i386__) || defined(__amd64__)
 	/* NB: we are still using ACPI timecounter at this point. */
 	resume_TSC();
 #endif
 	acpi_resync_clock(sc);
 	acpi_enable_fixed_events(sc);
+	slp_state &= ~ACPI_SS_SLEPT;
     }
     sc->acpi_next_stype = POWER_STYPE_AWAKE;
+
+    MPASS(slp_state == ACPI_SS_NONE);
 
     bus_topo_unlock();
 
@@ -4196,25 +4284,28 @@ struct acpi_ioctl_hook
     void			 *arg;
 };
 
-static TAILQ_HEAD(,acpi_ioctl_hook)	acpi_ioctl_hooks;
-static int				acpi_ioctl_hooks_initted;
+static TAILQ_HEAD(,acpi_ioctl_hook) acpi_ioctl_hooks =
+	TAILQ_HEAD_INITIALIZER(acpi_ioctl_hooks);
 
 int
 acpi_register_ioctl(u_long cmd, acpi_ioctl_fn fn, void *arg)
 {
-    struct acpi_ioctl_hook	*hp;
+    struct acpi_ioctl_hook *hp, *thp;
 
-    if ((hp = malloc(sizeof(*hp), M_ACPIDEV, M_NOWAIT)) == NULL)
-	return (ENOMEM);
+    hp = malloc(sizeof(*hp), M_ACPIDEV, M_WAITOK);
     hp->cmd = cmd;
     hp->fn = fn;
     hp->arg = arg;
 
     ACPI_LOCK(acpi);
-    if (acpi_ioctl_hooks_initted == 0) {
-	TAILQ_INIT(&acpi_ioctl_hooks);
-	acpi_ioctl_hooks_initted = 1;
+    TAILQ_FOREACH(thp, &acpi_ioctl_hooks, link) {
+	if (thp->cmd == cmd) {
+	    ACPI_UNLOCK(acpi);
+	    free(hp, M_ACPIDEV);
+	    return (EBUSY);
+	}
     }
+
     TAILQ_INSERT_TAIL(&acpi_ioctl_hooks, hp, link);
     ACPI_UNLOCK(acpi);
 
@@ -4236,6 +4327,21 @@ acpi_deregister_ioctl(u_long cmd, acpi_ioctl_fn fn)
 	free(hp, M_ACPIDEV);
     }
     ACPI_UNLOCK(acpi);
+}
+
+void
+acpi_deregister_ioctls(acpi_ioctl_fn fn)
+{
+	struct acpi_ioctl_hook *hp, *thp;
+
+	ACPI_LOCK(acpi);
+	TAILQ_FOREACH_SAFE(hp, &acpi_ioctl_hooks, link, thp) {
+		if (hp->fn == fn) {
+			TAILQ_REMOVE(&acpi_ioctl_hooks, hp, link);
+			free(hp, M_ACPIDEV);
+		}
+	}
+	ACPI_UNLOCK(acpi);
 }
 
 static int
@@ -4266,11 +4372,10 @@ acpiioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag, struct thread *t
      * Scan the list of registered ioctls, looking for handlers.
      */
     ACPI_LOCK(acpi);
-    if (acpi_ioctl_hooks_initted)
-	TAILQ_FOREACH(hp, &acpi_ioctl_hooks, link) {
-	    if (hp->cmd == cmd)
-		break;
-	}
+    TAILQ_FOREACH(hp, &acpi_ioctl_hooks, link) {
+	if (hp->cmd == cmd)
+	    break;
+    }
     ACPI_UNLOCK(acpi);
     if (hp)
 	return (hp->fn(cmd, addr, hp->arg));
@@ -4318,13 +4423,15 @@ acpi_sname_to_sstate(const char *sname)
 {
     int sstate;
 
+    if (strcasecmp(sname, "NONE") == 0)
+	return (ACPI_STATE_UNKNOWN);
+
     if (toupper(sname[0]) == 'S') {
 	sstate = sname[1] - '0';
 	if (sstate >= ACPI_STATE_S0 && sstate <= ACPI_STATE_S5 &&
 	    sname[2] == '\0')
 	    return (sstate);
-    } else if (strcasecmp(sname, "NONE") == 0)
-	return (ACPI_STATE_UNKNOWN);
+    }
     return (-1);
 }
 
@@ -4379,8 +4486,10 @@ acpi_suspend_state_sysctl(SYSCTL_HANDLER_ARGS)
     if (new_sstate < 0)
 	return (EINVAL);
     new_stype = acpi_sstate_to_stype(new_sstate);
-    if (acpi_supported_stypes[new_stype] == false)
+    if (new_sstate != ACPI_STATE_UNKNOWN &&
+	acpi_supported_stypes[new_stype] == false)
 	return (EOPNOTSUPP);
+
     if (new_stype != old_stype)
 	power_suspend_stype = new_stype;
     return (err);
@@ -4423,21 +4532,26 @@ acpi_stype_sysctl(SYSCTL_HANDLER_ARGS)
     if (err != 0 || req->newptr == NULL)
 	return (err);
 
-    new_stype = power_name_to_stype(name);
-    if (new_stype == POWER_STYPE_UNKNOWN) {
-	sstate = acpi_sname_to_sstate(name);
-	if (sstate < 0)
-	    return (EINVAL);
-	printf("warning: this sysctl expects a sleep type, but an ACPI S-state has "
-	    "been passed to it. This functionality is deprecated; see acpi(4).\n");
-	if (sstate < ACPI_S_STATE_COUNT &&
-	    !acpi_supported_sstates[sstate])
+    if (strcasecmp(name, "NONE") == 0) {
+	new_stype = POWER_STYPE_UNKNOWN;
+    } else {
+	new_stype = power_name_to_stype(name);
+	if (new_stype == POWER_STYPE_UNKNOWN) {
+	    sstate = acpi_sname_to_sstate(name);
+	    if (sstate < 0)
+		return (EINVAL);
+	    printf("warning: this sysctl expects a sleep type, but an ACPI "
+	           "S-state has been passed to it. This functionality is "
+	           "deprecated; see acpi(4).\n");
+	    MPASS(sstate < ACPI_S_STATE_COUNT);
+	    if (acpi_supported_sstates[sstate] == false)
+		return (EOPNOTSUPP);
+	    new_stype = acpi_sstate_to_stype(sstate);
+	}
+	if (acpi_supported_stypes[new_stype] == false)
 	    return (EOPNOTSUPP);
-	new_stype = acpi_sstate_to_stype(sstate);
     }
 
-    if (acpi_supported_stypes[new_stype] == false)
-	return (EOPNOTSUPP);
     if (new_stype != old_stype)
 	*(enum power_stype *)oidp->oid_arg1 = new_stype;
     return (0);
@@ -4502,6 +4616,7 @@ static struct debugtag	dbg_layer[] = {
     {"ACPI_FAN",		ACPI_FAN},
     {"ACPI_POWERRES",		ACPI_POWERRES},
     {"ACPI_PROCESSOR",		ACPI_PROCESSOR},
+    {"ACPI_SPMC",		ACPI_SPMC},
     {"ACPI_THERMAL",		ACPI_THERMAL},
     {"ACPI_TIMER",		ACPI_TIMER},
     {"ACPI_ALL_DRIVERS",	ACPI_ALL_DRIVERS},

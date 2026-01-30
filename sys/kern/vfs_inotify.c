@@ -381,7 +381,14 @@ inotify_unlink_watch_locked(struct inotify_softc *sc, struct inotify_watch *watc
 static void
 inotify_free_watch(struct inotify_watch *watch)
 {
-	vrele(watch->vp);
+	/*
+	 * Formally, we don't need to lock the vnode here.  However, if we
+	 * don't, and vrele() releases the last reference, it's possible the
+	 * vnode will be recycled while a different thread holds the vnode lock.
+	 * Work around this bug by acquiring the lock here.
+	 */
+	(void)vn_lock(watch->vp, LK_EXCLUSIVE | LK_RETRY);
+	vput(watch->vp);
 	free(watch, M_INOTIFY);
 }
 
@@ -716,7 +723,6 @@ vn_inotify(struct vnode *vp, struct vnode *dvp, struct componentname *cnp,
 				}
 				break;
 			case IN_MOVED_FROM:
-				cookie = 0;
 				selfevent = IN_MOVE_SELF;
 				break;
 			case _IN_ATTRIB_LINKCOUNT:
@@ -727,10 +733,8 @@ vn_inotify(struct vnode *vp, struct vnode *dvp, struct componentname *cnp,
 				break;
 			}
 
-			if ((selfevent & ~_IN_DIR_EVENTS) != 0) {
-				inotify_log(vp, NULL, 0, selfevent | isdir,
-				    cookie);
-			}
+			if ((selfevent & ~_IN_DIR_EVENTS) != 0)
+				inotify_log(vp, NULL, 0, selfevent | isdir, 0);
 		}
 
 		/*

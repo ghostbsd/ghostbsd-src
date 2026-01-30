@@ -290,7 +290,7 @@ struct pf_status {
 	uint64_t	lcounters[LCNT_MAX];
 	uint64_t	fcounters[FCNT_MAX];
 	uint64_t	scounters[SCNT_MAX];
-	uint64_t	pcounters[2][2][3];
+	uint64_t	pcounters[2][2][2];
 	uint64_t	bcounters[2][2];
 	uint32_t	running;
 	uint32_t	states;
@@ -500,6 +500,13 @@ struct pf_osfp_ioctl {
 #define	PF_ANCHOR_MAXPATH	(MAXPATHLEN - PF_ANCHOR_NAME_SIZE - 1)
 #define	PF_ANCHOR_HIWAT		512
 #define	PF_OPTIMIZER_TABLE_PFX	"__automatic_"
+
+enum {
+	PF_LIMITER_NOMATCH,
+	PF_LIMITER_BLOCK
+};
+
+#define	PF_LIMITER_DEFAULT	PF_LIMITER_BLOCK
 
 struct pf_rule {
 	struct pf_rule_addr	 src;

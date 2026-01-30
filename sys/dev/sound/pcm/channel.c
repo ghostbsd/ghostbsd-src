@@ -228,19 +228,21 @@ chn_lockinit(struct pcm_channel *c, int dir)
 {
 	switch (dir) {
 	case PCMDIR_PLAY:
-		c->lock = snd_mtxcreate(c->name, "pcm play channel");
+		mtx_init(&c->lock, c->name, "pcm play channel", MTX_DEF);
 		cv_init(&c->intr_cv, "pcmwr");
 		break;
 	case PCMDIR_PLAY_VIRTUAL:
-		c->lock = snd_mtxcreate(c->name, "pcm virtual play channel");
+		mtx_init(&c->lock, c->name, "pcm virtual play channel",
+		    MTX_DEF);
 		cv_init(&c->intr_cv, "pcmwrv");
 		break;
 	case PCMDIR_REC:
-		c->lock = snd_mtxcreate(c->name, "pcm record channel");
+		mtx_init(&c->lock, c->name, "pcm record channel", MTX_DEF);
 		cv_init(&c->intr_cv, "pcmrd");
 		break;
 	case PCMDIR_REC_VIRTUAL:
-		c->lock = snd_mtxcreate(c->name, "pcm virtual record channel");
+		mtx_init(&c->lock, c->name, "pcm virtual record channel",
+		    MTX_DEF);
 		cv_init(&c->intr_cv, "pcmrdv");
 		break;
 	default:
@@ -262,7 +264,7 @@ chn_lockdestroy(struct pcm_channel *c)
 	cv_destroy(&c->cv);
 	cv_destroy(&c->intr_cv);
 
-	snd_mtxfree(c->lock);
+	mtx_destroy(&c->lock);
 }
 
 /**
@@ -337,7 +339,7 @@ chn_sleep(struct pcm_channel *c, int timeout)
 		return (EINVAL);
 
 	c->sleeping++;
-	ret = cv_timedwait_sig(&c->intr_cv, c->lock, timeout);
+	ret = cv_timedwait_sig(&c->intr_cv, &c->lock, timeout);
 	c->sleeping--;
 
 	return ((c->flags & CHN_F_DEAD) ? EINVAL : ret);
@@ -438,7 +440,7 @@ chn_write(struct pcm_channel *c, struct uio *buf)
 {
 	struct snd_dbuf *bs = c->bufsoft;
 	void *off;
-	int ret, timeout, sz, t, p;
+	int ret, timeout, sz, p;
 
 	CHN_LOCKASSERT(c);
 
@@ -446,24 +448,17 @@ chn_write(struct pcm_channel *c, struct uio *buf)
 	timeout = chn_timeout * hz;
 
 	while (ret == 0 && buf->uio_resid > 0) {
+		p = sndbuf_getfreeptr(bs);
 		sz = min(buf->uio_resid, sndbuf_getfree(bs));
+		sz = min(sz, bs->bufsize - p);
 		if (sz > 0) {
-			/*
-			 * The following assumes that the free space in
-			 * the buffer can never be less around the
-			 * unlock-uiomove-lock sequence.
-			 */
-			while (ret == 0 && sz > 0) {
-				p = sndbuf_getfreeptr(bs);
-				t = min(sz, bs->bufsize - p);
-				off = sndbuf_getbufofs(bs, p);
-				CHN_UNLOCK(c);
-				ret = uiomove(off, t, buf);
-				CHN_LOCK(c);
-				sz -= t;
-				sndbuf_acquire(bs, NULL, t);
-			}
-			ret = 0;
+			off = sndbuf_getbufofs(bs, p);
+			sndbuf_acquire(bs, NULL, sz);
+			CHN_UNLOCK(c);
+			ret = uiomove(off, sz, buf);
+			CHN_LOCK(c);
+			if (ret != 0)
+				break;
 			if (CHN_STOPPED(c) && !(c->flags & CHN_F_NOTRIGGER)) {
 				ret = chn_start(c, 0);
 				if (ret != 0)
@@ -483,13 +478,7 @@ chn_write(struct pcm_channel *c, struct uio *buf)
 			ret = EAGAIN;
 		} else {
    			ret = chn_sleep(c, timeout);
-			if (ret == EAGAIN) {
-				ret = EINVAL;
-				c->flags |= CHN_F_DEAD;
-				device_printf(c->dev, "%s(): %s: "
-				    "play interrupt timeout, channel dead\n",
-				    __func__, c->name);
-			} else if (ret == ERESTART || ret == EINTR)
+			if (ret == ERESTART || ret == EINTR)
 				c->flags |= CHN_F_ABORTING;
 		}
 	}
@@ -552,7 +541,7 @@ chn_read(struct pcm_channel *c, struct uio *buf)
 {
 	struct snd_dbuf *bs = c->bufsoft;
 	void *off;
-	int ret, timeout, sz, t, p;
+	int ret, timeout, sz, p;
 
 	CHN_LOCKASSERT(c);
 
@@ -568,35 +557,22 @@ chn_read(struct pcm_channel *c, struct uio *buf)
 	timeout = chn_timeout * hz;
 
 	while (ret == 0 && buf->uio_resid > 0) {
+		p = sndbuf_getreadyptr(bs);
 		sz = min(buf->uio_resid, sndbuf_getready(bs));
+		sz = min(sz, bs->bufsize - p);
 		if (sz > 0) {
-			/*
-			 * The following assumes that the free space in
-			 * the buffer can never be less around the
-			 * unlock-uiomove-lock sequence.
-			 */
-			while (ret == 0 && sz > 0) {
-				p = sndbuf_getreadyptr(bs);
-				t = min(sz, bs->bufsize - p);
-				off = sndbuf_getbufofs(bs, p);
-				CHN_UNLOCK(c);
-				ret = uiomove(off, t, buf);
-				CHN_LOCK(c);
-				sz -= t;
-				sndbuf_dispose(bs, NULL, t);
-			}
-			ret = 0;
+			off = sndbuf_getbufofs(bs, p);
+			sndbuf_dispose(bs, NULL, sz);
+			CHN_UNLOCK(c);
+			ret = uiomove(off, sz, buf);
+			CHN_LOCK(c);
+			if (ret != 0)
+				break;
 		} else if (c->flags & (CHN_F_NBIO | CHN_F_NOTRIGGER))
 			ret = EAGAIN;
 		else {
    			ret = chn_sleep(c, timeout);
-			if (ret == EAGAIN) {
-				ret = EINVAL;
-				c->flags |= CHN_F_DEAD;
-				device_printf(c->dev, "%s(): %s: "
-				    "record interrupt timeout, channel dead\n",
-				    __func__, c->name);
-			} else if (ret == ERESTART || ret == EINTR)
+			if (ret == ERESTART || ret == EINTR)
 				c->flags |= CHN_F_ABORTING;
 		}
 	}
@@ -605,30 +581,14 @@ chn_read(struct pcm_channel *c, struct uio *buf)
 }
 
 void
-chn_intr_locked(struct pcm_channel *c)
+chn_intr(struct pcm_channel *c)
 {
-
-	CHN_LOCKASSERT(c);
-
+	CHN_LOCK(c);
 	c->interrupts++;
-
 	if (c->direction == PCMDIR_PLAY)
 		chn_wrintr(c);
 	else
 		chn_rdintr(c);
-}
-
-void
-chn_intr(struct pcm_channel *c)
-{
-
-	if (CHN_LOCKOWNED(c)) {
-		chn_intr_locked(c);
-		return;
-	}
-
-	CHN_LOCK(c);
-	chn_intr_locked(c);
 	CHN_UNLOCK(c);
 }
 
@@ -1277,7 +1237,7 @@ chn_init(struct snddev_info *d, struct pcm_channel *parent, kobj_class_t cls,
 	}
 	c->bufhard = b;
 	c->bufsoft = bs;
-	knlist_init_mtx(&bs->sel.si_note, c->lock);
+	knlist_init_mtx(&bs->sel.si_note, &c->lock);
 
 	c->devinfo = CHANNEL_INIT(c->methods, devinfo, b, c, direction);
 	if (c->devinfo == NULL) {

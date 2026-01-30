@@ -578,16 +578,13 @@ pmap_early_alloc_tables(vm_paddr_t *freemempos, int npages)
 }
 
 /*
- *	Construct the direct map -- a linear mapping of physical memory into
+ *	Construct the Direct Map -- a linear mapping of physical memory into
  *	the kernel address space.
  *
  *	We walk the list of physical memory segments (of arbitrary size and
- *	address) mapping each appropriately using L2 and L1 superpages.
- *	Consequently, the DMAP address space will have unmapped regions
- *	corresponding to any holes between physical memory segments.
- *
- *	The lowest usable physical address will always be mapped to
- *	DMAP_MIN_ADDRESS.
+ *	alignment) mapping each appropriately. Consequently, the DMAP address
+ *	space will have unmapped regions corresponding to the holes between
+ *	physical memory segments.
  */
 static vm_paddr_t
 pmap_bootstrap_dmap(pd_entry_t *l1, vm_paddr_t freemempos)
@@ -595,9 +592,9 @@ pmap_bootstrap_dmap(pd_entry_t *l1, vm_paddr_t freemempos)
 	vm_paddr_t physmap[PHYS_AVAIL_ENTRIES];
 	vm_offset_t va;
 	vm_paddr_t min_pa, max_pa, pa, endpa;
-	pd_entry_t *l2;
+	pd_entry_t *l3, *l2;
 	pt_entry_t memattr;
-	u_int l1slot, l2slot;
+	u_int l1slot, l2slot, l3slot;
 	int physmap_idx;
 
 	physmap_idx = physmem_avail(physmap, nitems(physmap));
@@ -614,17 +611,58 @@ pmap_bootstrap_dmap(pd_entry_t *l1, vm_paddr_t freemempos)
 
 	memattr = pmap_memattr_bits(VM_MEMATTR_DEFAULT);
 
-	/* Walk the physmap table. */
-	l2 = NULL;
-	l1slot = Ln_ENTRIES; /* sentinel value */
+	/*
+	 * Walk the physmap table, using the largest page sizes possible for each
+	 * mapping. So, for each physmap entry, map as needed/able:
+	 *  - 4K/L3 page prefix
+	 *  - 2M/L2 superpage prefix
+	 *  - 1G/L1 superpages
+	 *  - 2M/L2 superpage suffix
+	 *  - 4K/L3 page suffix
+	 */
+	l3 = l2 = NULL;
+	l2slot = l1slot = Ln_ENTRIES; /* sentinel value */
 	for (int idx = 0; idx < physmap_idx; idx += 2) {
-		pa = rounddown(physmap[idx], L2_SIZE);
+		pa = rounddown(physmap[idx], L3_SIZE);
 		endpa = physmap[idx + 1];
 
 		/* Virtual address for this range. */
 		va = PHYS_TO_DMAP(pa);
 
-		/* Any 1GB possible for this range? */
+		/* Any 2MB possible for this range? */
+		if (roundup(pa, L2_SIZE) + L2_SIZE > endpa)
+			goto l3end;
+
+		/* Loop until the next 2MB boundary. */
+		while ((pa & L2_OFFSET) != 0) {
+			if (l2 == NULL || pmap_l1_index(va) != l1slot) {
+				/* Need to alloc another page table. */
+				l2 = pmap_early_alloc_tables(&freemempos, 1);
+
+				/* Link it. */
+				l1slot = pmap_l1_index(va);
+				pmap_store(&l1[l1slot],
+				    L1_PDE((vm_paddr_t)l2, PTE_V));
+			}
+
+			if (l3 == NULL || pmap_l2_index(va) != l2slot) {
+				l3 = pmap_early_alloc_tables(&freemempos, 1);
+
+				/* Link it to L2. */
+				l2slot = pmap_l2_index(va);
+				pmap_store(&l2[l2slot],
+				    L2_PDE((vm_paddr_t)l3, PTE_V));
+			}
+
+			/* map l3 pages */
+			l3slot = pmap_l3_index(va);
+			pmap_store(&l3[l3slot], L3_PTE(pa, PTE_KERN | memattr));
+
+			pa += L3_SIZE;
+			va += L3_SIZE;
+		}
+
+		/* Any 1GB possible for remaining range? */
 		if (roundup(pa, L1_SIZE) + L1_SIZE > endpa)
 			goto l2end;
 
@@ -659,7 +697,8 @@ pmap_bootstrap_dmap(pd_entry_t *l1, vm_paddr_t freemempos)
 		}
 
 l2end:
-		while (pa < endpa) {
+		/* Map what we can with 2MB superpages. */
+		while (pa + L2_SIZE - 1 < endpa) {
 			if (l2 == NULL || pmap_l1_index(va) != l1slot) {
 				/* Need to alloc another page table. */
 				l2 = pmap_early_alloc_tables(&freemempos, 1);
@@ -676,6 +715,35 @@ l2end:
 
 			pa += L2_SIZE;
 			va += L2_SIZE;
+		}
+
+l3end:
+		while (pa < endpa) {
+			if (l2 == NULL || pmap_l1_index(va) != l1slot) {
+				/* Need to alloc another page table. */
+				l2 = pmap_early_alloc_tables(&freemempos, 1);
+
+				/* Link it. */
+				l1slot = pmap_l1_index(va);
+				pmap_store(&l1[l1slot],
+				    L1_PDE((vm_paddr_t)l2, PTE_V));
+			}
+
+			if (l3 == NULL || pmap_l2_index(va) != l2slot) {
+				l3 = pmap_early_alloc_tables(&freemempos, 1);
+
+				/* Link it to L2. */
+				l2slot = pmap_l2_index(va);
+				pmap_store(&l2[l2slot],
+				    L2_PDE((vm_paddr_t)l3, PTE_V));
+			}
+
+			/* map l3 pages */
+			l3slot = pmap_l3_index(va);
+			pmap_store(&l3[l3slot], L3_PTE(pa, PTE_KERN | memattr));
+
+			pa += L3_SIZE;
+			va += L3_SIZE;
 		}
 	}
 
@@ -1134,19 +1202,29 @@ pmap_extract(pmap_t pmap, vm_offset_t va)
 vm_page_t
 pmap_extract_and_hold(pmap_t pmap, vm_offset_t va, vm_prot_t prot)
 {
+	pd_entry_t *l2p, l2;
 	pt_entry_t *l3p, l3;
 	vm_page_t m;
 
 	m = NULL;
 	PMAP_LOCK(pmap);
-	l3p = pmap_l3(pmap, va);
-	if (l3p != NULL && (l3 = pmap_load(l3p)) != 0) {
-		if ((l3 & PTE_W) != 0 || (prot & VM_PROT_WRITE) == 0) {
-			m = PTE_TO_VM_PAGE(l3);
-			if (!vm_page_wire_mapped(m))
-				m = NULL;
+	l2p = pmap_l2(pmap, va);
+	if (l2p == NULL || ((l2 = pmap_load(l2p)) & PTE_V) == 0) {
+		;
+	} else if ((l2 & PTE_RWX) != 0) {
+		if ((l2 & PTE_W) != 0 || (prot & VM_PROT_WRITE) == 0) {
+			m = PHYS_TO_VM_PAGE(L2PTE_TO_PHYS(l2) +
+			    (va & L2_OFFSET));
+		}
+	} else {
+		l3p = pmap_l2_to_l3(l2p, va);
+		if ((l3 = pmap_load(l3p)) != 0) {
+			if ((l3 & PTE_W) != 0 || (prot & VM_PROT_WRITE) == 0)
+				m = PTE_TO_VM_PAGE(l3);
 		}
 	}
+	if (m != NULL && !vm_page_wire_mapped(m))
+		m = NULL;
 	PMAP_UNLOCK(pmap);
 	return (m);
 }

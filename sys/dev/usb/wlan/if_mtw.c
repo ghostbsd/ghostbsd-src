@@ -64,6 +64,7 @@
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
+#include <dev/usb/usb_request.h>
 
 #include "usbdevs.h"
 
@@ -174,7 +175,7 @@ static int mtw_read(struct mtw_softc *, uint16_t, uint32_t *);
 static int mtw_read_region_1(struct mtw_softc *, uint16_t, uint8_t *, int);
 static int mtw_write_2(struct mtw_softc *, uint16_t, uint16_t);
 static int mtw_write(struct mtw_softc *, uint16_t, uint32_t);
-static int mtw_write_region_1(struct mtw_softc *, uint16_t, uint8_t *, int);
+static int mtw_write_region_1(struct mtw_softc *, uint16_t, const uint8_t *, int);
 static int mtw_set_region_4(struct mtw_softc *, uint16_t, uint32_t, int);
 static int mtw_efuse_read_2(struct mtw_softc *, uint16_t, uint16_t *);
 static int mtw_bbp_read(struct mtw_softc *, uint8_t, uint8_t *);
@@ -525,6 +526,15 @@ mtw_attach(device_t self)
 	sc->sc_dev = self;
 	sc->sc_sent = 0;
 
+	/*
+	 * Reset the device to clear any stale state left over from
+	 * a previous warm reboot. Some MT7601U devices fail otherwise.
+	 */
+	error = usbd_req_re_enumerate(uaa->device, NULL);
+	if (error != 0)
+		device_printf(self, "USB re-enumerate failed, continuing\n");
+	DELAY(100000);	/* 100ms settle time */
+
 	mtx_init(&sc->sc_mtx, device_get_nameunit(sc->sc_dev),
                  MTX_NETWORK_LOCK, MTX_DEF);
 
@@ -585,7 +595,7 @@ mtw_attach(device_t self)
 	sc->mac_rev = tmp & 0xffff;
 
 	mtw_load_microcode(sc);
-	ret = msleep(&sc->fwloading, &sc->sc_mtx, 0, "fwload", 3 * hz);
+	ret = msleep(&sc->fwloading, &sc->sc_mtx, 0, "fwload", 10 * hz);
 	if (ret == EWOULDBLOCK || sc->fwloading != 1) {
 		device_printf(sc->sc_dev,
 		    "timeout waiting for MCU to initialize\n");
@@ -1105,11 +1115,22 @@ mtw_load_microcode(void *arg)
 	//	int ntries;
 	int dlen, ilen;
 	device_printf(sc->sc_dev, "version:0x%hx\n", sc->asic_ver);
-	/* is firmware already running? */
+	/*
+	 * Firmware may still be running from a previous warm reboot.
+	 * Force a reset of the MCU to ensure a clean state.
+	 */
 	mtw_read_cfg(sc, MTW_MCU_DMA_ADDR, &tmp);
 	if (tmp == MTW_MCU_READY) {
-		return;
+		device_printf(sc->sc_dev, "MCU already running, resetting\n");
+		mtw_write(sc, MTW_MCU_RESET_CTL, MTW_RESET);
+		DELAY(10000);
+		mtw_write(sc, MTW_MCU_RESET_CTL, 0);
+		DELAY(10000);
+		/* Clear ready flag */
+		mtw_write_cfg(sc, MTW_MCU_DMA_ADDR, 0);
+		DELAY(1000);
 	}
+
 	if (sc->asic_ver == 0x7612) {
 		fwname = "mtw-mt7662u_rom_patch";
 
@@ -1277,7 +1298,8 @@ mtw_write(struct mtw_softc *sc, uint16_t reg, uint32_t val)
 }
 
 static int
-mtw_write_region_1(struct mtw_softc *sc, uint16_t reg, uint8_t *buf, int len)
+mtw_write_region_1(struct mtw_softc *sc, uint16_t reg, const uint8_t *buf,
+    int len)
 {
 
 	usb_device_request_t req;
@@ -1286,7 +1308,8 @@ mtw_write_region_1(struct mtw_softc *sc, uint16_t reg, uint8_t *buf, int len)
 	USETW(req.wValue, 0);
 	USETW(req.wIndex, reg);
 	USETW(req.wLength, len);
-	return (usbd_do_request(sc->sc_udev, &sc->sc_mtx, &req, buf));
+	return (usbd_do_request(sc->sc_udev, &sc->sc_mtx, &req,
+	    __DECONST(uint8_t *, buf)));
 }
 
 static int
@@ -1911,7 +1934,7 @@ mtw_key_set_cb(void *arg)
 	/* map net80211 cipher to RT2860 security mode */
 	switch (cipher) {
 	case IEEE80211_CIPHER_WEP:
-		if (k->wk_keylen < 8)
+		if (ieee80211_crypto_get_key_len(k) < 8)
 			mode = MTW_MODE_WEP40;
 		else
 			mode = MTW_MODE_WEP104;
@@ -1936,13 +1959,19 @@ mtw_key_set_cb(void *arg)
 	}
 
 	if (cipher == IEEE80211_CIPHER_TKIP) {
-		mtw_write_region_1(sc, base, k->wk_key, 16);
-		mtw_write_region_1(sc, base + 16, &k->wk_key[24], 8);
-		mtw_write_region_1(sc, base + 24, &k->wk_key[16], 8);
+		/* TODO: note the direct use of tx/rx mic offsets! ew! */
+		mtw_write_region_1(sc, base,
+		    ieee80211_crypto_get_key_data(k), 16);
+		/* rxmic */
+		mtw_write_region_1(sc, base + 16,
+		    ieee80211_crypto_get_key_rxmic_data(k), 8);
+		/* txmic */
+		mtw_write_region_1(sc, base + 24,
+		    ieee80211_crypto_get_key_txmic_data(k), 8);
 	} else {
 		/* roundup len to 16-bit: XXX fix write_region_1() instead */
 		mtw_write_region_1(sc, base, k->wk_key,
-		    (k->wk_keylen + 1) & ~1);
+		    (ieee80211_crypto_get_key_len(k) + 1) & ~1);
 	}
 
 	if (!(k->wk_flags & IEEE80211_KEY_GROUP) ||
@@ -2848,7 +2877,7 @@ mtw_fw_callback(struct usb_xfer *xfer, usb_error_t error)
 			}
 
 			mtw_delay(sc, 10);
-			for (ntries = 0; ntries < 100; ntries++) {
+			for (ntries = 0; ntries < 300; ntries++) {
 				if ((error = mtw_read_cfg(sc, MTW_MCU_DMA_ADDR,
 					 &tmp)) != 0) {
 					device_printf(sc->sc_dev,
@@ -2862,9 +2891,9 @@ mtw_fw_callback(struct usb_xfer *xfer, usb_error_t error)
 					break;
 				}
 
-				mtw_delay(sc, 10);
+				mtw_delay(sc, 30);
 			}
-			if (ntries == 100)
+			if (ntries == 300)
 				sc->fwloading = 0;
 			wakeup(&sc->fwloading);
 			return;

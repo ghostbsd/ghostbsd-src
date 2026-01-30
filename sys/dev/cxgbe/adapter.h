@@ -184,7 +184,16 @@ enum {
 	DF_LOAD_FW_ANYTIME	= (1 << 1),	/* Allow LOAD_FW after init */
 	DF_DISABLE_TCB_CACHE	= (1 << 2),	/* Disable TCB cache (T6+) */
 	DF_DISABLE_CFG_RETRY	= (1 << 3),	/* Disable fallback config */
-	DF_VERBOSE_SLOWINTR	= (1 << 4),	/* Chatty slow intr handler */
+
+	/* adapter intr handler flags */
+	IHF_INTR_CLEAR_ON_INIT	= (1 << 0),	/* Driver calls t4_intr_clear */
+	IHF_NO_SHOW		= (1 << 1),	/* Do not display intr info */
+	IHF_VERBOSE		= (1 << 2),	/* Display extra intr info */
+	IHF_FATAL_IFF_ENABLED	= (1 << 3),	/* Fatal only if enabled */
+	IHF_IGNORE_IF_DISABLED	= (1 << 4),	/* Ignore if disabled */
+	IHF_CLR_ALL_SET		= (1 << 5),	/* Clear all set bits */
+	IHF_CLR_ALL_UNIGNORED	= (1 << 6),	/* Clear all unignored bits */
+	IHF_RUN_ALL_ACTIONS	= (1 << 7),	/* As if all cause are set */
 };
 
 #define IS_DETACHING(vi)	((vi)->flags & VI_DETACHING)
@@ -954,8 +963,6 @@ struct adapter {
 	struct resource *regs_res;
 	int msix_rid;
 	struct resource *msix_res;
-	bus_space_handle_t bh;
-	bus_space_tag_t bt;
 	bus_size_t mmio_len;
 	int udbs_rid;
 	struct resource *udbs_res;
@@ -1027,6 +1034,7 @@ struct adapter {
 	int flags;
 	int debug_flags;
 	int error_flags;	/* Used by error handler and live reset. */
+	int intr_flags;		/* Used by interrupt setup/handlers. */
 
 	char ifp_lockname[16];
 	struct mtx ifp_lock;
@@ -1266,7 +1274,7 @@ t4_read_reg(struct adapter *sc, uint32_t reg)
 {
 	if (hw_off_limits(sc))
 		MPASS(curthread == sc->reset_thread);
-	return bus_space_read_4(sc->bt, sc->bh, reg);
+	return bus_read_4(sc->regs_res, reg);
 }
 
 static inline void
@@ -1274,7 +1282,7 @@ t4_write_reg(struct adapter *sc, uint32_t reg, uint32_t val)
 {
 	if (hw_off_limits(sc))
 		MPASS(curthread == sc->reset_thread);
-	bus_space_write_4(sc->bt, sc->bh, reg, val);
+	bus_write_4(sc->regs_res, reg, val);
 }
 
 static inline uint64_t
@@ -1283,10 +1291,10 @@ t4_read_reg64(struct adapter *sc, uint32_t reg)
 	if (hw_off_limits(sc))
 		MPASS(curthread == sc->reset_thread);
 #ifdef __LP64__
-	return bus_space_read_8(sc->bt, sc->bh, reg);
+	return bus_read_8(sc->regs_res, reg);
 #else
-	return (uint64_t)bus_space_read_4(sc->bt, sc->bh, reg) +
-	    ((uint64_t)bus_space_read_4(sc->bt, sc->bh, reg + 4) << 32);
+	return (uint64_t)bus_read_4(sc->regs_res, reg) +
+	    ((uint64_t)bus_read_4(sc->regs_res, reg + 4) << 32);
 
 #endif
 }
@@ -1297,10 +1305,10 @@ t4_write_reg64(struct adapter *sc, uint32_t reg, uint64_t val)
 	if (hw_off_limits(sc))
 		MPASS(curthread == sc->reset_thread);
 #ifdef __LP64__
-	bus_space_write_8(sc->bt, sc->bh, reg, val);
+	bus_write_8(sc->regs_res, reg, val);
 #else
-	bus_space_write_4(sc->bt, sc->bh, reg, val);
-	bus_space_write_4(sc->bt, sc->bh, reg + 4, val>> 32);
+	bus_write_4(sc->regs_res, reg, val);
+	bus_write_4(sc->regs_res, reg + 4, val>> 32);
 #endif
 }
 

@@ -107,6 +107,7 @@ bhyve_usage(int code)
 	    "       -G: start a debug server\n"
 	    "       -h: help\n"
 	    "       -k: key=value flat config file\n"
+	    "       -M: monitor mode\n"
 	    "       -m: memory size\n"
 	    "       -o: set config 'var' to 'value'\n"
 	    "       -p: pin 'vcpu' to 'hostcpu'\n"
@@ -125,7 +126,7 @@ bhyve_optparse(int argc, char **argv)
 	const char *optstr;
 	int c;
 
-	optstr = "hCDSWk:f:o:p:G:c:s:m:U:";
+	optstr = "hCDMSWk:f:o:p:G:c:s:m:U:";
 	while ((c = getopt(argc, argv, optstr)) != -1) {
 		switch (c) {
 		case 'c':
@@ -149,6 +150,9 @@ bhyve_optparse(int argc, char **argv)
 		case 'm':
 			set_config_value("memory.size", optarg);
 			break;
+		case 'M':
+			set_config_bool("monitor", true);
+			break;
 		case 'o':
 			if (!bhyve_parse_config_option(optarg)) {
 				errx(EX_USAGE,
@@ -168,7 +172,7 @@ bhyve_optparse(int argc, char **argv)
 				pci_print_supported_devices();
 				exit(0);
 			} else if (pci_parse_slot(optarg) != 0)
-				exit(4);
+				exit(BHYVE_EXIT_ERROR);
 			else
 				break;
 		case 'S':
@@ -266,7 +270,7 @@ mmio_uart_mem_handler(struct vcpu *vcpu __unused, int dir,
 	return (0);
 }
 
-static bool
+static int
 init_mmio_uart(struct vmctx *ctx)
 {
 	struct uart_pl011_softc *sc;
@@ -276,14 +280,14 @@ init_mmio_uart(struct vmctx *ctx)
 
 	path = get_config_value("console");
 	if (path == NULL)
-		return (false);
+		return (1);
 
 	sc = uart_pl011_init(mmio_uart_intr_assert, mmio_uart_intr_deassert,
 	    ctx);
 	if (uart_pl011_tty_open(sc, path) != 0) {
 		EPRINTLN("Unable to initialize backend '%s' for mmio uart",
 		    path);
-		assert(0);
+		return (-1);
 	}
 
 	bzero(&mr, sizeof(struct mem_range));
@@ -297,7 +301,7 @@ init_mmio_uart(struct vmctx *ctx)
 	error = register_mem(&mr);
 	assert(error == 0);
 
-	return (true);
+	return (0);
 }
 
 static void
@@ -410,8 +414,11 @@ bhyve_init_platform(struct vmctx *ctx, struct vcpu *bsp)
 		return (error);
 	}
 
-	if (init_mmio_uart(ctx))
+	error = init_mmio_uart(ctx);
+	if (error == 0)
 		fdt_add_uart(UART_MMIO_BASE, UART_MMIO_SIZE, UART_INTR);
+	else if (error < 0)
+		return (error);
 	init_mmio_rtc(ctx);
 	fdt_add_rtc(RTC_MMIO_BASE, RTC_MMIO_SIZE, RTC_INTR);
 	fdt_add_timer();

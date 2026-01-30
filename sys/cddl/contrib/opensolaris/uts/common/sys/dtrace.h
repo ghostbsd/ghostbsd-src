@@ -70,6 +70,9 @@ typedef int processorid_t;
 #include <sys/linker.h>
 #include <sys/ioccom.h>
 #include <sys/cred.h>
+#ifdef __FreeBSD__
+#include <sys/_mutex.h>
+#endif
 #include <sys/proc.h>
 #include <sys/types.h>
 #include <sys/ucred.h>
@@ -2407,11 +2410,6 @@ extern void dtrace_invop_callsite(void);
 extern void dtrace_invop_add(int (*)(uintptr_t, struct trapframe *, uintptr_t));
 extern void dtrace_invop_remove(int (*)(uintptr_t, struct trapframe *,
     uintptr_t));
-
-#ifdef __sparc
-extern int dtrace_blksuword32(uintptr_t, uint32_t *, int);
-extern void dtrace_getfsr(uint64_t *);
-#endif
 
 #ifndef illumos
 extern void dtrace_helpers_duplicate(proc_t *, proc_t *);

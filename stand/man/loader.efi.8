@@ -41,20 +41,28 @@ On UEFI systems,
 .Nm
 loads the kernel.
 .Pp
-.Xr boot1.efi 8
-is used to load
 .Nm
-when it is placed within a UFS or ZFS file system.
-Alternatively,
-.Nm
-is used directly when configured with
-.Xr efibootmgr 8 ,
-or when placed directly as the default boot program as described in
-.Xr uefi 8 .
-When a system is built using
+is invoked directly from the EFI System Partition (ESP)
+on systems installed using
 .Xr bsdinstall 8 ,
-.Nm
-will be used directly.
+when installed as the default EFI boot program as described in
+.Xr uefi 8
+or when configured as an EFI boot entry with
+.Xr efibootmgr 8 .
+.Pp
+On systems upgraded from FreeBSD 10 or earlier, the EFI System Partition (ESP)
+can be too small to accommodate
+.Nm .
+In such cases,
+.Xr boot1.efi 8
+may be retained as the firmware boot program. It
+will chain-load the current
+.Pa /boot/loader.efi ,
+which is updated during the
+.Cm installworld
+process.
+.Xr boot1.efi 8
+is deprecated for new installations.
 .Ss Console Considerations
 The EFI BIOS provides a generic console.
 In
@@ -158,6 +166,7 @@ The serial ports are assigned as follows on IBM PC compatible systems:
 .It COM3 Ta 0x3e8 Ta Pa /dev/uart2
 .It COM4 Ta 0x2e8 Ta Pa /dev/uart3
 .El
+.Pp
 Though
 .Dv COM3
 and
@@ -191,8 +200,9 @@ of any behavior not covered in this document.
 .It Fl s Ta Dv boot_single Ta Va RB_SINGLE
 .It Fl v Ta Dv boot_verbose Ta Va RB_VERBOSE
 .El
+.Pp
 And the following flags determine the primary console:
-.Bl -column -offset indent ".Sy Flags" ".Sy Kernel Flags" ".Sy Kernel Consoles" ".Sy Primary Console"
+.Bl -column -offset xxx "Flags" "RB_SERIAL | RB_MULTIPLE" "Kernel Consoles" "Primary Console"
 .It Sy Flags Ta Sy Kernel Flags Ta Sy Kernel Consoles Ta Sy Primary Console
 .It none Ta 0 Ta Video Ta Video
 .It Fl h Ta RB_SERIAL Ta Serial Ta Serial
@@ -380,6 +390,7 @@ To check:
 # mount | grep nda0p1
 /dev/nda0p1 on /boot/efi (msdosfs, local)
 .Ed
+.Pp
 If it's not mounted, you will need to mount it:
 .Bd -literal -offset indent
 # mount -t msdosfs /dev/nda0p1 /boot/efi
@@ -398,6 +409,7 @@ BootOrder  : 0000, 0001, 0003, 0004, 0005, 0006, 0001, 0008, 000A, 000B, 000C, 0
                             nda0p1:/EFI/FREEBSD/LOADER.EFI /boot/efi//EFI/FREEBSD/LOADER.EFI
 \&...
 .Ed
+.Pp
 Often there are several options, depending on the BIOS.
 The entry that we booted with is marked with a
 .Sq +
@@ -416,6 +428,7 @@ loader, which varies by architecture.
 .It i386 Ta Pa /EFI/BOOT/BOOTIA32.EFI
 .It riscv Ta Pa /EFI/BOOT/BOOTRISCV64.EFI
 .El
+.Pp
 However, care must be taken: some multiple-boot environments rely on a special
 .Pa bootXXX.efi
 to function.
@@ -436,10 +449,12 @@ above table):
 .Bd -literal -offset indent
 # cmp /boot/efi/EFI/FREEBSD/LOADER.EFI /boot/efi/EFI/BOOT/BOOTX64.EFI
 .Ed
+.Pp
 Copy the loader:
 .Bd -literal -offset indent
 # cp /boot/loader.efi /boot/efi/EFI/FREEBSD/LOADER.EFI
 .Ed
+.Pp
 replacing the all caps part of the example with the proper path.
 .Pp
 If ESP path was
@@ -478,15 +493,6 @@ Typically in these embedded situations, there is only one .efi file (loader.efi
 or a copy of loader.efi).
 The path to this file is typically the default removable path above.
 .Pp
-Managing booting multiple OSes on UEFI varies greatly, so extra caution when
-updating the UEFI default loader.
+Managing booting multiple OSes on UEFI varies greatly, so extra caution is required
+when updating the UEFI default loader.
 .Pp
-The old, now obsolete, boot1.efi was installed as bootx64.efi in
-.Fx 10
-and earlier.
-Since it was quite limited in functionality, we created very small
-ESPs by default.
-A modern loader.efi will not fit.
-However, if the old boot1.efi still works, there's no need to update
-it since it will chain boot /boot/loader.efi from a copy that
-make installworld updates.

@@ -40,6 +40,7 @@
 #include <sys/mbuf.h>
 #include <sys/module.h>
 #include <sys/msan.h>
+#include <sys/sbuf.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/random.h>
@@ -2058,8 +2059,16 @@ vtnet_rxq_input(struct vtnet_rxq *rxq, struct mbuf *m,
 		}
 	}
 
-	m->m_pkthdr.flowid = rxq->vtnrx_id;
-	M_HASHTYPE_SET(m, M_HASHTYPE_OPAQUE);
+	if (sc->vtnet_act_vq_pairs == 1) {
+		/*
+		 * When RSS is not needed (one active rx queue), let the upper
+		 * layer know and react.
+		 */
+		M_HASHTYPE_CLEAR(m);
+	} else {
+		m->m_pkthdr.flowid = rxq->vtnrx_id;
+		M_HASHTYPE_SET(m, M_HASHTYPE_OPAQUE);
+	}
 
 	if (hdr->flags &
 	    (VIRTIO_NET_HDR_F_NEEDS_CSUM | VIRTIO_NET_HDR_F_DATA_VALID)) {
@@ -4398,6 +4407,35 @@ vtnet_setup_stat_sysctl(struct sysctl_ctx_list *ctx,
 	    "Times the transmit interrupt task rescheduled itself");
 }
 
+static int
+vtnet_sysctl_features(SYSCTL_HANDLER_ARGS)
+{
+	struct sbuf sb;
+	struct vtnet_softc *sc = (struct vtnet_softc *)arg1;
+	int error;
+
+	sbuf_new_for_sysctl(&sb, NULL, 0, req);
+	sbuf_printf(&sb, "%b", (uint32_t)sc->vtnet_features,
+	    VIRTIO_NET_FEATURE_BITS);
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
+	return (error);
+}
+
+static int
+vtnet_sysctl_flags(SYSCTL_HANDLER_ARGS)
+{
+	struct sbuf sb;
+	struct vtnet_softc *sc = (struct vtnet_softc *)arg1;
+	int error;
+
+	sbuf_new_for_sysctl(&sb, NULL, 0, req);
+	sbuf_printf(&sb, "%b", sc->vtnet_flags, VTNET_FLAGS_BITS);
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
+	return (error);
+}
+
 static void
 vtnet_setup_sysctl(struct vtnet_softc *sc)
 {
@@ -4420,6 +4458,12 @@ vtnet_setup_sysctl(struct vtnet_softc *sc)
 	SYSCTL_ADD_INT(ctx, child, OID_AUTO, "act_vq_pairs",
 	    CTLFLAG_RD, &sc->vtnet_act_vq_pairs, 0,
 	    "Number of active virtqueue pairs");
+	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "features",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
+	    vtnet_sysctl_features, "A", "Features");
+	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "flags",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
+	    vtnet_sysctl_flags, "A", "Flags");
 
 	vtnet_setup_stat_sysctl(ctx, child, sc);
 }

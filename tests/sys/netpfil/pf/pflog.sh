@@ -205,9 +205,11 @@ state_max_body()
 	epair=$(vnet_mkepair)
 
 	vnet_mkjail alcatraz ${epair}a
+	jexec alcatraz ifconfig ${epair}a inet6 ifdisabled
 	jexec alcatraz ifconfig ${epair}a 192.0.2.1/24 up
 
 	ifconfig ${epair}b 192.0.2.2/24 up
+	ifconfig ${epair}b inet6 ifdisabled
 
 	# Sanity check
 	atf_check -s exit:0 -o ignore \
@@ -335,7 +337,7 @@ unspecified_v6_cleanup()
 }
 
 atf_test_case "rdr_action" "cleanup"
-rdr_head()
+rdr_action_head()
 {
 	atf_set descr 'Ensure that NAT rule actions are logged correctly'
 	atf_set require.user root
@@ -352,6 +354,11 @@ rdr_action_body()
 	vnet_mkjail ${j}srv ${epair_srv}a
 	vnet_mkjail ${j}gw ${epair_srv}b ${epair_c}a
 	vnet_mkjail ${j}c ${epair_c}b
+
+	jexec ${j}srv ifconfig ${epair_srv}a inet6 ifdisabled
+	jexec ${j}gw ifconfig ${epair_srv}b inet6 ifdisabled
+	jexec ${j}gw ifconfig ${epair_c}a inet6 ifdisabled
+	jexec ${j}c ifconfig ${epair_c}b inet6 ifdisabled
 
 	jexec ${j}srv ifconfig ${epair_srv}a 198.51.100.1/24 up
 	# No default route in srv jail, to ensure we're NAT-ing

@@ -59,6 +59,7 @@ args_body()
 nocloud_body()
 {
 	mkdir -p media/nuageinit
+	setup_test_adduser
 	atf_check -s exit:1 -e match:"nuageinit: error parsing nocloud.*" /usr/libexec/nuageinit "${PWD}"/media/nuageinit/ nocloud
 	printf "instance-id: iid-local01\nlocal-hostname: cloudimg\n" > "${PWD}"/media/nuageinit/meta-data
 	atf_check -s exit:0 /usr/libexec/nuageinit "${PWD}"/media/nuageinit nocloud
@@ -220,6 +221,7 @@ EOF
 config2_body()
 {
 	mkdir -p media/nuageinit
+	setup_test_adduser
 	atf_check -s exit:1 -e match:"nuageinit: error parsing config-2 meta_data.json:.*" /usr/libexec/nuageinit "${PWD}"/media/nuageinit config-2
 	printf "{}" > media/nuageinit/meta_data.json
 	atf_check /usr/libexec/nuageinit "${PWD}"/media/nuageinit config-2
@@ -335,6 +337,7 @@ EOF
 config2_network_body()
 {
 	mkdir -p media/nuageinit
+	setup_test_adduser
 	printf "{}" > media/nuageinit/meta_data.json
 	mynetworks=$(ifconfig -l ether)
 	if [ -z "$mynetworks" ]; then
@@ -401,6 +404,7 @@ EOF
 config2_network_static_v4_body()
 {
 	mkdir -p media/nuageinit
+	setup_test_adduser
 	printf "{}" > media/nuageinit/meta_data.json
 	mynetworks=$(ifconfig -l ether)
 	if [ -z "$mynetworks" ]; then
@@ -890,7 +894,7 @@ EOF
 	atf_check -o inline:"plop" cat file1
 	atf_check -o inline:"" cat emptyfile
 	atf_check -o inline:"bla\n" cat file_base64
-	test -f foo && atf_fail "foo creation should have been defered"
+	test -f foo && atf_fail "foo creation should have been deferred"
 	atf_check -o match:"^-rwxr-xr-x.*nobody" ls -l file_base64
 	rm file1 emptyfile file_base64
 	atf_check -o empty /usr/libexec/nuageinit "${PWD}"/media/nuageinit postnet

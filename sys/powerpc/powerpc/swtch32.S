@@ -56,7 +56,6 @@
  */
 
 #include "assym.inc"
-#include "opt_sched.h"
 
 #include <sys/syscall.h>
 
@@ -119,17 +118,13 @@ ENTRY(cpu_switch)
 	bl	save_vec
 	
 .L2:
-#if defined(__SPE__)
-	mfspr	%r3,SPR_SPEFSCR
-	stw	%r3,PCB_VSCR(%r17)
-#endif
 	mr	%r3,%r14		/* restore old thread ptr */
 	bl	pmap_deactivate		/* Deactivate the current pmap */
 
 	sync				/* Make sure all of that finished */
 
 cpu_switchin:
-#if defined(SMP) && defined(SCHED_ULE)
+#if defined(SMP)
 	/* Wait for the new thread to become unblocked */
 	bl	1f
 1:
@@ -141,8 +136,8 @@ cpu_switchin:
 blocked_loop:
 	lwz	%r7,TD_LOCK(%r2)
 	cmpw	%r6,%r7 
-	beq-	blocked_loop
 	isync
+	beq-	blocked_loop
 #endif
 
 	lwz	%r17,TD_PCB(%r2)	/* Get new current PCB */
@@ -176,10 +171,6 @@ blocked_loop:
 	bl	enable_vec
 
 .L4:
-#if defined(__SPE__)
-	lwz	%r3,PCB_VSCR(%r17)
-	mtspr	SPR_SPEFSCR,%r3
-#endif
 	/* thread to restore is in r3 */
 	mr	%r3,%r17		/* Recover PCB ptr */
 	lmw	%r12,PCB_CONTEXT(%r3)	/* Load the non-volatile GP regs */
@@ -224,9 +215,5 @@ ENTRY(fork_trampoline)
 					   trapframe to simulate FRAME_SETUP
 					   does when allocating space for
 					   a frame pointer/saved LR */
-#ifdef __SPE__
-	li	%r3,SPEFSCR_DFLT
-	mtspr	SPR_SPEFSCR, %r3
-#endif
 	b	trapexit
 END(fork_trampoline)

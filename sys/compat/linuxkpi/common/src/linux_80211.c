@@ -128,11 +128,11 @@ SYSCTL_INT(_compat_linuxkpi_80211, OID_AUTO, debug, CTLFLAG_RWTUN,
 
 #define	UNIMPLEMENTED		if (linuxkpi_debug_80211 & D80211_TODO)		\
     printf("XXX-TODO %s:%d: UNIMPLEMENTED\n", __func__, __LINE__)
-#define	TRACEOK()		if (linuxkpi_debug_80211 & D80211_TRACEOK)	\
-    printf("XXX-TODO %s:%d: TRACEPOINT\n", __func__, __LINE__)
+#define	TRACEOK(_fmt, ...)	if (linuxkpi_debug_80211 & D80211_TRACEOK)	\
+    printf("%s:%d: TRACEPOINT " _fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
 #else
 #define	UNIMPLEMENTED		do { } while (0)
-#define	TRACEOK()		do { } while (0)
+#define	TRACEOK(...)		do { } while (0)
 #endif
 
 /* #define	PREP_TX_INFO_DURATION	(IEEE80211_TRANS_WAIT * 1000) */
@@ -282,7 +282,7 @@ lkpi_nl80211_sta_info_to_str(struct sbuf *s, const char *prefix,
 }
 
 static void
-lkpi_80211_dump_lvif_stas(struct lkpi_vif *lvif, struct sbuf *s)
+lkpi_80211_dump_lvif_stas(struct lkpi_vif *lvif, struct sbuf *s, bool dump_queues)
 {
 	struct lkpi_hw *lhw;
 	struct ieee80211_hw *hw;
@@ -292,6 +292,7 @@ lkpi_80211_dump_lvif_stas(struct lkpi_vif *lvif, struct sbuf *s)
 	struct ieee80211_sta *sta;
 	struct station_info sinfo;
 	int error;
+	uint8_t tid;
 
 	vif = LVIF_TO_VIF(lvif);
 	vap = LVIF_TO_VAP(lvif);
@@ -376,6 +377,39 @@ lkpi_80211_dump_lvif_stas(struct lkpi_vif *lvif, struct sbuf *s)
 		sbuf_printf(s, "         he_dcm %u he_gi %u he_ru_alloc %u eht_gi %u\n",
 		    sinfo.txrate.he_dcm, sinfo.txrate.he_gi, sinfo.txrate.he_ru_alloc,
 		    sinfo.txrate.eht_gi);
+
+		if (!dump_queues)
+			continue;
+
+		/* Dump queue information. */
+		sbuf_printf(s, " Queue information:\n");
+		sbuf_printf(s, "  frms direct tx %ju\n", lsta->frms_tx);
+		for (tid = 0; tid <= IEEE80211_NUM_TIDS; tid++) {
+			struct lkpi_txq *ltxq;
+
+			if (sta->txq[tid] == NULL) {
+				sbuf_printf(s, "  tid %-2u NOQ\n", tid);
+				continue;
+			}
+
+			ltxq = TXQ_TO_LTXQ(sta->txq[tid]);
+#ifdef __notyet__
+			sbuf_printf(s, "  tid %-2u flags: %b "
+			    "txq_generation %u skbq len %d\n",
+			    tid, ltxq->flags, LKPI_TXQ_FLAGS_BITS,
+			    ltxq->txq_generation,
+			    skb_queue_len_lockless(&ltxq->skbq));
+#else
+			sbuf_printf(s, "  tid %-2u "
+			    "txq_generation %u skbq len %d\n",
+			    tid,
+			    ltxq->txq_generation,
+			    skb_queue_len_lockless(&ltxq->skbq));
+#endif
+			sbuf_printf(s, "         frms_enqueued %ju frms_dequeued %ju "
+			    "frms_tx %ju\n",
+			    ltxq->frms_enqueued, ltxq->frms_dequeued, ltxq->frms_tx);
+		}
 	}
 	wiphy_unlock(hw->wiphy);
 }
@@ -393,7 +427,28 @@ lkpi_80211_dump_stas(SYSCTL_HANDLER_ARGS)
 
 	sbuf_new_for_sysctl(&s, NULL, 1024, req);
 
-	lkpi_80211_dump_lvif_stas(lvif, &s);
+	lkpi_80211_dump_lvif_stas(lvif, &s, false);
+
+	sbuf_finish(&s);
+	sbuf_delete(&s);
+
+	return (0);
+}
+
+static int
+lkpi_80211_dump_sta_queues(SYSCTL_HANDLER_ARGS)
+{
+	struct lkpi_vif *lvif;
+	struct sbuf s;
+
+	if (req->newptr)
+		return (EPERM);
+
+	lvif = (struct lkpi_vif *)arg1;
+
+	sbuf_new_for_sysctl(&s, NULL, 1024, req);
+
+	lkpi_80211_dump_lvif_stas(lvif, &s, true);
 
 	sbuf_finish(&s);
 	sbuf_delete(&s);
@@ -474,12 +529,14 @@ lkpi_sync_chanctx_cw_from_rx_bw(struct ieee80211_hw *hw,
 
 #if defined(LKPI_80211_HT)
 static void
-lkpi_sta_sync_ht_from_ni(struct ieee80211_vif *vif, struct ieee80211_sta *sta,
-    struct ieee80211_node *ni)
+lkpi_sta_sync_ht_from_ni(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, struct ieee80211_node *ni)
 {
 	struct ieee80211vap *vap;
 	uint8_t *ie;
 	struct ieee80211_ht_cap *htcap;
+	struct ieee80211_sta_ht_cap *ht_cap, *sta_ht_cap;
+	enum nl80211_band band;
 	int i, rx_nss;
 
 	if ((ni->ni_flags & IEEE80211_NODE_HT) == 0) {
@@ -513,13 +570,23 @@ lkpi_sta_sync_ht_from_ni(struct ieee80211_vif *vif, struct ieee80211_sta *sta,
 	 * MCS sets from the Rx MCS Bitmask; then there is MCS 32 and
 	 * MCS33.. is UEQM.
 	 */
+	band = vif->bss_conf.chanctx_conf->def.chan->band;
+	ht_cap = &hw->wiphy->bands[band]->ht_cap;
+	sta_ht_cap = &sta->deflink.ht_cap;
 	rx_nss = 0;
 	for (i = 0; i < 4; i++) {
-		if (htcap->mcs.rx_mask[i] != 0)
+		TRACEOK("HT rx_mask[%d] sta %#04x & hw %#04x", i,
+		    sta_ht_cap->mcs.rx_mask[i], ht_cap->mcs.rx_mask[i]);
+		sta_ht_cap->mcs.rx_mask[i] =
+			sta_ht_cap->mcs.rx_mask[i] & ht_cap->mcs.rx_mask[i];
+		/* XXX-BZ masking unequal modulation? */
+
+		if (sta_ht_cap->mcs.rx_mask[i] != 0)
 			rx_nss++;
 	}
 	if (rx_nss > 0) {
-		sta->deflink.rx_nss = rx_nss;
+		TRACEOK("HT rx_nss = max(%d, %d)", rx_nss, sta->deflink.rx_nss);
+		sta->deflink.rx_nss = MAX(rx_nss, sta->deflink.rx_nss);
 	} else {
 		sta->deflink.ht_cap.ht_supported = false;
 		return;
@@ -548,14 +615,15 @@ lkpi_sta_sync_ht_from_ni(struct ieee80211_vif *vif, struct ieee80211_sta *sta,
 
 #if defined(LKPI_80211_VHT)
 static void
-lkpi_sta_sync_vht_from_ni(struct ieee80211_vif *vif, struct ieee80211_sta *sta,
-    struct ieee80211_node *ni)
+lkpi_sta_sync_vht_from_ni(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, struct ieee80211_node *ni)
 {
+	struct ieee80211_sta_vht_cap *vht_cap, *sta_vht_cap;;
 	enum ieee80211_sta_rx_bandwidth bw;
+	enum nl80211_band band;
 	uint32_t width;
 	int rx_nss;
-	uint16_t rx_mcs_map;
-	uint8_t mcs;
+	uint16_t rx_map, tx_map;
 
 	if ((ni->ni_flags & IEEE80211_NODE_VHT) == 0 ||
 	    !IEEE80211_IS_CHAN_VHT_5GHZ(ni->ni_chan)) {
@@ -609,18 +677,50 @@ lkpi_sta_sync_vht_from_ni(struct ieee80211_vif *vif, struct ieee80211_sta *sta,
 	sta->deflink.bandwidth = bw;
 skip_bw:
 
+	band = vif->bss_conf.chanctx_conf->def.chan->band;
+	vht_cap = &hw->wiphy->bands[band]->vht_cap;
+	sta_vht_cap = &sta->deflink.vht_cap;
+
 	rx_nss = 0;
-	rx_mcs_map = sta->deflink.vht_cap.vht_mcs.rx_mcs_map;
+	rx_map = tx_map = 0;
 	for (int i = 7; i >= 0; i--) {
-		mcs = rx_mcs_map >> (2 * i);
-		mcs &= 0x3;
-		if (mcs != IEEE80211_VHT_MCS_NOT_SUPPORTED) {
-			rx_nss = i + 1;
-			break;
+		uint8_t card, sta;
+
+		card = (vht_cap->vht_mcs.rx_mcs_map >> (2 * i)) & 0x3;
+		sta  = (sta_vht_cap->vht_mcs.rx_mcs_map >> (2 * i)) & 0x3;
+		if (sta != IEEE80211_VHT_MCS_NOT_SUPPORTED) {
+			if (card == IEEE80211_VHT_MCS_NOT_SUPPORTED)
+				sta = IEEE80211_VHT_MCS_NOT_SUPPORTED;
+			else {
+				sta = MIN(sta, card);
+				if (rx_nss == 0)
+					rx_nss = i + 1;
+			}
 		}
+		rx_map |= (sta << (2 * i));
+
+		card = (vht_cap->vht_mcs.tx_mcs_map >> (2 * i)) & 0x3;
+		sta  = (sta_vht_cap->vht_mcs.tx_mcs_map >> (2 * i)) & 0x3;
+		if (sta != IEEE80211_VHT_MCS_NOT_SUPPORTED) {
+			if (card == IEEE80211_VHT_MCS_NOT_SUPPORTED)
+				sta = IEEE80211_VHT_MCS_NOT_SUPPORTED;
+			else
+				sta = MIN(sta, card);
+		}
+		tx_map |= (sta << (2 * i));
 	}
-	if (rx_nss > 0)
-		sta->deflink.rx_nss = rx_nss;
+	TRACEOK("VHT rx_mcs_map %#010x->%#010x, tx_mcs_map %#010x->%#010x, rx_nss = %d",
+	    sta_vht_cap->vht_mcs.rx_mcs_map, rx_map,
+	    sta_vht_cap->vht_mcs.tx_mcs_map, tx_map, rx_nss);
+	sta_vht_cap->vht_mcs.rx_mcs_map = rx_map;
+	sta_vht_cap->vht_mcs.tx_mcs_map = tx_map;
+	if (rx_nss > 0) {
+		TRACEOK("VHT rx_nss = max(%d, %d)", rx_nss, sta->deflink.rx_nss);
+		sta->deflink.rx_nss = MAX(rx_nss, sta->deflink.rx_nss);
+	} else {
+		sta->deflink.vht_cap.vht_supported = false;
+		return;
+	}
 
 	switch (sta->deflink.vht_cap.cap & IEEE80211_VHT_CAP_MAX_MPDU_MASK) {
 	case IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454:
@@ -642,18 +742,18 @@ lkpi_sta_sync_from_ni(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
     struct ieee80211_sta *sta, struct ieee80211_node *ni, bool updchnctx)
 {
 
-#if defined(LKPI_80211_HT)
-	lkpi_sta_sync_ht_from_ni(vif, sta, ni);
-#endif
-#if defined(LKPI_80211_VHT)
-	lkpi_sta_sync_vht_from_ni(vif, sta, ni);
-#endif
-
 	/*
 	 * Ensure rx_nss is at least 1 as otherwise drivers run into
 	 * unexpected problems.
 	 */
-	sta->deflink.rx_nss = MAX(1, sta->deflink.rx_nss);
+	sta->deflink.rx_nss = 1;
+
+#if defined(LKPI_80211_HT)
+	lkpi_sta_sync_ht_from_ni(hw, vif, sta, ni);
+#endif
+#if defined(LKPI_80211_VHT)
+	lkpi_sta_sync_vht_from_ni(hw, vif, sta, ni);
+#endif
 
 	/*
 	 * We are also called from node allocation which net80211
@@ -796,42 +896,36 @@ lkpi_lsta_alloc(struct ieee80211vap *vap, const uint8_t mac[IEEE80211_ADDR_LEN],
 	/* Deflink information. */
 	for (band = 0; band < NUM_NL80211_BANDS; band++) {
 		struct ieee80211_supported_band *supband;
+		uint32_t rate_mandatory;;
 
 		supband = hw->wiphy->bands[band];
 		if (supband == NULL)
 			continue;
 
+		switch (band) {
+		case NL80211_BAND_2GHZ:
+			/* We have to assume 11g support here. */
+			rate_mandatory = IEEE80211_RATE_MANDATORY_G |
+			    IEEE80211_RATE_MANDATORY_B;
+			break;
+		case NL80211_BAND_5GHZ:
+			rate_mandatory = IEEE80211_RATE_MANDATORY_A;
+			break;
+		default:
+			continue;
+		}
+
 		for (i = 0; i < supband->n_bitrates; i++) {
-			switch (band) {
-			case NL80211_BAND_2GHZ:
-				switch (supband->bitrates[i].bitrate) {
-				case 240:	/* 11g only */
-				case 120:	/* 11g only */
-				case 110:
-				case 60:	/* 11g only */
-				case 55:
-				case 20:
-				case 10:
-					sta->deflink.supp_rates[band] |= BIT(i);
-					break;
-				}
-				break;
-			case NL80211_BAND_5GHZ:
-				switch (supband->bitrates[i].bitrate) {
-				case 240:
-				case 120:
-				case 60:
-					sta->deflink.supp_rates[band] |= BIT(i);
-					break;
-				}
-				break;
-			}
+			if ((supband->bitrates[i].flags & rate_mandatory) != 0)
+				sta->deflink.supp_rates[band] |= BIT(i);
 		}
 	}
 
 	sta->deflink.smps_mode = IEEE80211_SMPS_OFF;
 	sta->deflink.bandwidth = IEEE80211_STA_RX_BW_20;
+	sta->deflink.agg.max_rc_amsdu_len = IEEE80211_MAX_MPDU_LEN_HT_BA;
 	sta->deflink.rx_nss = 1;
+	sta->deflink.sta = sta;
 
 	lkpi_sta_sync_from_ni(hw, vif, sta, ni, false);
 
@@ -1829,10 +1923,6 @@ lkpi_update_mcast_filter(struct ieee80211com *ic)
 
 	lhw = ic->ic_softc;
 
-	if (lhw->ops->prepare_multicast == NULL ||
-	    lhw->ops->configure_filter == NULL)
-		return;
-
 	LKPI_80211_LHW_SCAN_LOCK(lhw);
 	scanning = (lhw->scan_flags & LKPI_LHW_SCAN_RUNNING) != 0;
 	LKPI_80211_LHW_SCAN_UNLOCK(lhw);
@@ -1842,7 +1932,8 @@ lkpi_update_mcast_filter(struct ieee80211com *ic)
 	flags = 0;
 	if (scanning)
 		flags |= FIF_BCN_PRBRESP_PROMISC;
-	if (lhw->mc_all_multi)
+	/* The latter condition may not be as expected but seems wise. */
+	if (lhw->mc_all_multi || lhw->ops->prepare_multicast == NULL)
 		flags |= FIF_ALLMULTI;
 
 	hw = LHW_TO_HW(lhw);
@@ -4131,6 +4222,11 @@ lkpi_ic_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 	    SYSCTL_CHILDREN(node), OID_AUTO, "dump_stas",
 	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, lvif, 0,
 	    lkpi_80211_dump_stas, "A", "Dump sta statistics of this vif");
+	SYSCTL_ADD_PROC(&lvif->sysctl_ctx,
+	    SYSCTL_CHILDREN(node), OID_AUTO, "dump_stas_queues",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE | CTLFLAG_SKIP, lvif, 0,
+	    lkpi_80211_dump_sta_queues, "A",
+	    "Dump queue statistics for any sta of this vif");
 
 	IMPROVE();
 
@@ -4201,9 +4297,6 @@ lkpi_ic_update_mcast(struct ieee80211com *ic)
 	struct lkpi_hw *lhw;
 
 	lhw = ic->ic_softc;
-	if (lhw->ops->prepare_multicast == NULL ||
-	    lhw->ops->configure_filter == NULL)
-		return;
 
 	LKPI_80211_LHW_MC_LOCK(lhw);
 	/* Cleanup anything on the current list. */
@@ -5474,6 +5567,8 @@ lkpi_80211_txq_tx_one(struct lkpi_sta *lsta, struct mbuf *m)
 #endif
 
 	ni = lsta->ni;
+	ieee80211_output_seqno_assign(ni, -1, m);
+
 	k = NULL;
 	keyix = IEEE80211_KEYIX_NONE;
 	wh = mtod(m, struct ieee80211_frame *);
@@ -5628,6 +5723,8 @@ lkpi_80211_txq_tx_one(struct lkpi_sta *lsta, struct mbuf *m)
 			dev_kfree_skb(skb);
 			return;
 		}
+		/* Reset header as data might have moved. */
+		hdr = (void *)skb->data;
 	}
 #endif
 
@@ -5651,6 +5748,7 @@ lkpi_80211_txq_tx_one(struct lkpi_sta *lsta, struct mbuf *m)
 
 	LKPI_80211_LTXQ_LOCK(ltxq);
 	skb_queue_tail(&ltxq->skbq, skb);
+	ltxq->frms_enqueued++;
 #ifdef LINUXKPI_DEBUG_80211
 	if (linuxkpi_debug_80211 & D80211_TRACE_TX)
 		printf("%s:%d mo_wake_tx_queue :: %d %lu lsta %p sta %p "
@@ -5680,6 +5778,7 @@ ops_tx:
 	control.sta = sta;
 	wiphy_lock(hw->wiphy);
 	lkpi_80211_mo_tx(hw, &control, skb);
+	lsta->frms_tx++;
 	wiphy_unlock(hw->wiphy);
 }
 
@@ -6236,7 +6335,6 @@ lkpi_ic_getradiocaps_ht(struct ieee80211com *ic, struct ieee80211_hw *hw,
 #endif
 
 	IMPROVE("PS, ampdu_*, ht_cap.mcs.tx_params, ...");
-	ic->ic_htcaps |= IEEE80211_HTCAP_SMPS_OFF;
 
 	/* Only add HT40 channels if supported. */
 	if ((ic->ic_htcaps & IEEE80211_HTCAP_CHWIDTH40) != 0 &&
@@ -6428,8 +6526,9 @@ linuxkpi_ieee80211_alloc_hw(size_t priv_len, const struct ieee80211_ops *ops)
 	TAILQ_INIT(&lhw->lvif_head);
 	__hw_addr_init(&lhw->mc_list);
 	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
+		spin_lock_init(&lhw->txq_scheduled_lock[ac]);
 		lhw->txq_generation[ac] = 1;
-		TAILQ_INIT(&lhw->scheduled_txqs[ac]);
+		TAILQ_INIT(&lhw->txq_scheduled[ac]);
 	}
 
 	/* Chanctx_conf */
@@ -6463,6 +6562,7 @@ linuxkpi_ieee80211_iffree(struct ieee80211_hw *hw)
 {
 	struct lkpi_hw *lhw;
 	struct mbuf *m;
+	int ac;
 
 	lhw = HW_TO_LHW(hw);
 	free(lhw->ic, M_LKPI80211);
@@ -6526,6 +6626,9 @@ linuxkpi_ieee80211_iffree(struct ieee80211_hw *hw)
 	LKPI_80211_LHW_MC_LOCK(lhw);
 	lkpi_cleanup_mcast_list_locked(lhw);
 	LKPI_80211_LHW_MC_UNLOCK(lhw);
+
+	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
+		spin_lock_destroy(&lhw->txq_scheduled_lock[ac]);
 
 	/* Cleanup more of lhw here or in wiphy_free()? */
 	spin_lock_destroy(&lhw->txq_lock);
@@ -6869,7 +6972,9 @@ linuxkpi_ieee80211_ifattach(struct ieee80211_hw *hw)
 	}
 
 	if (bootverbose) {
-		ic_printf(ic, "netdev_features %b\n", hw->netdev_features, NETIF_F_BITS);
+		if (hw->netdev_features != 0)
+			ic_printf(ic, "netdev_features %b\n",
+			    hw->netdev_features, NETIF_F_BITS);
 		ieee80211_announce(ic);
 	}
 
@@ -6906,17 +7011,23 @@ linuxkpi_ieee80211_iterate_interfaces(struct ieee80211_hw *hw,
 	if (flags & ~(IEEE80211_IFACE_ITER_NORMAL|
 	    IEEE80211_IFACE_ITER_RESUME_ALL|
 	    IEEE80211_IFACE_SKIP_SDATA_NOT_IN_DRIVER|
-	    IEEE80211_IFACE_ITER_ACTIVE|IEEE80211_IFACE_ITER__ATOMIC)) {
+	    IEEE80211_IFACE_ITER_ACTIVE|IEEE80211_IFACE_ITER__ATOMIC|
+	    IEEE80211_IFACE_ITER__MTX)) {
 		ic_printf(lhw->ic, "XXX TODO %s flags(%#x) not yet supported.\n",
 		    __func__, flags);
 	}
+
+	if ((flags & IEEE80211_IFACE_ITER__MTX) != 0)
+		lockdep_assert_wiphy(hw->wiphy);
 
 	active = (flags & IEEE80211_IFACE_ITER_ACTIVE) != 0;
 	atomic = (flags & IEEE80211_IFACE_ITER__ATOMIC) != 0;
 	nin_drv = (flags & IEEE80211_IFACE_SKIP_SDATA_NOT_IN_DRIVER) != 0;
 
-	if (atomic)
+	if (atomic) {
+		IMPROVE("LKPI_80211_LHW_LVIF_LOCK atomic assume to be rcu?");
 		LKPI_80211_LHW_LVIF_LOCK(lhw);
+	}
 	TAILQ_FOREACH(lvif, &lhw->lvif_head, lvif_entry) {
 		struct ieee80211vap *vap;
 
@@ -7912,6 +8023,77 @@ linuxkpi_wiphy_free(struct wiphy *wiphy)
 	kfree(lwiphy);
 }
 
+static void
+lkpi_wiphy_band_annotate(struct wiphy *wiphy)
+{
+	int band;
+
+	for (band = 0; band < NUM_NL80211_BANDS; band++) {
+		struct ieee80211_supported_band *supband;
+		int i;
+
+		supband = wiphy->bands[band];
+		if (supband == NULL)
+			continue;
+
+		switch (band) {
+		case NL80211_BAND_2GHZ:
+		case NL80211_BAND_5GHZ:
+			break;
+		default:
+#ifdef LINUXKPI_DEBUG_80211
+			IMPROVE("band %d(%s) not yet supported",
+			    band, lkpi_nl80211_band_name(band));
+			/* For bands added here, also check lkpi_lsta_alloc(). */
+#endif
+			continue;
+		}
+
+		for (i = 0; i < supband->n_bitrates; i++) {
+			switch (band) {
+			case NL80211_BAND_2GHZ:
+				switch (supband->bitrates[i].bitrate) {
+				case 110:
+				case 55:
+				case 20:
+				case 10:
+					supband->bitrates[i].flags |=
+					    IEEE80211_RATE_MANDATORY_B;
+					/* FALLTHROUGH */
+				/* 11g only */
+				case 240:
+				case 120:
+				case 60:
+					supband->bitrates[i].flags |=
+					    IEEE80211_RATE_MANDATORY_G;
+					break;
+				}
+				break;
+			case NL80211_BAND_5GHZ:
+				switch (supband->bitrates[i].bitrate) {
+				case 240:
+				case 120:
+				case 60:
+					supband->bitrates[i].flags |=
+					    IEEE80211_RATE_MANDATORY_A;
+					break;
+				}
+				break;
+			}
+		}
+	}
+}
+
+int
+linuxkpi_80211_wiphy_register(struct wiphy *wiphy)
+{
+	TODO("Lots of checks and initialization");
+
+	lkpi_wiphy_band_annotate(wiphy);
+
+	return (0);
+}
+
 static uint32_t
 lkpi_cfg80211_calculate_bitrate_ht(struct rate_info *rate)
 {
@@ -8072,6 +8254,8 @@ linuxkpi_ieee80211_tx_dequeue(struct ieee80211_hw *hw,
 
 	LKPI_80211_LTXQ_LOCK(ltxq);
 	skb = skb_dequeue(&ltxq->skbq);
+	if (skb != NULL)
+		ltxq->frms_dequeued++;
 	LKPI_80211_LTXQ_UNLOCK(ltxq);
 
 stopped:
@@ -8614,7 +8798,12 @@ linuxkpi_ieee80211_wake_queue(struct ieee80211_hw *hw, int qnum)
 	spin_unlock_irqrestore(&lhw->txq_lock, flags);
 }
 
+/* -------------------------------------------------------------------------- */
+
 /* This is just hardware queues. */
+/*
+ * Being called from the driver thus use _bh() locking.
+ */
 void
 linuxkpi_ieee80211_txq_schedule_start(struct ieee80211_hw *hw, uint8_t ac)
 {
@@ -8622,10 +8811,16 @@ linuxkpi_ieee80211_txq_schedule_start(struct ieee80211_hw *hw, uint8_t ac)
 
 	lhw = HW_TO_LHW(hw);
 
-	IMPROVE_TXQ("Are there reasons why we wouldn't schedule?");
-	IMPROVE_TXQ("LOCKING");
+	if (ac >= IEEE80211_NUM_ACS) {
+		ic_printf(lhw->ic, "%s: ac %u out of bounds.\n", __func__, ac);
+		return;
+	}
+
+	spin_lock_bh(&lhw->txq_scheduled_lock[ac]);
+	IMPROVE("check AIRTIME_FAIRNESS");
 	if (++lhw->txq_generation[ac] == 0)
 		lhw->txq_generation[ac]++;
+	spin_unlock_bh(&lhw->txq_scheduled_lock[ac]);
 }
 
 struct ieee80211_txq *
@@ -8638,24 +8833,33 @@ linuxkpi_ieee80211_next_txq(struct ieee80211_hw *hw, uint8_t ac)
 	lhw = HW_TO_LHW(hw);
 	txq = NULL;
 
-	IMPROVE_TXQ("LOCKING");
+	if (ac >= IEEE80211_NUM_ACS) {
+		ic_printf(lhw->ic, "%s: ac %u out of bounds.\n", __func__, ac);
+		return (NULL);
+	}
+
+	spin_lock_bh(&lhw->txq_scheduled_lock[ac]);
 
 	/* Check that we are scheduled. */
 	if (lhw->txq_generation[ac] == 0)
 		goto out;
 
-	ltxq = TAILQ_FIRST(&lhw->scheduled_txqs[ac]);
+	ltxq = TAILQ_FIRST(&lhw->txq_scheduled[ac]);
 	if (ltxq == NULL)
 		goto out;
 	if (ltxq->txq_generation == lhw->txq_generation[ac])
 		goto out;
 
+	IMPROVE("check AIRTIME_FAIRNESS");
+
+	TAILQ_REMOVE(&lhw->txq_scheduled[ac], ltxq, txq_entry);
 	ltxq->txq_generation = lhw->txq_generation[ac];
-	TAILQ_REMOVE(&lhw->scheduled_txqs[ac], ltxq, txq_entry);
 	txq = &ltxq->txq;
 	TAILQ_ELEM_INIT(ltxq, txq_entry);
 
 out:
+	spin_unlock_bh(&lhw->txq_scheduled_lock[ac]);
+
 	return (txq);
 }
 
@@ -8668,8 +8872,6 @@ void linuxkpi_ieee80211_schedule_txq(struct ieee80211_hw *hw,
 
 	ltxq = TXQ_TO_LTXQ(txq);
 
-	IMPROVE_TXQ("LOCKING");
-
 	/* Only schedule if work to do or asked to anyway. */
 	LKPI_80211_LTXQ_LOCK(ltxq);
 	ltxq_empty = skb_queue_empty(&ltxq->skbq);
@@ -8677,37 +8879,46 @@ void linuxkpi_ieee80211_schedule_txq(struct ieee80211_hw *hw,
 	if (!withoutpkts && ltxq_empty)
 		goto out;
 
+	lhw = HW_TO_LHW(hw);
+	spin_lock_bh(&lhw->txq_scheduled_lock[txq->ac]);
 	/*
 	 * Make sure we do not double-schedule. We do this by checking tqe_prev,
 	 * the previous entry in our tailq. tqe_prev is always valid if this entry
 	 * is queued, tqe_next may be NULL if this is the only element in the list.
 	 */
 	if (ltxq->txq_entry.tqe_prev != NULL)
-		goto out;
+		goto unlock;
 
-	lhw = HW_TO_LHW(hw);
-	TAILQ_INSERT_TAIL(&lhw->scheduled_txqs[txq->ac], ltxq, txq_entry);
+	TAILQ_INSERT_TAIL(&lhw->txq_scheduled[txq->ac], ltxq, txq_entry);
+unlock:
+	spin_unlock_bh(&lhw->txq_scheduled_lock[txq->ac]);
+
 out:
 	return;
 }
+
+/* -------------------------------------------------------------------------- */
 
 void
 linuxkpi_ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
     struct ieee80211_txq *txq)
 {
 	struct lkpi_hw *lhw;
-	struct ieee80211_txq *ntxq;
-	struct ieee80211_tx_control control;
-        struct sk_buff *skb;
 
 	lhw = HW_TO_LHW(hw);
 
 	LKPI_80211_LHW_TXQ_LOCK(lhw);
 	ieee80211_txq_schedule_start(hw, txq->ac);
 	do {
+		struct lkpi_txq *ltxq;
+		struct ieee80211_txq *ntxq;
+		struct ieee80211_tx_control control;
+		struct sk_buff *skb;
+
 		ntxq = ieee80211_next_txq(hw, txq->ac);
 		if (ntxq == NULL)
 			break;
+		ltxq = TXQ_TO_LTXQ(ntxq);
 
 		memset(&control, 0, sizeof(control));
 		control.sta = ntxq->sta;
@@ -8715,6 +8926,7 @@ linuxkpi_ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
 			skb = linuxkpi_ieee80211_tx_dequeue(hw, ntxq);
 			if (skb == NULL)
 				break;
+			ltxq->frms_tx++;
 			lkpi_80211_mo_tx(hw, &control, skb);
 		} while(1);
 

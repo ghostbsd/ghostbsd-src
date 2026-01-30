@@ -29,7 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 #include "opt_inet.h"
 #include "opt_ipsec.h"
 #include "opt_kern_tls.h"
@@ -1067,8 +1066,8 @@ in_delayed_cksum_o(struct mbuf *m, uint16_t iph_offset)
 		if (csum == 0)
 			csum = 0xffff;
 	} else {
-		cklen = ntohs(ip->ip_len);
-		csum = in_cksum_skip(m, cklen, offset);
+		cklen = ntohs(ip->ip_len) - (ip->ip_hl << 2);
+		csum = in_cksum_skip(m, cklen + offset, offset);
 	}
 	offset += m->m_pkthdr.csum_data;	/* checksum offset */
 

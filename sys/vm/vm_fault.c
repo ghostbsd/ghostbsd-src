@@ -85,6 +85,8 @@
 #include <sys/refcount.h>
 #include <sys/resourcevar.h>
 #include <sys/rwlock.h>
+#include <sys/sched.h>
+#include <sys/sf_buf.h>
 #include <sys/signalvar.h>
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
@@ -136,6 +138,7 @@ struct faultstate {
 	vm_object_t	object;
 	vm_pindex_t	pindex;
 	vm_page_t	m;
+	bool		m_needs_zeroing;
 
 	/* Top-level map object. */
 	vm_object_t	first_object;
@@ -271,6 +274,7 @@ static void
 vm_fault_deallocate(struct faultstate *fs)
 {
 
+	fs->m_needs_zeroing = true;
 	vm_fault_page_release(&fs->m_cow);
 	vm_fault_page_release(&fs->m);
 	vm_object_pip_wakeup(fs->object);
@@ -710,10 +714,10 @@ _Static_assert(UCODE_PAGEFLT == T_PAGEFLT, "T_PAGEFLT");
 /*
  * vm_fault_trap:
  *
- * Helper for the page fault trap handlers, wrapping vm_fault().
- * Issues ktrace(2) tracepoints for the faults.
+ * Helper for the machine-dependent page fault trap handlers, wrapping
+ * vm_fault().  Issues ktrace(2) tracepoints for the faults.
  *
- * If a fault cannot be handled successfully by satisfying the
+ * If the fault cannot be handled successfully by updating the
  * required mapping, and the faulted instruction cannot be restarted,
  * the signal number and si_code values are returned for trapsignal()
  * to deliver.
@@ -1217,9 +1221,27 @@ vm_fault_zerofill(struct faultstate *fs)
 	/*
 	 * Zero the page if necessary and mark it valid.
 	 */
-	if ((fs->m->flags & PG_ZERO) == 0) {
+	if (fs->m_needs_zeroing) {
 		pmap_zero_page(fs->m);
 	} else {
+#ifdef INVARIANTS
+		if (vm_check_pg_zero) {
+			struct sf_buf *sf;
+			unsigned long *p;
+			int i;
+
+			sched_pin();
+			sf = sf_buf_alloc(fs->m, SFB_CPUPRIVATE);
+			p = (unsigned long *)sf_buf_kva(sf);
+			for (i = 0; i < PAGE_SIZE / sizeof(*p); i++, p++) {
+				KASSERT(*p == 0,
+				    ("zerocheck failed page %p PG_ZERO %d %jx",
+				    fs->m, i, (uintmax_t)*p));
+			}
+			sf_buf_free(sf);
+			sched_unpin();
+		}
+#endif
 		VM_CNT_INC(v_ozfod);
 	}
 	VM_CNT_INC(v_zfod);
@@ -1332,6 +1354,7 @@ vm_fault_allocate(struct faultstate *fs, struct pctrie_iter *pages)
 			vm_waitpfault(dset, vm_pfault_oom_wait * hz);
 		return (FAULT_RESTART);
 	}
+	fs->m_needs_zeroing = (fs->m->flags & PG_ZERO) == 0;
 	fs->oom_started = false;
 
 	return (FAULT_CONTINUE);
@@ -1634,10 +1657,10 @@ vm_fault_object(struct faultstate *fs, int *behindp, int *aheadp)
  * The given address should be truncated to the proper page address.
  *
  * KERN_SUCCESS is returned if the page fault is handled; otherwise, a
- * Mach error specifying why the fault is fatal is returned.
+ * Mach error code explaining why the fault is fatal is returned.
  *
- * The map in question must be alive, either being the map for current
- * process, or the owner process hold count incremented to prevent
+ * The map in question must be alive, either being the map for the current
+ * process, or the owner process hold count has been incremented to prevent
  * exit().
  *
  * If the thread private TDP_NOFAULTING flag is set, any fault results
@@ -1666,6 +1689,7 @@ vm_fault(vm_map_t map, vm_offset_t vaddr, vm_prot_t fault_type,
 	fs.fault_flags = fault_flags;
 	fs.map = map;
 	fs.lookup_still_valid = false;
+	fs.m_needs_zeroing = true;
 	fs.oom_started = false;
 	fs.nera = -1;
 	fs.can_read_lock = true;
@@ -2286,13 +2310,12 @@ vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map __unused,
 		 * directly.
 		 */
 		dst_object = vm_object_allocate_anon(atop(dst_entry->end -
-		    dst_entry->start), NULL, NULL, 0);
+		    dst_entry->start), NULL, NULL);
 #if VM_NRESERVLEVEL > 0
 		dst_object->flags |= OBJ_COLORED;
 		dst_object->pg_color = atop(dst_entry->start);
 #endif
 		dst_object->domain = src_object->domain;
-		dst_object->charge = dst_entry->end - dst_entry->start;
 
 		dst_entry->object.vm_object = dst_object;
 		dst_entry->offset = 0;
@@ -2305,7 +2328,7 @@ vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map __unused,
 		    ("vm_fault_copy_entry: leaked swp charge"));
 		dst_object->cred = curthread->td_ucred;
 		crhold(dst_object->cred);
-		*fork_charge += dst_object->charge;
+		*fork_charge += ptoa(dst_object->size);
 	} else if ((dst_object->flags & OBJ_SWAP) != 0 &&
 	    dst_object->cred == NULL) {
 		KASSERT(dst_entry->cred != NULL, ("no cred for entry %p",

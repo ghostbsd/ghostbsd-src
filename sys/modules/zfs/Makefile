@@ -1,5 +1,4 @@
 SRCDIR=${SRCTOP}/sys/contrib/openzfs/module
-INCDIR=${SRCTOP}/sys/contrib/openzfs/include
 
 KMOD=	zfs
 
@@ -27,11 +26,11 @@ KMOD=	zfs
 	${SRCDIR}/zstd/lib/compress \
 	${SRCDIR}/zstd/lib/decompress
 
-CFLAGS+= -I${INCDIR}
+CFLAGS+= -I${ZINCDIR}
 CFLAGS+= -I${SRCDIR}/icp/include
-CFLAGS+= -I${INCDIR}/os/freebsd
-CFLAGS+= -I${INCDIR}/os/freebsd/spl
-CFLAGS+= -I${INCDIR}/os/freebsd/zfs
+CFLAGS+= -I${ZINCDIR}/os/freebsd
+CFLAGS+= -I${ZINCDIR}/os/freebsd/spl
+CFLAGS+= -I${ZINCDIR}/os/freebsd/zfs
 CFLAGS+= -I${SRCDIR}/zstd/include
 CFLAGS+= -I${.CURDIR}
 
@@ -46,7 +45,7 @@ CFLAGS+= -D__x86_64 -DHAVE_SSE2 -DHAVE_SSSE3 -DHAVE_SSE4_1 -DHAVE_SSE4_2 \
 .endif
 
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "powerpc" || \
-	${MACHINE_ARCH} == "powerpcspe" || ${MACHINE_ARCH} == "arm"
+	${MACHINE_ARCH} == "arm"
 CFLAGS+= -DBITS_PER_LONG=32
 .else
 CFLAGS+= -DBITS_PER_LONG=64
@@ -176,7 +175,7 @@ SRCS+=	acl_common.c \
 
 
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "powerpc" || \
-	${MACHINE_ARCH} == "powerpcspe" || ${MACHINE_ARCH} == "arm"
+	${MACHINE_ARCH} == "arm"
 SRCS+= spl_atomic.c
 .endif
 
@@ -388,7 +387,7 @@ SRCS+=	zfs_zstd.c \
 .include <bsd.kmod.mk>
 
 CFLAGS+= -include ${SRCTOP}/sys/cddl/compat/opensolaris/sys/debug_compat.h
-CFLAGS+= -include ${INCDIR}/os/freebsd/spl/sys/ccompile.h
+CFLAGS+= -include ${ZINCDIR}/os/freebsd/spl/sys/ccompile.h
 CFLAGS+= -include ${SRCTOP}/sys/modules/zfs/static_ccompile.h
 
 CFLAGS.sysctl_os.c= -include ${SRCTOP}/sys/modules/zfs/zfs_config.h
@@ -475,8 +474,6 @@ CFLAGS.zstd_ldm.c= -U__BMI__ -fno-tree-vectorize ${NO_WBITWISE_INSTEAD_OF_LOGICA
 CFLAGS.zstd_opt.c= -U__BMI__ -fno-tree-vectorize ${NO_WBITWISE_INSTEAD_OF_LOGICAL}
 
 .if ${MACHINE_ARCH} == "aarch64"
-__ZFS_ZSTD_AARCH64_FLAGS= -include ${SRCDIR}/zstd/include/aarch64_compat.h
-CFLAGS.zstd.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
 CFLAGS.entropy_common.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
 CFLAGS.error_private.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
 CFLAGS.fse_compress.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}

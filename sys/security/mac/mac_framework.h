@@ -73,6 +73,7 @@ struct mount;
 struct msg;
 struct msqid_kernel;
 struct pipepair;
+struct prison;
 struct proc;
 struct semid_kernel;
 struct shmfd;
@@ -85,6 +86,7 @@ struct thread;
 struct timespec;
 struct ucred;
 struct vattr;
+struct vfsoptlist;
 struct vnode;
 struct vop_setlabel_args;
 
@@ -134,7 +136,7 @@ int	mac_cred_check_setuid(struct ucred *cred, uid_t uid);
 int	mac_cred_check_visible(struct ucred *cr1, struct ucred *cr2);
 void	mac_cred_copy(struct ucred *cr1, struct ucred *cr2);
 void	mac_cred_create_init(struct ucred *cred);
-void	mac_cred_create_swapper(struct ucred *cred);
+void	mac_cred_create_kproc0(struct ucred *cred);
 void	mac_cred_destroy(struct ucred *);
 void	mac_cred_init(struct ucred *);
 
@@ -345,6 +347,22 @@ int	mac_posixshm_check_write(struct ucred *active_cred,
 void 	mac_posixshm_create(struct ucred *cred, struct shmfd *shmfd);
 void	mac_posixshm_destroy(struct shmfd *);
 void	mac_posixshm_init(struct shmfd *);
+
+int	mac_prison_init(struct prison *pr, int flag);
+void	mac_prison_relabel(struct ucred *cred, struct prison *pr,
+	    struct label *newlabel);
+void	mac_prison_destroy(struct prison *pr);
+int	mac_prison_check_attach(struct ucred *cred, struct prison *pr);
+int	mac_prison_check_create(struct ucred *cred, struct vfsoptlist *opts,
+	    int flags);
+int	mac_prison_check_get(struct ucred *cred, struct prison *pr,
+	    struct vfsoptlist *opts, int flags);
+int	mac_prison_check_set(struct ucred *cred, struct prison *pr,
+	    struct vfsoptlist *opts, int flags);
+int	mac_prison_check_remove(struct ucred *cred, struct prison *pr);
+void	mac_prison_created(struct ucred *cred, struct prison *pr);
+void	mac_prison_attached(struct ucred *cred, struct prison *pr,
+	    struct proc *p);
 
 int	mac_priv_check_impl(struct ucred *cred, int priv);
 #ifdef MAC

@@ -60,7 +60,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 #define	MBUF_PRIVATE	/* XXXRW: Optimisation tries to avoid M_EXT mbufs */
 
 #include "opt_inet.h"
@@ -2081,7 +2080,8 @@ icmp6_reflect(struct mbuf *m, size_t off)
 
 			if (m->m_pkthdr.rcvif != NULL) {
 				/* XXX: This may not be the outgoing interface */
-				hlim = ND_IFINFO(m->m_pkthdr.rcvif)->chlim;
+				hlim =
+				    m->m_pkthdr.rcvif->if_inet6->nd_curhoplimit;
 			} else
 				hlim = V_ip6_defhlim;
 		}

@@ -41,6 +41,7 @@
 #include <dev/sound/pcm/ac97.h>
 #include <dev/sound/pcm/vchan.h>
 #include <dev/sound/pcm/dsp.h>
+#include <dev/sound/sndstat.h>
 #include <sys/limits.h>
 #include <sys/sysctl.h>
 
@@ -61,35 +62,6 @@ SYSCTL_NODE(_hw, OID_AUTO, snd, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
  * @brief Unit number allocator for syncgroup IDs
  */
 struct unrhdr *pcmsg_unrhdr = NULL;
-
-void *
-snd_mtxcreate(const char *desc, const char *type)
-{
-	struct mtx *m;
-
-	m = malloc(sizeof(*m), M_DEVBUF, M_WAITOK | M_ZERO);
-	mtx_init(m, desc, type, MTX_DEF);
-	return m;
-}
-
-void
-snd_mtxfree(void *m)
-{
-	struct mtx *mtx = m;
-
-	mtx_destroy(mtx);
-	free(mtx, M_DEVBUF);
-}
-
-void
-snd_mtxassert(void *m)
-{
-#ifdef INVARIANTS
-	struct mtx *mtx = m;
-
-	mtx_assert(mtx, MA_OWNED);
-#endif
-}
 
 int
 snd_setup_intr(device_t dev, struct resource *res, int flags, driver_intr_t hand, void *param, void **cookiep)
@@ -361,7 +333,7 @@ pcm_init(device_t dev, void *devinfo)
 
 	d = device_get_softc(dev);
 	d->dev = dev;
-	d->lock = snd_mtxcreate(device_get_nameunit(dev), "sound cdev");
+	mtx_init(&d->lock, device_get_nameunit(dev), "sound cdev", MTX_DEF);
 	cv_init(&d->cv, device_get_nameunit(dev));
 
 	i = 0;
@@ -455,7 +427,7 @@ pcm_register(device_t dev, char *str)
 	else if (snd_unit_auto == 1)
 		snd_unit = pcm_best_unit(snd_unit);
 
-	sndstat_register(dev, d->status);
+	sndstat_register(dev, SNDST_TYPE_PCM, d->status);
 
 	return (dsp_make_dev(dev));
 }
@@ -467,7 +439,7 @@ pcm_unregister(device_t dev)
 
 	d = device_get_softc(dev);
 
-	if (!PCM_ALIVE(d)) {
+	if (!PCM_REGISTERED(d)) {
 		device_printf(dev, "unregister: device not configured\n");
 		return (0);
 	}
@@ -498,7 +470,7 @@ pcm_unregister(device_t dev)
 	dsp_destroy_dev(dev);
 
 	cv_destroy(&d->cv);
-	snd_mtxfree(d->lock);
+	mtx_destroy(&d->lock);
 
 	if (snd_unit == device_get_unit(dev)) {
 		snd_unit = pcm_best_unit(-1);

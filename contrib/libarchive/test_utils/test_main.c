@@ -84,6 +84,18 @@
 #if HAVE_MEMBERSHIP_H
 #include <membership.h>
 #endif
+#if !defined(_WIN32) || defined(__CYGWIN__)
+# if HAVE_POSIX_SPAWN
+#  if HAVE_SYS_WAIT_H
+#   include <sys/wait.h>
+#  endif
+#  if HAVE_SPAWN_H
+#   include <spawn.h>
+#  endif
+extern char **environ;
+#  define USE_POSIX_SPAWN 1
+# endif
+#endif
 
 #ifndef nitems
 #define nitems(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -3009,15 +3021,28 @@ int
 systemf(const char *fmt, ...)
 {
 	char buff[8192];
+#if USE_POSIX_SPAWN
+	char *argv[] = { "/bin/sh", "-c", buff, NULL };
+	pid_t pid;
+#endif
 	va_list ap;
 	int r;
 
 	va_start(ap, fmt);
 	vsnprintf(buff, sizeof(buff), fmt, ap);
+	va_end(ap);
 	if (verbosity > VERBOSITY_FULL)
 		logprintf("Cmd: %s\n", buff);
+#if USE_POSIX_SPAWN
+	if ((r = posix_spawn(&pid, *argv, NULL, NULL, argv, environ)) == 0) {
+		while (waitpid(pid, &r, 0) == -1) {
+			if (errno != EINTR)
+				return (-1);
+		}
+	}
+#else
 	r = system(buff);
-	va_end(ap);
+#endif
 	return (r);
 }
 
@@ -3656,10 +3681,18 @@ test_run(int i, const char *tmpdir)
  */
 
 static void
-usage(const char *program)
+list_tests(void)
 {
 	static const int limit = nitems(tests);
 	int i;
+
+	for (i = 0; i < limit; i++)
+		printf("  %d: %s\n", i, tests[i].name);
+}
+
+static void
+usage(const char *program)
+{
 
 	printf("Usage: %s [options] <test> <test> ...\n", program);
 	printf("Default is to run all tests.\n");
@@ -3668,6 +3701,8 @@ usage(const char *program)
 	printf("  -d  Dump core after any failure, for debugging.\n");
 	printf("  -k  Keep all temp files.\n");
 	printf("      Default: temp files for successful tests deleted.\n");
+	printf("  -l  List available tests and exit, ignoring all other.\n");
+	printf("      options and arguments.\n");
 #ifdef PROGRAM
 	printf("  -p <path>  Path to executable to be tested.\n");
 	printf("      Default: path taken from " ENVBASE " environment variable.\n");
@@ -3679,8 +3714,7 @@ usage(const char *program)
 	printf("  -u  Keep running specified tests until one fails.\n");
 	printf("  -v  Verbose.\n");
 	printf("Available tests:\n");
-	for (i = 0; i < limit; i++)
-		printf("  %d: %s\n", i, tests[i].name);
+	list_tests();
 	exit(1);
 }
 
@@ -4053,6 +4087,10 @@ main(int argc, char **argv)
 				break;
 			case 'k':
 				keep_temp_files = 1;
+				break;
+			case 'l':
+				list_tests();
+				exit(0);
 				break;
 			case 'p':
 #ifdef PROGRAM

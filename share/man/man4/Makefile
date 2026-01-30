@@ -53,6 +53,7 @@ MAN=	aac.4 \
 	${_bxe.4} \
 	${_aout.4} \
 	${_apic.4} \
+	aq.4 \
 	arcmsr.4 \
 	arswitch.4 \
 	${_asmc.4} \
@@ -330,6 +331,7 @@ MAN=	aac.4 \
 	mac_test.4 \
 	malo.4 \
 	max44009.4 \
+	${_mca.4} \
 	md.4 \
 	mdio.4 \
 	me.4 \
@@ -442,6 +444,7 @@ MAN=	aac.4 \
 	${_nvdimm.4} \
 	nvme.4 \
 	nvmf.4 \
+	nvmf_che.4 \
 	nvmf_tcp.4 \
 	nvmft.4 \
 	${_nvram.4} \
@@ -500,6 +503,7 @@ MAN=	aac.4 \
 	random.4 \
 	rctl.4 \
 	re.4 \
+	rge.4 \
 	rgephy.4 \
 	rights.4 \
 	rl.4 \
@@ -808,6 +812,7 @@ MLINKS+=tap.4 if_tap.4 \
 	tap.4 if_vmnet.4
 MLINKS+=tdfx.4 tdfx_linux.4
 MLINKS+=ti.4 if_ti.4
+MLINKS+=tty.4 cua.4
 MLINKS+=tun.4 if_tun.4
 MLINKS+=ure.4 if_ure.4
 MLINKS+=vge.4 if_vge.4
@@ -880,6 +885,7 @@ _imcsmb.4=	imcsmb.4
 _io.4=		io.4
 _itwd.4=	itwd.4
 _kvmclock.4=	kvmclock.4
+_mca.4=		mca.4
 _mgb.4=		mgb.4
 _nda.4=		nda.4
 _nfe.4=		nfe.4
@@ -1005,6 +1011,7 @@ _ccd.4=		ccd.4
 .if ${MK_CDDL} != "no"
 _dtrace_provs=	dtrace_audit.4 \
 		dtrace_callout_execute.4 \
+		dtrace_cam.4 \
 		dtrace_dtrace.4 \
 		dtrace_fbt.4 \
 		dtrace_io.4 \

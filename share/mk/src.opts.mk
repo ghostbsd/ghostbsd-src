@@ -86,6 +86,7 @@ __DEFAULT_YES_OPTIONS = \
     CRYPT \
     CUSE \
     CXGBETOOL \
+    DEPEND_CLEANUP \
     DICT \
     DMAGENT \
     DTRACE \
@@ -98,7 +99,6 @@ __DEFAULT_YES_OPTIONS = \
     FINGER \
     FLOPPY \
     FORTH \
-    FP_LIBC \
     FREEBSD_UPDATE \
     FTP \
     GAMES \
@@ -171,6 +171,7 @@ __DEFAULT_YES_OPTIONS = \
     SERVICESDB \
     SETUID_LOGIN \
     SHAREDOCS \
+    SOUND \
     SOURCELESS \
     SOURCELESS_HOST \
     SOURCELESS_UCODE \
@@ -209,9 +210,11 @@ __DEFAULT_NO_OPTIONS = \
     DTRACE_TESTS \
     EXPERIMENTAL \
     HESIOD \
+    IPFILTER_IPFS \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
     LLVM_FULL_DEBUGINFO \
+    LLVM_LINK_STATIC_LIBRARIES \
     MALLOC_PRODUCTION \
     OFED_EXTRA \
     OPENLDAP \
@@ -380,6 +383,10 @@ BROKEN_OPTIONS+= OFED
 BROKEN_OPTIONS+= TESTS
 .endif
 
+.if ${__T} != "amd64"
+BROKEN_OPTIONS+=BHYVE_SNAPSHOT
+.endif
+
 .-include <site.src.opts.mk>
 
 .include <bsd.mkopt.mk>
@@ -497,6 +504,11 @@ MK_CLANG_FULL:= no
 MK_LLVM_COV:= no
 .endif
 
+# CUSE is needed only by virtual_oss, but virtual_oss is part of MK_SOUND.
+.if ${MK_CUSE} == "no"
+MK_SOUND:= no
+.endif
+
 .if ${MK_ASAN} == "yes"
 # In order to get sensible backtraces from ASAN we have to install
 # llvm-symbolizer as /usr/bin/addr2line instead of the elftoolchain version.
@@ -511,6 +523,10 @@ MK_LLVM_CXXFILT:=	yes
 
 .if ${MK_LOADER_VERIEXEC} == "no"
 MK_LOADER_VERIEXEC_PASS_MANIFEST := no
+.endif
+
+.if ${MK_CLEAN} == "yes"
+MK_DEPEND_CLEANUP:=	no
 .endif
 
 #

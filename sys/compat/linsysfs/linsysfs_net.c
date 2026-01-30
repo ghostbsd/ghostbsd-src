@@ -45,7 +45,7 @@
 #include <compat/linsysfs/linsysfs.h>
 
 struct pfs_node *net;
-static eventhandler_tag if_arrival_tag, if_departure_tag;
+static eventhandler_tag if_arrival_tag, if_departure_tag, if_rename_tag;
 
 static uint32_t net_latch_count = 0;
 static struct mtx net_latch_mtx;
@@ -90,7 +90,7 @@ linsysfs_if_addr(PFS_FILL_ARGS)
 
 	CURVNET_SET(TD_TO_VNET(td));
 	NET_EPOCH_ENTER(et);
-	ifp = ifname_linux_to_ifp(td, pn->pn_parent->pn_name);
+	ifp = ifname_linux_to_ifp(pn->pn_parent->pn_name);
 	if (ifp != NULL && (error = linux_ifhwaddr(ifp, &lsa)) == 0)
 		error = sbuf_printf(sb, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx\n",
 		    lsa.sa_data[0], lsa.sa_data[1], lsa.sa_data[2],
@@ -119,7 +119,7 @@ linsysfs_if_flags(PFS_FILL_ARGS)
 
 	CURVNET_SET(TD_TO_VNET(td));
 	NET_EPOCH_ENTER(et);
-	ifp = ifname_linux_to_ifp(td, pn->pn_parent->pn_name);
+	ifp = ifname_linux_to_ifp(pn->pn_parent->pn_name);
 	if (ifp != NULL)
 		error = sbuf_printf(sb, "0x%x\n", linux_ifflags(ifp));
 	else
@@ -138,7 +138,7 @@ linsysfs_if_ifindex(PFS_FILL_ARGS)
 
 	CURVNET_SET(TD_TO_VNET(td));
 	NET_EPOCH_ENTER(et);
-	ifp = ifname_linux_to_ifp(td, pn->pn_parent->pn_name);
+	ifp = ifname_linux_to_ifp(pn->pn_parent->pn_name);
 	if (ifp != NULL)
 		error = sbuf_printf(sb, "%u\n", if_getindex(ifp));
 	else
@@ -157,7 +157,7 @@ linsysfs_if_mtu(PFS_FILL_ARGS)
 
 	CURVNET_SET(TD_TO_VNET(td));
 	NET_EPOCH_ENTER(et);
-	ifp = ifname_linux_to_ifp(td, pn->pn_parent->pn_name);
+	ifp = ifname_linux_to_ifp( pn->pn_parent->pn_name);
 	if (ifp != NULL)
 		error = sbuf_printf(sb, "%u\n", if_getmtu(ifp));
 	else
@@ -186,7 +186,7 @@ linsysfs_if_type(PFS_FILL_ARGS)
 
 	CURVNET_SET(TD_TO_VNET(td));
 	NET_EPOCH_ENTER(et);
-	ifp = ifname_linux_to_ifp(td, pn->pn_parent->pn_name);
+	ifp = ifname_linux_to_ifp(pn->pn_parent->pn_name);
 	if (ifp != NULL && (error = linux_ifhwaddr(ifp, &lsa)) == 0)
 		error = sbuf_printf(sb, "%d\n", lsa.sa_family);
 	else
@@ -207,7 +207,7 @@ linsysfs_if_visible(PFS_VIS_ARGS)
 	visible = 0;
 	CURVNET_SET(TD_TO_VNET(td));
 	NET_EPOCH_ENTER(et);
-	ifp = ifname_linux_to_ifp(td, pn->pn_name);
+	ifp = ifname_linux_to_ifp(pn->pn_name);
 	if (ifp != NULL) {
 		TAILQ_FOREACH_SAFE(nq, &ifp_nodes_q, ifp_nodes_next, nq_tmp) {
 			if (nq->ifp == ifp && nq->vnet == curvnet) {
@@ -312,6 +312,16 @@ linsysfs_if_departure(void *arg __unused, if_t ifp)
 	linsysfs_net_latch_rele();
 }
 
+static void
+linsysfs_if_rename(void *arg __unused, if_t ifp)
+{
+
+	linsysfs_net_latch_hold();
+	linsysfs_net_delif(ifp);
+	(void)linsysfs_net_addif(ifp, net);
+	linsysfs_net_latch_rele();
+}
+
 void
 linsysfs_net_init(void)
 {
@@ -324,6 +334,8 @@ linsysfs_net_init(void)
 	    linsysfs_if_arrival, NULL, EVENTHANDLER_PRI_ANY);
 	if_departure_tag = EVENTHANDLER_REGISTER(ifnet_departure_event,
 	    linsysfs_if_departure, NULL, EVENTHANDLER_PRI_ANY);
+	if_rename_tag = EVENTHANDLER_REGISTER(ifnet_rename_event,
+	    linsysfs_if_rename, NULL, EVENTHANDLER_PRI_ANY);
 
 	linsysfs_net_latch_hold();
 	VNET_LIST_RLOCK();
@@ -343,6 +355,7 @@ linsysfs_net_uninit(void)
 
 	EVENTHANDLER_DEREGISTER(ifnet_arrival_event, if_arrival_tag);
 	EVENTHANDLER_DEREGISTER(ifnet_departure_event, if_departure_tag);
+	EVENTHANDLER_DEREGISTER(ifnet_rename_event, if_rename_tag);
 
 	linsysfs_net_latch_hold();
 	TAILQ_FOREACH_SAFE(nq, &ifp_nodes_q, ifp_nodes_next, nq_tmp) {

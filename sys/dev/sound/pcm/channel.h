@@ -110,7 +110,7 @@ struct pcm_channel {
 	int type;
 	char name[CHN_NAMELEN];
 	char comm[MAXCOMLEN + 1];
-	struct mtx *lock;
+	struct mtx lock;
 	int trigger;
 	/**
 	 * For interrupt manipulations.
@@ -298,7 +298,6 @@ int chn_oss_setorder(struct pcm_channel *, unsigned long long *);
 int chn_oss_getmask(struct pcm_channel *, uint32_t *);
 
 void chn_resetbuf(struct pcm_channel *c);
-void chn_intr_locked(struct pcm_channel *c);
 void chn_intr(struct pcm_channel *c);
 int chn_abort(struct pcm_channel *c);
 
@@ -320,12 +319,12 @@ int chn_syncdestroy(struct pcm_channel *c);
 int chn_getpeaks(struct pcm_channel *c, int *lpeak, int *rpeak);
 #endif
 
-#define CHN_LOCKOWNED(c)	mtx_owned((c)->lock)
-#define CHN_LOCK(c)		mtx_lock((c)->lock)
-#define CHN_UNLOCK(c)		mtx_unlock((c)->lock)
-#define CHN_TRYLOCK(c)		mtx_trylock((c)->lock)
-#define CHN_LOCKASSERT(c)	mtx_assert((c)->lock, MA_OWNED)
-#define CHN_UNLOCKASSERT(c)	mtx_assert((c)->lock, MA_NOTOWNED)
+#define CHN_LOCKOWNED(c)	mtx_owned(&(c)->lock)
+#define CHN_LOCK(c)		mtx_lock(&(c)->lock)
+#define CHN_UNLOCK(c)		mtx_unlock(&(c)->lock)
+#define CHN_TRYLOCK(c)		mtx_trylock(&(c)->lock)
+#define CHN_LOCKASSERT(c)	mtx_assert(&(c)->lock, MA_OWNED)
+#define CHN_UNLOCKASSERT(c)	mtx_assert(&(c)->lock, MA_NOTOWNED)
 
 #define CHN_BROADCAST(x)	cv_broadcastpri(x, PRIBIO)
 

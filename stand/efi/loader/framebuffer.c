@@ -32,14 +32,19 @@
 
 #include <efi.h>
 #include <efilib.h>
-#include <efiuga.h>
 #include <efipciio.h>
 #include <Protocol/EdidActive.h>
 #include <Protocol/EdidDiscovered.h>
+#include <Protocol/GraphicsOutput.h>
+#include <Protocol/UgaDraw.h>
 #include <machine/metadata.h>
 
 #include "bootstrap.h"
 #include "framebuffer.h"
+
+/* XXX This may be obsolete -- edk2 doesn't define it anywhere */
+#define EFI_CONSOLE_OUT_DEVICE_GUID    \
+{ 0xd3b36f2c, 0xd551, 0x11d4, {0x9a, 0x46, 0x0, 0x90, 0x27, 0x3f, 0xc1, 0x4d} }
 
 static EFI_GUID conout_guid = EFI_CONSOLE_OUT_DEVICE_GUID;
 EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
@@ -52,7 +57,7 @@ static EFI_HANDLE gop_handle;
 /* Cached EDID. */
 struct vesa_edid_info *edid_info = NULL;
 
-static EFI_GRAPHICS_OUTPUT *gop;
+static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
 static EFI_UGA_DRAW_PROTOCOL *uga;
 
 static struct named_resolution {
@@ -239,7 +244,7 @@ efifb_uga_find_pixel(EFI_UGA_DRAW_PROTOCOL *uga, u_int line,
 	printf("No change detected in frame buffer");
 
  fail:
-	printf(" -- error %lu\n", EFI_ERROR_CODE(status));
+	printf(" -- error %lu\n", DECODE_ERROR(status));
 	free(data1);
 	return (-1);
 }
@@ -387,6 +392,23 @@ efifb_from_uga(struct efi_fb *efifb)
 			/* These are the missing bits. */
 			offset = 0x0;
 			stride = 2048;
+		} else if (ev != NULL && !strcmp(ev, "MacBookPro3,1")) {
+			/*
+			 * Valid for MacBookPro 17" with standard resolution.
+			 * Other Models are:
+			 *   MacBookPro 15" with horiz=1440
+			 *   MacBookPro 17" with horiz=1920
+			 */
+
+			/* These are the expected values we should have. */
+			if (horiz == 1680) {
+				vert = 1050;
+				fbaddr = 0xc0000000;
+				/* These are the missing bits. */
+				stride = 2048;
+				/* 24 scan lines down */
+				offset = stride * 4 * 24;
+			}
 		}
 	}
 
@@ -585,46 +607,8 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
 		if (EFI_ERROR(status))
 			free(hlist);
 	}
-	if (EFI_ERROR(status))
-		return (efi_status_to_errno(status));
 
-	nhandles = hsize / sizeof(*hlist);
-
-	/*
-	 * Search for ConOut protocol, if not found, use first handle.
-	 */
-	gop_handle = NULL;
-	for (i = 0; i < nhandles; i++) {
-		EFI_GRAPHICS_OUTPUT *tgop;
-		void *dummy;
-
-		status = OpenProtocolByHandle(hlist[i], &gop_guid, (void **)&tgop);
-		if (status != EFI_SUCCESS)
-			continue;
-
-		if (tgop->Mode->Info->PixelFormat == PixelBltOnly ||
-		    tgop->Mode->Info->PixelFormat >= PixelFormatMax)
-			continue;
-
-		status = OpenProtocolByHandle(hlist[i], &conout_guid, &dummy);
-		if (status == EFI_SUCCESS) {
-			gop_handle = hlist[i];
-			gop = tgop;
-			break;
-		} else if (gop_handle == NULL) {
-			gop_handle = hlist[i];
-			gop = tgop;
-		}
-	}
-
-	free(hlist);
-
-	if (gop_handle != NULL) {
-		gfx_state->tg_fb_type = FB_GOP;
-		gfx_state->tg_private = gop;
-		if (edid_info == NULL)
-			edid_info = efifb_gop_get_edid(gop_handle);
-	} else {
+	if (EFI_ERROR(status)) {
 		status = BS->LocateProtocol(&uga_guid, NULL, (VOID **)&uga);
 		if (status == EFI_SUCCESS) {
 			gfx_state->tg_fb_type = FB_UGA;
@@ -632,6 +616,46 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
 		} else {
 			return (efi_status_to_errno(status));
 		}
+	} else {
+		nhandles = hsize / sizeof(*hlist);
+
+		/*
+		 * Search for ConOut protocol, if not found, use first handle.
+		 */
+		gop_handle = NULL;
+		for (i = 0; i < nhandles; i++) {
+			EFI_GRAPHICS_OUTPUT_PROTOCOL *tgop;
+			void *dummy;
+
+			status = OpenProtocolByHandle(hlist[i], &gop_guid,
+			    (void **)&tgop);
+			if (status != EFI_SUCCESS)
+				continue;
+
+			if (tgop->Mode->Info->PixelFormat == PixelBltOnly ||
+			    tgop->Mode->Info->PixelFormat >= PixelFormatMax)
+				continue;
+
+			status = OpenProtocolByHandle(hlist[i], &conout_guid,
+			    &dummy);
+			if (status == EFI_SUCCESS) {
+				gop_handle = hlist[i];
+				gop = tgop;
+				break;
+			} else if (gop_handle == NULL) {
+				gop_handle = hlist[i];
+				gop = tgop;
+			}
+		}
+
+		free(hlist);
+		if (gop_handle == NULL)
+			return (ENXIO);
+
+		gfx_state->tg_fb_type = FB_GOP;
+		gfx_state->tg_private = gop;
+		if (edid_info == NULL)
+			edid_info = efifb_gop_get_edid(gop_handle);
 	}
 
 	switch (gfx_state->tg_fb_type) {
@@ -781,7 +805,7 @@ gop_autoresize(void)
 		if (EFI_ERROR(status)) {
 			snprintf(command_errbuf, sizeof(command_errbuf),
 			    "gop_autoresize: Unable to set mode to %u (error=%lu)",
-			    mode, EFI_ERROR_CODE(status));
+			    mode, DECODE_ERROR(status));
 			return (CMD_ERROR);
 		}
 		(void) cons_update_mode(true);
@@ -884,7 +908,7 @@ command_gop(int argc, char *argv[])
 		if (EFI_ERROR(status)) {
 			snprintf(command_errbuf, sizeof(command_errbuf),
 			    "%s: Unable to set mode to %u (error=%lu)",
-			    argv[0], mode, EFI_ERROR_CODE(status));
+			    argv[0], mode, DECODE_ERROR(status));
 			return (CMD_ERROR);
 		}
 		(void) cons_update_mode(true);

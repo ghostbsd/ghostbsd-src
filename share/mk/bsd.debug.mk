@@ -16,7 +16,7 @@ MK_WERROR=	no
 # If reproducible build mode is enabled, map the root of the source
 # directory to /usr/src and the root of the object directory to
 # /usr/obj.
-.if ${MK_REPRODUCIBLE_BUILD} != "no" && !defined(DEBUG_PREFIX)
+.if ${MK_REPRODUCIBLE_PATHS} != "no" && !defined(DEBUG_PREFIX)
 .if defined(SRCTOP)
 DEBUG_PREFIX+= ${SRCTOP:S,/$,,}=/usr/src
 .endif
@@ -61,7 +61,7 @@ CTFFLAGS+= -g
 _debuginstall:
 .if ${MK_DEBUG_FILES} != "no" && defined(DEBUGFILE)
 .if defined(DEBUGMKDIR)
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dbg} -d ${DESTDIR}${DEBUGFILEDIR}/
+	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dbg} -d ${DESTDIR}${DEBUGFILEDIR}
 .endif
 	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dbg} -o ${DEBUGOWN} -g ${DEBUGGRP} -m ${DEBUGMODE} \
 	    ${DEBUGFILE} ${DESTDIR}${DEBUGFILEDIR}/${DEBUGFILE}

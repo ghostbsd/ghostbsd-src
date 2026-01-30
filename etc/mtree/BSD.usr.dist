@@ -103,8 +103,8 @@
         ..
         ossl-modules
         ..
-	virtual_oss
-	..
+        virtual_oss
+        ..
     ..
     libdata
         ldscripts
@@ -478,6 +478,12 @@
                 trusted         tags=package=runtime
                 ..
             ..
+            pkgbase-15
+                revoked         tags=package=runtime
+                ..
+                trusted         tags=package=runtime
+                ..
+            ..
         ..
         kyua            tags=package=tests
             misc            tags=package=tests
@@ -835,6 +841,10 @@
                 ..
                 man7
                 ..
+            ..
+        ..
+        pkg
+            triggers
             ..
         ..
         security

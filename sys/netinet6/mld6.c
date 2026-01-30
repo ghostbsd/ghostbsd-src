@@ -63,7 +63,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -100,7 +99,6 @@
 #define KTR_MLD KTR_INET6
 #endif
 
-static void	mli_delete_locked(struct ifnet *);
 static void	mld_dispatch_packet(struct mbuf *);
 static void	mld_dispatch_queue(struct mbufq *, int);
 static void	mld_final_leave(struct in6_multi *, struct mld_ifsoftc *);
@@ -166,8 +164,8 @@ static int	sysctl_mld_ifinfo(SYSCTL_HANDLER_ARGS);
  *  scope ID is only used by MLD to select the outgoing interface.
  *
  *  During interface attach and detach, MLD will take MLD_LOCK *after*
- *  the IF_AFDATA_LOCK.
- *  As in6_setscope() takes IF_AFDATA_LOCK then SCOPE_LOCK, we can't call
+ *  the LLTABLE_LOCK.
+ *  As in6_setscope() takes LLTABLE_LOCK then SCOPE_LOCK, we can't call
  *  it with MLD_LOCK held without triggering an LOR. A netisr with indirect
  *  dispatch could work around this, but we'd rather not do that, as it
  *  can introduce other races.
@@ -183,7 +181,7 @@ static int	sysctl_mld_ifinfo(SYSCTL_HANDLER_ARGS);
  *  calls in6_setscope() internally whilst MLD_LOCK is held. This will
  *  trigger a LOR warning in WITNESS when the ifnet is detached.
  *
- *  The right answer is probably to make IF_AFDATA_LOCK an rwlock, given
+ *  The right answer is probably to make LLTABLE_LOCK an rwlock, given
  *  how it's used across the network stack. Here we're simply exploiting
  *  the fact that MLD runs at a similar layer in the stack to scope6.c.
  *
@@ -466,21 +464,21 @@ mld_is_addr_reported(const struct in6_addr *addr)
  * Attach MLD when PF_INET6 is attached to an interface.  Assumes that the
  * current VNET is set by the caller.
  */
-struct mld_ifsoftc *
+void
 mld_domifattach(struct ifnet *ifp)
 {
-	struct mld_ifsoftc *mli;
+	struct mld_ifsoftc *mli = MLD_IFINFO(ifp);
 
 	CTR3(KTR_MLD, "%s: called for ifp %p(%s)", __func__, ifp, if_name(ifp));
 
-	mli = malloc(sizeof(struct mld_ifsoftc), M_MLD, M_WAITOK | M_ZERO);
-	mli->mli_ifp = ifp;
-	mli->mli_version = MLD_VERSION_2;
-	mli->mli_flags = 0;
-	mli->mli_rv = MLD_RV_INIT;
-	mli->mli_qi = MLD_QI_INIT;
-	mli->mli_qri = MLD_QRI_INIT;
-	mli->mli_uri = MLD_URI_INIT;
+	*mli = (struct mld_ifsoftc){
+		.mli_ifp = ifp,
+		.mli_version = MLD_VERSION_2,
+		.mli_rv = MLD_RV_INIT,
+		.mli_qi = MLD_QI_INIT,
+		.mli_qri = MLD_QRI_INIT,
+		.mli_uri = MLD_URI_INIT,
+	};
 	mbufq_init(&mli->mli_gq, MLD_MAX_RESPONSE_PACKETS);
 	if ((ifp->if_flags & IFF_MULTICAST) == 0)
 		mli->mli_flags |= MLIF_SILENT;
@@ -490,8 +488,6 @@ mld_domifattach(struct ifnet *ifp)
 	MLD_LOCK();
 	LIST_INSERT_HEAD(&V_mli_head, mli, mli_link);
 	MLD_UNLOCK();
-
-	return (mli);
 }
 
 /*
@@ -553,44 +549,19 @@ mld_ifdetach(struct ifnet *ifp, struct in6_multi_head *inmh)
 /*
  * Hook for domifdetach.
  * Runs after link-layer cleanup; free MLD state.
- *
- * SMPng: Normally called with IF_AFDATA_LOCK held.
  */
 void
 mld_domifdetach(struct ifnet *ifp)
 {
+	struct mld_ifsoftc *mli = MLD_IFINFO(ifp);
 
 	CTR3(KTR_MLD, "%s: called for ifp %p(%s)",
 	    __func__, ifp, if_name(ifp));
 
 	MLD_LOCK();
-	mli_delete_locked(ifp);
+	LIST_REMOVE(mli, mli_link);
 	MLD_UNLOCK();
-}
-
-static void
-mli_delete_locked(struct ifnet *ifp)
-{
-	struct mld_ifsoftc *mli, *tmli;
-
-	CTR3(KTR_MLD, "%s: freeing mld_ifsoftc for ifp %p(%s)",
-	    __func__, ifp, if_name(ifp));
-
-	MLD_LOCK_ASSERT();
-
-	LIST_FOREACH_SAFE(mli, &V_mli_head, mli_link, tmli) {
-		if (mli->mli_ifp == ifp) {
-			/*
-			 * Free deferred General Query responses.
-			 */
-			mbufq_drain(&mli->mli_gq);
-
-			LIST_REMOVE(mli, mli_link);
-
-			free(mli, M_MLD);
-			return;
-		}
-	}
+	mbufq_drain(&mli->mli_gq);
 }
 
 /*

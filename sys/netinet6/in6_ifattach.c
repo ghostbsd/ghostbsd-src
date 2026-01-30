@@ -32,6 +32,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/eventhandler.h>
 #include <sys/systm.h>
 #include <sys/counter.h>
 #include <sys/malloc.h>
@@ -50,6 +51,7 @@
 #include <net/if_dl.h>
 #include <net/if_private.h>
 #include <net/if_types.h>
+#include <net/if_llatbl.h>
 #include <net/route.h>
 #include <net/vnet.h>
 
@@ -463,7 +465,7 @@ in6_get_ifid(struct ifnet *ifp0, struct ifnet *altifp,
 	NET_EPOCH_ASSERT();
 
 	/* first, try to get it from the interface itself, with stable algorithm, if configured */
-	if ((ND_IFINFO(ifp0)->flags & ND6_IFF_STABLEADDR) && in6_get_stableifid(ifp0, in6, 64) == 0) {
+	if ((ifp0->if_inet6->nd_flags & ND6_IFF_STABLEADDR) && in6_get_stableifid(ifp0, in6, 64) == 0) {
 		nd6log((LOG_DEBUG, "%s: got interface identifier from itself (stable private)\n",
 		    if_name(ifp0)));
 		goto success;
@@ -783,7 +785,8 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 {
 	struct in6_ifaddr *ia;
 
-	if (ifp->if_afdata[AF_INET6] == NULL)
+	/* XXXGL: can this happen after IFT_PFLOG and IFT_PFSYNC are gone? */
+	if (ifp->if_inet6 == NULL)
 		return;
 	/*
 	 * quirks based on interface type
@@ -796,8 +799,8 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 		 * linklocals for 6to4 interface, but there's no use and
 		 * it is rather harmful to have one.
 		 */
-		ND_IFINFO(ifp)->flags &= ~ND6_IFF_AUTO_LINKLOCAL;
-		ND_IFINFO(ifp)->flags |= ND6_IFF_NO_DAD;
+		ifp->if_inet6->nd_flags &= ~ND6_IFF_AUTO_LINKLOCAL;
+		ifp->if_inet6->nd_flags |= ND6_IFF_NO_DAD;
 		break;
 	default:
 		break;
@@ -828,8 +831,8 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 	/*
 	 * assign a link-local address, if there's none.
 	 */
-	if (!(ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) &&
-	    ND_IFINFO(ifp)->flags & ND6_IFF_AUTO_LINKLOCAL) {
+	if (!(ifp->if_inet6->nd_flags & ND6_IFF_IFDISABLED) &&
+	    ifp->if_inet6->nd_flags & ND6_IFF_AUTO_LINKLOCAL) {
 		struct epoch_tracker et;
 
 		NET_EPOCH_ENTER(et);
@@ -857,7 +860,8 @@ _in6_ifdetach(struct ifnet *ifp, int purgeulp)
 {
 	struct ifaddr *ifa, *next;
 
-	if (ifp->if_afdata[AF_INET6] == NULL)
+	/* XXXGL: can this happen after IFT_PFLOG and IFT_PFSYNC are gone? */
+	if (ifp->if_inet6 == NULL)
 		return;
 
 	/*
@@ -894,6 +898,50 @@ in6_ifdetach(struct ifnet *ifp)
 
 	_in6_ifdetach(ifp, 1);
 }
+
+static void
+in6_ifextra_free(epoch_context_t ctx)
+{
+	struct in6_ifextra *ext =
+	     __containerof(ctx, struct in6_ifextra, epoch_ctx);
+
+	COUNTER_ARRAY_FREE(ext->in6_ifstat,
+	    sizeof(struct in6_ifstat) / sizeof(uint64_t));
+	COUNTER_ARRAY_FREE(ext->icmp6_ifstat,
+	    sizeof(struct icmp6_ifstat) / sizeof(uint64_t));
+	free(ext, M_IFADDR);
+}
+
+static void
+in6_ifdeparture(void *arg __unused, struct ifnet *ifp)
+{
+	struct in6_ifextra *ext = ifp->if_inet6;
+
+	/* XXXGL: can this happen after IFT_PFLOG and IFT_PFSYNC are gone? */
+	if (ifp->if_inet6 == NULL)
+		return;
+
+#ifdef VIMAGE
+	/*
+	 * On VNET shutdown abort here as the stack teardown will do all
+	 * the work top-down for us.  XXXGL: see comment in in.c:in_ifdetach().
+	 */
+	if (!VNET_IS_SHUTTING_DOWN(ifp->if_vnet))
+#endif
+		_in6_ifdetach(ifp, 1);
+	/*
+	 * XXXGL: mld and nd bits are left in a consistent state after
+	 * destructors, but I'm not sure if it safe to call lltable_free() here.
+	 * Individual lle entries are epoch(9) protected, but the table itself
+	 * isn't.
+	 */
+	mld_domifdetach(ifp);
+	nd6_ifdetach(ifp);
+	lltable_free(ext->lltable);
+	NET_EPOCH_CALL(in6_ifextra_free, &ext->epoch_ctx);
+}
+EVENTHANDLER_DEFINE(ifnet_departure_event, in6_ifdeparture, NULL,
+    EVENTHANDLER_PRI_ANY);
 
 void
 in6_ifdetach_destroy(struct ifnet *ifp)

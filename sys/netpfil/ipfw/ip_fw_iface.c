@@ -77,12 +77,13 @@ static struct ipfw_sopt_handler	scodes[] = {
 /*
  * FreeBSD Kernel interface.
  */
-static void ipfw_kifhandler(void *arg, struct ifnet *ifp);
+static void ipfw_kifhandler(void *, struct ifnet *, const char *);
 static int ipfw_kiflookup(char *name);
 static void iface_khandler_register(void);
 static void iface_khandler_deregister(void);
 
-static eventhandler_tag ipfw_ifdetach_event, ipfw_ifattach_event;
+static eventhandler_tag ipfw_ifdetach_event, ipfw_ifattach_event,
+    ipfw_rename_event;
 static int num_vnets = 0;
 static struct mtx vnet_mtx;
 
@@ -90,19 +91,21 @@ static struct mtx vnet_mtx;
  * Checks if kernel interface is contained in our tracked
  * interface list and calls attach/detach handler.
  */
+enum ifevent { ARRIVAL, DEPARTURE, RENAME };
 static void
-ipfw_kifhandler(void *arg, struct ifnet *ifp)
+ipfw_kifhandler(void *arg, struct ifnet *ifp, const char *old_name)
 {
+	enum ifevent what = (uintptr_t)arg;
 	struct ip_fw_chain *ch;
 	struct ipfw_iface *iif;
 	struct namedobj_instance *ii;
-	uintptr_t htype;
+
+	MPASS(what != RENAME || old_name != NULL);
 
 	if (V_ipfw_vnet_ready == 0)
 		return;
 
 	ch = &V_layer3_chain;
-	htype = (uintptr_t)arg;
 
 	IPFW_UH_WLOCK(ch);
 	ii = CHAIN_TO_II(ch);
@@ -111,12 +114,23 @@ ipfw_kifhandler(void *arg, struct ifnet *ifp)
 		return;
 	}
 	iif = (struct ipfw_iface*)ipfw_objhash_lookup_name(ii, 0,
-	    if_name(ifp));
+	    what == RENAME ? old_name : if_name(ifp));
 	if (iif != NULL) {
-		if (htype == 1)
+		switch (what) {
+		case ARRIVAL:
 			handle_ifattach(ch, iif, ifp->if_index);
-		else
+			break;
+		case DEPARTURE:
 			handle_ifdetach(ch, iif, ifp->if_index);
+			break;
+		case RENAME:
+			/*
+			 * XXXGL: should be handled better.
+			 */
+			handle_ifdetach(ch, iif, ifp->if_index);
+			handle_ifattach(ch, iif, ifp->if_index);
+			break;
+		}
 	}
 	IPFW_UH_WUNLOCK(ch);
 }
@@ -143,12 +157,12 @@ iface_khandler_register(void)
 
 	printf("IPFW: starting up interface tracker\n");
 
-	ipfw_ifdetach_event = EVENTHANDLER_REGISTER(
-	    ifnet_departure_event, ipfw_kifhandler, NULL,
-	    EVENTHANDLER_PRI_ANY);
-	ipfw_ifattach_event = EVENTHANDLER_REGISTER(
-	    ifnet_arrival_event, ipfw_kifhandler, (void*)((uintptr_t)1),
-	    EVENTHANDLER_PRI_ANY);
+	ipfw_ifdetach_event = EVENTHANDLER_REGISTER(ifnet_departure_event,
+	    ipfw_kifhandler, (void*)(uintptr_t)DEPARTURE, EVENTHANDLER_PRI_ANY);
+	ipfw_ifattach_event = EVENTHANDLER_REGISTER(ifnet_arrival_event,
+	    ipfw_kifhandler, (void*)(uintptr_t)ARRIVAL, EVENTHANDLER_PRI_ANY);
+	ipfw_rename_event = EVENTHANDLER_REGISTER(ifnet_rename_event,
+	    ipfw_kifhandler, (void*)(uintptr_t)RENAME, EVENTHANDLER_PRI_ANY);
 }
 
 /*
@@ -171,10 +185,9 @@ iface_khandler_deregister(void)
 	if (destroy == 0)
 		return;
 
-	EVENTHANDLER_DEREGISTER(ifnet_arrival_event,
-	    ipfw_ifattach_event);
-	EVENTHANDLER_DEREGISTER(ifnet_departure_event,
-	    ipfw_ifdetach_event);
+	EVENTHANDLER_DEREGISTER(ifnet_arrival_event, ipfw_ifattach_event);
+	EVENTHANDLER_DEREGISTER(ifnet_departure_event, ipfw_ifdetach_event);
+	EVENTHANDLER_DEREGISTER(ifnet_rename_event, ipfw_rename_event);
 }
 
 /*
@@ -233,13 +246,13 @@ vnet_ipfw_iface_init(struct ip_fw_chain *ch)
 {
 	struct namedobj_instance *ii;
 
+	IPFW_UH_WLOCK_ASSERT(ch);
+
 	ii = ipfw_objhash_create(DEFAULT_IFACES, DEFAULT_OBJHASH_SIZE);
-	IPFW_UH_WLOCK(ch);
 	if (ch->ifcfg == NULL) {
 		ch->ifcfg = ii;
 		ii = NULL;
 	}
-	IPFW_UH_WUNLOCK(ch);
 
 	if (ii != NULL) {
 		/* Already initialized. Free namehash. */
@@ -283,9 +296,7 @@ vnet_ipfw_iface_destroy(struct ip_fw_chain *ch)
 
 /*
  * Notify the subsystem that we are interested in tracking
- * interface @name. This function has to be called without
- * holding any locks to permit allocating the necessary states
- * for proper interface tracking.
+ * interface @name.
  *
  * Returns 0 on success.
  */
@@ -296,10 +307,10 @@ ipfw_iface_ref(struct ip_fw_chain *ch, char *name,
 	struct namedobj_instance *ii;
 	struct ipfw_iface *iif, *tmp;
 
+	IPFW_UH_WLOCK_ASSERT(ch);
+
 	if (strlen(name) >= sizeof(iif->ifname))
 		return (EINVAL);
-
-	IPFW_UH_WLOCK(ch);
 
 	ii = CHAIN_TO_II(ch);
 	if (ii == NULL) {
@@ -307,9 +318,7 @@ ipfw_iface_ref(struct ip_fw_chain *ch, char *name,
 		 * First request to subsystem.
 		 * Let's perform init.
 		 */
-		IPFW_UH_WUNLOCK(ch);
 		vnet_ipfw_iface_init(ch);
-		IPFW_UH_WLOCK(ch);
 		ii = CHAIN_TO_II(ch);
 	}
 
@@ -318,11 +327,8 @@ ipfw_iface_ref(struct ip_fw_chain *ch, char *name,
 	if (iif != NULL) {
 		iif->no.refcnt++;
 		ic->iface = iif;
-		IPFW_UH_WUNLOCK(ch);
 		return (0);
 	}
-
-	IPFW_UH_WUNLOCK(ch);
 
 	/* Not found. Let's create one */
 	iif = malloc(sizeof(struct ipfw_iface), M_IPFW, M_WAITOK | M_ZERO);
@@ -337,14 +343,12 @@ ipfw_iface_ref(struct ip_fw_chain *ch, char *name,
 	 * are not holding any locks.
 	 */
 	iif->no.refcnt = 1;
-	IPFW_UH_WLOCK(ch);
 
 	tmp = (struct ipfw_iface *)ipfw_objhash_lookup_name(ii, 0, name);
 	if (tmp != NULL) {
 		/* Interface has been created since unlock. Ref and return */
 		tmp->no.refcnt++;
 		ic->iface = tmp;
-		IPFW_UH_WUNLOCK(ch);
 		free(iif, M_IPFW);
 		return (0);
 	}
@@ -355,8 +359,6 @@ ipfw_iface_ref(struct ip_fw_chain *ch, char *name,
 
 	ipfw_objhash_add(ii, &iif->no);
 	ic->iface = iif;
-
-	IPFW_UH_WUNLOCK(ch);
 
 	return (0);
 }

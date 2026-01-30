@@ -89,6 +89,7 @@
 #include <sys/zstd/zstd.h>
 #include <sys/backtrace.h>
 
+#include <libzpool.h>
 #include <libnvpair.h>
 #include <libzutil.h>
 #include <libzfs_core.h>
@@ -738,13 +739,14 @@ usage(void)
 	    "[-U <cache>]\n\t\t<poolname> [<vdev> [<metaslab> ...]]\n"
 	    "\t%s -O [-K <key>] <dataset> <path>\n"
 	    "\t%s -r [-K <key>] <dataset> <path> <destination>\n"
+	    "\t%s -r [-K <key>] -O <dataset> <object-id> <destination>\n"
 	    "\t%s -R [-A] [-e [-V] [-p <path> ...]] [-U <cache>]\n"
 	    "\t\t<poolname> <vdev>:<offset>:<size>[:<flags>]\n"
 	    "\t%s -E [-A] word0:word1:...:word15\n"
 	    "\t%s -S [-AP] [-e [-V] [-p <path> ...]] [-U <cache>] "
 	    "<poolname>\n\n",
 	    cmdname, cmdname, cmdname, cmdname, cmdname, cmdname, cmdname,
-	    cmdname, cmdname, cmdname, cmdname, cmdname);
+	    cmdname, cmdname, cmdname, cmdname, cmdname, cmdname);
 
 	(void) fprintf(stderr, "    Dataset name must include at least one "
 	    "separator character '/' or '@'\n");
@@ -7899,11 +7901,11 @@ zdb_set_skip_mmp(char *target)
 	 * Disable the activity check to allow examination of
 	 * active pools.
 	 */
-	mutex_enter(&spa_namespace_lock);
+	spa_namespace_enter(FTAG);
 	if ((spa = spa_lookup(target)) != NULL) {
 		spa->spa_import_flags |= ZFS_IMPORT_SKIP_MMP;
 	}
-	mutex_exit(&spa_namespace_lock);
+	spa_namespace_exit(FTAG);
 }
 
 #define	BOGUS_SUFFIX "_CHECKPOINTED_UNIVERSE"
@@ -9955,7 +9957,7 @@ main(int argc, char **argv)
 	 * which imports the pool to the namespace if it's
 	 * not in the cachefile.
 	 */
-	if (dump_opt['O']) {
+	if (dump_opt['O'] && !dump_opt['r']) {
 		if (argc != 2)
 			usage();
 		dump_opt['v'] = verbose + 3;
@@ -9968,7 +9970,11 @@ main(int argc, char **argv)
 		if (argc != 3)
 			usage();
 		dump_opt['v'] = verbose;
-		error = dump_path(argv[0], argv[1], &object);
+		if (dump_opt['O']) {
+			object = strtoull(argv[1], NULL, 0);
+		} else {
+			error = dump_path(argv[0], argv[1], &object);
+		}
 		if (error != 0)
 			fatal("internal error: %s", strerror(error));
 	}
@@ -10022,13 +10028,13 @@ main(int argc, char **argv)
 				 * try opening the pool after clearing the
 				 * log state.
 				 */
-				mutex_enter(&spa_namespace_lock);
+				spa_namespace_enter(FTAG);
 				if ((spa = spa_lookup(target)) != NULL &&
 				    spa->spa_log_state == SPA_LOG_MISSING) {
 					spa->spa_log_state = SPA_LOG_CLEAR;
 					error = 0;
 				}
-				mutex_exit(&spa_namespace_lock);
+				spa_namespace_exit(FTAG);
 
 				if (!error) {
 					error = spa_open_rewind(target, &spa,

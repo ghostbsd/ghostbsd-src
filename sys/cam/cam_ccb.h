@@ -160,12 +160,14 @@ typedef enum {
 				/* Path statistics (error counts, etc.) */
 	XPT_GDEV_STATS		= 0x0c,
 				/* Device statistics (error counts, etc.) */
+
+				/* 0x0d unused */
 	XPT_DEV_ADVINFO		= 0x0e,
 				/* Get/Set Device advanced information */
 	XPT_ASYNC		= 0x0f | XPT_FC_QUEUED | XPT_FC_USER_CCB
 				       | XPT_FC_XPT_ONLY,
 				/* Asynchronous event */
-/* SCSI Control Functions: 0x10->0x1F */
+/* SCSI, NVME, and ATA Control Functions: 0x10->0x1F */
 	XPT_ABORT		= 0x10,
 				/* Abort the specified CCB */
 	XPT_RESET_BUS		= 0x11 | XPT_FC_XPT_ONLY,
@@ -199,14 +201,10 @@ typedef enum {
 	XPT_GET_SIM_KNOB_OLD	= 0x18, /* Compat only */
 
 	XPT_SET_SIM_KNOB	= 0x19,
-				/*
-				 * Set SIM specific knob values.
-				 */
+				/* Set SIM specific knob values. */
 
 	XPT_GET_SIM_KNOB	= 0x1a,
-				/*
-				 * Get SIM specific knob values.
-				 */
+				/* Get SIM specific knob values. */
 
 	XPT_SMP_IO		= 0x1b | XPT_FC_DEV_QUEUED,
 				/* Serial Management Protocol */
@@ -250,8 +248,11 @@ typedef enum {
 	XPT_REPROBE_LUN		= 0x38 | XPT_FC_QUEUED | XPT_FC_USER_CCB,
 				/* Query device capacity and notify GEOM */
 
+/* More common commands: 0x40-0x7f */
 	XPT_MMC_SET_TRAN_SETTINGS = 0x40 | XPT_FC_DEV_QUEUED,
+				/* Queued MMC/SD set transmit settings */
 	XPT_MMC_GET_TRAN_SETTINGS = 0x41 | XPT_FC_DEV_QUEUED,
+				/* Queued MMC/SD get transmit settings */
 
 /* Vendor Unique codes: 0x80->0x8F */
 	XPT_VUNIQUE		= 0x80
@@ -614,6 +615,7 @@ typedef enum {
 } pi_tmflag;
 
 typedef enum {
+	PIM_WLUNS	= 0x400,/* Well known LUNs supported */
 	PIM_ATA_EXT	= 0x200,/* ATA requests can understand ata_ext requests */
 	PIM_EXTLUNS	= 0x100,/* 64bit extended LUNs supported */
 	PIM_SCANHILO	= 0x80,	/* Bus scans from high ID to low ID */
@@ -649,7 +651,7 @@ struct ccb_pathinq_settings_nvme {
 	uint8_t  bus;
 	uint8_t  slot;
 	uint8_t  function;
-	uint8_t  extra;
+	uint8_t  progif;
 	char	 dev_name[NVME_DEV_NAME_LEN]; /* nvme controller dev name for this device */
 };
 _Static_assert(sizeof(struct ccb_pathinq_settings_nvme) == 64,

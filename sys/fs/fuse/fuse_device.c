@@ -65,7 +65,6 @@
 #include <sys/module.h>
 #include <sys/systm.h>
 #include <sys/errno.h>
-#include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/conf.h>
 #include <sys/uio.h>
@@ -82,7 +81,7 @@
 #include <sys/sysctl.h>
 #include <sys/poll.h>
 #include <sys/selinfo.h>
-#define EXTERR_CATEGORY EXTERR_CAT_FUSE
+#define EXTERR_CATEGORY EXTERR_CAT_FUSE_DEVICE
 #include <sys/exterrvar.h>
 
 #include "fuse.h"
@@ -176,6 +175,11 @@ fdata_dtor(void *arg)
 	}
 	fuse_lck_mtx_unlock(fdata->ms_mtx);
 	FUSE_UNLOCK();
+
+	if (fdata->mp && fdata->dataflags & FSESS_AUTO_UNMOUNT) {
+		vfs_ref(fdata->mp);
+		dounmount(fdata->mp, MNT_FORCE, curthread);
+	}
 
 	fdata_trydestroy(fdata);
 }

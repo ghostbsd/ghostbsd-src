@@ -135,7 +135,7 @@ static struct fetcherr socks5_errlist[] = {
 };
 
 /* End-of-Line */
-static const char ENDL[2] = "\r\n";
+static const char ENDL[2] = { '\r', '\n' };
 
 
 /*** Error-reporting functions ***********************************************/
@@ -1048,6 +1048,8 @@ fetch_ssl_setup_transport_layer(SSL_CTX *ctx, int verbose)
 		ssl_ctx_options |= SSL_OP_NO_TLSv1_1;
 	if (getenv("SSL_NO_TLS1_2") != NULL)
 		ssl_ctx_options |= SSL_OP_NO_TLSv1_2;
+	if (getenv("SSL_NO_TLS1_3") != NULL)
+		ssl_ctx_options |= SSL_OP_NO_TLSv1_3;
 	if (verbose)
 		fetch_info("SSL options: %lx", ssl_ctx_options);
 	SSL_CTX_set_options(ctx, ssl_ctx_options);
@@ -1265,6 +1267,14 @@ fetch_ssl_read(SSL *ssl, char *buf, size_t len)
 {
 	ssize_t rlen;
 	int ssl_err;
+	struct timeval tv;
+
+	if (fetchTimeout > 0) {
+		tv.tv_sec = fetchTimeout;
+		tv.tv_usec = 0;
+		setsockopt(SSL_get_fd(ssl), SOL_SOCKET, SO_RCVTIMEO,
+			&tv, sizeof(tv));
+	}
 
 	rlen = SSL_read(ssl, buf, len);
 	if (rlen < 0) {

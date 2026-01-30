@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2020-2025 The FreeBSD Foundation
+ * Copyright (c) 2020-2026 The FreeBSD Foundation
  *
  * This software was developed by Björn Zeeb under sponsorship from
  * the FreeBSD Foundation.
@@ -43,11 +43,24 @@ extern int linuxkpi_debug_80211;
 #ifndef	D80211_TODO
 #define	D80211_TODO		0x1
 #endif
+#ifndef	D80211_IMPROVE
+#define	D80211_IMPROVE		0x2
+#endif
 #define	TODO(fmt, ...)		if (linuxkpi_debug_80211 & D80211_TODO)	\
     printf("%s:%d: XXX LKPI80211 TODO " fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
+#define	IMPROVE(fmt, ...)	if (linuxkpi_debug_80211 & D80211_IMPROVE) \
+    printf("%s:%d: XXX LKPI80211 IMPROVE " fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
 
-
-/* 9.4.2.55 Management MIC element (CMAC-256, GMAC-128, and GMAC-256). */
+/* 802.11-2024, 9.4.2.53 MME. */
+/* BIP-CMAC-128 */
+struct ieee80211_mmie {
+	uint8_t		element_id;
+	uint8_t		length;
+	uint16_t	key_id;
+	uint8_t		ipn[6];
+	uint8_t		mic[8];
+};
+/* BIP-CMAC-256, BIP-GMAC-128, BIP-GMAC-256 */
 struct ieee80211_mmie_16 {
 	uint8_t		element_id;
 	uint8_t		length;
@@ -103,7 +116,18 @@ struct ieee80211_mmie_16 {
 #define	IEEE80211_QOS_CTL_MESH_CONTROL_PRESENT	0x0100
 
 enum ieee80211_rate_flags {
-	IEEE80211_RATE_SHORT_PREAMBLE		= BIT(0),
+	IEEE80211_RATE_SHORT_PREAMBLE		= BIT(0),	/* 2.4Ghz, CCK */
+	IEEE80211_RATE_SUPPORTS_5MHZ		= BIT(1),
+	IEEE80211_RATE_SUPPORTS_10MHZ		= BIT(2),
+	IEEE80211_RATE_ERP_G			= BIT(3),
+
+	/*
+	 * According to documentation these are flags initialized internally.
+	 * See lkpi_wiphy_band_annotate().
+	 */
+	IEEE80211_RATE_MANDATORY_A		= BIT(4),
+	IEEE80211_RATE_MANDATORY_G		= BIT(5),
+	IEEE80211_RATE_MANDATORY_B		= BIT(6),
 };
 
 enum ieee80211_rate_control_changed_flags {
@@ -195,6 +219,7 @@ enum ieee80211_min_mpdu_start_spacing {
 #define	IEEE80211_FCTL_TODS			(IEEE80211_FC1_DIR_TODS << 8)
 #define	IEEE80211_FCTL_MOREFRAGS		(IEEE80211_FC1_MORE_FRAG << 8)
 #define	IEEE80211_FCTL_PM			(IEEE80211_FC1_PWR_MGT << 8)
+#define	IEEE80211_FCTL_MOREDATA			(IEEE80211_FC1_MORE_DATA << 8)
 
 #define	IEEE80211_FTYPE_MGMT			IEEE80211_FC0_TYPE_MGT
 #define	IEEE80211_FTYPE_CTL			IEEE80211_FC0_TYPE_CTL
@@ -456,18 +481,6 @@ enum ieee80211_tx_control_flags {
 	IEEE80211_TX_CTRL_MLO_LINK		= 0xF0000000,	/* This is IEEE80211_LINK_UNSPECIFIED on the high bits. */
 };
 
-enum ieee80211_tx_rate_flags {
-	/* XXX TODO .. right shift numbers */
-	IEEE80211_TX_RC_40_MHZ_WIDTH		= BIT(0),
-	IEEE80211_TX_RC_80_MHZ_WIDTH		= BIT(1),
-	IEEE80211_TX_RC_160_MHZ_WIDTH		= BIT(2),
-	IEEE80211_TX_RC_GREEN_FIELD		= BIT(3),
-	IEEE80211_TX_RC_MCS			= BIT(4),
-	IEEE80211_TX_RC_SHORT_GI		= BIT(5),
-	IEEE80211_TX_RC_VHT_MCS			= BIT(6),
-	IEEE80211_TX_RC_USE_SHORT_PREAMBLE	= BIT(7),
-};
-
 #define	IEEE80211_RNR_TBTT_PARAMS_PSD_RESERVED	-128
 
 #define	IEEE80211_HT_CTL_LEN	4
@@ -568,17 +581,25 @@ struct ieee80211_mgmt {
 					uint8_t tpc_elem_tx_power;
 					uint8_t tpc_elem_link_margin;
 				} __packed tpc_report;
-				/* 9.6.8.33 Fine Timing Measurement frame format */
+				/* 802.11-2024, 9.6.7.32 FTM Request frame format */
 				struct {
-					uint8_t	dialog_token;
-					uint8_t	follow_up;
-					uint8_t	tod[6];
-					uint8_t	toa[6];
+					uint8_t	public_action;
+					uint8_t trigger;
+					uint8_t variable[0];
+				} __packed ftmr;
+				/* 802.11az-2022, 9.6.7.33 Fine Timing Measurement (FTM) frame format */
+				/* XXX CHANGED IN 802.11-2024, 9.6.7.33 Fine Timing Measurement frame format */
+				struct {
+					uint8_t	public_action;
+					uint8_t dialog_token;
+					uint8_t follow_up;
+					uint8_t tod[6];
+					uint8_t toa[6];
 					uint16_t tod_error;
 					uint16_t toa_error;
 					uint8_t variable[0];
 				} __packed ftm;
-				/* 802.11-2016, 9.6.5.2 ADDBA Request frame format */
+				/* 802.11-2024, 9.6.4.2 ADDBA Request frame format */
 				struct {
 					uint8_t action_code;
 					uint8_t dialog_token;
@@ -588,9 +609,12 @@ struct ieee80211_mgmt {
 					/* Optional follows... */
 					uint8_t variable[0];
 				} __packed addba_req;
-				/* XXX */
+				/* 802.11-2024, 9.6.13.3 Event Report frame format */
 				struct {
+					uint8_t wnm_action;
 					uint8_t dialog_token;
+					/* Optional follows... */
+					uint8_t variable[0];
 				} __packed wnm_timing_msr;
 			} u;
 		} __packed action;
@@ -1087,24 +1111,42 @@ ieee80211_is_bufferable_mmpdu(struct sk_buff *skb)
 	struct ieee80211_mgmt *mgmt;
 	__le16 fc;
 
+	KASSERT(skb->len >= sizeof(fc), ("%s: skb %p short len %d\n",
+	    __func__, skb, skb->len));
+
 	mgmt = (struct ieee80211_mgmt *)skb->data;
 	fc = mgmt->frame_control;
 
-	/* 11.2.2 Bufferable MMPDUs, 80211-2020. */
-	/* XXX we do not care about IBSS yet. */
+	/* 11.2.2 Bufferable MMPDUs, 802.11-2024. */
+	IMPROVE("XXX IBBS");
 
 	if (!ieee80211_is_mgmt(fc))
 		return (false);
-	if (ieee80211_is_action(fc))		/* XXX FTM? */
-		return (true);			/* XXX false? */
 	if (ieee80211_is_disassoc(fc))
 		return (true);
 	if (ieee80211_is_deauth(fc))
 		return (true);
+	if (!ieee80211_is_action(fc))
+		return (false);
 
-	TODO();
+	/*
+	 * Now we know it is an action frame, so we can check for a proper
+	 * length before accessing any further data to check if it is an
+	 * FTM/FTMR, which is non-bufferable.
+	 * 9.6.7.32 FTM Request frame format
+	 * 9.6.7.33 FTM frame format
+	 */
+	if (skb->len < offsetofend(typeof(*mgmt), u.action.u.ftm.public_action))
+		return (false);
 
-	return (false);
+	if (mgmt->u.action.category != IEEE80211_ACTION_CAT_PUBLIC)
+		return (false);
+
+	if (mgmt->u.action.u.ftm.public_action == 33 ||	/* FTM xxx defines? */
+	    mgmt->u.action.u.ftmr.public_action == 32) /* FTMR xxx defines? */
+		return (false);
+
+	return (true);
 }
 
 static __inline bool
@@ -1208,52 +1250,124 @@ ieee80211_get_DA(struct ieee80211_hdr *hdr)
 }
 
 static __inline bool
-ieee80211_is_frag(struct ieee80211_hdr *hdr)
+ieee80211_has_morefrags(__le16 fc)
 {
-	TODO();
-	return (false);
+
+	fc &= htole16(IEEE80211_FC1_MORE_FRAG << 8);
+	return (fc != 0);
 }
 
 static __inline bool
-ieee80211_is_first_frag(__le16 fc)
+ieee80211_is_frag(struct ieee80211_hdr *hdr)
 {
-	TODO();
-	return (false);
+	return (ieee80211_has_morefrags(hdr->frame_control) ||
+	    (hdr->seq_ctrl & htole16(IEEE80211_SEQ_FRAG_MASK)) != 0);
+}
+
+static __inline bool
+ieee80211_is_first_frag(__le16 seq_ctrl)
+{
+	return ((seq_ctrl & htole16(IEEE80211_SEQ_FRAG_MASK)) == 0);
 }
 
 static __inline bool
 ieee80211_is_robust_mgmt_frame(struct sk_buff *skb)
 {
-	TODO();
-	return (false);
+	struct ieee80211_mgmt *mgmt;
+
+	if (skb->len < sizeof(mgmt->frame_control))
+		return (false);
+	mgmt = (struct ieee80211_mgmt *)skb->data;
+
+	/* 802.11-2024, 12.2.7 Requirements for management frame protection */
+
+	if (ieee80211_is_disassoc(mgmt->frame_control))
+		return (true);
+	if (ieee80211_is_deauth(mgmt->frame_control))
+		return (true);
+
+	if (!ieee80211_is_action(mgmt->frame_control))
+		return (false);
+
+	/*
+	 * If the action frame is a protected frame the peer has already
+	 * decided that it is a robust mgmt frame.
+	 * This is not exactly in the books but maintaining the below
+	 * table will go out of sync eventually and this can save us.
+	 */
+	if (ieee80211_has_protected(mgmt->frame_control))
+		return (true);
+
+	/*
+	 * 802.11-2024, 9.4.1.11 Action Fields,
+	 * Table 9-81-Category values;  check for the ones marked Robust: no.
+	 */
+	/* Check length again before accessing more data. */
+	if (skb->len < offsetofend(typeof(*mgmt), u.action.category))
+		return (false);
+
+	switch (mgmt->u.action.category) {
+	case 4:		/* Public */
+	case 7:		/* HT */
+	case 11:	/* Unprotected WNM */
+	/* 12 */	/* TDLS */
+	case 15:	/* Self-protected */
+	case 20:	/* Unprotected DMG */
+	case 21:	/* VHT */
+	case 22:	/* Unprotected S1G */
+	case 30:	/* HE */
+	case 127:	/* Vendor-specific */
+		return (false);
+	default:
+		return (true);
+	}
 }
 
 static __inline bool
 ieee80211_is_ftm(struct sk_buff *skb)
 {
-	TODO();
+	struct ieee80211_mgmt *mgmt;
+
+	/* First check length before accessing data. */
+	if (skb->len < offsetofend(typeof(*mgmt), u.action.u.ftm.public_action))
+		return (false);
+
+	mgmt = (struct ieee80211_mgmt *)skb->data;
+	if (!ieee80211_is_action(mgmt->frame_control))
+		return (false);
+	if (mgmt->u.action.category != IEEE80211_ACTION_CAT_PUBLIC)
+		return (false);
+	if (mgmt->u.action.u.ftm.public_action == 33)	/* FTM xxx defines? */
+		return (true);
+
 	return (false);
 }
 
 static __inline bool
 ieee80211_is_timing_measurement(struct sk_buff *skb)
 {
-	TODO();
+        struct ieee80211_mgmt *mgmt;
+
+	/* First check length before accessing data. */
+	if (skb->len < offsetofend(typeof(*mgmt), u.action.u.wnm_timing_msr.wnm_action))
+		return (false);
+
+	mgmt = (struct ieee80211_mgmt *)skb->data;
+	if (!ieee80211_is_action(mgmt->frame_control))
+		return (false);
+
+	if (mgmt->u.action.category != IEEE80211_ACTION_CAT_UNPROTECTED_WNM)
+		return (false);
+	if (mgmt->u.action.u.wnm_timing_msr.wnm_action == 1)	/* Event Report xxx defines? */
+		return (true);
+
 	return (false);
 }
 
 static __inline bool
 ieee80211_has_pm(__le16 fc)
 {
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_has_morefrags(__le16 fc)
-{
-
-	fc &= htole16(IEEE80211_FC1_MORE_FRAG << 8);
+	fc &= htole16(IEEE80211_FC1_PWR_MGT << 8);
 	return (fc != 0);
 }
 

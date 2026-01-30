@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd June 28, 2020
+.Dd January 14, 2026
 .Dt TERMIOS 4
 .Os
 .Sh NAME
@@ -759,7 +759,9 @@ wait channel, the number of user and system seconds used,
 the percentage of cpu the process is getting, and the resident
 set size of the process.
 .Pp
-In case the
+In case the kernel has
+.Xr stack 9
+support configured and the
 .Xr sysctl 8
 variable
 .Va kern.tty_info_kstacks
@@ -1594,4 +1596,15 @@ the values in the header
 .Xr tcsetattr 3 ,
 .Xr tcsetsid 3 ,
 .Xr tty 4 ,
+.Xr uart 4 ,
 .Xr stack 9
+.Sh BUGS
+Before the Internet, serial ports were primarily used for inbound
+connections from terminals, either directly or through modems, these
+days serial ports are primarily used for outbound connections to
+devices, an evolution which unfortunately has spread the relevant
+documentation over three different manual pages:
+.Xr termios 4 ,
+.Xr uart 4 and
+.Xr tty 4 .
+

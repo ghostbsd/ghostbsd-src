@@ -226,10 +226,148 @@ ndp_prefix_len_mismatch_cleanup() {
 	vnet_cleanup
 }
 
+atf_test_case "ndp_prefix_lifetime" "cleanup"
+ndp_prefix_lifetime_head() {
+	atf_set descr 'Test ndp slaac address lifetime handling'
+	atf_set require.user root
+	atf_set require.progs python3 scapy
+}
+
+ndp_prefix_lifetime_body() {
+	local epair0 jname prefix
+
+	vnet_init
+
+	jname="v6t-ndp_prefix_lifetime"
+
+	epair0=$(vnet_mkepair)
+
+	vnet_mkjail ${jname} ${epair0}a
+
+	ndp_if_up ${epair0}a ${jname}
+	ndp_if_up ${epair0}b
+	atf_check jexec ${jname} ifconfig ${epair0}a inet6 accept_rtadv no_dad
+
+	prefix="2001:db8:ffff:1000:"
+
+        # Send an RA advertising a prefix.
+	atf_check -e ignore python3 $(atf_get_srcdir)/ra.py \
+	    --sendif ${epair0}b \
+	    --dst $(ndp_if_lladdr ${epair0}a ${jname}) \
+	    --src $(ndp_if_lladdr ${epair0}b) \
+	    --prefix "2001:db8:ffff:1000::" --prefixlen 64 \
+	    --validlifetime 10 --preferredlifetime 5
+
+	# Wait for a default router to appear.
+	while [ -z "$(jexec ${jname} ndp -r)" ]; do
+		sleep 0.1
+	done
+	atf_check \
+	    -o match:"^default[[:space:]]+fe80:" \
+	    jexec ${jname} netstat -rn -6
+
+	atf_check \
+	    -o match:"inet6 ${prefix}.* prefixlen 64 autoconf pltime 5 vltime 10" \
+	    jexec ${jname} ifconfig ${epair0}a
+
+	# Wait for the address to become deprecated.
+	sleep 6
+	atf_check \
+	    -o match:"inet6 ${prefix}.* prefixlen 64 deprecated autoconf pltime 0 vltime [1-9]+" \
+	    jexec ${jname} ifconfig -L ${epair0}a
+
+	# Wait for the address to expire.
+	sleep 6
+	atf_check \
+	    -o not-match:"inet6 ${prefix}.*" \
+	    jexec ${jname} ifconfig ${epair0}a
+}
+
+ndp_prefix_lifetime_cleanup() {
+	vnet_cleanup
+}
+
+atf_test_case "ndp_prefix_lifetime_extend"
+ndp_prefix_lifetime_extend_head() {
+	atf_set descr 'Test prefix lifetime updates via ifconfig'
+	atf_set require.user root
+	atf_set require.progs jq
+}
+
+get_prefix_attr() {
+	local prefix=$1
+	local attr=$2
+
+	ndp -p --libxo json | \
+	    jq -r '.ndp.["prefix-list"][] |
+	           select(.prefix == "'${prefix}'") | .["'${attr}'"]'
+}
+
+# Given a prefix, return its expiry time in seconds.
+prefix_expiry() {
+	get_prefix_attr $1 "expires_sec"
+}
+
+# Given a prefix, return its valid and preferred lifetimes.
+prefix_lifetimes() {
+	local p v
+
+	v=$(get_prefix_attr $1 "valid-lifetime")
+	p=$(get_prefix_attr $1 "preferred-lifetime")
+	echo $v $p
+}
+
+ndp_prefix_lifetime_extend_body() {
+	local epair ex1 ex2 ex3 prefix pltime vltime
+
+	atf_check -o save:epair ifconfig epair create
+	epair=$(cat epair)
+	atf_check ifconfig ${epair} up
+
+	prefix="2001:db8:ffff:1000::"
+
+	atf_check ifconfig ${epair} inet6 ${prefix}1/64 pltime 5 vltime 10
+	t=$(prefix_lifetimes ${prefix}/64)
+	if [ "${t}" != "10 5" ]; then
+		atf_fail "Unexpected lifetimes: ${t}"
+	fi
+	ex1=$(prefix_expiry ${prefix}/64)
+	if [ "${ex1}" -gt 10 ]; then
+		atf_fail "Unexpected expiry time: ${ex1}"
+	fi
+
+	# Double the address lifetime and verify that the prefix is
+	# updated.
+	atf_check ifconfig ${epair} inet6 ${prefix}1/64 pltime 10 vltime 20
+	t=$(prefix_lifetimes ${prefix}/64)
+	if [ "${t}" != "20 10" ]; then
+		atf_fail "Unexpected lifetimes: ${t}"
+	fi
+	ex2=$(prefix_expiry ${prefix}/64)
+	if [ "${ex2}" -le "${ex1}" ]; then
+		atf_fail "Expiry time was not extended: ${ex1} <= ${ex2}"
+	fi
+
+	# Add a second address from the same prefix with a shorter
+	# lifetime, and make sure that the prefix lifetime is not
+	# shortened.
+	atf_check ifconfig ${epair} inet6 ${prefix}2/64 pltime 5 vltime 10
+	t=$(prefix_lifetimes ${prefix}/64)
+	if [ "${t}" != "20 10" ]; then
+		atf_fail "Unexpected lifetimes: ${t}"
+	fi
+	ex3=$(prefix_expiry ${prefix}/64)
+	if [ "${ex3}" -lt "${ex2}" ]; then
+		atf_fail "Expiry time was shortened: ${ex2} <= ${ex3}"
+	fi
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "ndp_add_gu_success"
 	atf_add_test_case "ndp_del_gu_success"
 	atf_add_test_case "ndp_slaac_default_route"
 	atf_add_test_case "ndp_prefix_len_mismatch"
+	atf_add_test_case "ndp_prefix_lifetime"
+	atf_add_test_case "ndp_prefix_lifetime_extend"
 }

@@ -51,9 +51,9 @@
 
 #define HDA_DRV_TEST_REV	"20120126_0002"
 
-#define hdac_lock(sc)		snd_mtxlock((sc)->lock)
-#define hdac_unlock(sc)		snd_mtxunlock((sc)->lock)
-#define hdac_lockassert(sc)	snd_mtxassert((sc)->lock)
+#define hdac_lock(sc)		mtx_lock(&(sc)->lock)
+#define hdac_unlock(sc)		mtx_unlock(&(sc)->lock)
+#define hdac_lockassert(sc)	mtx_assert(&(sc)->lock, MA_OWNED)
 
 #define HDAC_QUIRK_64BIT	(1 << 0)
 #define HDAC_QUIRK_DMAPOS	(1 << 1)
@@ -545,9 +545,12 @@ hdac_get_capabilities(struct hdac_softc *sc)
 	    HDAC_CORBSIZE_CORBSZCAP_2)
 		sc->corb_size = 2;
 	else {
-		device_printf(sc->dev, "%s: Invalid corb size (%x)\n",
+		device_printf(sc->dev, "%s: Hardware reports invalid corb size "
+		    "(%x), defaulting to 256\n",
 		    __func__, corbsize);
-		return (ENXIO);
+		sc->corb_size = 256;
+		corbsize = HDAC_CORBSIZE_CORBSIZE(HDAC_CORBSIZE_CORBSIZE_256);
+		HDAC_WRITE_1(&sc->mem, HDAC_CORBSIZE, corbsize);
 	}
 
 	rirbsize = HDAC_READ_1(&sc->mem, HDAC_RIRBSIZE);
@@ -561,9 +564,12 @@ hdac_get_capabilities(struct hdac_softc *sc)
 	    HDAC_RIRBSIZE_RIRBSZCAP_2)
 		sc->rirb_size = 2;
 	else {
-		device_printf(sc->dev, "%s: Invalid rirb size (%x)\n",
+		device_printf(sc->dev, "%s: Hardware reports invalid rirb size "
+		    "(%x), defaulting to 256\n",
 		    __func__, rirbsize);
-		return (ENXIO);
+		sc->rirb_size = 256;
+		rirbsize = HDAC_RIRBSIZE_RIRBSIZE(HDAC_RIRBSIZE_RIRBSIZE_256);
+		HDAC_WRITE_1(&sc->mem, HDAC_RIRBSIZE, rirbsize);
 	}
 
 	HDA_BOOTVERBOSE(
@@ -1171,7 +1177,8 @@ hdac_attach(device_t dev)
 		}
 	}
 
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "HDA driver mutex");
+	mtx_init(&sc->lock, device_get_nameunit(dev), "HDA driver mutex",
+	    MTX_DEF);
 	sc->dev = dev;
 	TASK_INIT(&sc->unsolq_task, 0, hdac_unsolq_task, sc);
 	callout_init(&sc->poll_callout, 1);
@@ -1374,7 +1381,7 @@ hdac_attach_fail:
 	hdac_dma_free(sc, &sc->rirb_dma);
 	hdac_dma_free(sc, &sc->corb_dma);
 	hdac_mem_free(sc);
-	snd_mtxfree(sc->lock);
+	mtx_destroy(&sc->lock);
 
 	return (ENXIO);
 }
@@ -1798,7 +1805,7 @@ hdac_detach(device_t dev)
 		sc->chan_dmat = NULL;
 	}
 	hdac_mem_free(sc);
-	snd_mtxfree(sc->lock);
+	mtx_destroy(&sc->lock);
 	return (0);
 }
 
@@ -1888,7 +1895,7 @@ hdac_get_mtx(device_t dev, device_t child)
 {
 	struct hdac_softc *sc = device_get_softc(dev);
 
-	return (sc->lock);
+	return (&sc->lock);
 }
 
 static uint32_t

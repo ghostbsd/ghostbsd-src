@@ -31,6 +31,7 @@ MAN=		alloca.3 \
 		snl.3 \
 		stats.3 \
 		stdarg.3 \
+		stdbit.3 \
 		stdckdint.3 \
 		sysexits.3 \
 		tgmath.3 \
@@ -203,6 +204,7 @@ MLINKS+=	Q_SIGNSHFT.3 Q_SSIGN.3 \
 MLINKS+=	queue.3 LIST_CLASS_ENTRY.3 \
 		queue.3 LIST_CLASS_HEAD.3 \
 		queue.3 LIST_EMPTY.3 \
+		queue.3 LIST_EMPTY_ATOMIC.3 \
 		queue.3 LIST_ENTRY.3 \
 		queue.3 LIST_FIRST.3 \
 		queue.3 LIST_FOREACH.3 \
@@ -224,6 +226,7 @@ MLINKS+=	queue.3 LIST_CLASS_ENTRY.3 \
 		queue.3 SLIST_CLASS_ENTRY.3 \
 		queue.3 SLIST_CLASS_HEAD.3 \
 		queue.3 SLIST_EMPTY.3 \
+		queue.3 SLIST_EMPTY_ATOMIC.3 \
 		queue.3 SLIST_ENTRY.3 \
 		queue.3 SLIST_FIRST.3 \
 		queue.3 SLIST_FOREACH.3 \
@@ -246,6 +249,7 @@ MLINKS+=	queue.3 LIST_CLASS_ENTRY.3 \
 		queue.3 STAILQ_CLASS_HEAD.3 \
 		queue.3 STAILQ_CONCAT.3 \
 		queue.3 STAILQ_EMPTY.3 \
+		queue.3 STAILQ_EMPTY_ATOMIC.3 \
 		queue.3 STAILQ_ENTRY.3 \
 		queue.3 STAILQ_FIRST.3 \
 		queue.3 STAILQ_FOREACH.3 \
@@ -270,6 +274,7 @@ MLINKS+=	queue.3 LIST_CLASS_ENTRY.3 \
 		queue.3 TAILQ_CLASS_HEAD.3 \
 		queue.3 TAILQ_CONCAT.3 \
 		queue.3 TAILQ_EMPTY.3 \
+		queue.3 TAILQ_EMPTY_ATOMIC.3 \
 		queue.3 TAILQ_ENTRY.3 \
 		queue.3 TAILQ_FIRST.3 \
 		queue.3 TAILQ_FOREACH.3 \
@@ -535,6 +540,7 @@ PTHREAD_MLINKS+=pthread_spin_init.3 pthread_spin_destroy.3 \
 PTHREAD_MLINKS+=pthread_testcancel.3 pthread_setcancelstate.3 \
 		pthread_testcancel.3 pthread_setcanceltype.3
 PTHREAD_MLINKS+=pthread_join.3 pthread_peekjoin_np.3 \
-		pthread_join.3 pthread_timedjoin_np.3
+		pthread_join.3 pthread_timedjoin_np.3 \
+		pthread_join.3 pthread_tryjoin_np.3
 
 .include <bsd.prog.mk>

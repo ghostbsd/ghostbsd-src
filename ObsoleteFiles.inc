@@ -51,12 +51,53 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20260120: Made libkrb5profile INTERNALLIB
+OLD_LIBS+=usr/lib/libkrb5profile.so.122
+OLD_FILES+=usr/lib/libkrb5profile.so
+
+# 20260114: remove ncurses html documentation
+OLD_FILES+=usr/share/doc/ncurses/hackguide.html
+OLD_FILES+=usr/share/doc/ncurses/ncurses-intro.html
+OLD_DIRS+=usr/share/doc/ncurses
+
+# 20251215: Remove intrinsic utilities
+OLD_FILES+=usr/bin/alias
+OLD_FILES+=usr/bin/bg
+OLD_FILES+=usr/bin/cd
+OLD_FILES+=usr/bin/fc
+OLD_FILES+=usr/bin/fg
+OLD_FILES+=usr/bin/getopts
+OLD_FILES+=usr/bin/hash
+OLD_FILES+=usr/bin/jobs
+OLD_FILES+=usr/bin/read
+OLD_FILES+=usr/bin/type
+OLD_FILES+=usr/bin/ulimit
+OLD_FILES+=usr/bin/umask
+OLD_FILES+=usr/bin/unalias
+OLD_FILES+=usr/bin/wait
+
+# 20251208: Rename iwm8000C to correct name.
+OLD_FILES+=boot/firmware/iwm8000C
+
+# 20251207: removed libuutil and libtpool
+OLD_LIBS+=	lib/libuutil.so.2
+OLD_LIBS+=	lib/libtpool.so.2
+
+# 20251204: zpfind.9 alias to pfind.9 removed
+OLD_FILES+=usr/share/man/man9/zpfind.9
+
+# 20251121: Remove duplicate pam_krb5 manual page
+OLD_FILES+=usr/share/man/man8/pam-krb5.8.gz
+
+# 20251112: Remove old MLINK to apmconf(8)
+OLD_FILES+=usr/share/man/man8/apmconf.8.gz
+
 # 20251112: Remove pccard(4) and related
-OLD_FILES+=share/man/man4/pccard.4.gz
-OLD_FILES+=share/man/man4/pcic.4.gz
+OLD_FILES+=usr/share/man/man4/pccard.4.gz
+OLD_FILES+=usr/share/man/man4/pcic.4.gz
 
 # 20251028: Remove hifn(4)
-OLD_FILES+=share/man/man4/hifn.4.gz
+OLD_FILES+=usr/share/man/man4/hifn.4.gz
 
 # 20251006: Remove libnss_tacplus.a (it never should have been installed)
 OLD_FILES+=usr/lib/libnss_tacplus.a

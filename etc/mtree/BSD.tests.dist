@@ -382,6 +382,8 @@
             ..
             ssp
             ..
+            stdbit
+            ..
             stdio
             ..
             stdlib
@@ -824,6 +826,8 @@
             ..
             tmpfs
             ..
+            unionfs
+            ..
         ..
         geom
             class
@@ -1164,6 +1168,8 @@
         join
         ..
         jot
+        ..
+        lam
         ..
         lastcomm
         ..

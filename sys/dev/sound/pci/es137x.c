@@ -224,14 +224,14 @@ struct es_info {
 	uint32_t	sctrl;
 	uint32_t	escfg;
 	struct es_chinfo ch[ES_NCHANS];
-	struct mtx	*lock;
+	struct mtx	lock;
 	struct callout	poll_timer;
 	int poll_ticks, polling;
 };
 
-#define ES_LOCK(sc)		snd_mtxlock((sc)->lock)
-#define ES_UNLOCK(sc)		snd_mtxunlock((sc)->lock)
-#define ES_LOCK_ASSERT(sc)	snd_mtxassert((sc)->lock)
+#define ES_LOCK(sc)		mtx_lock(&(sc)->lock)
+#define ES_UNLOCK(sc)		mtx_unlock(&(sc)->lock)
+#define ES_LOCK_ASSERT(sc)	mtx_assert(&(sc)->lock, MA_OWNED)
 
 /* prototypes */
 static void     es_intr(void *);
@@ -1540,10 +1540,6 @@ sysctl_es137x_single_pcm_mixer(SYSCTL_HANDLER_ARGS)
 		PCM_RELEASE_QUICK(d);
 		return (ENODEV);
 	}
-	if (mixer_busy(m) != 0) {
-		PCM_RELEASE_QUICK(d);
-		return (EBUSY);
-	}
 	level = mix_get(m, SOUND_MIXER_PCM);
 	recsrc = mix_getrecsrc(m);
 	if (level < 0 || recsrc < 0) {
@@ -1712,7 +1708,8 @@ es_pci_attach(device_t dev)
 	uint32_t devid;
 
 	es = malloc(sizeof *es, M_DEVBUF, M_WAITOK | M_ZERO);
-	es->lock = snd_mtxcreate(device_get_nameunit(dev), "snd_es137x softc");
+	mtx_init(&es->lock, device_get_nameunit(dev), "snd_es137x softc",
+	    MTX_DEF);
 	es->dev = dev;
 	es->escfg = 0;
 	mapped = 0;
@@ -1888,10 +1885,8 @@ bad:
 		ac97_destroy(codec);
 	if (es->reg)
 		bus_release_resource(dev, es->regtype, es->regid, es->reg);
-	if (es->lock)
-		snd_mtxfree(es->lock);
-	if (es)
-		free(es, M_DEVBUF);
+	mtx_destroy(&es->lock);
+	free(es, M_DEVBUF);
 	return (ENXIO);
 }
 
@@ -1919,7 +1914,7 @@ es_pci_detach(device_t dev)
 	bus_release_resource(dev, SYS_RES_IRQ, es->irqid, es->irq);
 	bus_release_resource(dev, es->regtype, es->regid, es->reg);
 	bus_dma_tag_destroy(es->parent_dmat);
-	snd_mtxfree(es->lock);
+	mtx_destroy(&es->lock);
 	free(es, M_DEVBUF);
 
 	return (0);

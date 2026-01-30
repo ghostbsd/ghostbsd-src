@@ -117,6 +117,25 @@ color_dupe_body()
 	atf_check -o match:"^ +1 color.out" wc -l color.out
 }
 
+atf_test_case qflag
+qflag_body()
+{
+	# Test whitespace in argument
+	printf "1 2 3 4\n5 6 7 8\n" > in
+
+	atf_check zgrep -q '1 2' in
+}
+
+atf_test_case eflags
+eflags_body()
+{
+	# Test use with more than one -e expression
+	printf "aaa bbb ccc\n111 222 333\ndon't match this line" > in
+
+	atf_check -o 'inline:aaa bbb ccc\n111 222 333\n' \
+	    zgrep -eaaa -e333 in
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case grep_r_implied
@@ -124,4 +143,6 @@ atf_init_test_cases()
 	atf_add_test_case gnuext
 	atf_add_test_case zflag
 	atf_add_test_case color_dupe
+	atf_add_test_case qflag
+	atf_add_test_case eflags
 }

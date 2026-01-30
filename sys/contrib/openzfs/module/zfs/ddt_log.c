@@ -222,7 +222,7 @@ ddt_log_begin(ddt_t *ddt, size_t nentries, dmu_tx_t *tx, ddt_log_update_t *dlu)
 
 	VERIFY0(dmu_buf_hold_array_by_dnode(dlu->dlu_dn, offset, length,
 	    B_FALSE, FTAG, &dlu->dlu_ndbp, &dlu->dlu_dbp,
-	    DMU_READ_NO_PREFETCH));
+	    DMU_READ_NO_PREFETCH | DMU_UNCACHEDIO));
 
 	dlu->dlu_tx = tx;
 	dlu->dlu_block = dlu->dlu_offset = 0;
@@ -252,7 +252,8 @@ ddt_log_free_entry(ddt_t *ddt, ddt_log_entry_t *ddle)
 }
 
 static void
-ddt_log_update_entry(ddt_t *ddt, ddt_log_t *ddl, ddt_lightweight_entry_t *ddlwe)
+ddt_log_update_entry(ddt_t *ddt, ddt_log_t *ddl, ddt_lightweight_entry_t *ddlwe,
+    boolean_t hist)
 {
 	/* Create the log tree entry from a live or stored entry */
 	avl_index_t where;
@@ -262,7 +263,13 @@ ddt_log_update_entry(ddt_t *ddt, ddt_log_t *ddl, ddt_lightweight_entry_t *ddlwe)
 		ddle = ddt_log_alloc_entry(ddt);
 		ddle->ddle_key = ddlwe->ddlwe_key;
 		avl_insert(&ddl->ddl_tree, ddle, where);
+	} else if (hist) {
+		ddt_lightweight_entry_t oddlwe;
+		DDT_LOG_ENTRY_TO_LIGHTWEIGHT(ddt, ddle, &oddlwe);
+		ddt_histogram_sub_entry(ddt, &ddt->ddt_log_histogram, &oddlwe);
 	}
+	if (hist)
+		ddt_histogram_add_entry(ddt, &ddt->ddt_log_histogram, ddlwe);
 	ddle->ddle_type = ddlwe->ddlwe_type;
 	ddle->ddle_class = ddlwe->ddlwe_class;
 	memcpy(ddle->ddle_phys, &ddlwe->ddlwe_phys, DDT_PHYS_SIZE(ddt));
@@ -273,8 +280,7 @@ ddt_log_entry(ddt_t *ddt, ddt_lightweight_entry_t *ddlwe, ddt_log_update_t *dlu)
 {
 	ASSERT3U(dlu->dlu_dbp, !=, NULL);
 
-	ddt_log_update_entry(ddt, ddt->ddt_log_active, ddlwe);
-	ddt_histogram_add_entry(ddt, &ddt->ddt_log_histogram, ddlwe);
+	ddt_log_update_entry(ddt, ddt->ddt_log_active, ddlwe, B_TRUE);
 
 	/* Get our block */
 	ASSERT3U(dlu->dlu_block, <, dlu->dlu_ndbp);
@@ -298,7 +304,8 @@ ddt_log_entry(ddt_t *ddt, ddt_lightweight_entry_t *ddlwe, ddt_log_update_t *dlu)
 	 * we will fill it, and zero it out.
 	 */
 	if (dlu->dlu_offset == 0) {
-		dmu_buf_will_fill(db, dlu->dlu_tx, B_FALSE);
+		dmu_buf_will_fill_flags(db, dlu->dlu_tx, B_FALSE,
+		    DMU_UNCACHEDIO);
 		memset(db->db_data, 0, db->db_size);
 	}
 
@@ -380,14 +387,20 @@ ddt_log_remove_key(ddt_t *ddt, ddt_log_t *ddl, const ddt_key_t *ddk)
 
 boolean_t
 ddt_log_find_key(ddt_t *ddt, const ddt_key_t *ddk,
-    ddt_lightweight_entry_t *ddlwe)
+    ddt_lightweight_entry_t *ddlwe, boolean_t *from_flushing)
 {
-	ddt_log_entry_t *ddle =
-	    avl_find(&ddt->ddt_log_active->ddl_tree, ddk, NULL);
-	if (!ddle)
+	ddt_log_entry_t *ddle = avl_find(&ddt->ddt_log_active->ddl_tree,
+	    ddk, NULL);
+	if (ddle) {
+		if (from_flushing)
+			*from_flushing = B_FALSE;
+	} else {
 		ddle = avl_find(&ddt->ddt_log_flushing->ddl_tree, ddk, NULL);
-	if (!ddle)
-		return (B_FALSE);
+		if (!ddle)
+			return (B_FALSE);
+		if (from_flushing)
+			*from_flushing = B_TRUE;
+	}
 	if (ddlwe)
 		DDT_LOG_ENTRY_TO_LIGHTWEIGHT(ddt, ddle, ddlwe);
 	return (B_TRUE);
@@ -523,7 +536,7 @@ ddt_log_load_entry(ddt_t *ddt, ddt_log_t *ddl, ddt_log_record_t *dlr,
 	ddlwe.ddlwe_key = dlre->dlre_key;
 	memcpy(&ddlwe.ddlwe_phys, dlre->dlre_phys, DDT_PHYS_SIZE(ddt));
 
-	ddt_log_update_entry(ddt, ddl, &ddlwe);
+	ddt_log_update_entry(ddt, ddl, &ddlwe, B_FALSE);
 }
 
 static void
@@ -597,7 +610,7 @@ ddt_log_load_one(ddt_t *ddt, uint_t n)
 		for (uint64_t offset = 0; offset < hdr.dlh_length;
 		    offset += dn->dn_datablksz) {
 			err = dmu_buf_hold_by_dnode(dn, offset, FTAG, &db,
-			    DMU_READ_PREFETCH);
+			    DMU_READ_PREFETCH | DMU_UNCACHEDIO);
 			if (err != 0) {
 				dnode_rele(dn, FTAG);
 				ddt_log_empty(ddt, ddl);

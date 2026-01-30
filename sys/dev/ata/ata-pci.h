@@ -430,8 +430,8 @@ struct ata_pci_controller {
 #define ATA_HT1000_S1           0x024b1166
 #define ATA_HT1000_S2           0x024a1166
 #define ATA_K2			0x02401166
-#define ATA_FRODO4		0x02411166
-#define ATA_FRODO8		0x02421166
+#define ATA_FRODO8		0x02411166
+#define ATA_FRODO4		0x02421166
 
 #define ATA_SILICON_IMAGE_ID    0x1095
 #define ATA_SII3114             0x31141095
@@ -537,7 +537,7 @@ void ata_pci_write_config(device_t dev, device_t child, int reg,
     uint32_t val, int width);
 int ata_pci_print_child(device_t dev, device_t child);
 int ata_pci_child_location(device_t dev, device_t child, struct sbuf *sb);
-struct resource * ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid, rman_res_t start, rman_res_t end, rman_res_t count, u_int flags);
+struct resource * ata_pci_alloc_resource(device_t dev, device_t child, int type, int rid, rman_res_t start, rman_res_t end, rman_res_t count, u_int flags);
 int ata_pci_release_resource(device_t dev, device_t child, struct resource *r);
 int ata_pci_setup_intr(device_t dev, device_t child, struct resource *irq, int flags, driver_filter_t *filter, driver_intr_t *function, void *argument, void **cookiep);
  int ata_pci_teardown_intr(device_t dev, device_t child, struct resource *irq, void *cookie);

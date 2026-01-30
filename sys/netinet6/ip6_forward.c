@@ -31,7 +31,6 @@
  *	$KAME: ip6_forward.c,v 1.69 2001/05/17 03:48:30 itojun Exp $
  */
 
-#include <sys/cdefs.h>
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
@@ -385,11 +384,11 @@ again:
 pass:
 	/* See if the size was changed by the packet filter. */
 	/* TODO: change to nh->nh_mtu */
-	if (m->m_pkthdr.len > IN6_LINKMTU(nh->nh_ifp)) {
+	if (m->m_pkthdr.len > in6_ifmtu(nh->nh_ifp)) {
 		in6_ifstat_inc(nh->nh_ifp, ifs6_in_toobig);
 		if (mcopy)
 			icmp6_error(mcopy, ICMP6_PACKET_TOO_BIG, 0,
-			    IN6_LINKMTU(nh->nh_ifp));
+			    in6_ifmtu(nh->nh_ifp));
 		goto bad;
 	}
 

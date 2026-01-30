@@ -88,14 +88,17 @@ VNET_DEFINE(ipf_main_softc_t, ipfmain) = {
 	.ipf_running		= -2,
 };
 #define	V_ipfmain		VNET(ipfmain)
+#define V0_ipfmain		VNET_VNET(vnet0,ipfmain)
 
 #include <sys/conf.h>
 #include <net/pfil.h>
 
 VNET_DEFINE_STATIC(eventhandler_tag, ipf_arrivetag);
 VNET_DEFINE_STATIC(eventhandler_tag, ipf_departtag);
+VNET_DEFINE_STATIC(eventhandler_tag, ipf_renametag);
 #define	V_ipf_arrivetag		VNET(ipf_arrivetag)
 #define	V_ipf_departtag		VNET(ipf_departtag)
+#define	V_ipf_renametag		VNET(ipf_renametag)
 
 static void ipf_ifevent(void *arg, struct ifnet *ifp);
 
@@ -252,6 +255,20 @@ ipfioctl(struct cdev *dev, ioctlcmd_t cmd, caddr_t data,
 		V_ipfmain.ipf_interror = 130001;
 		CURVNET_RESTORE();
 		return (EPERM);
+	}
+
+	/*
+	 * Remember, the host system (with its vnet0) controls
+	 * whether a jail is allowed to use ipfilter or not.
+	 * The default is ipfilter cannot be used by a jail
+	 * unless the sysctl allows it.
+	 */
+	if (V0_ipfmain.ipf_jail_allowed == 0) {
+		if (jailed(p->p_cred)) {
+			V_ipfmain.ipf_interror = 130019;
+			CURVNET_RESTORE();
+			return (EOPNOTSUPP);
+		}
 	}
 
 	if (jailed_without_vnet(p->p_cred)) {
@@ -1334,6 +1351,9 @@ ipf_event_reg(void)
 	V_ipf_departtag = EVENTHANDLER_REGISTER(ifnet_departure_event, \
 					       ipf_ifevent, NULL, \
 					       EVENTHANDLER_PRI_ANY);
+	V_ipf_renametag = EVENTHANDLER_REGISTER(ifnet_rename_event, \
+					       ipf_ifevent, NULL, \
+					       EVENTHANDLER_PRI_ANY);
 }
 
 void
@@ -1344,6 +1364,9 @@ ipf_event_dereg(void)
 	}
 	if (V_ipf_departtag != NULL) {
 		EVENTHANDLER_DEREGISTER(ifnet_departure_event, V_ipf_departtag);
+	}
+	if (V_ipf_renametag != NULL) {
+		EVENTHANDLER_DEREGISTER(ifnet_rename_event, V_ipf_renametag);
 	}
 }
 
@@ -1424,4 +1447,6 @@ ipf_fbsd_kenv_get(ipf_main_softc_t *softc)
 {
 	TUNABLE_INT_FETCH("net.inet.ipf.large_nat",
 		&softc->ipf_large_nat);
+	TUNABLE_INT_FETCH("net.inet.ipf.jail_allowed",
+		&softc->ipf_jail_allowed);
 }

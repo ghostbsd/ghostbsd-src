@@ -72,8 +72,6 @@ SYSCTL_INT(_hw_snd, OID_AUTO, basename_clone, CTLFLAG_RWTUN,
 #define DSP_F_READ(x)		((x) & FREAD)
 #define DSP_F_WRITE(x)		((x) & FWRITE)
 
-#define OLDPCM_IOCTL
-
 static d_open_t dsp_open;
 static d_read_t dsp_read;
 static d_write_t dsp_write;
@@ -464,14 +462,9 @@ static __inline int
 dsp_io_ops(struct dsp_cdevpriv *priv, struct uio *buf)
 {
 	struct snddev_info *d;
-	struct pcm_channel **ch;
+	struct pcm_channel *ch;
 	int (*chn_io)(struct pcm_channel *, struct uio *);
-	int prio, ret;
-	pid_t runpid;
-
-	KASSERT(buf != NULL &&
-	    (buf->uio_rw == UIO_READ || buf->uio_rw == UIO_WRITE),
-	    ("%s(): io train wreck!", __func__));
+	int ret;
 
 	d = priv->sc;
 	if (!DSP_REGISTERED(d))
@@ -481,53 +474,39 @@ dsp_io_ops(struct dsp_cdevpriv *priv, struct uio *buf)
 
 	switch (buf->uio_rw) {
 	case UIO_READ:
-		prio = FREAD;
-		ch = &priv->rdch;
+		ch = priv->rdch;
 		chn_io = chn_read;
 		break;
 	case UIO_WRITE:
-		prio = FWRITE;
-		ch = &priv->wrch;
+		ch = priv->wrch;
 		chn_io = chn_write;
 		break;
-	default:
-		panic("invalid/corrupted uio direction: %d", buf->uio_rw);
-		break;
 	}
-
-	runpid = buf->uio_td->td_proc->p_pid;
-
-	dsp_lock_chans(priv, prio);
-
-	if (*ch == NULL || !((*ch)->flags & CHN_F_BUSY)) {
-		if (priv->rdch != NULL || priv->wrch != NULL)
-			dsp_unlock_chans(priv, prio);
+	if (ch == NULL) {
 		PCM_GIANT_EXIT(d);
-		return (EBADF);
+		return (ENXIO);
 	}
+	CHN_LOCK(ch);
 
-	if (((*ch)->flags & (CHN_F_MMAP | CHN_F_DEAD)) ||
-	    (((*ch)->flags & CHN_F_RUNNING) && (*ch)->pid != runpid)) {
-		dsp_unlock_chans(priv, prio);
+	if (!(ch->flags & CHN_F_BUSY) ||
+	    (ch->flags & (CHN_F_MMAP | CHN_F_DEAD))) {
+		CHN_UNLOCK(ch);
 		PCM_GIANT_EXIT(d);
-		return (EINVAL);
-	} else if (!((*ch)->flags & CHN_F_RUNNING)) {
-		(*ch)->flags |= CHN_F_RUNNING;
-		(*ch)->pid = runpid;
-	}
+		return (ENXIO);
+	} else if (!(ch->flags & CHN_F_RUNNING))
+		ch->flags |= CHN_F_RUNNING;
 
 	/*
 	 * chn_read/write must give up channel lock in order to copy bytes
 	 * from/to userland, so up the "in progress" counter to make sure
 	 * someone else doesn't come along and muss up the buffer.
 	 */
-	++(*ch)->inprog;
-	ret = chn_io(*ch, buf);
-	--(*ch)->inprog;
+	ch->inprog++;
+	ret = chn_io(ch, buf);
+	ch->inprog--;
 
-	CHN_BROADCAST(&(*ch)->cv);
-
-	dsp_unlock_chans(priv, prio);
+	CHN_BROADCAST(&ch->cv);
+	CHN_UNLOCK(ch);
 
 	PCM_GIANT_LEAVE(d);
 
@@ -808,10 +787,6 @@ dsp_ioctl(struct cdev *i_dev, u_long cmd, caddr_t arg, int mode,
 	}
 
     	switch(cmd) {
-#ifdef OLDPCM_IOCTL
-    	/*
-     	 * we start with the new ioctl interface.
-     	 */
     	case AIONWRITE:	/* how many bytes can write ? */
 		if (wrch) {
 			CHN_LOCK(wrch);
@@ -1028,10 +1003,6 @@ dsp_ioctl(struct cdev *i_dev, u_long cmd, caddr_t arg, int mode,
 		printf("AIOSYNC chan 0x%03lx pos %lu unimplemented\n",
 	    		((snd_sync_parm *)arg)->chan, ((snd_sync_parm *)arg)->pos);
 		break;
-#endif
-	/*
-	 * here follow the standard ioctls (filio.h etc.)
-	 */
     	case FIONREAD: /* get # bytes to read */
 		if (rdch) {
 			CHN_LOCK(rdch);
@@ -1070,11 +1041,6 @@ dsp_ioctl(struct cdev *i_dev, u_long cmd, caddr_t arg, int mode,
 		}
 		break;
 
-    	/*
-	 * Finally, here is the linux-compatible ioctl interface
-	 */
-#define THE_REAL_SNDCTL_DSP_GETBLKSIZE _IOWR('P', 4, int)
-    	case THE_REAL_SNDCTL_DSP_GETBLKSIZE:
     	case SNDCTL_DSP_GETBLKSIZE:
 		chn = wrch ? wrch : rdch;
 		if (chn) {
@@ -1631,7 +1597,7 @@ dsp_ioctl(struct cdev *i_dev, u_long cmd, caddr_t arg, int mode,
 			struct snd_dbuf *bs;
 			CHN_LOCK(wrch);
 			while (wrch->inprog != 0)
-				cv_wait(&wrch->cv, wrch->lock);
+				cv_wait(&wrch->cv, &wrch->lock);
 			bs = wrch->bufsoft;
 			if ((bs->shadbuf != NULL) && (sndbuf_getready(bs) > 0)) {
 				bs->sl = sndbuf_getready(bs);
@@ -1655,7 +1621,7 @@ dsp_ioctl(struct cdev *i_dev, u_long cmd, caddr_t arg, int mode,
 			struct snd_dbuf *bs;
 			CHN_LOCK(wrch);
 			while (wrch->inprog != 0)
-				cv_wait(&wrch->cv, wrch->lock);
+				cv_wait(&wrch->cv, &wrch->lock);
 			bs = wrch->bufsoft;
 			if ((bs->shadbuf != NULL) && (bs->sl > 0)) {
 				sndbuf_softreset(bs);
@@ -2616,8 +2582,7 @@ dsp_oss_syncgroup(struct pcm_channel *wrch, struct pcm_channel *rdch, oss_syncgr
 
 out:
 	if (ret != 0) {
-		if (smrd != NULL)
-			free(smrd, M_DEVBUF);
+		free(smrd, M_DEVBUF);
 		if ((sg != NULL) && SLIST_EMPTY(&sg->members)) {
 			sg_ids[2] = sg->id;
 			SLIST_REMOVE(&snd_pcm_syncgroups, sg, pcmchan_syncgroup, link);
