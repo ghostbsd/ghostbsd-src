@@ -111,11 +111,25 @@ pdes_get(int *pdes, const char **type)
 #endif
 	}
 
-	if ((cur = malloc(sizeof(*cur))) != NULL)
-		return cur;
+	if ((cur = malloc(sizeof(*cur))) != NULL) {
+		if (**type == 'r') {
+			cur->fp = fdopen(pdes[0], *type);
+#ifdef _REENTRANT
+			cur->fd = pdes[0];
+#endif
+		} else {
+			cur->fp = fdopen(pdes[1], *type);
+#ifdef _REENTRANT
+			cur->fd = pdes[1];
+#endif
+		}
+		if (cur->fp != NULL)
+			return cur;
+	}
 	serrno = errno;
 	(void)close(pdes[0]);
 	(void)close(pdes[1]);
+	free(cur);
 	errno = serrno;
 	return NULL;
 }
@@ -124,16 +138,6 @@ static void
 pdes_child(int *pdes, const char *type)
 {
 	struct pid *old;
-
-	/* POSIX.2 B.3.2.2 "popen() shall ensure that any streams
-	   from previous popen() calls that remain open in the 
-	   parent process are closed in the new child process. */
-	for (old = pidlist; old; old = old->next)
-#ifdef _REENTRANT
-		(void)close(old->fd); /* don't allow a flush */
-#else
-		(void)close(fileno(old->fp)); /* don't allow a flush */
-#endif
 
 	if (type[0] == 'r') {
 		(void)close(pdes[0]);
@@ -150,31 +154,30 @@ pdes_child(int *pdes, const char *type)
 			(void)close(pdes[0]);
 		}
 	}
+
+	/* POSIX.2 B.3.2.2 "popen() shall ensure that any streams
+	   from previous popen() calls that remain open in the
+	   parent process are closed in the new child process. */
+	for (old = pidlist; old; old = old->next) {
+#ifdef _REENTRANT
+		(void)close(old->fd); /* don't allow a flush */
+#else
+		(void)close(fileno(old->fp)); /* don't allow a flush */
+#endif
+	}
 }
 
 static void
 pdes_parent(int *pdes, struct pid *cur, pid_t pid, const char *type)
 {
-	FILE *iop;
-
-	/* Parent; assume fdopen can't fail. */
-	if (*type == 'r') {
-		iop = fdopen(pdes[0], type);
-#ifdef _REENTRANT
-		cur->fd = pdes[0];
-#endif
+	/* Parent */
+	if (*type == 'r')
 		(void)close(pdes[1]);
-	} else {
-		iop = fdopen(pdes[1], type);
-#ifdef _REENTRANT
-		cur->fd = pdes[1];
-#endif
+	else
 		(void)close(pdes[0]);
-	}
 
 	/* Link into list of file descriptors. */
-	cur->fp = iop;
-	cur->pid =  pid;
+	cur->pid = pid;
 	cur->next = pidlist;
 	pidlist = cur;
 }
@@ -200,7 +203,7 @@ popenve(const char *cmd, char *const *argv, char *const *envp, const char *type)
 #ifdef _REENTRANT
 	(void)rwlock_rdlock(&pidlist_lock);
 #endif
-	switch (pid = vfork()) {
+	switch (pid = fork()) {
 	case -1:			/* Error. */
 		serrno = errno;
 #ifdef _REENTRANT

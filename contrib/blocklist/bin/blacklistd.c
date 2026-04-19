@@ -191,7 +191,7 @@ process(bl_t bl)
 	}
 
 	if (getremoteaddress(bi, &rss, &rsl) == -1)
-		return;
+		goto out;
 
 	if (debug || bi->bi_msg[0]) {
 		sockaddr_snprintf(rbuf, sizeof(rbuf), "%a:%p", (void *)&rss);
@@ -204,12 +204,12 @@ process(bl_t bl)
 
 	if (conf_find(bi->bi_fd, bi->bi_uid, &rss, &c) == NULL) {
 		(*lfun)(LOG_DEBUG, "no rule matched");
-		return;
+		goto out;
 	}
 
 
 	if (state_get(state, &c, &dbi) == -1)
-		return;
+		goto out;
 
 	if (debug) {
 		char b1[128], b2[128];
@@ -269,6 +269,8 @@ process(bl_t bl)
 	state_put(state, &c, &dbi);
 
 out:
+	close(bi->bi_fd);
+
 	if (debug) {
 		char b1[128], b2[128];
 		(*lfun)(LOG_DEBUG, "%s: final db state for %s: count=%d/%d "
