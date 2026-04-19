@@ -570,6 +570,15 @@ find_currdev(bool do_bootmgr, bool is_last,
 		} /* Nothing specified, try normal match */
 	}
 
+#ifdef MD_IMAGE_SIZE
+	/*
+	 * If there is an embedded MD, try to use that.
+	 */
+	printf("Trying MD\n");
+	if (probe_md_currdev())
+		return (0);
+#endif /* MD_IMAGE_SIZE */
+
 #ifdef EFI_ZFS_BOOT
 	/*
 	 * Did efi_zfs_probe() detect the boot pool? If so, use the zpool
@@ -584,15 +593,6 @@ find_currdev(bool do_bootmgr, bool is_last,
 			return (0);
 	}
 #endif /* EFI_ZFS_BOOT */
-
-#ifdef MD_IMAGE_SIZE
-	/*
-	 * If there is an embedded MD, try to use that.
-	 */
-	printf("Trying MD\n");
-	if (probe_md_currdev())
-		return (0);
-#endif /* MD_IMAGE_SIZE */
 
 	/*
 	 * Try to find the block device by its handle based on the
@@ -977,10 +977,10 @@ parse_uefi_con_out(void)
 		 * If we don't have any Con* variable use both. If we have GOP
 		 * make video primary, otherwise set serial primary. In either
 		 * case, try to use both the 'efi' console which will use the
-		 * GOP, if present and serial. If there's an EFI BIOS that omits
-		 * this, but has a serial port redirect, we'll unavioidably get
-		 * doubled characters, but we'll be right in all the other more
-		 * common cases.
+		 * GOP, if present and serial. If there's a UEFI firmware that
+		 * omit this, but has a serial port redirect, we'll unavoidably
+		 * get doubled characters, but we'll be right in all the other
+		 * more common cases.
 		 */
 		if (efi_has_gop())
 			how |= RB_MULTIPLE;

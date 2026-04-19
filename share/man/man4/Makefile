@@ -621,6 +621,7 @@ MAN=	aac.4 \
 	virtio_random.4 \
 	virtio_scsi.4 \
 	${_vmci.4} \
+	vmgenc.4 \
 	vkbd.4 \
 	vlan.4 \
 	vxlan.4 \
@@ -715,6 +716,7 @@ MLINKS+=ext2fs.4 ext4fs.4
 MLINKS+=fd.4 stderr.4 \
 	fd.4 stdin.4 \
 	fd.4 stdout.4
+MLINKS+=ffs.4 ufs.4
 MLINKS+=fdt.4 FDT.4
 MLINKS+=firewire.4 ieee1394.4
 MLINKS+=fwe.4 if_fwe.4
@@ -1048,11 +1050,11 @@ MAN+=		mlx5io.4
 .endif
 
 .if ${MK_TESTS} != "no"
-MANGROUPS+=	TESTS
-ATF=            ${SRCTOP}/contrib/atf
-.PATH:          ${ATF}/doc
-TESTS=		atf-test-case.4
-TESTSPACKAGE=	tests
+MANGROUPS+=	ATF
+ATFTOP=		${SRCTOP}/contrib/atf
+.PATH:          ${ATFTOP}/doc
+ATF=		atf-test-case.4
+ATFPACKAGE=	atf
 .endif
 
 .if ${MK_PF} != "no"

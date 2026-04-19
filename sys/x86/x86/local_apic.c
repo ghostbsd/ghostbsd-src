@@ -72,6 +72,10 @@
 #include <machine/smp.h>
 #include <machine/specialreg.h>
 #include <x86/init.h>
+#include <x86/kvm.h>
+#include <contrib/xen/arch-x86/cpuid.h>
+#include <x86/bhyve.h>
+#include <dev/hyperv/vmbus/x86/hyperv_reg.h>
 
 #ifdef DDB
 #include <sys/interrupt.h>
@@ -1426,6 +1430,9 @@ lapic_handle_intr(int vector, struct trapframe *frame)
 
 	isrc = intr_lookup_source(apic_idt_to_irq(PCPU_GET(apic_id),
 	    vector));
+	KASSERT(isrc != NULL,
+	    ("lapic_handle_intr: vector %d unrecognized at lapic %u",
+	    vector, PCPU_GET(apic_id)));
 	intr_execute_handlers(isrc, frame);
 }
 
@@ -2064,6 +2071,47 @@ apic_setup_local(void *dummy __unused)
 }
 SYSINIT(apic_setup_local, SI_SUB_CPU, SI_ORDER_SECOND, apic_setup_local, NULL);
 
+/* Are we in a VM which supports the Extended Destination ID standard? */
+int apic_ext_dest_id = -1;
+SYSCTL_INT(_machdep, OID_AUTO, apic_ext_dest_id, CTLFLAG_RDTUN, &apic_ext_dest_id, 0,
+    "Use APIC Extended Destination IDs");
+
+/* Detect support for Extended Destination IDs. */
+static void
+detect_extended_dest_id(void)
+{
+	u_int regs[4];
+
+	/* Check if we support extended destination IDs. */
+	switch (vm_guest) {
+	case VM_GUEST_XEN:
+		cpuid_count(hv_base + 4, 0, regs);
+		if (regs[0] & XEN_HVM_CPUID_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	case VM_GUEST_HV:
+		cpuid_count(CPUID_LEAF_HV_STACK_INTERFACE, 0, regs);
+		if (regs[0] != HYPERV_STACK_INTERFACE_EAX_SIG)
+			break;
+		cpuid_count(CPUID_LEAF_HV_STACK_PROPERTIES, 0, regs);
+		if (regs[0] & HYPERV_PROPERTIES_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	case VM_GUEST_KVM:
+		kvm_cpuid_get_features(regs);
+		if (regs[0] & KVM_FEATURE_MSI_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	case VM_GUEST_BHYVE:
+		if (hv_high < CPUID_BHYVE_FEATURES)
+			break;
+		cpuid_count(CPUID_BHYVE_FEATURES, 0, regs);
+		if (regs[0] & CPUID_BHYVE_FEAT_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	}
+}
+
 /*
  * Setup the I/O APICs.
  */
@@ -2074,6 +2122,10 @@ apic_setup_io(void *dummy __unused)
 
 	if (best_enum == NULL)
 		return;
+
+	/* Check hypervisor support for extended destination IDs. */
+	if (apic_ext_dest_id == -1)
+		detect_extended_dest_id();
 
 	/*
 	 * Local APIC must be registered before other PICs and pseudo PICs

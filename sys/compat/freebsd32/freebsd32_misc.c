@@ -757,7 +757,7 @@ static int
 freebsd32_kevent_copyout(void *arg, struct kevent *kevp, int count)
 {
 	struct freebsd32_kevent_args *uap;
-	struct kevent32	ks32[KQ_NEVENTS];
+	struct kevent32	ks32[KQ_NEVENTS] = {};
 	int i, error;
 
 	KASSERT(count <= KQ_NEVENTS, ("count (%d) > KQ_NEVENTS", count));
@@ -2649,7 +2649,7 @@ freebsd11_freebsd32_nstat(struct thread *td,
 	if (error != 0)
 		return (error);
 	error = freebsd11_cvtnstat32(&sb, &nsb);
-	if (error != 0)
+	if (error == 0)
 		error = copyout(&nsb, uap->ub, sizeof (nsb));
 	return (error);
 }

@@ -199,7 +199,7 @@
     sbin
     ..
     share
-        atf             tags=package=tests
+        atf             tags=package=atf
         ..
         bhyve
             gdb
@@ -236,17 +236,15 @@
         doc
             IPv6
             ..
-            atf             tags=package=tests
+            atf             tags=package=atf
             ..
-            kyua            tags=package=tests
+            kyua            tags=package=kyua
             ..
             legal
             ..
             llvm
                 clang
                 ..
-            ..
-            ncurses
             ..
             ntp
                 drivers
@@ -336,7 +334,7 @@
                     ..
                 ..
             ..
-            kyua            tags=package=tests
+            kyua            tags=package=kyua
             ..
             libusb20
             ..
@@ -485,10 +483,10 @@
                 ..
             ..
         ..
-        kyua            tags=package=tests
-            misc            tags=package=tests
+        kyua            tags=package=kyua
+            misc            tags=package=kyua
             ..
-            store           tags=package=tests
+            store           tags=package=kyua
             ..
         ..
         locale

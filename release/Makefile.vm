@@ -24,7 +24,6 @@ CLOUDWARE_TYPES?= AZURE \
 		BASIC-CLOUDINIT \
 		EC2 \
 		GCE \
-		ORACLE \
 		VAGRANT
 AZURE_FORMAT=	vhdf
 AZURE_FSLIST?=	ufs zfs
@@ -45,9 +44,6 @@ EC2-SMALL_DESC=	Amazon EC2 small image
 GCE_FORMAT=	raw
 GCE_FSLIST?=	ufs zfs
 GCE_DESC=	Google Compute Engine image
-ORACLE_FORMAT=	raw
-ORACLE_FSLIST?=	ufs zfs
-ORACLE_DESC=	Oracle Cloud Infrastructure image
 OPENSTACK_FORMAT=qcow2
 OPENSTACK_FSLIST?=	ufs
 OPENSTACK_DESC=	OpenStack platform image
@@ -73,7 +69,7 @@ CLOUDWARE?=	${CLOUDWARE_GEN}
 
 .for _V in TYPE BRANCH REVISION
 . if !defined(${_V}) || empty(${_V})
-${_V}!=	eval $$(awk '/^${_V}=/{print}' ${.CURDIR}/../sys/conf/newvers.sh); echo $$${_V}
+${_V}!=	eval $$(awk '/^${_V}=/{print}' ${.CURDIR:H}/sys/conf/newvers.sh); echo $$${_V}
 . endif
 .endfor
 
@@ -211,6 +207,7 @@ vm-image:	${QEMUTGT} ${PKGBASE_REPO_DIR}
 		PKGBASE_REPO_DIR=${.OBJDIR}/pkgbase-repo-dir \
 		${.CURDIR}/scripts/mk-vmimage.sh \
 		-C ${.CURDIR}/tools/vmimage.subr \
+		${VM_IMAGE_CONFIG:D-c ${VM_IMAGE_CONFIG}} \
 		-d ${.OBJDIR}/${.TARGET}-${FORMAT}-${FS} -F ${FS} \
 		-i ${.OBJDIR}/${FORMAT}.${FS}.img -s ${VMSIZE} -f ${FORMAT} \
 		-S ${WORLDDIR} -o ${.OBJDIR}/${VMBASE}.${FS}.${FORMAT} || true
@@ -314,6 +311,5 @@ cloudware-release:
 .include "${.CURDIR}/Makefile.ec2"
 .include "${.CURDIR}/Makefile.firecracker"
 .include "${.CURDIR}/Makefile.gce"
-.include "${.CURDIR}/Makefile.oracle"
 .include "${.CURDIR}/Makefile.vagrant"
 .include "${.CURDIR}/Makefile.inc1"

@@ -468,8 +468,8 @@ MLINKS+=posix_spawn.3 posix_spawnp.3 \
 	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_addclose.3 \
 	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_addclosefrom_np.3 \
 	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_adddup2.3 \
-	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_addchdir_np.3 \
-	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_addfchdir_np.3 \
+	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_addchdir.3 \
+	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_addfchdir.3 \
 	posix_spawn_file_actions_init.3 posix_spawn_file_actions_destroy.3 \
 	posix_spawnattr_getflags.3 posix_spawnattr_setflags.3 \
 	posix_spawnattr_getexecfd_np.3 posix_spawnattr_setexecfd_np.3 \
@@ -562,6 +562,7 @@ MLINKS+=unvis.3 strunvis.3 \
 	unvis.3 strunvisx.3
 MLINKS+=vis.3 nvis.3 \
 	vis.3 snvis.3 \
+	vis.3 stravis.3 \
 	vis.3 strenvisx.3 \
 	vis.3 strnunvis.3 \
 	vis.3 strnunvisx.3 \

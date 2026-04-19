@@ -170,6 +170,9 @@ SYSCTL_VNET_PCPUSTAT(_net_inet_ip, OID_AUTO, mrtstat, struct mrtstat,
     mrtstat, "IPv4 Multicast Forwarding Statistics (struct mrtstat, "
     "netinet/ip_mroute.h)");
 
+VNET_DEFINE_STATIC(struct socket *, ip_mrouter);
+#define	V_ip_mrouter		VNET(ip_mrouter)
+
 VNET_DEFINE_STATIC(u_long, mfchash);
 #define	V_mfchash		VNET(mfchash)
 #define	MFCHASH(a, g)							\
@@ -306,7 +309,7 @@ VNET_DEFINE_STATIC(struct ifnet *, multicast_register_if);
 static u_long	X_ip_mcast_src(int);
 static int	X_ip_mforward(struct ip *, struct ifnet *, struct mbuf *,
 		    struct ip_moptions *);
-static int	X_ip_mrouter_done(void);
+static void	X_ip_mrouter_done(struct socket *);
 static int	X_ip_mrouter_get(struct socket *, struct sockopt *);
 static int	X_ip_mrouter_set(struct socket *, struct sockopt *);
 static int	X_legal_vif_num(int);
@@ -436,7 +439,7 @@ X_ip_mrouter_set(struct socket *so, struct sockopt *sopt)
 		error = ip_mrouter_init(so, optval);
 		break;
 	case MRT_DONE:
-		error = ip_mrouter_done();
+		ip_mrouter_done(so);
 		break;
 	case MRT_ADD_VIF:
 		error = sooptcopyin(sopt, &vifc, sizeof vifc, sizeof vifc);
@@ -594,7 +597,10 @@ get_sg_cnt(struct sioc_sg_req *req)
 static int
 get_vif_cnt(struct sioc_vif_req *req)
 {
-	vifi_t vifi = req->vifi;
+	struct vif *vif;
+	vifi_t vifi;
+
+	vifi = req->vifi;
 
 	MRW_RLOCK();
 	if (vifi >= V_numvifs) {
@@ -602,12 +608,13 @@ get_vif_cnt(struct sioc_vif_req *req)
 		return EINVAL;
 	}
 
-	mtx_lock(&V_viftable[vifi].v_mtx);
-	req->icount = V_viftable[vifi].v_pkt_in;
-	req->ocount = V_viftable[vifi].v_pkt_out;
-	req->ibytes = V_viftable[vifi].v_bytes_in;
-	req->obytes = V_viftable[vifi].v_bytes_out;
-	mtx_unlock(&V_viftable[vifi].v_mtx);
+	vif = &V_viftable[vifi];
+	mtx_lock(&vif->v_mtx);
+	req->icount = vif->v_pkt_in;
+	req->ocount = vif->v_pkt_out;
+	req->ibytes = vif->v_bytes_in;
+	req->obytes = vif->v_bytes_out;
+	mtx_unlock(&vif->v_mtx);
 	MRW_RUNLOCK();
 
 	return 0;
@@ -621,8 +628,7 @@ if_detached_event(void *arg __unused, struct ifnet *ifp)
 	struct ifnet *free_ptr, *multi_leave;
 
 	MRW_WLOCK();
-
-	if (V_ip_mrouter == NULL) {
+	if (!V_ip_mrouting_enabled) {
 		MRW_WUNLOCK();
 		return;
 	}
@@ -737,6 +743,7 @@ ip_mrouter_init(struct socket *so, int version)
 	    curvnet);
 
 	V_ip_mrouter = so;
+	V_ip_mrouting_enabled = true;
 	atomic_add_int(&ip_mrouter_cnt, 1);
 
 	/* This is a mutex required by buf_ring init, but not used internally */
@@ -753,8 +760,8 @@ ip_mrouter_init(struct socket *so, int version)
 /*
  * Disable multicast forwarding.
  */
-static int
-X_ip_mrouter_done(void)
+static void
+X_ip_mrouter_done(struct socket *so)
 {
 	struct ifnet **ifps;
 	int nifp;
@@ -763,22 +770,22 @@ X_ip_mrouter_done(void)
 	struct bw_upcall *bu;
 
 	MRW_TEARDOWN_WLOCK();
-
-	if (V_ip_mrouter == NULL) {
+	if (so != V_ip_mrouter) {
 		MRW_TEARDOWN_WUNLOCK();
-		return (EINVAL);
+		return;
 	}
 
 	/*
 	 * Detach/disable hooks to the reset of the system.
 	 */
 	V_ip_mrouter = NULL;
+	V_ip_mrouting_enabled = false;
 	atomic_subtract_int(&ip_mrouter_cnt, 1);
 	V_mrt_api_config = 0;
 
 	/*
-	 * Wait for all epoch sections to complete to ensure
-	 * V_ip_mrouter = NULL is visible to others.
+	 * Wait for all epoch sections to complete to ensure the new value of
+	 * V_ip_mrouting_enabled is visible to others.
 	 */
 	NET_EPOCH_WAIT();
 
@@ -853,8 +860,6 @@ X_ip_mrouter_done(void)
 	free(ifps, M_TEMP);
 
 	CTR1(KTR_IPMF, "%s: done", __func__);
-
-	return 0;
 }
 
 /*
@@ -1574,6 +1579,7 @@ static int
 ip_mdq(struct mbuf *m, struct ifnet *ifp, struct mfc *rt, vifi_t xmt_vif)
 {
 	struct ip *ip = mtod(m, struct ip *);
+	struct vif *vif;
 	vifi_t vifi;
 	int plen = ntohs(ip->ip_len);
 
@@ -1598,9 +1604,10 @@ ip_mdq(struct mbuf *m, struct ifnet *ifp, struct mfc *rt, vifi_t xmt_vif)
 	 * Don't forward if it didn't arrive from the parent vif for its origin.
 	 */
 	vifi = rt->mfc_parent;
-	if ((vifi >= V_numvifs) || (V_viftable[vifi].v_ifp != ifp)) {
+	vif = &V_viftable[vifi];
+	if (vifi >= V_numvifs || vif->v_ifp != ifp) {
 		CTR4(KTR_IPMF, "%s: rx on wrong ifp %p (vifi %d, v_ifp %p)",
-				__func__, ifp, (int)vifi, V_viftable[vifi].v_ifp);
+				__func__, ifp, (int)vifi, vif->v_ifp);
 		MRTSTAT_INC(mrts_wrong_if);
 		++rt->mfc_wrong_if;
 		/*
@@ -1612,7 +1619,7 @@ ip_mdq(struct mbuf *m, struct ifnet *ifp, struct mfc *rt, vifi_t xmt_vif)
 		 * of the iif (broadcast media, GRE tunnel, etc).
 		 */
 		if (V_pim_assert_enabled && (vifi < V_numvifs) &&
-		    V_viftable[vifi].v_ifp) {
+		    vif->v_ifp != NULL) {
 			if (ifp == V_multicast_register_if)
 				PIMSTAT_INC(pims_rcv_registers_wrongiif);
 
@@ -1655,15 +1662,15 @@ ip_mdq(struct mbuf *m, struct ifnet *ifp, struct mfc *rt, vifi_t xmt_vif)
 	}
 
 	/* If I sourced this packet, it counts as output, else it was input. */
-	mtx_lock(&V_viftable[vifi].v_mtx);
-	if (in_hosteq(ip->ip_src, V_viftable[vifi].v_lcl_addr)) {
-		V_viftable[vifi].v_pkt_out++;
-		V_viftable[vifi].v_bytes_out += plen;
+	mtx_lock(&vif->v_mtx);
+	if (in_hosteq(ip->ip_src, vif->v_lcl_addr)) {
+		vif->v_pkt_out++;
+		vif->v_bytes_out += plen;
 	} else {
-		V_viftable[vifi].v_pkt_in++;
-		V_viftable[vifi].v_bytes_in += plen;
+		vif->v_pkt_in++;
+		vif->v_bytes_in += plen;
 	}
-	mtx_unlock(&V_viftable[vifi].v_mtx);
+	mtx_unlock(&vif->v_mtx);
 
 	rt->mfc_pkt_cnt++;
 	rt->mfc_byte_cnt += plen;
@@ -1676,12 +1683,13 @@ ip_mdq(struct mbuf *m, struct ifnet *ifp, struct mfc *rt, vifi_t xmt_vif)
 	 */
 	for (vifi = 0; vifi < V_numvifs; vifi++)
 		if ((rt->mfc_ttls[vifi] > 0) && (ip->ip_ttl > rt->mfc_ttls[vifi])) {
-			V_viftable[vifi].v_pkt_out++;
-			V_viftable[vifi].v_bytes_out += plen;
-			if (V_viftable[vifi].v_flags & VIFF_REGISTER)
-				pim_register_send(ip, V_viftable + vifi, m, rt);
+			vif = &V_viftable[vifi];
+			vif->v_pkt_out++;
+			vif->v_bytes_out += plen;
+			if (vif->v_flags & VIFF_REGISTER)
+				pim_register_send(ip, vif, m, rt);
 			else
-				phyint_send(ip, V_viftable + vifi, m);
+				phyint_send(ip, vif, m);
 		}
 
 	/*
@@ -2866,7 +2874,7 @@ ip_mroute_modevent(module_t mod, int type, void *unused)
 		MRW_WLOCK();
 		if (ip_mrouter_cnt != 0) {
 			MRW_WUNLOCK();
-			return (EINVAL);
+			return (EBUSY);
 		}
 		ip_mrouter_unloading = 1;
 		MRW_WUNLOCK();

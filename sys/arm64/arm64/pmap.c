@@ -147,6 +147,8 @@
 
 #include <machine/asan.h>
 #include <machine/cpu_feat.h>
+#include <machine/elf.h>
+#include <machine/ifunc.h>
 #include <machine/machdep.h>
 #include <machine/md_var.h>
 #include <machine/pcb.h>
@@ -529,6 +531,7 @@ static void *bti_dup_range(void *ctx, void *data);
 static void bti_free_range(void *ctx, void *node);
 static int pmap_bti_copy(pmap_t dst_pmap, pmap_t src_pmap);
 static void pmap_bti_deassign_all(pmap_t pmap);
+static void pagezero(void *);
 
 /*
  * These load the old table data and store the new value.
@@ -1015,7 +1018,7 @@ pmap_bootstrap_l0_table(struct pmap_bootstrap_state *state)
 
 		/* Create a new L0 table entry */
 		state->l1 = (pt_entry_t *)state->freemempos;
-		memset(state->l1, 0, PAGE_SIZE);
+		memset_early(state->l1, 0, PAGE_SIZE);
 		state->freemempos += PAGE_SIZE;
 
 		l1_pa = pmap_early_vtophys((vm_offset_t)state->l1);
@@ -1063,7 +1066,7 @@ pmap_bootstrap_l1_table(struct pmap_bootstrap_state *state)
 
 		/* Create a new L1 table entry */
 		state->l2 = (pt_entry_t *)state->freemempos;
-		memset(state->l2, 0, PAGE_SIZE);
+		memset_early(state->l2, 0, PAGE_SIZE);
 		state->freemempos += PAGE_SIZE;
 
 		l2_pa = pmap_early_vtophys((vm_offset_t)state->l2);
@@ -1107,7 +1110,7 @@ pmap_bootstrap_l2_table(struct pmap_bootstrap_state *state)
 
 		/* Create a new L2 table entry */
 		state->l3 = (pt_entry_t *)state->freemempos;
-		memset(state->l3, 0, PAGE_SIZE);
+		memset_early(state->l3, 0, PAGE_SIZE);
 		state->freemempos += PAGE_SIZE;
 
 		l3_pa = pmap_early_vtophys((vm_offset_t)state->l3);
@@ -1344,7 +1347,7 @@ pmap_bootstrap(void)
 
 	/* Set this early so we can use the pagetable walking functions */
 	kernel_pmap_store.pm_l0 = pagetable_l0_ttbr1;
-	PMAP_LOCK_INIT(kernel_pmap);
+	mtx_init(&kernel_pmap->pm_mtx, "kernel pmap", NULL, MTX_DEF);
 	kernel_pmap->pm_l0_paddr =
 	    pmap_early_vtophys((vm_offset_t)kernel_pmap_store.pm_l0);
 	TAILQ_INIT(&kernel_pmap->pm_pvchunk);
@@ -1406,7 +1409,7 @@ pmap_bootstrap(void)
 #define alloc_pages(var, np)						\
 	(var) = bs_state.freemempos;					\
 	bs_state.freemempos += (np * PAGE_SIZE);			\
-	memset((char *)(var), 0, ((np) * PAGE_SIZE));
+	memset_early((char *)(var), 0, ((np) * PAGE_SIZE));
 
 	/* Allocate dynamic per-cpu area. */
 	alloc_pages(dpcpu, DPCPU_SIZE / PAGE_SIZE);
@@ -1444,7 +1447,7 @@ pmap_bootstrap_allocate_san_l2(vm_paddr_t start_pa, vm_paddr_t end_pa,
 			continue;
 		}
 
-		bzero((void *)PHYS_TO_DMAP(pa), L2_SIZE);
+		bzero_early((void *)PHYS_TO_DMAP(pa), L2_SIZE);
 		physmem_exclude_region(pa, L2_SIZE, EXFLAG_NOALLOC);
 		pmap_store(l2, PHYS_TO_PTE(pa) | PMAP_SAN_PTE_BITS | L2_BLOCK);
 	}
@@ -1923,17 +1926,13 @@ pmap_s1_invalidate_page(pmap_t pmap, vm_offset_t va, bool final_only)
 	r = TLBI_VA(va);
 	if (pmap == kernel_pmap) {
 		pmap_s1_invalidate_kernel(r, final_only);
-		if (pmap_multiple_tlbi) {
-			dsb(ish);
-			pmap_s1_invalidate_kernel(r, final_only);
-		}
 	} else {
 		r |= ASID_TO_OPERAND(COOKIE_TO_ASID(pmap->pm_cookie));
 		pmap_s1_invalidate_user(r, final_only);
-		if (pmap_multiple_tlbi) {
-			dsb(ish);
-			pmap_s1_invalidate_user(r, final_only);
-		}
+	}
+	if (pmap_multiple_tlbi) {
+		dsb(ish);
+		__asm __volatile("tlbi	vale1is, xzr" ::: "memory");
 	}
 	dsb(ish);
 	isb();
@@ -1975,24 +1974,16 @@ pmap_s1_invalidate_strided(pmap_t pmap, vm_offset_t sva, vm_offset_t eva,
 		end = TLBI_VA(eva);
 		for (r = start; r < end; r += TLBI_VA(stride))
 			pmap_s1_invalidate_kernel(r, final_only);
-
-		if (pmap_multiple_tlbi) {
-			dsb(ish);
-			for (r = start; r < end; r += TLBI_VA(stride))
-				pmap_s1_invalidate_kernel(r, final_only);
-		}
 	} else {
 		start = end = ASID_TO_OPERAND(COOKIE_TO_ASID(pmap->pm_cookie));
 		start |= TLBI_VA(sva);
 		end |= TLBI_VA(eva);
 		for (r = start; r < end; r += TLBI_VA(stride))
 			pmap_s1_invalidate_user(r, final_only);
-
-		if (pmap_multiple_tlbi) {
-			dsb(ish);
-			for (r = start; r < end; r += TLBI_VA(stride))
-				pmap_s1_invalidate_user(r, final_only);
-		}
+	}
+	if (pmap_multiple_tlbi) {
+		dsb(ish);
+		__asm __volatile("tlbi	vale1is, xzr" ::: "memory");
 	}
 	dsb(ish);
 	isb();
@@ -2033,11 +2024,11 @@ pmap_s1_invalidate_all_kernel(void)
 {
 	dsb(ishst);
 	__asm __volatile("tlbi vmalle1is");
-	dsb(ish);
 	if (pmap_multiple_tlbi) {
-		__asm __volatile("tlbi vmalle1is");
 		dsb(ish);
+		__asm __volatile("tlbi	vale1is, xzr" ::: "memory");
 	}
+	dsb(ish);
 	isb();
 }
 
@@ -2055,17 +2046,13 @@ pmap_s1_invalidate_all(pmap_t pmap)
 	dsb(ishst);
 	if (pmap == kernel_pmap) {
 		__asm __volatile("tlbi vmalle1is");
-		if (pmap_multiple_tlbi) {
-			dsb(ish);
-			__asm __volatile("tlbi vmalle1is");
-		}
 	} else {
 		r = ASID_TO_OPERAND(COOKIE_TO_ASID(pmap->pm_cookie));
 		__asm __volatile("tlbi aside1is, %0" : : "r" (r));
-		if (pmap_multiple_tlbi) {
-			dsb(ish);
-			__asm __volatile("tlbi aside1is, %0" : : "r" (r));
-		}
+	}
+	if (pmap_multiple_tlbi) {
+		dsb(ish);
+		__asm __volatile("tlbi	vale1is, xzr" ::: "memory");
 	}
 	dsb(ish);
 	isb();
@@ -9161,16 +9148,15 @@ pmap_init_mp(void *dummy __unused)
 {
 	uint64_t reg;
 
-	if (get_kernel_reg(ID_AA64PFR1_EL1, &reg)) {
-		if (ID_AA64PFR1_BT_VAL(reg) != ID_AA64PFR1_BT_NONE) {
-			if (bootverbose)
-				printf("Enabling BTI\n");
-			pmap_bti_support = true;
+	get_kernel_reg(ID_AA64PFR1_EL1, &reg);
+	if (ID_AA64PFR1_BT_VAL(reg) != ID_AA64PFR1_BT_NONE) {
+		if (bootverbose)
+			printf("Enabling BTI\n");
+		pmap_bti_support = true;
 
-			pmap_bti_ranges_zone = uma_zcreate("BTI ranges",
-			    sizeof(struct rs_el), NULL, NULL, NULL, NULL,
-			    UMA_ALIGN_PTR, 0);
-		}
+		pmap_bti_ranges_zone = uma_zcreate("BTI ranges",
+		    sizeof(struct rs_el), NULL, NULL, NULL, NULL,
+		    UMA_ALIGN_PTR, 0);
 	}
 }
 SYSINIT(pmap_init_mp, SI_SUB_CPU, SI_ORDER_ANY, pmap_init_mp, NULL);
@@ -9185,9 +9171,7 @@ pmap_init_cnp(void *dummy __unused)
 	uint64_t reg;
 	u_int cpuid;
 
-	if (!get_kernel_reg(ID_AA64MMFR2_EL1, &reg))
-		return;
-
+	get_kernel_reg(ID_AA64MMFR2_EL1, &reg);
 	if (ID_AA64MMFR2_CnP_VAL(reg) != ID_AA64MMFR2_CnP_NONE) {
 		if (bootverbose)
 			printf("Enabling CnP\n");
@@ -10210,3 +10194,22 @@ SYSCTL_OID(_vm_pmap, OID_AUTO, kernel_maps,
     CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE | CTLFLAG_SKIP,
     NULL, 0, sysctl_kmaps, "A",
     "Dump kernel address layout");
+
+
+void pagezero_simple(void *);
+void pagezero_cache(void *);
+void pagezero_mops(void *);
+
+DEFINE_IFUNC(static, void, pagezero, (void *))
+{
+	uint32_t dczid_el0;
+
+	dczid_el0 = READ_SPECIALREG(dczid_el0);
+
+	if (elf_hwcap2 & HWCAP2_MOPS)
+		return (pagezero_mops);
+	else if ((dczid_el0 & DCZID_DZP) == 0)
+		return (pagezero_cache);
+	else
+		return (pagezero_simple);
+}

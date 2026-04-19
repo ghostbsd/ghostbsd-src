@@ -69,6 +69,7 @@ RUNTIMELINKS=\
 	builtin.1 readonly.1 \
 	builtin.1 rehash.1 \
 	builtin.1 repeat.1 \
+	builtin.1 return.1 \
 	builtin.1 sched.1 \
 	builtin.1 set.1 \
 	builtin.1 setenv.1 \
@@ -99,11 +100,11 @@ RUNTIMELINKS=\
 	builtin.1 while.1
 
 .if ${MK_TESTS} != "no"
-MANGROUPS+=	TESTS
-ATF=		${SRCTOP}/contrib/atf
-.PATH:		${ATF}/doc
-TESTS=		atf-test-program.1
-TESTSPACKAGE=	tests
+MANGROUPS+=	ATF
+ATFTOP=		${SRCTOP}/contrib/atf
+.PATH:		${ATFTOP}/doc
+ATF=		atf-test-program.1
+ATFPACKAGE=	atf
 .endif
 
 .include <bsd.prog.mk>

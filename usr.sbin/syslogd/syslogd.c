@@ -781,15 +781,21 @@ main(int argc, char *argv[])
 		case EVFILT_SIGNAL:
 			switch (ev.ident) {
 			case SIGHUP:
+				/* Reload */
 				init(true);
 				break;
 			case SIGINT:
 			case SIGQUIT:
+				/* Ignore these unless -F and / or -d */
+				if (!Foreground && !Debug)
+					break;
+				/* FALLTHROUGH */
 			case SIGTERM:
-				if (ev.ident == SIGTERM || Debug)
-					die(ev.ident);
+				/* Terminate */
+				die(ev.ident);
 				break;
 			case SIGALRM:
+				/* Mark and flush */
 				markit();
 				break;
 			}
@@ -2930,8 +2936,9 @@ parse_selector(const char *p, struct filed *f)
 
 		pri = decode(buf, prioritynames);
 		if (pri < 0) {
-			dprintf("unknown priority name \"%s\"", buf);
-			return (NULL);
+			warnx("unknown priority name \"%s\", setting to 'info'",
+			    buf);
+			pri = LOG_INFO;
 		}
 	}
 	if (!pri_cmp)
@@ -2953,11 +2960,12 @@ parse_selector(const char *p, struct filed *f)
 		} else {
 			i = decode(buf, facilitynames);
 			if (i < 0) {
-				dprintf("unknown facility name \"%s\"", buf);
-				return (NULL);
+				warnx("unknown facility name \"%s\", ignoring",
+				    buf);
+			} else {
+				f->f_pmask[i >> 3] = pri;
+				f->f_pcmp[i >> 3] = pri_cmp;
 			}
-			f->f_pmask[i >> 3] = pri;
-			f->f_pcmp[i >> 3] = pri_cmp;
 		}
 		while (*p == ',' || *p == ' ')
 			p++;

@@ -521,6 +521,8 @@
         ..
         sysctl
         ..
+        tunefs
+        ..
     ..
     secure
         lib
@@ -1262,6 +1264,8 @@
         yacc
             yacc
             ..
+        ..
+        yes
         ..
     ..
     usr.sbin

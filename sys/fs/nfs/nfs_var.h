@@ -119,7 +119,6 @@ int nfsrv_delegupdate(struct nfsrv_descript *, nfsquad_t, nfsv4stateid_t *,
     vnode_t, int, struct ucred *, NFSPROC_T *, int *);
 int nfsrv_releaselckown(struct nfsstate *, nfsquad_t, NFSPROC_T *);
 void nfsrv_zapclient(struct nfsclient *, NFSPROC_T *);
-int nfssvc_idname(struct nfsd_idargs *);
 void nfsrv_servertimer(void * __unused);
 int nfsrv_getclientipaddr(struct nfsrv_descript *, struct nfsclient *);
 void nfsrv_setupstable(NFSPROC_T *);
@@ -609,6 +608,7 @@ int nfscl_relbytelock(vnode_t, u_int64_t, u_int64_t,
 int nfscl_checkwritelocked(vnode_t, struct flock *,
     struct ucred *, NFSPROC_T *, void *, int);
 void nfscl_lockrelease(struct nfscllockowner *, int, int);
+void nfscl_uuidcheck(char *);
 void nfscl_fillclid(u_int64_t, char *, u_int8_t *, u_int16_t);
 void nfscl_filllockowner(void *, u_int8_t *, int);
 void nfscl_freeopen(struct nfsclopen *, int, bool);
