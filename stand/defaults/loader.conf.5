@@ -421,6 +421,17 @@ be displayed.
 If set to
 .Dq YES ,
 the beastie boot menu will be skipped.
+.It Va loader_menu_hidden
+If set to
+.Dq YES ,
+the boot menu will not be drawn during the autoboot countdown.
+Instead, a single line prompt
+.Pq Dq Li "Press any key for boot menu..."
+is displayed.
+If a key is pressed, the full menu is revealed; otherwise the system boots
+normally when the countdown expires.
+The countdown duration is controlled by
+.Va autoboot_delay .
 .It Va loader_autoboot_show Pq Dq Li YES
 If set to
 .Dq NO ,
