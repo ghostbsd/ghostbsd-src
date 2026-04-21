@@ -517,16 +517,28 @@ function menu.run()
 		return
 	end
 
-	menu.draw(menu.default)
+	local hidden = loader.getenv("loader_menu_hidden")
+	if hidden ~= nil and hidden:lower() == "yes" then
+		if delay ~= nil then
+			autoboot_key = menu.autoboothidden(delay)
+			-- nil means timed out and booted
+			if autoboot_key == nil then
+				return
+			end
+		end
+		menu.draw(menu.default)
+	else
+		menu.draw(menu.default)
 
-	if delay ~= nil then
-		autoboot_key = menu.autoboot(delay)
+		if delay ~= nil then
+			autoboot_key = menu.autoboot(delay)
 
-		-- autoboot_key should return the key pressed.  It will only
-		-- return nil if we hit the timeout and executed the timeout
-		-- command.  Bail out.
-		if autoboot_key == nil then
-			return
+			-- autoboot_key should return the key pressed.  It will only
+			-- return nil if we hit the timeout and executed the timeout
+			-- command.  Bail out.
+			if autoboot_key == nil then
+				return
+			end
 		end
 	end
 
@@ -570,6 +582,37 @@ function menu.autoboot(delay)
 				screen.defcursor()
 				return ch
 			end
+		end
+
+		loader.delay(50000)
+	until time <= 0
+
+	local cmd = loader.getenv("menu_timeout_command") or "boot"
+	cli_execute_unparsed(cmd)
+	return nil
+end
+
+function menu.autoboothidden(delay)
+	local endtime = loader.time() + delay
+	local time
+	local last
+	repeat
+		time = endtime - loader.time()
+		if last == nil or last ~= time then
+			last = time
+			screen.setcursor(1, 1)
+			printc("Press any key for boot menu... " .. time .. " ")
+			screen.defcursor()
+		end
+		if io.ischar() then
+			local ch = io.getchar()
+			screen.setcursor(1, 1)
+			printc(string.rep(" ", 79))
+			screen.defcursor()
+			if ch == core.KEY_ENTER then
+				break
+			end
+			return ch
 		end
 
 		loader.delay(50000)
