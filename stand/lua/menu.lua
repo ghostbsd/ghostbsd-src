@@ -609,9 +609,6 @@ function menu.autoboothidden(delay)
 			screen.setcursor(1, 1)
 			printc(string.rep(" ", 79))
 			screen.defcursor()
-			if ch == core.KEY_ENTER then
-				break
-			end
 			return ch
 		end
 
