@@ -1,0 +1,14 @@
+/*
+ * GhostBSD Certificate Package
+ */
+
+comment = "GhostBSD Package Repository Certificate"
+
+desc = <<EOD
+Public key certificate for authenticating packages from the GhostBSD
+package repository.
+EOD
+
+annotations {
+	set = "minimal,minimal-jail"
+}
