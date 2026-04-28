@@ -601,7 +601,7 @@ function menu.autoboothidden(delay)
 		if last == nil or last ~= time then
 			last = time
 			screen.setcursor(1, 1)
-			printc("Press any key for boot menu... " .. time .. " ")
+			printc("[Enter] boot now, any other key for boot menu... " .. time .. " ")
 			screen.defcursor()
 		end
 		if io.ischar() then
@@ -609,6 +609,9 @@ function menu.autoboothidden(delay)
 			screen.setcursor(1, 1)
 			printc(string.rep(" ", 79))
 			screen.defcursor()
+			if ch == core.KEY_ENTER then
+				break
+			end
 			return ch
 		end
 
