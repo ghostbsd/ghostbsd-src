@@ -1,3 +1,3 @@
-SUBDIR= pkg pkgbase-15
+SUBDIR= pkg pkgbase-15 ssl
 
 .include <bsd.subdir.mk>

@@ -113,6 +113,7 @@ function core.setVerbose(verbose)
 
 	if verbose then
 		loader.setenv("boot_verbose", "YES")
+		loader.setenv("boot_mute", "NO")
 	else
 		loader.unsetenv("boot_verbose")
 	end
