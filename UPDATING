@@ -12,6 +12,57 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20260430:
+	15.0-RELEASE-p8	EN-26:11.dhclient
+
+	dhclient(8) lease validation is too strict. [EN-26:11.dhclient]
+
+20260429:
+	15.0-RELEASE-p7	SA-26:12.dhclient
+			SA-26:13.exec
+			SA-26:14.pf
+			SA-26:15.dhclient
+			SA-26:16.libnv
+			SA-26:17.libnv
+			EN-26:08.pf
+			EN-26:09.tzdata
+			EN-26:10.amd64
+
+	Remote code execution via malicious DHCP options. [SA-26:12.dhclient]
+
+	Local privilege escalation via execve(). [SA-26:13.exec]
+
+	pf can overflow the stack parsing crafted SCTP packets. [SA-26:14.pf]
+
+	Remotely triggerable out-of-bounds heap write in dhclient. [SA-26:15.dhclient]
+
+	Stack overflow via select() file descriptor set overflow. [SA-26:16.libnv]
+
+	Heap overflow in libnv. [SA-26:17.libnv]
+
+	Incorrect duplicate rule detection for automatic tables. [EN-26:08.pf]
+
+	Timezone database information update. [EN-26:09.tzdata]
+
+	TLB invalidation bug on AMD systems with INVLPGB. [EN-26:10.amd64]
+
+20260421:
+	15.0-RELEASE-p6	SA-26:10.tty
+			SA-26:11.amd64
+			EN-26:05.vm
+			EN-26:06.timerfd
+			EN-26:07.pkgbase
+
+	Kernel use-after-free bug in the TIOCNOTTY handler. [SA-26:10.tty]
+
+	Missing large page handling in pmap_pkru_update_range(). [SA-26:11.amd64]
+
+	The page fault handler fails to zero memory. [EN-26:05.vm]
+
+	Periodic timerfd(2) timers may produce incorrect results. [EN-26:06.timerfd]
+
+	Base packages fail to build with newer versions of libucl. [EN-26:07.pkgbase]
+
 20260325:
 	15.0-RELEASE-p5	SA-26:06.tcp
 			SA-26:07.nvmf
