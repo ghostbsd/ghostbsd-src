@@ -195,9 +195,6 @@ cpu_startup(void *dummy)
 	 */
 	cpu_setup(PCPU_GET(cpuid));
 
-#ifdef PERFMON
-	perfmon_init();
-#endif
 	printf("real memory  = %ju (%ju MB)\n", ptoa((uintmax_t)physmem),
 	    ptoa((uintmax_t)physmem) / 1048576);
 	realmem = physmem;
@@ -490,9 +487,8 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	/*
 	 * Finish setting up thread0.
 	 */
-	thread0.td_pcb = (struct pcb *)
-	    ((thread0.td_kstack + thread0.td_kstack_pages * PAGE_SIZE -
-	    sizeof(struct pcb)) & ~15UL);
+	thread0.td_pcb = (struct pcb *)__align_down(thread0.td_kstack +
+	    thread0.td_kstack_pages * PAGE_SIZE - sizeof(struct pcb), 16);
 	bzero((void *)thread0.td_pcb, sizeof(struct pcb));
 	pc->pc_curpcb = thread0.td_pcb;
 

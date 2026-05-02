@@ -60,6 +60,17 @@
 #include <linux/pci_ids.h>
 #include <linux/pm.h>
 
+/*
+ * <linux/ioport.h> should be included here, like Linux, but we can't have that
+ * because Linux `struct resource` definition would conflict with FreeBSD
+ * native definition.
+ *
+ * At least the amdgpu DRM driver (amdgpu_isp.c at the time of this writing)
+ * relies on this indirect include to get the definition of Linux `struct
+ * resource`. As a workaround, we include <linux/ioport.h> from
+ * <linux/mfd/core.h>.
+ */
+
 #include <linux/kernel.h>	/* pr_debug */
 
 struct pci_device_id {
@@ -234,6 +245,20 @@ extern const char *pci_power_names[6];
 #if defined(LINUXKPI_VERSION) && (LINUXKPI_VERSION <= 61000)
 #define	PCI_IRQ_LEGACY			PCI_IRQ_INTX
 #endif
+
+/*
+ * Linux PCI code uses `PCI_SET_ERROR_RESPONSE()` to indicate to the caller of
+ * a `pci_read_*()` function that the read failed. An example of failure is
+ * whether the device was disconnected. It is a bit weird because Linux
+ * `pci_read_*()` can return an error value, as the read value is stored in a
+ * integer passed by pointer.
+ *
+ * We don't set PCI_ERROR_RESPONSE anywhere as of this commit, but the DRM
+ * drivers started to use `PCI_POSSIBLE_ERROR()`.
+ */
+#define	PCI_ERROR_RESPONSE		(~0ULL)
+#define	PCI_SET_ERROR_RESPONSE(val)	(*(val) = ((typeof(*(val))) PCI_ERROR_RESPONSE))
+#define	PCI_POSSIBLE_ERROR(val)		((val) == ((typeof(val)) PCI_ERROR_RESPONSE))
 
 struct pci_dev;
 
@@ -1306,6 +1331,13 @@ pci_dev_present(const struct pci_device_id *cur)
 		cur++;
 	}
 	return (0);
+}
+
+static inline bool
+pci_dev_is_disconnected(const struct pci_dev *pdev)
+{
+	pr_debug("TODO: %s\n", __func__);
+	return (false);
 }
 
 static inline const struct pci_device_id *

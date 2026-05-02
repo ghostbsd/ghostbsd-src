@@ -1345,9 +1345,7 @@ pf_hash_rule_addr(MD5_CTX *ctx, struct pf_rule_addr *pfr)
 			PF_MD5_UPD(pfr, addr.iflags);
 			break;
 		case PF_ADDR_TABLE:
-			if (strncmp(pfr->addr.v.tblname, PF_OPTIMIZER_TABLE_PFX,
-			    strlen(PF_OPTIMIZER_TABLE_PFX)))
-				PF_MD5_UPD(pfr, addr.v.tblname);
+			PF_MD5_UPD(pfr, addr.v.tblname);
 			break;
 		case PF_ADDR_ADDRMASK:
 		case PF_ADDR_RANGE:
@@ -3115,8 +3113,6 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		case DIOCIGETIFACES:
 		case DIOCGIFSPEEDV0:
 		case DIOCGIFSPEEDV1:
-		case DIOCSETIFFLAG:
-		case DIOCCLRIFFLAG:
 		case DIOCGETETHRULES:
 		case DIOCGETETHRULE:
 		case DIOCGETETHRULESETS:
