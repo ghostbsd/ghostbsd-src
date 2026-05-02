@@ -278,7 +278,7 @@ ddt_log_update_entry(ddt_t *ddt, ddt_log_t *ddl, ddt_lightweight_entry_t *ddlwe,
 void
 ddt_log_entry(ddt_t *ddt, ddt_lightweight_entry_t *ddlwe, ddt_log_update_t *dlu)
 {
-	ASSERT3U(dlu->dlu_dbp, !=, NULL);
+	ASSERT3P(dlu->dlu_dbp, !=, NULL);
 
 	ddt_log_update_entry(ddt, ddt->ddt_log_active, ddlwe, B_TRUE);
 
@@ -328,7 +328,7 @@ ddt_log_entry(ddt_t *ddt, ddt_lightweight_entry_t *ddlwe, ddt_log_update_t *dlu)
 void
 ddt_log_commit(ddt_t *ddt, ddt_log_update_t *dlu)
 {
-	ASSERT3U(dlu->dlu_dbp, !=, NULL);
+	ASSERT3P(dlu->dlu_dbp, !=, NULL);
 	ASSERT3U(dlu->dlu_block+1, ==, dlu->dlu_ndbp);
 	ASSERT3U(dlu->dlu_offset, >, 0);
 
@@ -604,8 +604,7 @@ ddt_log_load_one(ddt_t *ddt, uint_t n)
 	}
 
 	if (hdr.dlh_length > 0) {
-		dmu_prefetch_by_dnode(dn, 0, 0, hdr.dlh_length,
-		    ZIO_PRIORITY_SYNC_READ);
+		dmu_prefetch_stream_by_dnode(dn, 0, hdr.dlh_length, B_FALSE);
 
 		for (uint64_t offset = 0; offset < hdr.dlh_length;
 		    offset += dn->dn_datablksz) {

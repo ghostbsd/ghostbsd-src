@@ -826,8 +826,8 @@ preload_protect1(elf_file_t ef, vm_prot_t prot, bool reset)
 			if ((phdr->p_flags & PF_X) != 0)
 				nprot |= VM_PROT_EXECUTE;
 		}
-		error = pmap_change_prot((vm_offset_t)ef->address +
-		    phdr->p_vaddr, round_page(phdr->p_memsz), prot | nprot);
+		error = pmap_change_prot(ef->address + phdr->p_vaddr,
+		    round_page(phdr->p_memsz), prot | nprot);
 		if (error != 0)
 			break;
 	}
@@ -2041,7 +2041,6 @@ link_elf_propagate_vnets(linker_file_t lf)
 }
 #endif
 
-#if defined(__i386__) || defined(__amd64__) || defined(__aarch64__) || defined(__powerpc__)
 /*
  * Use this lookup routine when performing relocations early during boot.
  * The generic lookup routine depends on kobj, which is not initialized
@@ -2103,5 +2102,4 @@ link_elf_late_ireloc(void)
 
 	relocate_file1(ef, elf_lookup_ifunc, elf_reloc_late, true);
 }
-#endif
 #endif

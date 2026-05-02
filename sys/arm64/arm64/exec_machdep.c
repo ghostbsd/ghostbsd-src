@@ -445,6 +445,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	else
 		new_tcr = 0;
 	td->td_proc->p_md.md_tcr = new_tcr;
+	td->td_md.md_sctlr = 0;
 
 	/* TODO: should create a pmap function for this... */
 	tcr = READ_SPECIALREG(tcr_el1);
@@ -838,7 +839,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Make room, keeping the stack aligned */
 	fp = (struct sigframe *)addr;
 	fp--;
-	fp = (struct sigframe *)STACKALIGN(fp);
+	fp = STACKALIGN(fp);
 
 	/* Copy the sigframe out to the user's stack. */
 	if (copyout(&frame, fp, sizeof(*fp)) != 0) {

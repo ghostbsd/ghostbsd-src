@@ -633,8 +633,6 @@ static int rtw8851b_read_efuse(struct rtw89_dev *rtwdev, u8 *log_map,
 	efuse->rfe_type = map->rfe_type;
 	efuse->xtal_cap = map->xtal_k;
 
-	rtw89_info(rtwdev, "chip rfe_type is %d\n", efuse->rfe_type);
-
 	return 0;
 }
 
@@ -1825,15 +1823,9 @@ static void rtw8851b_bb_set_tx_shape_dfir(struct rtw89_dev *rtwdev,
 #define __DFIR_CFG_ADDR(i) (R_TXFIR0 + ((i) << 2))
 #define __DFIR_CFG_MASK 0xffffffff
 #define __DFIR_CFG_NR 8
-#if defined(__linux__)
 #define __DECL_DFIR_PARAM(_name, _val...) \
 	static const u32 param_ ## _name[] = {_val}; \
 	static_assert(ARRAY_SIZE(param_ ## _name) == __DFIR_CFG_NR)
-#elif defined(__FreeBSD__)
-#define __DECL_DFIR_PARAM(_name, _val...) \
-	static const u32 param_ ## _name[] = {_val}; \
-	rtw89_static_assert(ARRAY_SIZE(param_ ## _name) == __DFIR_CFG_NR)
-#endif
 
 	__DECL_DFIR_PARAM(flat,
 			  0x023D23FF, 0x0029B354, 0x000FC1C8, 0x00FDB053,
@@ -2538,11 +2530,15 @@ static const struct rtw89_chip_ops rtw8851b_chip_ops = {
 	.cfg_txrx_path		= rtw8851b_bb_cfg_txrx_path,
 	.set_txpwr_ul_tb_offset	= rtw8851b_set_txpwr_ul_tb_offset,
 	.digital_pwr_comp	= NULL,
+	.calc_rx_gain_normal	= NULL,
 	.pwr_on_func		= rtw8851b_pwr_on_func,
 	.pwr_off_func		= rtw8851b_pwr_off_func,
 	.query_rxdesc		= rtw89_core_query_rxdesc,
 	.fill_txdesc		= rtw89_core_fill_txdesc,
 	.fill_txdesc_fwcmd	= rtw89_core_fill_txdesc,
+	.get_ch_dma		= {rtw89_core_get_ch_dma,
+				   rtw89_core_get_ch_dma,
+				   NULL,},
 	.cfg_ctrl_path		= rtw89_mac_cfg_ctrl_path,
 	.mac_cfg_gnt		= rtw89_mac_cfg_gnt,
 	.stop_sch_tx		= rtw89_mac_stop_sch_tx,
@@ -2556,6 +2552,7 @@ static const struct rtw89_chip_ops rtw8851b_chip_ops = {
 	.h2c_default_dmac_tbl	= NULL,
 	.h2c_update_beacon	= rtw89_fw_h2c_update_beacon,
 	.h2c_ba_cam		= rtw89_fw_h2c_ba_cam,
+	.h2c_wow_cam_update	= rtw89_fw_h2c_wow_cam_update,
 
 	.btc_set_rfe		= rtw8851b_btc_set_rfe,
 	.btc_init_cfg		= rtw8851b_btc_init_cfg,
@@ -2593,6 +2590,10 @@ const struct rtw89_chip_info rtw8851b_chip_info = {
 	.small_fifo_size	= true,
 	.dle_scc_rsvd_size	= 98304,
 	.max_amsdu_limit	= 3500,
+	.max_vht_mpdu_cap	= IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454,
+	.max_eht_mpdu_cap	= 0,
+	.max_tx_agg_num		= 128,
+	.max_rx_agg_num		= 64,
 	.dis_2g_40m_ul_ofdma	= true,
 	.rsvd_ple_ofst		= 0x2f800,
 	.hfc_param_ini		= {rtw8851b_hfc_param_ini_pcie,
@@ -2634,6 +2635,7 @@ const struct rtw89_chip_info rtw8851b_chip_info = {
 	.support_ant_gain	= false,
 	.support_tas		= false,
 	.support_sar_by_ant	= false,
+	.support_noise		= false,
 	.ul_tb_waveform_ctrl	= true,
 	.ul_tb_pwr_diff		= false,
 	.rx_freq_frome_ie	= true,
@@ -2650,6 +2652,7 @@ const struct rtw89_chip_info rtw8851b_chip_info = {
 	.bacam_num		= 2,
 	.bacam_dynamic_num	= 4,
 	.bacam_ver		= RTW89_BACAM_V0,
+	.addrcam_ver		= 0,
 	.ppdu_max_usr		= 4,
 	.sec_ctrl_efuse_size	= 4,
 	.physical_efuse_size	= 1216,
@@ -2695,6 +2698,8 @@ const struct rtw89_chip_info rtw8851b_chip_info = {
 	.cfo_hw_comp		= true,
 	.dcfo_comp		= &rtw8851b_dcfo_comp,
 	.dcfo_comp_sft		= 12,
+	.nhm_report		= NULL,
+	.nhm_th			= NULL,
 	.imr_info		= &rtw8851b_imr_info,
 	.imr_dmac_table		= NULL,
 	.imr_cmac_table		= NULL,
@@ -2703,6 +2708,7 @@ const struct rtw89_chip_info rtw8851b_chip_info = {
 	.bss_clr_map_reg	= R_BSS_CLR_MAP_V1,
 	.rfkill_init		= &rtw8851b_rfkill_regs,
 	.rfkill_get		= {R_AX_GPIO_EXT_CTRL, B_AX_GPIO_IN_9},
+	.btc_sb			= {{{R_AX_SCOREBOARD, R_AX_SCOREBOARD},}},
 	.dma_ch_mask		= BIT(RTW89_DMA_ACH4) | BIT(RTW89_DMA_ACH5) |
 				  BIT(RTW89_DMA_ACH6) | BIT(RTW89_DMA_ACH7) |
 				  BIT(RTW89_DMA_B1MG) | BIT(RTW89_DMA_B1HI),
@@ -2711,6 +2717,7 @@ const struct rtw89_chip_info rtw8851b_chip_info = {
 	.wowlan_stub		= &rtw_wowlan_stub_8851b,
 #endif
 	.xtal_info		= &rtw8851b_xtal_info,
+	.default_quirks		= 0,
 };
 EXPORT_SYMBOL(rtw8851b_chip_info);
 

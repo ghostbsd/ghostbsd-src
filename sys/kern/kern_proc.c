@@ -1235,6 +1235,8 @@ fill_kinfo_proc_pgrp(struct proc *p, struct kinfo_proc *kp)
 		kp->ki_tdev = NODEV;
 		kp->ki_tdev_freebsd11 = kp->ki_tdev; /* truncate */
 	}
+	kp->ki_reaper = p->p_reaper->p_pid;
+	kp->ki_reapsubtree = p->p_reapsubtree;
 }
 
 /*
@@ -1325,7 +1327,7 @@ fill_kinfo_thread(struct thread *td, struct kinfo_proc *kp, int preferthread)
 	kp->ki_tid = td->td_tid;
 	kp->ki_numthreads = p->p_numthreads;
 	kp->ki_pcb = td->td_pcb;
-	kp->ki_kstack = (void *)td->td_kstack;
+	kp->ki_kstack = td->td_kstack;
 	kp->ki_slptime = (ticks - td->td_slptick) / hz;
 	kp->ki_pri.pri_class = td->td_pri_class;
 	kp->ki_pri.pri_user = td->td_user_pri;
@@ -1437,7 +1439,7 @@ freebsd32_kinfo_proc_out(const struct kinfo_proc *ki, struct kinfo_proc32 *ki32)
 	CP(*ki, *ki32, ki_sid);
 	CP(*ki, *ki32, ki_tsid);
 	CP(*ki, *ki32, ki_jobc);
-	CP(*ki, *ki32, ki_tdev);
+	FU64_CP(*ki, *ki32, ki_tdev);
 	CP(*ki, *ki32, ki_tdev_freebsd11);
 	CP(*ki, *ki32, ki_siglist);
 	CP(*ki, *ki32, ki_sigmask);
@@ -1464,7 +1466,7 @@ freebsd32_kinfo_proc_out(const struct kinfo_proc *ki, struct kinfo_proc32 *ki32)
 	CP(*ki, *ki32, ki_slptime);
 	CP(*ki, *ki32, ki_swtime);
 	CP(*ki, *ki32, ki_cow);
-	CP(*ki, *ki32, ki_runtime);
+	FU64_CP(*ki, *ki32, ki_runtime);
 	TV_CP(*ki, *ki32, ki_start);
 	TV_CP(*ki, *ki32, ki_childtime);
 	CP(*ki, *ki32, ki_flag);
@@ -1494,6 +1496,8 @@ freebsd32_kinfo_proc_out(const struct kinfo_proc *ki, struct kinfo_proc32 *ki32)
 	CP(*ki, *ki32, ki_fibnum);
 	CP(*ki, *ki32, ki_cr_flags);
 	CP(*ki, *ki32, ki_jid);
+	CP(*ki, *ki32, ki_reaper);
+	CP(*ki, *ki32, ki_reapsubtree);
 	CP(*ki, *ki32, ki_numthreads);
 	CP(*ki, *ki32, ki_tid);
 	CP(*ki, *ki32, ki_pri);
@@ -1503,6 +1507,7 @@ freebsd32_kinfo_proc_out(const struct kinfo_proc *ki, struct kinfo_proc32 *ki32)
 	PTRTRIM_CP(*ki, *ki32, ki_kstack);
 	PTRTRIM_CP(*ki, *ki32, ki_udata);
 	PTRTRIM_CP(*ki, *ki32, ki_tdaddr);
+	PTRTRIM_CP(*ki, *ki32, ki_pd);
 	CP(*ki, *ki32, ki_sflag);
 	CP(*ki, *ki32, ki_tdflags);
 	PTRTRIM_CP(*ki, *ki32, ki_uerrmsg);

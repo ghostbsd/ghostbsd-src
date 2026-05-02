@@ -336,6 +336,33 @@ SYSCTL_BOOL(_kern_ipc_splice, OID_AUTO, receive_stream, CTLFLAG_RWTUN,
     &splice_receive_stream, 0,
     "Use soreceive_stream() for stream splices");
 
+static int splice_num_wq = -1;
+static int
+sysctl_splice_num_wq(SYSCTL_HANDLER_ARGS)
+{
+	int error, new;
+
+	new = splice_num_wq;
+	error = sysctl_handle_int(oidp, &new, 0, req);
+	if (error == 0 && req->newptr && new != splice_num_wq) {
+		if (!cold)
+			sx_xlock(&splice_init_lock);
+		if (new < -1 || new > mp_ncpus ||
+		    (new <= 0 && splice_init_state != 0)) {
+			error = EINVAL;
+		} else {
+			splice_num_wq = new;
+		}
+		if (!cold)
+			sx_xunlock(&splice_init_lock);
+	}
+	return (error);
+}
+SYSCTL_PROC(_kern_ipc_splice, OID_AUTO, num_wq,
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+    &splice_num_wq, 0, sysctl_splice_num_wq, "IU",
+    "Number of splice worker queues");
+
 static uma_zone_t splice_zone;
 static struct proc *splice_proc;
 struct splice_wq {
@@ -447,24 +474,36 @@ splice_init(void)
 		return (0);
 	}
 
+	if (splice_num_wq == -1) {
+		/* if no user preference, use all cores */
+		splice_num_wq = mp_ncpus;
+	} else if (splice_num_wq == 0) {
+		/* allow user to disable */
+		splice_init_state = -1;
+		sx_xunlock(&splice_init_lock);
+		return (ENXIO);
+	} else if (splice_num_wq > mp_ncpus) {
+		splice_num_wq = mp_ncpus;
+	}
+
 	splice_zone = uma_zcreate("splice", sizeof(struct so_splice), NULL,
 	    NULL, splice_zinit, splice_zfini, UMA_ALIGN_CACHE, 0);
 
-	splice_wq = mallocarray(mp_maxid + 1, sizeof(*splice_wq), M_TEMP,
+	splice_wq = mallocarray(mp_ncpus, sizeof(*splice_wq), M_TEMP,
 	    M_WAITOK | M_ZERO);
 
 	/*
 	 * Initialize the workqueues to run the splice work.  We create a
 	 * work queue for each CPU.
 	 */
-	CPU_FOREACH(i) {
+	for (i = 0; i < mp_ncpus; i++) {
 		STAILQ_INIT(&splice_wq[i].head);
 		mtx_init(&splice_wq[i].mtx, "splice work queue", NULL, MTX_DEF);
 	}
 
 	/* Start kthreads for each workqueue. */
 	error = 0;
-	CPU_FOREACH(i) {
+	for (i = 0; i < mp_ncpus; i++) {
 		error = kproc_kthread_add(splice_work_thread, &splice_wq[i],
 		    &splice_proc, &td, 0, 0, "so_splice", "thr_%d", i);
 		if (error) {
@@ -818,8 +857,6 @@ soalloc(struct vnet *vnet)
 	 * a feature to change class of an existing lock, so we use DUPOK.
 	 */
 	mtx_init(&so->so_lock, "socket", NULL, MTX_DEF | MTX_DUPOK);
-	mtx_init(&so->so_snd_mtx, "so_snd", NULL, MTX_DEF);
-	mtx_init(&so->so_rcv_mtx, "so_rcv", NULL, MTX_DEF);
 	so->so_rcv.sb_sel = &so->so_rdsel;
 	so->so_snd.sb_sel = &so->so_wrsel;
 	sx_init(&so->so_snd_sx, "so_snd_sx");
@@ -893,12 +930,51 @@ sodealloc(struct socket *so)
 			    &so->so_snd.sb_hiwat, 0, RLIM_INFINITY);
 		sx_destroy(&so->so_snd_sx);
 		sx_destroy(&so->so_rcv_sx);
-		mtx_destroy(&so->so_snd_mtx);
-		mtx_destroy(&so->so_rcv_mtx);
 	}
 	crfree(so->so_cred);
 	mtx_destroy(&so->so_lock);
 	uma_zfree(socket_zone, so);
+}
+
+/*
+ * Shim to accomodate protocols that already do their own socket buffers
+ * management (marked with PR_SOCKBUF) with protocols that yet do not.
+ *
+ * Attach via socket(2) is different from attach via accept(2).  In case of
+ * normal socket(2) syscall it is the pr_attach that calls soreserve(), even
+ * for protocols that don't yet do PR_SOCKBUF.  In case of accepted connection
+ * it is our shim that calls soreserve() and the hiwat values are taken from
+ * the parent socket.  The SCTP's sopeeloff() hands us a non-listening parent
+ * socket.
+ *
+ * This whole shim should go away when all major protocols fully manage their
+ * socket buffers.
+ */
+static int
+soattach(struct socket *so, int proto, struct thread *td, struct socket *head)
+{
+	int error;
+
+	VNET_ASSERT(curvnet == so->so_vnet,
+	    ("%s: %p != %p", __func__, curvnet,  so->so_vnet));
+
+	if ((so->so_proto->pr_flags & PR_SOCKBUF) == 0) {
+		mtx_init(&so->so_snd_mtx, "so_snd", NULL, MTX_DEF);
+		mtx_init(&so->so_rcv_mtx, "so_rcv", NULL, MTX_DEF);
+		so->so_snd.sb_mtx = &so->so_snd_mtx;
+		so->so_rcv.sb_mtx = &so->so_rcv_mtx;
+	}
+	if (head == NULL || (error = soreserve(so,
+	    SOLISTENING(head) ? head->sol_sbsnd_hiwat : head->so_snd.sb_hiwat,
+	    SOLISTENING(head) ? head->sol_sbrcv_hiwat : head->so_rcv.sb_hiwat))
+	    == 0)
+		error = so->so_proto->pr_attach(so, proto, td);
+	if (error != 0 && (so->so_proto->pr_flags & PR_SOCKBUF) == 0) {
+		mtx_destroy(&so->so_snd_mtx);
+		mtx_destroy(&so->so_rcv_mtx);
+	}
+
+	return (error);
 }
 
 /*
@@ -956,16 +1032,8 @@ socreate(int dom, struct socket **aso, int type, int proto,
 	    so_rdknl_assert_lock);
 	knlist_init(&so->so_wrsel.si_note, so, so_wrknl_lock, so_wrknl_unlock,
 	    so_wrknl_assert_lock);
-	if ((prp->pr_flags & PR_SOCKBUF) == 0) {
-		so->so_snd.sb_mtx = &so->so_snd_mtx;
-		so->so_rcv.sb_mtx = &so->so_rcv_mtx;
-	}
-	/*
-	 * Auto-sizing of socket buffers is managed by the protocols and
-	 * the appropriate flags must be set in the pr_attach() method.
-	 */
 	CURVNET_SET(so->so_vnet);
-	error = prp->pr_attach(so, proto, td);
+	error = soattach(so, proto, td, NULL);
 	CURVNET_RESTORE();
 	if (error) {
 		sodealloc(so);
@@ -1192,13 +1260,6 @@ solisten_clone(struct socket *head)
 	    so_rdknl_assert_lock);
 	knlist_init(&so->so_wrsel.si_note, so, so_wrknl_lock, so_wrknl_unlock,
 	    so_wrknl_assert_lock);
-	VNET_SO_ASSERT(head);
-	if (soreserve(so, head->sol_sbsnd_hiwat, head->sol_sbrcv_hiwat)) {
-		sodealloc(so);
-		log(LOG_DEBUG, "%s: pcb %p: soreserve() failed\n",
-		    __func__, head->so_pcb);
-		return (NULL);
-	}
 	so->so_rcv.sb_lowat = head->sol_sbrcv_lowat;
 	so->so_snd.sb_lowat = head->sol_sbsnd_lowat;
 	so->so_rcv.sb_timeo = head->sol_sbrcv_timeo;
@@ -1206,10 +1267,6 @@ solisten_clone(struct socket *head)
 	so->so_rcv.sb_flags = head->sol_sbrcv_flags & SB_AUTOSIZE;
 	so->so_snd.sb_flags = head->sol_sbsnd_flags &
 	    (SB_AUTOSIZE | SB_AUTOLOWAT);
-	if ((so->so_proto->pr_flags & PR_SOCKBUF) == 0) {
-		so->so_snd.sb_mtx = &so->so_snd_mtx;
-		so->so_rcv.sb_mtx = &so->so_rcv_mtx;
-	}
 
 	return (so);
 }
@@ -1223,7 +1280,7 @@ sonewconn(struct socket *head, int connstatus)
 	if ((so = solisten_clone(head)) == NULL)
 		return (NULL);
 
-	if (so->so_proto->pr_attach(so, 0, NULL) != 0) {
+	if (soattach(so, 0, NULL, head) != 0) {
 		sodealloc(so);
 		log(LOG_DEBUG, "%s: pcb %p: pr_attach() failed\n",
 		    __func__, head->so_pcb);
@@ -1292,18 +1349,20 @@ solisten_enqueue(struct socket *so, int connstatus)
 
 #if defined(SCTP) || defined(SCTP_SUPPORT)
 /*
- * Socket part of sctp_peeloff().  Detach a new socket from an
+ * Socket part of sctp_peeloff().  Create a new socket for an
  * association.  The new socket is returned with a reference.
  *
  * XXXGL: reduce copy-paste with solisten_clone().
  */
 struct socket *
-sopeeloff(struct socket *head)
+sopeeloff(struct socket *head, struct protosw *so_proto)
 {
 	struct socket *so;
 
 	VNET_ASSERT(head->so_vnet != NULL, ("%s:%d so_vnet is NULL, head=%p",
 	    __func__, __LINE__, head));
+	KASSERT(head->so_type == SOCK_SEQPACKET,
+	    ("%s: unexpecte so_type: %d", __func__, head->so_type));
 	so = soalloc(head->so_vnet);
 	if (so == NULL) {
 		log(LOG_DEBUG, "%s: pcb %p: New socket allocation failure: "
@@ -1311,12 +1370,12 @@ sopeeloff(struct socket *head)
 		    __func__, head->so_pcb);
 		return (NULL);
 	}
-	so->so_type = head->so_type;
+	so->so_type = SOCK_STREAM;
 	so->so_options = head->so_options;
 	so->so_linger = head->so_linger;
 	so->so_state = (head->so_state & SS_NBIO) | SS_ISCONNECTED;
 	so->so_fibnum = head->so_fibnum;
-	so->so_proto = head->so_proto;
+	so->so_proto = so_proto;
 	so->so_cred = crhold(head->so_cred);
 #ifdef MAC
 	mac_socket_newconn(head, so);
@@ -1325,14 +1384,7 @@ sopeeloff(struct socket *head)
 	    so_rdknl_assert_lock);
 	knlist_init(&so->so_wrsel.si_note, so, so_wrknl_lock, so_wrknl_unlock,
 	    so_wrknl_assert_lock);
-	VNET_SO_ASSERT(head);
-	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat)) {
-		sodealloc(so);
-		log(LOG_DEBUG, "%s: pcb %p: soreserve() failed\n",
-		    __func__, head->so_pcb);
-		return (NULL);
-	}
-	if (so->so_proto->pr_attach(so, 0, NULL)) {
+	if (soattach(so, 0, NULL, head)) {
 		sodealloc(so);
 		log(LOG_DEBUG, "%s: pcb %p: pr_attach() failed\n",
 		    __func__, head->so_pcb);
@@ -1344,10 +1396,6 @@ sopeeloff(struct socket *head)
 	so->so_snd.sb_timeo = head->so_snd.sb_timeo;
 	so->so_rcv.sb_flags |= head->so_rcv.sb_flags & SB_AUTOSIZE;
 	so->so_snd.sb_flags |= head->so_snd.sb_flags & SB_AUTOSIZE;
-	if ((so->so_proto->pr_flags & PR_SOCKBUF) == 0) {
-		so->so_snd.sb_mtx = &so->so_snd_mtx;
-		so->so_rcv.sb_mtx = &so->so_rcv_mtx;
-	}
 
 	soref(so);
 
@@ -1622,10 +1670,7 @@ so_splice_alloc(off_t max)
 	sp->src = NULL;
 	sp->dst = NULL;
 	sp->max = max > 0 ? max : -1;
-	do {
-		sp->wq_index = atomic_fetchadd_32(&splice_index, 1) %
-		    (mp_maxid + 1);
-	} while (CPU_ABSENT(sp->wq_index));
+	sp->wq_index = atomic_fetchadd_32(&splice_index, 1) % splice_num_wq;
 	sp->state = SPLICE_INIT;
 	TIMEOUT_TASK_INIT(taskqueue_thread, &sp->timeout, 0, so_splice_timeout,
 	    sp);
@@ -1723,7 +1768,7 @@ so_splice(struct socket *so, struct socket *so2, struct splice *splice)
 		return (error);
 	}
 	SOCK_SENDBUF_LOCK(so2);
-	if (so->so_snd.sb_tls_info != NULL) {
+	if (so2->so_snd.sb_tls_info != NULL) {
 		SOCK_SENDBUF_UNLOCK(so2);
 		SOCK_UNLOCK(so2);
 		mtx_lock(&sp->mtx);
@@ -1904,6 +1949,8 @@ sofree(struct socket *so)
 		SOCK_SENDBUF_UNLOCK(so);
 		SOCK_RECVBUF_UNLOCK(so);
 #endif
+		mtx_destroy(&so->so_snd_mtx);
+		mtx_destroy(&so->so_rcv_mtx);
 	}
 	seldrain(&so->so_rdsel);
 	seldrain(&so->so_wrsel);

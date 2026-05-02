@@ -343,7 +343,7 @@ nvme_sim_attach(device_t dev)
 	sc->s_ctrlr = ctrlr;
 
 	sc->s_sim = cam_sim_alloc(nvme_sim_action, nvme_sim_poll,
-	    "nvme", sc, device_get_unit(dev),
+	    "nvme", sc, device_get_unit(ctrlr->dev),
 	    NULL, max_trans, max_trans, devq);
 	if (sc->s_sim == NULL) {
 		device_printf(dev, "Failed to allocate a sim\n");
@@ -406,6 +406,16 @@ nvme_sim_ns_added(device_t dev, struct nvme_namespace *ns)
 	union ccb *ccb;
 
 	/*
+	 * If we have no namespaces, then we both do not attach the nvme_sim_ns
+	 * device. And then get a ns changed AER as well to tell us about it
+	 * (which is how we get here). If there's no device attached, then
+	 * there's nothing to do. sc->s_sim will be NULL as well (since it
+	 * only gets set when we attach).
+	 */
+	if (!device_is_attached(dev))
+		return (0);
+
+	/*
 	 * We map the NVMe namespace idea onto the CAM unit LUN. For each new
 	 * namespace, scan or rescan the path to enumerate it.
 	 */
@@ -428,7 +438,7 @@ nvme_sim_ns_removed(device_t dev, struct nvme_namespace *ns)
 
 	if (xpt_create_path(&tmppath, /*periph*/NULL,
 	    cam_sim_path(sc->s_sim), 0, ns->id) != CAM_REQ_CMP) {
-		printf("unable to create path for rescan\n");
+		printf("unable to create path for ns removal\n");
 		return (ENOMEM);
 	}
 	xpt_async(AC_LOST_DEVICE, tmppath, NULL);
@@ -476,7 +486,7 @@ static device_method_t nvme_sim_methods[] = {
 	DEVMETHOD(nvme_ns_changed,   	nvme_sim_ns_changed),
 	DEVMETHOD(nvme_controller_failed, nvme_sim_controller_failed),
 	DEVMETHOD(nvme_handle_aen,   	nvme_sim_handle_aen),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t nvme_sim_driver = {
@@ -486,4 +496,4 @@ static driver_t nvme_sim_driver = {
 };
 
 DRIVER_MODULE(nvme_sim, nvme, nvme_sim_driver, NULL, NULL);
-MODULE_VERSION(nvme_shim, 1);
+MODULE_VERSION(nvme_sim, 1);

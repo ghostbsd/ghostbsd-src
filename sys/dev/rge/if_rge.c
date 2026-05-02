@@ -67,6 +67,9 @@
 #include "if_rge_sysctl.h"
 #include "if_rge_stats.h"
 
+#define ETHER_IS_VALID(addr) \
+	(!ETHER_IS_MULTICAST(addr.octet) && !ETHER_IS_ZERO(addr.octet))
+
 #define	RGE_CSUM_FEATURES		(CSUM_IP | CSUM_TCP | CSUM_UDP)
 
 static int		rge_attach(device_t);
@@ -100,12 +103,7 @@ static void	rge_tx_task(void *, int);
 static void	rge_txq_flush_mbufs(struct rge_softc *sc);
 static void	rge_tick(void *);
 static void	rge_link_state(struct rge_softc *);
-#if 0
-#ifndef SMALL_KERNEL
-int		rge_wol(struct ifnet *, int);
-void		rge_wol_power(struct rge_softc *);
-#endif
-#endif
+static void	rge_setwol(struct rge_softc *);
 
 struct rge_matchid {
 	uint16_t vendor;
@@ -158,7 +156,11 @@ rge_attach_if(struct rge_softc *sc, const char *eaddr)
 	if_setcapabilities(sc->sc_ifp, IFCAP_HWCSUM);
 	if_setcapenable(sc->sc_ifp, if_getcapabilities(sc->sc_ifp));
 
-	/* TODO: set WOL */
+	/* Enable WOL if PM is supported. */
+	if (pci_has_pm(sc->sc_dev)) {
+		if_setcapabilitiesbit(sc->sc_ifp, IFCAP_WOL_MAGIC, 0);
+		if_setcapenablebit(sc->sc_ifp, IFCAP_WOL_MAGIC, 0);
+	}
 
 	/* Attach interface */
 	ether_ifattach(sc->sc_ifp, eaddr);
@@ -182,7 +184,7 @@ rge_attach_if(struct rge_softc *sc, const char *eaddr)
 static int
 rge_attach(device_t dev)
 {
-	uint8_t eaddr[ETHER_ADDR_LEN];
+	struct ether_addr eaddr;
 	struct rge_softc *sc;
 	struct rge_queues *q;
 	uint32_t hwrev, reg;
@@ -195,6 +197,8 @@ rge_attach(device_t dev)
 	sc->sc_ifp = if_gethandle(IFT_ETHER);
 	mtx_init(&sc->sc_mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK,
 	    MTX_DEF);
+
+	callout_init_mtx(&sc->sc_timeout, &sc->sc_mtx, 0);
 
 	/* Enable bus mastering */
 	pci_enable_busmaster(dev);
@@ -408,27 +412,31 @@ rge_attach(device_t dev)
 	switch (hwrev) {
 	case 0x60900000:
 		sc->rge_type = MAC_R25;
-//		device_printf(dev, "RTL8125\n");
+		device_printf(dev, "chip rev: RTL8125 (0x%08x)\n", hwrev);
 		break;
 	case 0x64100000:
 		sc->rge_type = MAC_R25B;
-//		device_printf(dev, "RTL8125B\n");
+		device_printf(dev, "chip rev: RTL8125B (0x%08x)\n", hwrev);
 		break;
 	case 0x64900000:
 		sc->rge_type = MAC_R26_1;
-//		device_printf(dev, "RTL8126_1\n");
+		device_printf(dev, "chip rev: RTL8126_1 (0x%08x)\n", hwrev);
 		break;
 	case 0x64a00000:
 		sc->rge_type = MAC_R26_2;
-//		device_printf(dev, "RTL8126_2\n");
+		device_printf(dev, "chip rev: RTL8126_2 (0x%08x)\n", hwrev);
 		break;
 	case 0x68800000:
-		sc->rge_type = MAC_R25D;
-//		device_printf(dev, "RTL8125D\n");
+		sc->rge_type = MAC_R25D_1;
+		device_printf(dev, "chip rev: RTL8125D_1 (0x%08x)\n", hwrev);
+		break;
+	case 0x68900000:
+		sc->rge_type = MAC_R25D_2;
+		device_printf(dev, "chip rev: RTL8125D_2 (0x%08x)\n", hwrev);
 		break;
 	case 0x6c900000:
 		sc->rge_type = MAC_R27;
-//		device_printf(dev, "RTL8127\n");
+		device_printf(dev, "chip rev: RTL8127 (0x%08x)\n", hwrev);
 		break;
 	default:
 		RGE_PRINT_ERROR(sc, "unknown version 0x%08x\n", hwrev);
@@ -437,23 +445,19 @@ rge_attach(device_t dev)
 
 	rge_config_imtype(sc, RGE_IMTYPE_SIM);
 
-	/* TODO: disable ASPM/ECPM? */
-
-#if 0
-	/*
-	 * PCI Express check.
-	 */
-	if (pci_get_capability(pa->pa_pc, pa->pa_tag, PCI_CAP_PCIEXPRESS,
-	    &offset, NULL)) {
-		/* Disable PCIe ASPM and ECPM. */
-		reg = pci_conf_read(pa->pa_pc, pa->pa_tag,
-		    offset + PCI_PCIE_LCSR);
-		reg &= ~(PCI_PCIE_LCSR_ASPM_L0S | PCI_PCIE_LCSR_ASPM_L1 |
-		    PCI_PCIE_LCSR_ECPM);
-		pci_conf_write(pa->pa_pc, pa->pa_tag, offset + PCI_PCIE_LCSR,
-		    reg);
+	/* Disable PCIe ASPM and ECPM if requested. */
+	if (sc->sc_disable_aspm) {
+		int ecap;
+		if (pci_find_cap(dev, PCIY_EXPRESS, &ecap) == 0) {
+			uint16_t lctl;
+			lctl = pci_read_config(dev,
+			    ecap + PCIER_LINK_CTL, 2);
+			lctl &= ~(PCIEM_LINK_CTL_ASPMC |
+			    PCIEM_LINK_CTL_ECPM);
+			pci_write_config(dev,
+			    ecap + PCIER_LINK_CTL, lctl, 2);
+		}
 	}
-#endif
 
 	RGE_LOCK(sc);
 	if (rge_chipinit(sc)) {
@@ -461,8 +465,14 @@ rge_attach(device_t dev)
 		goto fail;
 	}
 
-	rge_get_macaddr(sc, eaddr);
+	rge_get_macaddr(sc, eaddr.octet);
 	RGE_UNLOCK(sc);
+
+	if (!ETHER_IS_VALID(eaddr)) {
+		device_printf(dev,
+		    "No MAC address found.  Using ether_gen_addr().\n");
+		ether_gen_addr_byname(device_get_nameunit(dev), &eaddr);
+	}
 
 	if (rge_allocmem(sc))
 		goto fail;
@@ -477,7 +487,7 @@ rge_attach(device_t dev)
 	ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_AUTO);
 	sc->sc_media.ifm_media = sc->sc_media.ifm_cur->ifm_media;
 
-	rge_attach_if(sc, eaddr);
+	rge_attach_if(sc, eaddr.octet);
 
 	/*
 	 * TODO: technically should be per txq but we only support
@@ -496,8 +506,6 @@ rge_attach(device_t dev)
 	    sc->sc_tq_thr_name);
 
 	TASK_INIT(&sc->sc_tx_task, 0, rge_tx_task, sc);
-
-	callout_init_mtx(&sc->sc_timeout, &sc->sc_mtx, 0);
 
 	return (0);
 fail:
@@ -640,26 +648,6 @@ rge_detach(device_t dev)
 
 	return (0);
 }
-
-#if 0
-
-int
-rge_activate(struct device *self, int act)
-{
-#ifndef SMALL_KERNEL
-	struct rge_softc *sc = (struct rge_softc *)self;
-#endif
-
-	switch (act) {
-	case DVACT_POWERDOWN:
-#ifndef SMALL_KERNEL
-		rge_wol_power(sc);
-#endif
-		break;
-	}
-	return (0);
-}
-#endif
 
 static void
 rge_intr_msi(void *arg)
@@ -946,29 +934,24 @@ rge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCSIFFLAGS:
 		RGE_LOCK(sc);
 		if ((if_getflags(ifp) & IFF_UP) != 0) {
-			if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0) {
-				/*
-				 * TODO: handle promisc/iffmulti changing
-				 * without reprogramming everything.
-				 */
-				rge_init_locked(sc);
-			} else {
-				/* Reinit promisc/multi just in case */
-				rge_iff_locked(sc);
-			}
-		} else {
 			if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) != 0) {
+				if (((if_getflags(ifp) ^ sc->rge_if_flags)
+				    & (IFF_PROMISC | IFF_ALLMULTI)) != 0)
+					rge_iff_locked(sc);
+			} else
+				rge_init_locked(sc);
+		} else {
+			if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) != 0)
 				rge_stop_locked(sc);
-			}
 		}
+		sc->rge_if_flags = if_getflags(ifp);
 		RGE_UNLOCK(sc);
 		break;
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
 		RGE_LOCK(sc);
-		if ((if_getflags(ifp) & IFF_DRV_RUNNING) != 0) {
+		if ((if_getflags(ifp) & IFF_DRV_RUNNING) != 0)
 			rge_iff_locked(sc);
-		}
 		RGE_UNLOCK(sc);
 		break;
 	case SIOCGIFMEDIA:
@@ -1006,7 +989,9 @@ rge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				reinit = 1;
 			}
 
-			/* TODO: WOL */
+			if ((mask & IFCAP_WOL_MAGIC) != 0 &&
+			    (if_getcapabilities(ifp) & IFCAP_WOL_MAGIC) != 0)
+				if_togglecapenable(ifp, IFCAP_WOL_MAGIC);
 
 			if ((mask & IFCAP_RXCSUM) != 0 &&
 			    (if_getcapabilities(ifp) & IFCAP_RXCSUM) != 0) {
@@ -1112,7 +1097,7 @@ rge_init_locked(struct rge_softc *sc)
 		 * causing this to be initialised both from the ioctl
 		 * API and if_init() API.
 		 */
-//		RGE_PRINT_ERROR(sc, "%s: called whilst running?\n", __func__);
+/*		RGE_PRINT_ERROR(sc, "%s: called whilst running?\n", __func__); */
 		return;
 	}
 
@@ -1159,7 +1144,7 @@ rge_init_locked(struct rge_softc *sc)
 		rxconf = RGE_RXCFG_CONFIG;
 	else if (sc->rge_type == MAC_R25B)
 		rxconf = RGE_RXCFG_CONFIG_8125B;
-	else if (sc->rge_type == MAC_R25D)
+	else if (RGE_TYPE_R25D(sc))
 		rxconf = RGE_RXCFG_CONFIG_8125D;
 	else
 		rxconf = RGE_RXCFG_CONFIG_8126;
@@ -1173,7 +1158,7 @@ rge_init_locked(struct rge_softc *sc)
 		/* Disable L1 timeout. */
 		val = rge_read_csi(sc, 0x890) & ~0x00000001;
 		rge_write_csi(sc, 0x890, val);
-	} else if (sc->rge_type != MAC_R25D)
+	} else if (!RGE_TYPE_R25D(sc))
 		RGE_WRITE_2(sc, 0x0382, 0x221b);
 
 	RGE_WRITE_1(sc, RGE_RSS_CTRL, 0);
@@ -1199,7 +1184,7 @@ rge_init_locked(struct rge_softc *sc)
 
 	val = rge_read_mac_ocp(sc, 0xe614);
 	val &= (sc->rge_type == MAC_R27) ? ~0x0f00 : ~0x0700;
-	if (sc->rge_type == MAC_R25 || sc->rge_type == MAC_R25D)
+	if (sc->rge_type == MAC_R25 || RGE_TYPE_R25D(sc))
 		rge_write_mac_ocp(sc, 0xe614, val | 0x0300);
 	else if (sc->rge_type == MAC_R25B)
 		rge_write_mac_ocp(sc, 0xe614, val | 0x0200);
@@ -1235,7 +1220,7 @@ rge_init_locked(struct rge_softc *sc)
 	val = rge_read_mac_ocp(sc, 0xea1c) & ~0x0003;
 	rge_write_mac_ocp(sc, 0xea1c, val | 0x0001);
 
-	if (sc->rge_type == MAC_R25D)
+	if (RGE_TYPE_R25D(sc))
 		rge_write_mac_ocp(sc, 0xe0c0, 0x4403);
 	else
 		rge_write_mac_ocp(sc, 0xe0c0, 0x4000);
@@ -1251,7 +1236,7 @@ rge_init_locked(struct rge_softc *sc)
 	if (sc->rge_type == MAC_R25)
 		RGE_SETBIT_1(sc, RGE_MCUCMD, 0x01);
 
-	if (sc->rge_type != MAC_R25D) {
+	if (!RGE_TYPE_R25D(sc)) {
 		/* Disable EEE plus. */
 		RGE_MAC_CLRBIT(sc, 0xe080, 0x0002);
 	}
@@ -1306,7 +1291,7 @@ rge_init_locked(struct rge_softc *sc)
 	val = rge_read_csi(sc, 0x98) & ~0x0000ff00;
 	rge_write_csi(sc, 0x98, val);
 
-	if (sc->rge_type == MAC_R25D) {
+	if (RGE_TYPE_R25D(sc)) {
 		val = rge_read_mac_ocp(sc, 0xe092) & ~0x00ff;
 		rge_write_mac_ocp(sc, 0xe092, val | 0x0008);
 	} else
@@ -1749,13 +1734,6 @@ rge_freemem(struct rge_softc *sc)
 
 	RGE_ASSERT_UNLOCKED(sc);
 
-	/* TX desc */
-	bus_dmamap_unload(sc->sc_dmat_tx_desc, q->q_tx.rge_tx_list_map);
-	if (q->q_tx.rge_tx_list != NULL)
-		bus_dmamem_free(sc->sc_dmat_tx_desc, q->q_tx.rge_tx_list,
-		    q->q_tx.rge_tx_list_map);
-	memset(&q->q_tx, 0, sizeof(q->q_tx));
-
 	/* TX buf */
 	for (i = 0; i < RGE_TX_LIST_CNT; i++) {
 		struct rge_txq *tx = &q->q_tx.rge_txq[i];
@@ -1787,12 +1765,13 @@ rge_freemem(struct rge_softc *sc)
 		}
 	}
 
-	/* RX desc */
-	bus_dmamap_unload(sc->sc_dmat_rx_desc, q->q_rx.rge_rx_list_map);
-	if (q->q_rx.rge_rx_list != 0)
-		bus_dmamem_free(sc->sc_dmat_rx_desc, q->q_rx.rge_rx_list,
-		    q->q_rx.rge_rx_list_map);
-	memset(&q->q_rx, 0, sizeof(q->q_tx));
+	/* TX desc */
+	if (q->q_tx.rge_tx_list != NULL) {
+		bus_dmamap_unload(sc->sc_dmat_tx_desc, q->q_tx.rge_tx_list_map);
+		bus_dmamem_free(sc->sc_dmat_tx_desc, q->q_tx.rge_tx_list,
+		    q->q_tx.rge_tx_list_map);
+	}
+	memset(&q->q_tx, 0, sizeof(q->q_tx));
 
 	/* RX buf */
 	for (i = 0; i < RGE_RX_LIST_CNT; i++) {
@@ -1817,6 +1796,14 @@ rge_freemem(struct rge_softc *sc)
 		}
 	}
 
+	/* RX desc */
+	if (q->q_rx.rge_rx_list != NULL) {
+		bus_dmamap_unload(sc->sc_dmat_rx_desc, q->q_rx.rge_rx_list_map);
+		bus_dmamem_free(sc->sc_dmat_rx_desc, q->q_rx.rge_rx_list,
+		    q->q_rx.rge_rx_list_map);
+	}
+	memset(&q->q_rx, 0, sizeof(q->q_tx));
+
 	return (0);
 }
 
@@ -1832,9 +1819,10 @@ rge_free_stats_mem(struct rge_softc *sc)
 
 	RGE_ASSERT_UNLOCKED(sc);
 
-	bus_dmamap_unload(sc->sc_dmat_stats_buf, ss->map);
-	if (ss->stats != NULL)
+	if (ss->stats != NULL) {
+		bus_dmamap_unload(sc->sc_dmat_stats_buf, ss->map);
 		bus_dmamem_free(sc->sc_dmat_stats_buf, ss->stats, ss->map);
+	}
 	memset(ss, 0, sizeof(*ss));
 	return (0);
 }
@@ -2088,9 +2076,10 @@ rge_rxeof(struct rge_queues *q, struct mbufq *mq)
 	uint32_t rxstat, extsts;
 	int i, mlen, rx = 0;
 	int cons, prod;
-	int maxpkt = 16; /* XXX TODO: make this a tunable */
+	int maxpkt;
 	bool check_hwcsum;
 
+	maxpkt = sc->sc_rx_process_limit;
 	check_hwcsum = ((if_getcapenable(sc->sc_ifp) & IFCAP_RXCSUM) != 0);
 
 	RGE_ASSERT_LOCKED(sc);
@@ -2393,7 +2382,7 @@ rge_hash_maddr(void *arg, struct sockaddr_dl *sdl, u_int cnt)
 {
 	uint32_t crc, *hashes = arg;
 
-	// XXX TODO: validate this does addrlo? */
+	/* XXX TODO: validate this does addrlo? */
 	crc = ether_crc32_be(LLADDR(sdl), ETHER_ADDR_LEN) >> 26;
 	crc &= 0x3f;
 
@@ -2608,6 +2597,22 @@ rge_link_state(struct rge_softc *sc)
 	}
 }
 
+static void
+rge_setwol(struct rge_softc *sc)
+{
+	if_t ifp = sc->sc_ifp;
+	int enable;
+
+	mtx_assert(&sc->sc_mtx, MA_OWNED);
+
+	if (!pci_has_pm(sc->sc_dev))
+		return;
+
+	enable = (if_getcapenable(ifp) & IFCAP_WOL_MAGIC) != 0;
+
+	rge_wol_config(sc, enable);
+}
+
 /**
  * @brief Suspend
  */
@@ -2618,7 +2623,7 @@ rge_suspend(device_t dev)
 
 	RGE_LOCK(sc);
 	rge_stop_locked(sc);
-	/* TODO: wake on lan */
+	rge_setwol(sc);
 	sc->sc_suspended = true;
 	RGE_UNLOCK(sc);
 
@@ -2634,7 +2639,6 @@ rge_resume(device_t dev)
 	struct rge_softc *sc = device_get_softc(dev);
 
 	RGE_LOCK(sc);
-	/* TODO: wake on lan */
 
 	/* reinit if required */
 	if (if_getflags(sc->sc_ifp) & IFF_UP)
@@ -2657,6 +2661,7 @@ rge_shutdown(device_t dev)
 
 	RGE_LOCK(sc);
 	rge_stop_locked(sc);
+	rge_setwol(sc);
 	RGE_UNLOCK(sc);
 
 	return (0);

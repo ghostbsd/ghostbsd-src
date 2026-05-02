@@ -2467,6 +2467,40 @@ pf_handle_table_clear_astats(struct nlmsghdr *hdr, struct nl_pstate *npt)
 	return (error);
 }
 
+static int
+pf_handle_table_test_addrs(struct nlmsghdr *hdr, struct nl_pstate *npt)
+{
+	struct nl_parsed_table_addrs attrs = { 0 };
+	struct nl_writer *nw = npt->nw;
+	struct genlmsghdr *ghdr_new;
+	int error;
+
+	PF_RULES_RLOCK_TRACKER;
+
+	error = nl_parse_nlmsg(hdr, &table_addr_parser, npt, &attrs);
+	if (error != 0)
+		return (error);
+
+	PF_RULES_RLOCK();
+	error = pfr_tst_addrs(&attrs.table, &attrs.addrs[0],
+	    attrs.addr_count, &attrs.nchange,
+	    attrs.flags | PFR_FLAG_USERIOCTL);
+	PF_RULES_RUNLOCK();
+
+	if (!nlmsg_reply(nw, hdr, sizeof(struct genlmsghdr)))
+		return (ENOMEM);
+
+	ghdr_new = nlmsg_reserve_object(nw, struct genlmsghdr);
+	ghdr_new->cmd = PFNL_CMD_TABLE_TEST_ADDRS;
+
+	nlattr_add_u32(nw, PF_TAS_ASTATS_COUNT, attrs.nchange);
+
+	if (!nlmsg_end(nw))
+		return (ENOMEM);
+
+	return (error);
+}
+
 static const struct nlattr_parser nla_p_rate[] = {
 	{ .type = PF_LR_LIMIT, .off = 0, .cb = nlattr_get_uint32 },
 	{ .type = PF_LR_SECONDS, .off = sizeof(unsigned int), .cb = nlattr_get_uint32 },
@@ -2838,6 +2872,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_getstates,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_GETCREATORS,
@@ -2845,6 +2880,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_getcreators,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_START,
@@ -2852,6 +2888,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_start,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_STOP,
@@ -2859,6 +2896,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_stop,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_ADDRULE,
@@ -2866,6 +2904,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_addrule,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_GETRULES,
@@ -2873,6 +2912,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_getrules,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_GETRULE,
@@ -2880,6 +2920,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_getrule,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_CLRSTATES,
@@ -2887,6 +2928,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_clear_states,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_KILLSTATES,
@@ -2894,6 +2936,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_kill_states,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_SET_STATUSIF,
@@ -2901,6 +2944,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_set_statusif,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_STATUS,
@@ -2908,6 +2952,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_status,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_CLEAR_STATUS,
@@ -2915,6 +2960,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_clear_status,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_NATLOOK,
@@ -2922,6 +2968,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_natlook,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_SET_DEBUG,
@@ -2929,6 +2976,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_set_debug,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_SET_TIMEOUT,
@@ -2936,6 +2984,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_set_timeout,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_TIMEOUT,
@@ -2943,6 +2992,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_timeout,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_SET_LIMIT,
@@ -2950,6 +3000,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_set_limit,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_LIMIT,
@@ -2957,6 +3008,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_limit,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_BEGIN_ADDRS,
@@ -2964,6 +3016,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_begin_addrs,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_ADD_ADDR,
@@ -2971,6 +3024,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_add_addr,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_ADDRS,
@@ -2978,6 +3032,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_addrs,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_ADDR,
@@ -2985,6 +3040,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_addr,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_RULESETS,
@@ -2992,6 +3048,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_rulesets,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_RULESET,
@@ -2999,6 +3056,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_ruleset,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_SRCNODES,
@@ -3006,6 +3064,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_srcnodes,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_CLEAR_TABLES,
@@ -3013,6 +3072,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_clear_tables,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_ADD_TABLE,
@@ -3020,6 +3080,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_add_table,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_DEL_TABLE,
@@ -3027,6 +3088,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_del_table,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_GET_TSTATS,
@@ -3034,6 +3096,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_get_tstats,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_CLR_TSTATS,
@@ -3041,6 +3104,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_clear_tstats,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_CLR_ADDRS,
@@ -3048,6 +3112,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_clear_addrs,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_TABLE_ADD_ADDR,
@@ -3055,6 +3120,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_table_add_addrs,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_TABLE_DEL_ADDR,
@@ -3062,6 +3128,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_table_del_addrs,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_TABLE_SET_ADDR,
@@ -3069,6 +3136,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_table_set_addrs,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_TABLE_GET_ADDR,
@@ -3076,6 +3144,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_table_get_addrs,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_TABLE_GET_ASTATS,
@@ -3083,6 +3152,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_table_get_astats,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_TABLE_CLEAR_ASTATS,
@@ -3090,6 +3160,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_table_clear_astats,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_STATE_LIMITER_ADD,
@@ -3097,6 +3168,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_state_limiter_add,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_STATE_LIMITER_GET,
@@ -3104,6 +3176,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_state_limiter_get,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_STATE_LIMITER_NGET,
@@ -3111,6 +3184,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_state_limiter_get,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_SOURCE_LIMITER_ADD,
@@ -3118,6 +3192,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_source_limiter_add,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 2,
 	},
 	{
 		.cmd_num = PFNL_CMD_SOURCE_LIMITER_GET,
@@ -3125,6 +3200,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_source_limiter_get,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_SOURCE_LIMITER_NGET,
@@ -3132,6 +3208,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_source_limiter_get,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_SOURCE_GET,
@@ -3139,6 +3216,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_source_get,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_SOURCE_NGET,
@@ -3146,6 +3224,7 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_source_get,
 		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 	{
 		.cmd_num = PFNL_CMD_SOURCE_CLEAR,
@@ -3153,6 +3232,15 @@ static const struct genl_cmd pf_cmds[] = {
 		.cmd_cb = pf_handle_source_clear,
 		.cmd_flags = GENL_CMD_CAP_DO | GENL_CMD_CAP_HASPOL,
 		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
+	},
+	{
+		.cmd_num = PFNL_CMD_TABLE_TEST_ADDRS,
+		.cmd_name = "TABLE_TEST_ADDRS",
+		.cmd_cb = pf_handle_table_test_addrs,
+		.cmd_flags = GENL_CMD_CAP_DUMP | GENL_CMD_CAP_HASPOL,
+		.cmd_priv = PRIV_NETINET_PF,
+		.cmd_securelevel = 3,
 	},
 };
 

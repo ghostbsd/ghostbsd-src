@@ -352,6 +352,18 @@ tstosbt(struct timespec _ts)
 	return (((sbintime_t)_ts.tv_sec << 32) + nstosbt(_ts.tv_nsec));
 }
 
+static __inline sbintime_t
+tstosbt_sat(struct timespec _ts)
+{
+#ifndef __i386__
+	if (_ts.tv_sec > SBT_MAX >> 32)
+		return (SBT_MAX);
+	if (_ts.tv_sec < -(SBT_MAX >> 32) - 1)
+		return (-SBT_MAX - 1);
+#endif
+	return (tstosbt(_ts));
+}
+
 static __inline struct timeval
 sbttotv(sbintime_t _sbt)
 {
@@ -368,6 +380,19 @@ tvtosbt(struct timeval _tv)
 
 	return (((sbintime_t)_tv.tv_sec << 32) + ustosbt(_tv.tv_usec));
 }
+
+static __inline sbintime_t
+tvtosbt_sat(struct timeval _tv)
+{
+#ifndef __i386__
+	if (_tv.tv_sec > SBT_MAX >> 32)
+		return (SBT_MAX);
+	if (_tv.tv_sec < -(SBT_MAX >> 32) - 1)
+		return (-SBT_MAX - 1);
+#endif
+	return (tvtosbt(_tv));
+}
+
 #endif /* __BSD_VISIBLE */
 
 #ifdef _KERNEL

@@ -1,6 +1,8 @@
 /*	$OpenBSD: diff3prog.c,v 1.11 2009/10/27 23:59:37 deraadt Exp $	*/
 
 /*
+ * SPDX-License-Identifier: Caldera-no-preamble AND BSD-3-Clause
+ *
  * Copyright (C) Caldera International Inc.  2001-2002.
  * All rights reserved.
  *
@@ -62,23 +64,26 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/types.h>
 #include <sys/capsicum.h>
 #include <sys/procdesc.h>
-#include <sys/types.h>
-#include <sys/event.h>
 #include <sys/wait.h>
 
+#include <assert.h>
 #include <capsicum_helpers.h>
 #include <ctype.h>
 #include <err.h>
+#include <fcntl.h>
 #include <getopt.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <limits.h>
-#include <inttypes.h>
 #include <string.h>
 #include <unistd.h>
 
+extern char **environ;
 /*
  * "from" is first in range of changed lines; "to" is last+1
  * from=to=line after point of insertion for added lines.
@@ -88,14 +93,15 @@ struct range {
 	int to;
 };
 
+enum difftype {
+	DIFF_NONE,
+	DIFF_TYPE1,
+	DIFF_TYPE2,
+	DIFF_TYPE3,
+};
+
 struct diff {
-#define DIFF_TYPE1 1
-#define DIFF_TYPE2 2
-#define DIFF_TYPE3 3
-	int type;
-#if DEBUG
-	char *line;
-#endif	/* DEBUG */
+	enum difftype type;
 
 	/* Ranges as lines */
 	struct range old;
@@ -119,6 +125,7 @@ static struct diff *d23;
  */
 static struct diff *de;
 static char *overlap;
+static int  *de_delta;	/* file1-file3 line number delta per edit */
 static int  overlapcnt;
 static FILE *fp[3];
 static int cline[3];		/* # of the last-read line in each file (0-2) */
@@ -137,7 +144,7 @@ static const char *newmark = ">>>>>>>";
 static const char *divider = "=======";
 
 static bool duplicate(struct range *, struct range *);
-static int edit(struct diff *, bool, int, int);
+static int edit(struct diff *, bool, int, enum difftype);
 static char *getchange(FILE *);
 static char *get_line(FILE *, size_t *);
 static int readin(int fd, struct diff **);
@@ -150,12 +157,12 @@ static void repos(int);
 static void separate(const char *);
 static void edscript(int) __dead2;
 static void Ascript(int) __dead2;
-static void mergescript(int) __dead2;
+static void mergescript(int, int) __dead2;
 static void increase(void);
 static void usage(void);
 static void printrange(FILE *, struct range *);
 
-static const char diff3_version[] = "FreeBSD diff3 20240925";
+static const char diff3_version[] = "FreeBSD diff3 20260213";
 
 enum {
 	DIFFPROG_OPT,
@@ -200,7 +207,7 @@ strtoi(char *str, char **end)
 	if ((end != NULL && *end == str) ||
 	    num < 0 || num > INT_MAX ||
 	    errno == EINVAL || errno == ERANGE)
-		err(1, "error in diff output");
+		err(2, "error in diff output");
 	return (int)num;
 }
 
@@ -256,9 +263,6 @@ readin(int fd, struct diff **dd)
 	for (i = 0; (p = getchange(f)) != NULL; i++) {
 		if ((size_t)i >= szchanges - 1)
 			increase();
-#if DEBUG
-		(*dd)[i].line = strdup(p);
-#endif	/* DEBUG */
 
 		a = b = strtoi(p, &p);
 		if (*p == ',')
@@ -268,7 +272,7 @@ readin(int fd, struct diff **dd)
 		if (*p == ',')
 			d = strtoi(p + 1, &p);
 		if (*p != '\n')
-			errx(1, "error in diff output");
+			errx(2, "error in diff output");
 		if (kind == 'a')
 			a++;
 		else if (kind == 'c')
@@ -276,11 +280,11 @@ readin(int fd, struct diff **dd)
 		else if (kind == 'd')
 			c++;
 		else
-			errx(1, "error in diff output");
+			errx(2, "error in diff output");
 		b++;
 		d++;
 		if (b < a || d < c)
-			errx(1, "error in diff output");
+			errx(2, "error in diff output");
 		(*dd)[i].old.from = a;
 		(*dd)[i].old.to = b;
 		(*dd)[i].new.from = c;
@@ -288,7 +292,7 @@ readin(int fd, struct diff **dd)
 		if (i > 0) {
 			if ((*dd)[i].old.from < (*dd)[i - 1].old.to ||
 			    (*dd)[i].new.from < (*dd)[i - 1].new.to)
-				errx(1, "diff output out of order");
+				errx(2, "diff output out of order");
 		}
 	}
 	if (i > 0) {
@@ -300,23 +304,27 @@ readin(int fd, struct diff **dd)
 }
 
 static int
-diffexec(const char *diffprog, char **diffargv, int fd[])
+diffexec(char **diffargv, int fd[])
 {
-	int pd;
+	posix_spawnattr_t sa;
+	posix_spawn_file_actions_t fa;
+	pid_t pid;
+	int pd, error;
 
-	switch (pdfork(&pd, PD_CLOEXEC)) {
-	case 0:
-		close(fd[0]);
-		if (dup2(fd[1], STDOUT_FILENO) == -1)
-			err(2, "child could not duplicate descriptor");
-		close(fd[1]);
-		execvp(diffprog, diffargv);
-		err(2, "could not execute diff: %s", diffprog);
-		break;
-	case -1:
-		err(2, "could not fork");
-		break;
-	}
+	if ((error = posix_spawnattr_init(&sa)) != 0)
+		errc(2, error, "posix_spawnattr_init");
+	if ((error = posix_spawn_file_actions_init(&fa)) != 0)
+		errc(2, error, "posix_spawn_file_actions_init");
+
+	posix_spawnattr_setprocdescp_np(&sa, &pd, 0);
+	posix_spawn_file_actions_adddup2(&fa, fd[1], STDOUT_FILENO);
+
+	error = posix_spawn(&pid, diffargv[0], &fa, &sa, diffargv, environ);
+	if (error != 0)
+		errc(2, error, "could not spawn diff");
+
+	posix_spawn_file_actions_destroy(&fa);
+	posix_spawnattr_destroy(&sa);
 	close(fd[1]);
 	return (pd);
 }
@@ -361,11 +369,13 @@ merge(int m1, int m2)
 {
 	struct diff *d1, *d2, *d3;
 	int j, t1, t2;
+	int f1f3delta;
 	bool dup = false;
 
 	d1 = d13;
 	d2 = d23;
 	j = 0;
+	f1f3delta = 0;
 
 	for (;;) {
 		t1 = (d1 < d13 + m1);
@@ -381,9 +391,17 @@ merge(int m1, int m2)
 				change(1, &d1->old, false);
 				keep(2, &d1->new);
 				change(3, &d1->new, false);
+			} else if (mflag) {
+				j++;
+				de[j].type = DIFF_TYPE1;
+				de[j].old = d1->old;
+				de[j].new = d1->new;
+				overlap[j] = 0;
 			} else if (eflag == EFLAG_OVERLAP) {
 				j = edit(d2, dup, j, DIFF_TYPE1);
 			}
+			f1f3delta += (d1->old.to - d1->old.from) -
+			    (d1->new.to - d1->new.from);
 			d1++;
 			continue;
 		}
@@ -395,9 +413,10 @@ merge(int m1, int m2)
 				change(3, &d2->new, false);
 				change(2, &d2->old, false);
 			} else if (Aflag || mflag) {
-				// XXX-THJ: What does it mean for the second file to differ?
-				if (eflag == EFLAG_UNMERGED)
+				if (eflag == EFLAG_UNMERGED) {
 					j = edit(d2, dup, j, DIFF_TYPE2);
+					de_delta[j] = f1f3delta;
+				}
 			}
 			d2++;
 			continue;
@@ -433,10 +452,20 @@ merge(int m1, int m2)
 				change(2, &d2->old, false);
 				d3 = d1->old.to > d1->old.from ? d1 : d2;
 				change(3, &d3->new, false);
+			} else if (mflag) {
+				j++;
+				de[j].type = DIFF_TYPE3;
+				de[j].old = d1->old;
+				de[j].new = d1->new;
+				overlap[j] = !dup;
+				if (!dup)
+					overlapcnt++;
 			} else {
 				j = edit(d1, dup, j, DIFF_TYPE3);
 			}
 			dup = false;
+			f1f3delta += (d1->old.to - d1->old.from) -
+			    (d1->new.to - d1->new.from);
 			d1++;
 			d2++;
 			continue;
@@ -462,7 +491,7 @@ merge(int m1, int m2)
 	}
 
 	if (mflag)
-		mergescript(j);
+		mergescript(j, f1f3delta);
 	else if (Aflag)
 		Ascript(j);
 	else if (eflag)
@@ -544,7 +573,7 @@ skip(int i, int from, const char *pr)
 
 	for (n = 0; cline[i] < from - 1; n += j) {
 		if ((line = get_line(fp[i], &j)) == NULL)
-			errx(EXIT_FAILURE, "logic error");
+			errx(2, "logic error");
 		if (pr != NULL)
 			printf("%s%s", Tflag == 1 ? "\t" : pr, line);
 		cline[i]++;
@@ -575,7 +604,7 @@ duplicate(struct range *r1, struct range *r2)
 			if (c == -1 && d == -1)
 				break;
 			if (c == -1 || d == -1)
-				errx(EXIT_FAILURE, "logic error");
+				errx(2, "logic error");
 			nchar++;
 			if (c != d) {
 				repos(nchar);
@@ -600,7 +629,7 @@ repos(int nchar)
  * collect an editing script for later regurgitation
  */
 static int
-edit(struct diff *diff, bool dup, int j, int difftype)
+edit(struct diff *diff, bool dup, int j, enum difftype difftype)
 {
 	if (!(eflag == EFLAG_UNMERGED ||
 		(!dup && eflag == EFLAG_OVERLAP ) ||
@@ -613,10 +642,6 @@ edit(struct diff *diff, bool dup, int j, int difftype)
 		overlapcnt++;
 
 	de[j].type = difftype;
-#if DEBUG
-	de[j].line = strdup(diff->line);
-#endif	/* DEBUG */
-
 	de[j].old.from = diff->old.from;
 	de[j].old.to = diff->old.to;
 	de[j].new.from = diff->new.from;
@@ -636,7 +661,7 @@ printrange(FILE *p, struct range *r)
 		return;
 
 	if (r->from > r->to)
-		errx(EXIT_FAILURE, "invalid print range");
+		errx(2, "invalid print range");
 
 	/*
 	 * XXX-THJ: We read through all of the file for each range printed.
@@ -695,7 +720,7 @@ edscript(int n)
 	if (iflag)
 		printf("w\nq\n");
 
-	exit(eflag == EFLAG_NONE ? overlapcnt : 0);
+	exit(oflag ? overlapcnt > 0 : 0);
 }
 
 /*
@@ -724,7 +749,7 @@ Ascript(int n)
 				prange(old, deletenew);
 				printrange(fp[2], new);
 			} else {
-				startmark = new->to - 1;
+				startmark = new->to - 1 + de_delta[n];
 
 				printf("%da\n", startmark);
 				printf("%s %s\n", newmark, f3mark);
@@ -789,11 +814,10 @@ Ascript(int n)
  * inbetween lines.
  */
 static void
-mergescript(int i)
+mergescript(int i, int f1f3delta)
 {
 	struct range r, *new, *old;
 	int n;
-	bool delete = false;
 
 	r.from = 1;
 	r.to = 1;
@@ -806,21 +830,17 @@ mergescript(int i)
 		 * Print any lines leading up to here. If we are merging don't
 		 * print deleted ranges.
 		 */
-		delete = (new->from == new->to);
-		if (de[n].type == DIFF_TYPE1 && delete)
-			r.to = new->from - 1;
-		else if (de[n].type == DIFF_TYPE3 && (old->from == old->to)) {
-			r.from = old->from - 1;
-			r.to = new->from;
-		} else
+		if (de[n].type == DIFF_TYPE1)
+			r.to = old->to;
+		else if (de[n].type == DIFF_TYPE2)
+			r.to = new->from + de_delta[n];
+		else
 			r.to = old->from;
 
 		printrange(fp[0], &r);
 		switch (de[n].type) {
 		case DIFF_TYPE1:
-			/* If this isn't a delete print it */
-			if (!delete)
-				printrange(fp[2], new);
+			/* Content included in "between" printing from fp[0] */
 			break;
 		case DIFF_TYPE2:
 			printf("%s %s\n", oldmark, f2mark);
@@ -856,12 +876,11 @@ mergescript(int i)
 			}
 			break;
 		default:
-			printf("Error: Unhandled diff type - exiting\n");
-			exit(EXIT_FAILURE);
+			__assert_unreachable();
 		}
 
-		if (old->from == old->to)
-			r.from = new->to;
+		if (de[n].type == DIFF_TYPE2)
+			r.from = new->to + de_delta[n];
 		else
 			r.from = old->to;
 	}
@@ -869,19 +888,8 @@ mergescript(int i)
 	/*
 	 * Print from the final range to the end of 'myfile'. Any deletions or
 	 * additions to this file should have been handled by now.
-	 *
-	 * If the ranges are the same we need to rewind a line.
-	 * If the new range is 0 length (from == to), we need to use the old
-	 * range.
 	 */
-	new = &de[n-1].new;
-	old = &de[n-1].old;
-
-	if (old->from == new->from && old->to == new->to)
-		r.from--;
-	else if (new->from == new->to)
-		r.from = old->from;
-
+	r.from -= f1f3delta;
 	r.to = INT_MAX;
 	printrange(fp[2], &r);
 	exit(overlapcnt > 0);
@@ -892,6 +900,7 @@ increase(void)
 {
 	struct diff *p;
 	char *q;
+	int *s;
 	size_t newsz, incr;
 
 	/* are the memset(3) calls needed? */
@@ -900,32 +909,53 @@ increase(void)
 
 	p = reallocarray(d13, newsz, sizeof(*p));
 	if (p == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(p + szchanges, 0, incr * sizeof(*p));
 	d13 = p;
 	p = reallocarray(d23, newsz, sizeof(*p));
 	if (p == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(p + szchanges, 0, incr * sizeof(*p));
 	d23 = p;
 	p = reallocarray(de, newsz, sizeof(*p));
 	if (p == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(p + szchanges, 0, incr * sizeof(*p));
 	de = p;
 	q = reallocarray(overlap, newsz, 1);
 	if (q == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(q + szchanges, 0, incr * 1);
 	overlap = q;
+	s = reallocarray(de_delta, newsz, sizeof(*s));
+	if (s == NULL)
+		err(2, NULL);
+	memset(s + szchanges, 0, incr * sizeof(*s));
+	de_delta = s;
 	szchanges = newsz;
 }
 
+static void
+wait_and_check(int pd)
+{
+	int status;
+
+	while (pdwait(pd, &status, WEXITED, NULL, NULL) == -1) {
+		if (errno != EINTR)
+			err(2, "pdwait");
+	}
+	close(pd);
+
+	if (WIFEXITED(status) && WEXITSTATUS(status) >= 2)
+		errx(2, "diff exited abnormally");
+	if (WIFSIGNALED(status))
+		errx(2, "diff killed by signal %d", WTERMSIG(status));
+}
 
 int
 main(int argc, char **argv)
 {
-	int ch, nblabels, status, m, n, kq, nke, nleft, i;
+	int ch, nblabels, m, n;
 	char *labels[] = { NULL, NULL, NULL };
 	const char *diffprog = DIFF_PATH;
 	char *file1, *file2, *file3;
@@ -934,7 +964,6 @@ main(int argc, char **argv)
 	int fd13[2], fd23[2];
 	int pd13, pd23;
 	cap_rights_t rights_ro;
-	struct kevent *e;
 
 	nblabels = 0;
 	eflag = EFLAG_NONE;
@@ -983,7 +1012,7 @@ main(int argc, char **argv)
 			eflag = EFLAG_OVERLAP;
 			break;
 		case DIFFPROG_OPT:
-			diffprog = optarg;
+			diffargv[0] = optarg;
 			break;
 		case STRIPCR_OPT:
 			strip_cr = 1;
@@ -1015,14 +1044,6 @@ main(int argc, char **argv)
 		err(2, "unable to limit stdio");
 
 	cap_rights_init(&rights_ro, CAP_READ, CAP_FSTAT, CAP_SEEK);
-
-	kq = kqueue();
-	if (kq == -1)
-		err(2, "kqueue");
-
-	e = malloc(2 * sizeof(*e));
-	if (e == NULL)
-		err(2, "malloc");
 
 	/* TODO stdio */
 	file1 = argv[0];
@@ -1061,28 +1082,18 @@ main(int argc, char **argv)
 	if (caph_rights_limit(fileno(fp[2]), &rights_ro) < 0)
 		err(2, "unable to limit rights on: %s", file3);
 
-	if (pipe(fd13))
+	if (pipe2(fd13, O_CLOEXEC))
 		err(2, "pipe");
-	if (pipe(fd23))
+	if (pipe2(fd23, O_CLOEXEC))
 		err(2, "pipe");
 
 	diffargv[diffargc] = file1;
 	diffargv[diffargc + 1] = file3;
 	diffargv[diffargc + 2] = NULL;
-
-	nleft = 0;
-	pd13 = diffexec(diffprog, diffargv, fd13);
-	EV_SET(e + nleft , pd13, EVFILT_PROCDESC, EV_ADD, NOTE_EXIT, 0, NULL);
-	if (kevent(kq, e + nleft, 1, NULL, 0, NULL) == -1)
-		err(2, "kevent1");
-	nleft++;
+	pd13 = diffexec(diffargv, fd13);
 
 	diffargv[diffargc] = file2;
-	pd23 = diffexec(diffprog, diffargv, fd23);
-	EV_SET(e + nleft , pd23, EVFILT_PROCDESC, EV_ADD, NOTE_EXIT, 0, NULL);
-	if (kevent(kq, e + nleft, 1, NULL, 0, NULL) == -1)
-		err(2, "kevent2");
-	nleft++;
+	pd23 = diffexec(diffargv, fd23);
 
 	caph_cache_catpages();
 	if (caph_enter() < 0)
@@ -1093,23 +1104,10 @@ main(int argc, char **argv)
 	m = readin(fd13[0], &d13);
 	n = readin(fd23[0], &d23);
 
-	/* waitpid cooked over pdforks */
-	while (nleft > 0) {
-		nke = kevent(kq, NULL, 0, e, nleft, NULL);
-		if (nke == -1)
-			err(2, "kevent");
-		for (i = 0; i < nke; i++) {
-			status = e[i].data;
-			if (WIFEXITED(status) && WEXITSTATUS(status) >= 2)
-				errx(2, "diff exited abnormally");
-			else if (WIFSIGNALED(status))
-				errx(2, "diff killed by signal %d",
-				    WTERMSIG(status));
-		}
-		nleft -= nke;
-	}
-	free(e);
+	wait_and_check(pd13);
+	wait_and_check(pd23);
+
 	merge(m, n);
 
-	return (EXIT_SUCCESS);
+	exit(0);
 }

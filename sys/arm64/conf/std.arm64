@@ -14,7 +14,6 @@ options 	INET6			# IPv6 communications protocols
 options 	CC_CUBIC		# include CUBIC congestion control
 options 	IPSEC_SUPPORT		# Allow kldload of ipsec and tcpmd5
 options 	IPSEC_OFFLOAD		# Inline ipsec offload infra
-options 	ROUTE_MPATH		# Multipath routing support
 options 	FIB_ALGO		# Modular fib lookups
 options 	TCP_OFFLOAD		# TCP offload
 options 	TCP_BLACKBOX		# Enhanced TCP event logging
@@ -84,10 +83,12 @@ include "std.debug"
 #options 	KUBSAN			# Kernel Undefined Behavior Sanitizer
 #options 	KCSAN			# Kernel Concurrency Sanitizer
 
+# Compression support
+options 	GZIO			# gzip (dumps)
+options 	ZSTDIO			# zstd (dumps, tarfs, uzip, zfs)
+
 # Kernel dump features.
 options 	EKCD			# Support for encrypted kernel dumps
-options 	GZIO			# gzip-compressed kernel and user dumps
-options 	ZSTDIO			# zstd-compressed kernel and user dumps
 options 	DEBUGNET		# debugnet networking
 options 	NETDUMP			# netdump(4) client support
 

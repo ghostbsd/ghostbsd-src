@@ -24,6 +24,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_inet6.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -44,6 +46,10 @@
 /* needed for checksum offload */
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#ifdef INET6
+#include <netinet/ip6.h>
+#include <netinet6/ip6_var.h>
+#endif
 
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
@@ -61,8 +67,6 @@
 #include <dev/usb/net/if_urereg.h>
 
 #include "miibus_if.h"
-
-#include "opt_inet6.h"
 
 #ifdef USB_DEBUG
 static int ure_debug = 0;
@@ -96,21 +100,30 @@ static const STRUCT_USB_HOST_ID ure_devs[] = {
   USB_VPI(USB_VENDOR_##v, USB_PRODUCT_##v##_##p, i), \
   USB_IFACE_CLASS(UICLASS_VENDOR), \
   USB_IFACE_SUBCLASS(UISUBCLASS_VENDOR) }
+	URE_DEV(CISCOLINKSYS, USB3GIGV1, 0),
+	URE_DEV(DLINK, DUBE1312, 0),
 	URE_DEV(ELECOM, EDCQUA3C, 0),
 	URE_DEV(LENOVO, RTL8153, URE_FLAG_8153),
+	URE_DEV(LENOVO, RTL8153_04, URE_FLAG_8153),
+	URE_DEV(LENOVO, TBT3LAN, 0),
 	URE_DEV(LENOVO, TBT3LANGEN2, 0),
 	URE_DEV(LENOVO, ONELINK, 0),
-	URE_DEV(LENOVO, RTL8153_04, URE_FLAG_8153),
 	URE_DEV(LENOVO, ONELINKPLUS, URE_FLAG_8153),
 	URE_DEV(LENOVO, USBCLAN, 0),
 	URE_DEV(LENOVO, USBCLANGEN2, 0),
 	URE_DEV(LENOVO, USBCLANHYBRID, 0),
+	URE_DEV(MICROSOFT, SURFETH1, 0),
+	URE_DEV(MICROSOFT, SURFETH2, 0),
 	URE_DEV(MICROSOFT, WINDEVETH, 0),
 	URE_DEV(NVIDIA, RTL8153, URE_FLAG_8153),
+	URE_DEV(REALTEK, RTL8050, URE_FLAG_8152),
+	URE_DEV(REALTEK, RTL8053, URE_FLAG_8153),
 	URE_DEV(REALTEK, RTL8152, URE_FLAG_8152),
 	URE_DEV(REALTEK, RTL8153, URE_FLAG_8153),
-	URE_DEV(TPLINK, RTL8153, URE_FLAG_8153),
 	URE_DEV(REALTEK, RTL8156, URE_FLAG_8156),
+	URE_DEV(SAMSUNG, RTL8153, 0),
+	URE_DEV(TPLINK, RTL8153, URE_FLAG_8153),
+	URE_DEV(TPLINK, RTL8153_2, 0),
 #undef URE_DEV
 };
 
@@ -124,6 +137,7 @@ static usb_callback_t ure_bulk_write_callback;
 static miibus_readreg_t ure_miibus_readreg;
 static miibus_writereg_t ure_miibus_writereg;
 static miibus_statchg_t ure_miibus_statchg;
+static miibus_linkchg_t ure_miibus_linkchg;
 
 static uether_fn_t ure_attach_post;
 static uether_fn_t ure_init;
@@ -180,6 +194,7 @@ static device_method_t ure_methods[] = {
 	DEVMETHOD(miibus_readreg, ure_miibus_readreg),
 	DEVMETHOD(miibus_writereg, ure_miibus_writereg),
 	DEVMETHOD(miibus_statchg, ure_miibus_statchg),
+	DEVMETHOD(miibus_linkchg, ure_miibus_linkchg),
 
 	DEVMETHOD_END
 };
@@ -439,6 +454,8 @@ ure_miibus_statchg(device_t dev)
 	struct mii_data *mii;
 	if_t ifp;
 	int locked;
+	uint16_t bmsr;
+	bool new_link, old_link;
 
 	sc = device_get_softc(dev);
 	mii = GET_MII(sc);
@@ -451,6 +468,7 @@ ure_miibus_statchg(device_t dev)
 	    (if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0)
 		goto done;
 
+	old_link = (sc->sc_flags & URE_FLAG_LINK) ? true : false;
 	sc->sc_flags &= ~URE_FLAG_LINK;
 	if ((mii->mii_media_status & (IFM_ACTIVE | IFM_AVALID)) ==
 	    (IFM_ACTIVE | IFM_AVALID)) {
@@ -471,11 +489,69 @@ ure_miibus_statchg(device_t dev)
 		}
 	}
 
-	/* Lost link, do nothing. */
-	if ((sc->sc_flags & URE_FLAG_LINK) == 0)
-		goto done;
+	new_link = (sc->sc_flags & URE_FLAG_LINK) ? true : false;
+	if (old_link && !new_link) {
+		/*
+		 * MII layer reports link down.  Verify by reading
+		 * the PHY BMSR register directly.  BMSR link status
+		 * is latched-low, so read twice: first clears any
+		 * stale latch, second gives current state.
+		 */
+		(void)ure_ocp_reg_read(sc,
+		    URE_OCP_BASE_MII + MII_BMSR * 2);
+		bmsr = ure_ocp_reg_read(sc,
+		    URE_OCP_BASE_MII + MII_BMSR * 2);
+
+		if (bmsr & BMSR_LINK) {
+			/*
+			 * PHY still has link.  This is a spurious
+			 * link-down from the MII polling race (see
+			 * PR 252165).  Restore IFM_ACTIVE so the
+			 * subsequent MIIBUS_LINKCHG check in
+			 * mii_phy_update sees no change.
+			 */
+			device_printf(dev,
+			    "spurious link down (PHY link up), overriding\n");
+			sc->sc_flags |= URE_FLAG_LINK;
+			mii->mii_media_status |= IFM_ACTIVE;
+		}
+	}
 done:
 	if (!locked)
+		URE_UNLOCK(sc);
+}
+
+static void
+ure_miibus_linkchg(device_t dev)
+{
+	struct ure_softc *sc;
+	struct mii_data *mii;
+	int locked;
+	uint16_t bmsr;
+
+	sc = device_get_softc(dev);
+	mii = GET_MII(sc);
+	locked = mtx_owned(&sc->sc_mtx);
+	if (locked == 0)
+		URE_LOCK(sc);
+
+	/*
+	 * This is called by the default miibus linkchg handler
+	 * before it calls if_link_state_change().  If the PHY
+	 * still has link but the MII layer lost IFM_ACTIVE due
+	 * to the polling race (see PR 252165), restore it so the
+	 * notification goes out as LINK_STATE_UP rather than DOWN.
+	 */
+	if (mii != NULL && (mii->mii_media_status & IFM_ACTIVE) == 0) {
+		(void)ure_ocp_reg_read(sc,
+		    URE_OCP_BASE_MII + MII_BMSR * 2);
+		bmsr = ure_ocp_reg_read(sc,
+		    URE_OCP_BASE_MII + MII_BMSR * 2);
+		if (bmsr & BMSR_LINK)
+			mii->mii_media_status |= IFM_ACTIVE;
+	}
+
+	if (locked == 0)
 		URE_UNLOCK(sc);
 }
 
@@ -1015,6 +1091,7 @@ ure_attach_post_sub(struct usb_ether *ue)
 	if_sethwassist(ifp, CSUM_IP|CSUM_IP_UDP|CSUM_IP_TCP);
 #ifdef INET6
 	if_setcapabilitiesbit(ifp, IFCAP_HWCSUM_IPV6, 0);
+	if_sethwassistbits(ifp, CSUM_IP6_UDP|CSUM_IP6_TCP, 0);
 #endif
 	if_setcapenable(ifp, if_getcapabilities(ifp));
 
@@ -1463,6 +1540,7 @@ ure_ioctl(if_t ifp, u_long cmd, caddr_t data)
 		if ((mask & IFCAP_TXCSUM) != 0 &&
 		    (if_getcapabilities(ifp) & IFCAP_TXCSUM) != 0) {
 			if_togglecapenable(ifp, IFCAP_TXCSUM);
+			if_togglehwassist(ifp, CSUM_IP|CSUM_IP_UDP|CSUM_IP_TCP);
 		}
 		if ((mask & IFCAP_RXCSUM) != 0 &&
 		    (if_getcapabilities(ifp) & IFCAP_RXCSUM) != 0) {
@@ -1471,6 +1549,7 @@ ure_ioctl(if_t ifp, u_long cmd, caddr_t data)
 		if ((mask & IFCAP_TXCSUM_IPV6) != 0 &&
 		    (if_getcapabilities(ifp) & IFCAP_TXCSUM_IPV6) != 0) {
 			if_togglecapenable(ifp, IFCAP_TXCSUM_IPV6);
+			if_togglehwassist(ifp, CSUM_IP6_UDP|CSUM_IP6_TCP);
 		}
 		if ((mask & IFCAP_RXCSUM_IPV6) != 0 &&
 		    (if_getcapabilities(ifp) & IFCAP_RXCSUM_IPV6) != 0) {
@@ -2124,41 +2203,33 @@ ure_rtl8152_nic_reset(struct ure_softc *sc)
 static void
 ure_rxcsum(int capenb, struct ure_rxpkt *rp, struct mbuf *m)
 {
-	int flags;
 	uint32_t csum, misc;
-	int tcp, udp;
 
 	m->m_pkthdr.csum_flags = 0;
-
-	if (!(capenb & IFCAP_RXCSUM))
-		return;
 
 	csum = le32toh(rp->ure_csum);
 	misc = le32toh(rp->ure_misc);
 
-	tcp = udp = 0;
+	if ((capenb & IFCAP_RXCSUM) == 0 &&
+	    (csum & URE_RXPKT_IPV4_CS) != 0)
+		return;
+	if ((capenb & IFCAP_RXCSUM_IPV6) == 0 &&
+	    (csum & URE_RXPKT_IPV6_CS) != 0)
+		return;
 
-	flags = 0;
-	if (csum & URE_RXPKT_IPV4_CS)
-		flags |= CSUM_IP_CHECKED;
-	else if (csum & URE_RXPKT_IPV6_CS)
-		flags = 0;
-
-	tcp = rp->ure_csum & URE_RXPKT_TCP_CS;
-	udp = rp->ure_csum & URE_RXPKT_UDP_CS;
-
-	if (__predict_true((flags & CSUM_IP_CHECKED) &&
-	    !(misc & URE_RXPKT_IP_F))) {
-		flags |= CSUM_IP_VALID;
+	if ((csum & URE_RXPKT_IPV4_CS) != 0) {
+		m->m_pkthdr.csum_flags |= CSUM_IP_CHECKED;
+		if (__predict_true((misc & URE_RXPKT_IP_F) == 0))
+			m->m_pkthdr.csum_flags |= CSUM_IP_VALID;
 	}
 	if (__predict_true(
-	    (tcp && !(misc & URE_RXPKT_TCP_F)) ||
-	    (udp && !(misc & URE_RXPKT_UDP_F)))) {
-		flags |= CSUM_DATA_VALID|CSUM_PSEUDO_HDR;
+	    ((rp->ure_csum & URE_RXPKT_TCP_CS) != 0 &&
+	     (misc & URE_RXPKT_TCP_F) == 0) ||
+	    ((rp->ure_csum & URE_RXPKT_UDP_CS) != 0 &&
+	     (misc & URE_RXPKT_UDP_F) == 0))) {
+		m->m_pkthdr.csum_flags |= CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 		m->m_pkthdr.csum_data = 0xFFFF;
 	}
-
-	m->m_pkthdr.csum_flags = flags;
 }
 
 /*
@@ -2176,7 +2247,6 @@ ure_txcsum(struct mbuf *m, int caps, uint32_t *regout)
 	struct ip ip;
 	struct ether_header *eh;
 	int flags;
-	uint32_t data;
 	uint32_t reg;
 	int l3off, l4off;
 	uint16_t type;
@@ -2211,10 +2281,9 @@ ure_txcsum(struct mbuf *m, int caps, uint32_t *regout)
 	if (flags & CSUM_IP)
 		reg |= URE_TXPKT_IPV4_CS;
 
-	data = m->m_pkthdr.csum_data;
 	if (flags & (CSUM_IP_TCP | CSUM_IP_UDP)) {
 		m_copydata(m, l3off, sizeof ip, (caddr_t)&ip);
-		l4off = l3off + (ip.ip_hl << 2) + data;
+		l4off = l3off + (ip.ip_hl << 2);
 		if (__predict_false(l4off > URE_L4_OFFSET_MAX))
 			return (1);
 
@@ -2227,7 +2296,9 @@ ure_txcsum(struct mbuf *m, int caps, uint32_t *regout)
 	}
 #ifdef INET6
 	else if (flags & (CSUM_IP6_TCP | CSUM_IP6_UDP)) {
-		l4off = l3off + data;
+		l4off = ip6_lasthdr(m, l3off, IPPROTO_IPV6, NULL);
+		if (__predict_false(l4off < 0))
+			return (1);
 		if (__predict_false(l4off > URE_L4_OFFSET_MAX))
 			return (1);
 

@@ -36,6 +36,7 @@ arm64/arm64/busdma_bounce.c			standard
 arm64/arm64/busdma_machdep.c			standard
 arm64/arm64/clock.c				standard
 arm64/arm64/copyinout.S				standard
+arm64/arm64/copyinout_ifunc.c			standard
 arm64/arm64/cpu_errata.c			standard
 arm64/arm64/cpu_feat.c				standard
 arm64/arm64/cpufunc_asm.S			standard
@@ -205,6 +206,7 @@ dev/acpica/acpi_pci.c				optional acpi pci
 dev/acpica/acpi_pci_link.c			optional acpi pci
 dev/acpica/acpi_pcib.c				optional acpi pci
 dev/acpica/acpi_pxm.c				optional acpi
+dev/acpi_support/acpi_wmi_if.m			optional acpi acpi_wmi
 dev/ahci/ahci_generic.c				optional ahci
 
 cddl/dev/dtrace/aarch64/dtrace_asm.S		optional dtrace compile-with "${DTRACE_S}"
@@ -260,6 +262,7 @@ dev/dpaa2/dpaa2_channel.c			optional soc_nxp_ls dpaa2
 dev/dpaa2/dpaa2_cmd_if.m			optional soc_nxp_ls dpaa2
 dev/dpaa2/dpaa2_con.c				optional soc_nxp_ls dpaa2
 dev/dpaa2/dpaa2_console.c			optional soc_nxp_ls dpaa2 fdt
+dev/dpaa2/dpaa2_frame.c				optional soc_nxp_ls dpaa2
 dev/dpaa2/dpaa2_io.c				optional soc_nxp_ls dpaa2
 dev/dpaa2/dpaa2_mac.c				optional soc_nxp_ls dpaa2
 dev/dpaa2/dpaa2_mc.c				optional soc_nxp_ls dpaa2
@@ -565,6 +568,7 @@ dev/clk/allwinner/ccu_a64.c			optional soc_allwinner_a64 aw_ccu fdt
 dev/clk/allwinner/ccu_h3.c			optional soc_allwinner_h5 aw_ccu fdt
 dev/clk/allwinner/ccu_h6.c			optional soc_allwinner_h6 aw_ccu fdt
 dev/clk/allwinner/ccu_h6_r.c			optional soc_allwinner_h6 aw_ccu fdt
+dev/clk/allwinner/ccu_h616.c			optional soc_allwinner_h616 aw_ccu fdt
 dev/clk/allwinner/ccu_sun8i_r.c			optional aw_ccu fdt
 dev/clk/allwinner/ccu_de2.c			optional aw_ccu fdt
 
@@ -575,6 +579,8 @@ arm/allwinner/h3/h3_padconf.c			optional soc_allwinner_h5 fdt
 arm/allwinner/h3/h3_r_padconf.c			optional soc_allwinner_h5 fdt
 arm/allwinner/h6/h6_padconf.c			optional soc_allwinner_h6 fdt
 arm/allwinner/h6/h6_r_padconf.c			optional soc_allwinner_h6 fdt
+arm/allwinner/h616/h616_padconf.c		optional soc_allwinner_h616 fdt
+arm/allwinner/h616/h616_r_padconf.c		optional soc_allwinner_h616 fdt
 
 # Altera/Intel
 arm64/intel/stratix10-soc-fpga-mgr.c		optional soc_intel_stratix10 fdt
@@ -624,6 +630,7 @@ arm/broadcom/bcm2835/bcm283x_dwc_fdt.c			optional dwcotg fdt soc_brcm_bcm2837 | 
 arm/broadcom/bcm2835/bcm2838_pci.c			optional soc_brcm_bcm2838 fdt pci
 arm/broadcom/bcm2835/bcm2838_xhci.c			optional soc_brcm_bcm2838 fdt pci xhci
 arm/broadcom/bcm2835/raspberrypi_gpio.c			optional soc_brcm_bcm2837 gpio fdt | soc_brcm_bcm2838 gpio fdt
+arm/broadcom/bcm2835/raspberrypi_virtgpio.c		optional soc_brcm_bcm2837 gpio fdt | soc_brcm_bcm2838 gpio fdt
 contrib/vchiq/interface/compat/vchi_bsd.c		optional vchiq soc_brcm_bcm2837 fdt \
 	compile-with "${NORMAL_C} -DUSE_VCHIQ_ARM -D__VCCOREVER__=0x04000000 -I$S/contrib/vchiq"
 contrib/vchiq/interface/vchiq_arm/vchiq_2835_arm.c	optional vchiq soc_brcm_bcm2837 fdt \
@@ -761,8 +768,27 @@ dev/ahci/ahci_fsl_fdt.c				optional soc_nxp_ls ahci fdt
 dev/flash/flexspi/flex_spi.c    		optional clk flex_spi soc_nxp_ls fdt
 
 # Qualcomm
-arm64/qualcomm/qcom_gcc.c			optional qcom_gcc fdt
+dev/qcom_gcc/qcom_gcc_main.c			optional qcom_gcc fdt
+dev/qcom_gcc/qcom_gcc_clock.c			optional qcom_gcc fdt
+dev/qcom_gcc/qcom_gcc_reset.c			optional qcom_gcc fdt
+dev/qcom_gcc/qcom_gcc_ipq4018_reset.c		optional qcom_gcc fdt
+dev/qcom_gcc/qcom_gcc_ipq4018_clock.c		optional qcom_gcc fdt
+dev/qcom_gcc/qcom_gcc_msm8916_reset.c		optional qcom_gcc fdt
+dev/qcom_gcc/qcom_gcc_msm8916_clock.c		optional qcom_gcc fdt
+dev/qcom_clk/qcom_clk_fepll.c			optional qcom_gcc fdt
+dev/qcom_clk/qcom_clk_fdiv.c			optional qcom_gcc fdt
+dev/qcom_clk/qcom_clk_apssdiv.c			optional qcom_gcc fdt
+dev/qcom_clk/qcom_clk_freqtbl.c			optional qcom_gcc fdt
+dev/qcom_clk/qcom_clk_rcg2.c			optional qcom_gcc fdt
+dev/qcom_clk/qcom_clk_branch2.c			optional qcom_gcc fdt
+dev/qcom_clk/qcom_clk_ro_div.c			optional qcom_gcc fdt
 dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+dev/qcom_tlmm/qcom_tlmm_debug.c			optional qcom_tlmm gpio
+dev/qcom_tlmm/qcom_tlmm_pin.c			optional qcom_tlmm gpio
+dev/qcom_tlmm/qcom_tlmm_pinmux.c		optional qcom_tlmm gpio
+dev/qcom_tlmm/qcom_tlmm.c			optional qcom_tlmm gpio
+dev/qcom_tlmm/qcom_tlmm_ipq4018.c		optional qcom_tlmm gpio
+dev/qcom_tlmm/qcom_tlmm_ipq4018_hw.c		optional qcom_tlmm gpio
 
 # RockChip Drivers
 arm64/rockchip/rk3328_codec.c			optional fdt rk3328codec soc_rockchip_rk3328

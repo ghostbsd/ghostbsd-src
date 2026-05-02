@@ -105,6 +105,12 @@
 
 MALLOC_DECLARE(M_TPM20);
 
+struct tpm_priv {
+	uint8_t 	buf[TPM_BUFSIZE];
+	size_t		offset;
+	size_t		len;
+};
+
 struct tpm_sc {
 	device_t	dev;
 
@@ -116,18 +122,13 @@ struct tpm_sc {
 	struct cdev	*sc_cdev;
 
 	struct sx 	dev_lock;
-	struct cv	buf_cv;
 
 	void 		*intr_cookie;
 	int 		intr_type;	/* Current event type */
 	bool 		interrupts;
 
-	uint8_t 	*buf;
-	size_t		pending_data_length;
-	size_t		total_length;
-	lwpid_t		owner_tid;
+	struct tpm_priv *internal_priv;
 
-	struct callout 	discard_buffer_callout;
 #if defined TPM_HARVEST || defined RANDOM_ENABLE_TPM
 	struct timeout_task 	harvest_task;
 #endif
@@ -136,6 +137,7 @@ struct tpm_sc {
 };
 
 int tpm20_suspend(device_t dev);
+int tpm20_resume(device_t dev);
 int tpm20_shutdown(device_t dev);
 int32_t tpm20_get_timeout(uint32_t command);
 int tpm20_init(struct tpm_sc *sc);

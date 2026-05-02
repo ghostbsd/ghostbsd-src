@@ -34,7 +34,6 @@
 #include "opt_kern_tls.h"
 #include "opt_mbuf_stress_test.h"
 #include "opt_ratelimit.h"
-#include "opt_route.h"
 #include "opt_rss.h"
 #include "opt_sctp.h"
 
@@ -78,6 +77,7 @@
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip_options.h>
+#include <netinet/ip_mroute.h>
 
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
@@ -561,12 +561,13 @@ again:
 		 * See if the caller provided any multicast options
 		 */
 		if (imo != NULL) {
+			int vif;
+
+			vif = imo->imo_multicast_vif;
 			ip->ip_ttl = imo->imo_multicast_ttl;
-			if (imo->imo_multicast_vif != -1)
-				ip->ip_src.s_addr =
-				    ip_mcast_src ?
-				    ip_mcast_src(imo->imo_multicast_vif) :
-				    INADDR_ANY;
+			if (vif != -1)
+				ip->ip_src.s_addr = ip_mcast_src ?
+				    ip_mcast_src(fibnum, vif) : INADDR_ANY;
 		} else
 			ip->ip_ttl = IP_DEFAULT_MULTICAST_TTL;
 		/*
@@ -609,7 +610,8 @@ again:
 			 * above, will be forwarded by the ip_input() routine,
 			 * if necessary.
 			 */
-			if (V_ip_mrouter && (flags & IP_FORWARDING) == 0) {
+			if (V_ip_mrouting_enabled &&
+			    (flags & IP_FORWARDING) == 0) {
 				/*
 				 * If rsvp daemon is not running, do not
 				 * set ip_moptions. This ensures that the packet

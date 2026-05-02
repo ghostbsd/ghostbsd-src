@@ -25,6 +25,8 @@
 # SUCH DAMAGE.
 #
 
+: ${CHKPATH:="mnt"}
+
 atf_test_case F_flag
 F_flag_head()
 {
@@ -54,6 +56,7 @@ h_flag_head()
 }
 h_flag_body()
 {
+	file=$(realpath $0)
 	# POSIX defines a hole as “[a] contiguous region of bytes
 	# within a file, all having the value of zero” and requires
 	# that “all seekable files shall have a virtual hole starting
@@ -82,27 +85,27 @@ h_flag_body()
 	atf_check -o inline:"$((ps)) .\n" stat -h .
 	atf_check -o inline:"$((ps)) ." stat -hn .
 
-	# For a file, prints a list of holes.
+	# For a file, prints a list of holes.  Some file systems don't
+	# like creating small holes, so we create large ones instead.
+	hs=$((16*1024*1024))
 	atf_check truncate -s 0 foo
 	atf_check -o inline:"0 foo" \
 	    stat -hn foo
-	atf_check truncate -s "$((ps))" foo
-	atf_check -o inline:"0-$((ps-1)) foo" \
+	atf_check truncate -s "$((hs))" foo
+	atf_check -o inline:"0-$((hs-1)) foo" \
 	    stat -hn foo
-	atf_check dd status=none if=/COPYRIGHT of=foo \
-	    oseek="$((ps))" bs=1 count=1
-	atf_check -o inline:"0-$((ps-1)),$((ps+1)) foo" \
+	atf_check dd status=none if="${file}" of=foo \
+	    oseek="$((hs))" bs=1 count=1
+	atf_check -o inline:"0-$((hs-1)),$((hs+1)) foo" \
 	    stat -hn foo
-	atf_check truncate -s "$((ps*3))" foo
-	atf_check -o inline:"0-$((ps-1)),$((ps*2))-$((ps*3-1)) foo" \
+	atf_check truncate -s "$((hs*3))" foo
+	atf_check -o inline:"0-$((hs-1)),$((hs+ps))-$((hs*3-1)) foo" \
 	    stat -hn foo
 
 	# Test multiple files.
-	atf_check dd status=none if=/COPYRIGHT of=bar
+	atf_check dd status=none if="${file}" of=bar
 	sz=$(stat -f%z bar)
-	atf_check -o inline:"0-$((ps-1)),$((ps*2))-$((ps*3-1)) foo
-$((sz)) bar
-" \
+	atf_check -o inline:"0-$((hs-1)),$((hs+ps))-$((hs*3-1)) foo\n$((sz)) bar\n" \
 	    stat -h foo bar
 
 	# For a device, fail.
@@ -300,6 +303,36 @@ x_flag_body()
 	done
 }
 
+atf_test_case devname cleanup
+devname_head()
+{
+	atf_set	"descr" "Verify that %Sd outputs a device name"
+}
+devname_body()
+{
+	local devname devpath
+
+	atf_check -o save:dev mdconfig -t malloc -s 16M
+	read devname < dev
+	devpath="/dev/$devname"
+	atf_check -o not-empty newfs "$devpath"
+
+	atf_check mkdir "$CHKPATH"
+	atf_check mount "$devpath" "$CHKPATH"
+
+	atf_check -o inline:"$devname\n" stat -f '%Sd' "$CHKPATH"
+	atf_check -o inline:"$devname\n" stat -f '%Sr' "$devpath"
+}
+devname_cleanup()
+{
+	if [ -d "$CHKPATH" ]; then
+		umount "$CHKPATH" || true
+	fi
+	if [ -f dev ]; then
+		mdconfig -d -u $(cat dev) || true
+	fi
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case F_flag
@@ -314,4 +347,5 @@ atf_init_test_cases()
 	atf_add_test_case s_flag
 	atf_add_test_case t_flag
 	atf_add_test_case x_flag
+	atf_add_test_case devname
 }

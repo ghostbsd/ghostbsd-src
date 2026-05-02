@@ -4,7 +4,7 @@
 
 # PROVIDE: zfs
 # REQUIRE: zfsbe
-# BEFORE: FILESYSTEMS var
+# BEFORE: FILESYSTEMS tmp var
 
 . /etc/rc.subr
 
@@ -22,7 +22,7 @@ required_modules="zfs"
 zfs_start_jail()
 {
 	if check_jail mount_allowed; then
-		zfs mount -a
+		zfs mount -va
 	fi
 }
 

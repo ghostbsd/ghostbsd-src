@@ -407,7 +407,7 @@ nfsrvd_setattr(struct nfsrv_descript *nd, __unused int isdgram,
 	int preat_ret = 1, postat_ret = 1, gcheck = 0, error = 0;
 	int gotproxystateid;
 	struct timespec guard = { 0, 0 };
-	nfsattrbit_t attrbits, retbits;
+	nfsattrbit_t atimeonly, attrbits, retbits;
 	nfsv4stateid_t stateid;
 	NFSACL_T *aclp = NULL, *daclp = NULL;
 	struct thread *p = curthread;
@@ -481,9 +481,28 @@ nfsrvd_setattr(struct nfsrv_descript *nd, __unused int isdgram,
 	 */
 	if (!nd->nd_repstat) {
 		if (NFSVNO_NOTSETSIZE(&nva)) {
+			/*
+			 * For an NFSv4.2 Setattr of atime only that fails with
+			 * EROFS, pretend the operation succeeded.  This makes
+			 * the semantics of copying files from a ZFS snapshot
+			 * the same over NFSv4.2 as it is locally.
+			 * Without this "hack", the copy will fail
+			 * with EROFS unless the NFSv4.2 mount has the
+			 * "noatime" mount option.
+			 */
+			NFSZERO_ATTRBIT(&atimeonly);
+			NFSSETBIT_ATTRBIT(&atimeonly, NFSATTRBIT_TIMEACCESSSET);
 			if (NFSVNO_EXRDONLY(exp) ||
-			    (vp->v_mount->mnt_flag & MNT_RDONLY))
-				nd->nd_repstat = EROFS;
+			    (vp->v_mount->mnt_flag & MNT_RDONLY)) {
+				if ((nd->nd_flag & ND_NFSV42) != 0 &&
+				    NFSEQUAL_ATTRBIT(&attrbits, &atimeonly)) {
+					NFSCLRBIT_ATTRBIT(&attrbits,
+					    NFSATTRBIT_TIMEACCESSSET);
+					NFSSETBIT_ATTRBIT(&retbits,
+					    NFSATTRBIT_TIMEACCESSSET);
+				} else
+					nd->nd_repstat = EROFS;
+			}
 		} else {
 			if (vp->v_type != VREG)
 				nd->nd_repstat = EINVAL;
@@ -843,7 +862,7 @@ nfsrvd_readlink(struct nfsrv_descript *nd, __unused int isdgram,
 		nd->nd_mb = mpend;
 		if ((mpend->m_flags & M_EXTPG) != 0) {
 			nd->nd_bextpg = mpend->m_epg_npgs - 1;
-			nd->nd_bpos = (char *)(void *)
+			nd->nd_bpos =
 			    PHYS_TO_DMAP(mpend->m_epg_pa[nd->nd_bextpg]);
 			off = (nd->nd_bextpg == 0) ? mpend->m_epg_1st_off : 0;
 			nd->nd_bpos += off + mpend->m_epg_last_len;
@@ -1049,8 +1068,7 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 		if ((m2->m_flags & M_EXTPG) != 0) {
 			nd->nd_flag |= ND_EXTPG;
 			nd->nd_bextpg = m2->m_epg_npgs - 1;
-			nd->nd_bpos = (char *)(void *)
-			    PHYS_TO_DMAP(m2->m_epg_pa[nd->nd_bextpg]);
+			nd->nd_bpos = PHYS_TO_DMAP(m2->m_epg_pa[nd->nd_bextpg]);
 			poff = (nd->nd_bextpg == 0) ? m2->m_epg_1st_off : 0;
 			nd->nd_bpos += poff + m2->m_epg_last_len;
 			nd->nd_bextpgsiz = PAGE_SIZE - m2->m_epg_last_len -
@@ -1438,7 +1456,7 @@ nfsrvd_mknod(struct nfsrv_descript *nd, __unused int isdgram,
 	vnode_t vp, dirp = NULL;
 	nfsattrbit_t attrbits;
 	char *bufp = NULL, *pathcp = NULL;
-	u_long *hashp, cnflags;
+	u_long *hashp, cnflags, setflags;
 	NFSACL_T *aclp = NULL, *daclp = NULL;
 	struct thread *p = curthread;
 
@@ -1605,9 +1623,13 @@ nfsrvd_mknod(struct nfsrv_descript *nd, __unused int isdgram,
 		}
 	}
 
+	/* For NFSv4, set na_flags via nfsrv_fixattr(). */
+	setflags = nva.na_flags;
+	nva.na_flags = VNOVAL;
 	nd->nd_repstat = nfsvno_mknod(&named, &nva, nd->nd_cred, p);
 	if (!nd->nd_repstat) {
 		vp = named.ni_vp;
+		nva.na_flags = setflags;
 		nfsrv_fixattr(nd, vp, &nva, aclp, daclp, p, &attrbits, false);
 		nd->nd_repstat = nfsvno_getfh(vp, fhp, p);
 		if ((nd->nd_flag & ND_NFSV3) && !nd->nd_repstat)
@@ -2115,10 +2137,14 @@ nfsrvd_symlinksub(struct nfsrv_descript *nd, struct nameidata *ndp,
     int pathlen)
 {
 	u_int32_t *tl;
+	u_long setflags;
 
+	setflags = nvap->na_flags;
+	nvap->na_flags = (u_long)VNOVAL;
 	nd->nd_repstat = nfsvno_symlink(ndp, nvap, pathcp, pathlen,
 	    !(nd->nd_flag & ND_NFSV2), nd->nd_saveduid, nd->nd_cred, p, exp);
 	if (!nd->nd_repstat && !(nd->nd_flag & ND_NFSV2)) {
+		nvap->na_flags = setflags;
 		nfsrv_fixattr(nd, ndp->ni_vp, nvap, aclp, NULL, p, attrbitp,
 		    false);
 		if (nd->nd_flag & ND_NFSV3) {
@@ -2249,12 +2275,16 @@ nfsrvd_mkdirsub(struct nfsrv_descript *nd, struct nameidata *ndp,
 {
 	vnode_t vp;
 	u_int32_t *tl;
+	u_long setflags;
 
+	setflags = nvap->na_flags;
+	nvap->na_flags = (u_long)VNOVAL;
 	NFSVNO_SETATTRVAL(nvap, type, VDIR);
 	nd->nd_repstat = nfsvno_mkdir(ndp, nvap, nd->nd_saveduid,
 	    nd->nd_cred, p, exp);
 	if (!nd->nd_repstat) {
 		vp = ndp->ni_vp;
+		nvap->na_flags = setflags;
 		nfsrv_fixattr(nd, vp, nvap, aclp, daclp, p, attrbitp, false);
 		nd->nd_repstat = nfsvno_getfh(vp, fhp, p);
 		if (!(nd->nd_flag & ND_NFSV4) && !nd->nd_repstat)
@@ -6400,7 +6430,7 @@ nfsrvd_getxattr(struct nfsrv_descript *nd, __unused int isdgram,
 			if ((mpend->m_flags & M_EXTPG) != 0) {
 				nd->nd_flag |= ND_EXTPG;
 				nd->nd_bextpg = mpend->m_epg_npgs - 1;
-				nd->nd_bpos = (char *)(void *)
+				nd->nd_bpos =
 				   PHYS_TO_DMAP(mpend->m_epg_pa[nd->nd_bextpg]);
 				off = (nd->nd_bextpg == 0) ?
 				    mpend->m_epg_1st_off : 0;

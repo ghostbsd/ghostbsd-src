@@ -94,6 +94,7 @@ typedef void (abort_handler)(struct thread *, struct trapframe *, uint64_t,
 static abort_handler align_abort;
 static abort_handler data_abort;
 static abort_handler external_abort;
+static abort_handler tag_check_abort;
 
 static abort_handler *abort_handlers[] = {
 	[ISS_DATA_DFSC_TF_L0] = data_abort,
@@ -106,6 +107,7 @@ static abort_handler *abort_handlers[] = {
 	[ISS_DATA_DFSC_PF_L1] = data_abort,
 	[ISS_DATA_DFSC_PF_L2] = data_abort,
 	[ISS_DATA_DFSC_PF_L3] = data_abort,
+	[ISS_DATA_DFSC_TAG] = tag_check_abort,
 	[ISS_DATA_DFSC_ALIGN] = align_abort,
 	[ISS_DATA_DFSC_EXT] =  external_abort,
 	[ISS_DATA_DFSC_EXT_L0] =  external_abort,
@@ -193,17 +195,19 @@ test_bs_fault(void *addr)
 	    addr == &generic_bs_poke_8f);
 }
 
-static void
+static bool
 svc_handler(struct thread *td, struct trapframe *frame)
 {
 
 	if ((frame->tf_esr & ESR_ELx_ISS_MASK) == 0) {
 		syscallenter(td);
 		syscallret(td);
+		/* Skip userret as syscallret already called it */
+		return (true);
 	} else {
 		call_trapsignal(td, SIGILL, ILL_ILLOPN, (void *)frame->tf_elr,
 		    ESR_ELx_EXCEPTION(frame->tf_esr));
-		userret(td, frame);
+		return (false);
 	}
 }
 
@@ -220,7 +224,6 @@ align_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 
 	call_trapsignal(td, SIGBUS, BUS_ADRALN, (void *)frame->tf_elr,
 	    ESR_ELx_EXCEPTION(frame->tf_esr));
-	userret(td, frame);
 }
 
 
@@ -231,7 +234,6 @@ external_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	if (lower) {
 		call_trapsignal(td, SIGBUS, BUS_OBJERR, (void *)far,
 		    ESR_ELx_EXCEPTION(frame->tf_esr));
-		userret(td, frame);
 		return;
 	}
 
@@ -250,6 +252,26 @@ external_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	panic("Unhandled external data abort");
 }
 
+static void
+tag_check_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
+    uint64_t far, int lower)
+{
+	/*
+	 * A Tag Check Fault should be handled as a SIGSEGV if it occurs
+	 * at EL0 and a kernel panic if at EL1.
+	 */
+	if (!lower) {
+		print_registers(frame);
+		print_gp_register("far", far);
+		printf(" esr: 0x%.16lx\n", esr);
+		panic("Tag Check Fault");
+	}
+
+	call_trapsignal(td, SIGSEGV, SEGV_MTESERR, (void *)far,
+	    ESR_ELx_EXCEPTION(frame->tf_esr));
+	userret(td, frame);
+}
+
 /*
  * It is unsafe to access the stack canary value stored in "td" until
  * kernel map translation faults are handled, see the pmap_klookup() call below.
@@ -262,6 +284,7 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 {
 	struct vm_map *map;
 	struct pcb *pcb;
+	vm_offset_t fault_va;
 	vm_prot_t ftype;
 	int error, sig, ucode;
 #ifdef KDB
@@ -282,8 +305,11 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	}
 #endif
 
+	fault_va = far;
 	if (lower) {
 		map = &td->td_proc->p_vmspace->vm_map;
+		if ((td->td_proc->p_md.md_tcr & TCR_TBI0) != 0)
+			fault_va = ADDR_MAKE_CANONICAL(far);
 	} else if (!ADDR_IS_CANONICAL(far)) {
 		/* We received a TBI/PAC/etc. fault from the kernel */
 		error = KERN_INVALID_ADDRESS;
@@ -338,7 +364,7 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	 * or pmap_fault() will recurse on that lock.
 	 */
 	if ((lower || map == kernel_map || pcb->pcb_onfault != 0) &&
-	    pmap_fault(map->pmap, esr, far) == KERN_SUCCESS)
+	    pmap_fault(map->pmap, esr, fault_va) == KERN_SUCCESS)
 		return;
 
 #ifdef INVARIANTS
@@ -379,7 +405,8 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	}
 
 	/* Fault in the page. */
-	error = vm_fault_trap(map, far, ftype, VM_FAULT_NORMAL, &sig, &ucode);
+	error = vm_fault_trap(map, fault_va, ftype, VM_FAULT_NORMAL, &sig,
+	    &ucode);
 	if (error != KERN_SUCCESS) {
 		if (lower) {
 			call_trapsignal(td, sig, ucode, (void *)far,
@@ -411,9 +438,6 @@ bad_far:
 			    frame->tf_elr, error);
 		}
 	}
-
-	if (lower)
-		userret(td, frame);
 }
 
 static void
@@ -479,6 +503,66 @@ fpe_trap(struct thread *td, void *addr, uint32_t exception)
 	call_trapsignal(td, SIGFPE, code, addr, exception);
 }
 #endif
+
+static void
+handle_moe(struct thread *td, struct trapframe *frame, uint64_t esr)
+{
+	uint64_t src;
+	uint64_t dest;
+	uint64_t size;
+	int src_reg;
+	int dest_reg;
+	int size_reg;
+	int format_option;
+
+	format_option = esr & ISS_MOE_FORMAT_OPTION_MASK;
+	dest_reg = (esr & ISS_MOE_DESTREG_MASK) >> ISS_MOE_DESTREG_SHIFT;
+	size_reg = (esr & ISS_MOE_SIZEREG_MASK) >> ISS_MOE_SIZEREG_SHIFT;
+	dest = frame->tf_x[dest_reg];
+	size = frame->tf_x[size_reg];
+
+	/*
+	 * Put the registers back in the original format suitable for a
+	 * prologue instruction, using the generic return routine from the
+	 * Arm ARM (DDI 0487I.a) rules CNTMJ and MWFQH.
+	 */
+	if (esr & ISS_MOE_MEMINST) {
+		/* SET* instruction */
+		if (format_option == ISS_MOE_FORMAT_OPTION_A ||
+		    format_option == ISS_MOE_FORMAT_OPTION_A2) {
+			/* Format is from Option A; forward set */
+			frame->tf_x[dest_reg] = dest + size;
+			frame->tf_x[size_reg] = -size;
+		}
+	} else {
+		/* CPY* instruction */
+		src_reg = (esr & ISS_MOE_SRCREG_MASK) >> ISS_MOE_SRCREG_SHIFT;
+		src = frame->tf_x[src_reg];
+
+		if (format_option == ISS_MOE_FORMAT_OPTION_B ||
+		    format_option == ISS_MOE_FORMAT_OPTION_B2) {
+			/* Format is from Option B */
+			if (frame->tf_spsr & PSR_N) {
+				/* Backward copy */
+				frame->tf_x[dest_reg] = dest - size;
+				frame->tf_x[src_reg] = src + size;
+			}
+		} else {
+			/* Format is from Option A */
+			if (frame->tf_x[size_reg] & (1UL << 63)) {
+				/* Forward copy */
+				frame->tf_x[dest_reg] = dest + size;
+				frame->tf_x[src_reg] = src + size;
+				frame->tf_x[size_reg] = -size;
+			}
+		}
+	}
+
+	if (esr & ISS_MOE_FROM_EPILOGUE)
+		frame->tf_elr -= 8;
+	else
+		frame->tf_elr -= 4;
+}
 
 /*
  * See the comment above data_abort().
@@ -589,72 +673,15 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 		print_gp_register("far", far);
 		panic("Branch Target exception");
 		break;
+	case EXCP_MOE:
+		handle_moe(td, frame, esr);
+		break;
 	default:
 		print_registers(frame);
 		print_gp_register("far", far);
 		panic("Unknown kernel exception 0x%x esr_el1 0x%lx", exception,
 		    esr);
 	}
-}
-
-static void
-handle_moe(struct thread *td, struct trapframe *frame, uint64_t esr)
-{
-	uint64_t src;
-	uint64_t dest;
-	uint64_t size;
-	int src_reg;
-	int dest_reg;
-	int size_reg;
-	int format_option;
-
-	format_option = esr & ISS_MOE_FORMAT_OPTION_MASK;
-	dest_reg = (esr & ISS_MOE_DESTREG_MASK) >> ISS_MOE_DESTREG_SHIFT;
-	size_reg = (esr & ISS_MOE_SIZEREG_MASK) >> ISS_MOE_SIZEREG_SHIFT;
-	dest = frame->tf_x[dest_reg];
-	size = frame->tf_x[size_reg];
-
-	/*
-	 * Put the registers back in the original format suitable for a
-	 * prologue instruction, using the generic return routine from the
-	 * Arm ARM (DDI 0487I.a) rules CNTMJ and MWFQH.
-	 */
-	if (esr & ISS_MOE_MEMINST) {
-		/* SET* instruction */
-		if (format_option == ISS_MOE_FORMAT_OPTION_A ||
-		    format_option == ISS_MOE_FORMAT_OPTION_A2) {
-			/* Format is from Option A; forward set */
-			frame->tf_x[dest_reg] = dest + size;
-			frame->tf_x[size_reg] = -size;
-		}
-	} else {
-		/* CPY* instruction */
-		src_reg = (esr & ISS_MOE_SRCREG_MASK) >> ISS_MOE_SRCREG_SHIFT;
-		src = frame->tf_x[src_reg];
-
-		if (format_option == ISS_MOE_FORMAT_OPTION_B ||
-		    format_option == ISS_MOE_FORMAT_OPTION_B2) {
-			/* Format is from Option B */
-			if (frame->tf_spsr & PSR_N) {
-				/* Backward copy */
-				frame->tf_x[dest_reg] = dest - size;
-				frame->tf_x[src_reg] = src + size;
-			}
-		} else {
-			/* Format is from Option A */
-			if (frame->tf_x[size_reg] & (1UL << 63)) {
-				/* Forward copy */
-				frame->tf_x[dest_reg] = dest + size;
-				frame->tf_x[src_reg] = src + size;
-				frame->tf_x[size_reg] = -size;
-			}
-		}
-	}
-
-	if (esr & ISS_MOE_FROM_EPILOGUE)
-		frame->tf_elr -= 8;
-	else
-		frame->tf_elr -= 4;
 }
 
 void
@@ -664,6 +691,7 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	uint32_t exception;
 	uint64_t esr, far;
 	int dfsc;
+	bool skip_userret;
 
 	/* Check we have a sane environment when entering from userland */
 	KASSERT((uintptr_t)get_pcpu() >= VM_MIN_KERNEL_ADDRESS,
@@ -691,6 +719,7 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	CTR4(KTR_TRAP, "%s: exception=%lu, elr=0x%lx, esr=0x%lx",
 	    __func__, exception, frame->tf_elr, esr);
 
+	skip_userret = false;
 	switch (exception) {
 	case EXCP_FP_SIMD:
 #ifdef VFP
@@ -702,7 +731,6 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_TRAP_FP:
 #ifdef VFP
 		fpe_trap(td, (void *)frame->tf_elr, esr);
-		userret(td, frame);
 #else
 		panic("VFP exception in userland");
 #endif
@@ -712,11 +740,10 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		if (!sve_restore_state(td))
 			call_trapsignal(td, SIGILL, ILL_ILLTRP,
 			    (void *)frame->tf_elr, exception);
-		userret(td, frame);
 		break;
 	case EXCP_SVC32:
 	case EXCP_SVC64:
-		svc_handler(td, frame);
+		skip_userret = svc_handler(td, frame);
 		break;
 	case EXCP_INSN_ABORT_L:
 	case EXCP_DATA_ABORT_L:
@@ -738,22 +765,18 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		if (!undef_insn(frame))
 			call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)far,
 			    exception);
-		userret(td, frame);
 		break;
 	case EXCP_FPAC:
 		call_trapsignal(td, SIGILL, ILL_ILLOPN, (void *)frame->tf_elr,
 		    exception);
-		userret(td, frame);
 		break;
 	case EXCP_SP_ALIGN:
 		call_trapsignal(td, SIGBUS, BUS_ADRALN, (void *)frame->tf_sp,
 		    exception);
-		userret(td, frame);
 		break;
 	case EXCP_PC_ALIGN:
 		call_trapsignal(td, SIGBUS, BUS_ADRALN, (void *)frame->tf_elr,
 		    exception);
-		userret(td, frame);
 		break;
 	case EXCP_BRKPT_EL0:
 	case EXCP_BRK:
@@ -762,12 +785,10 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 #endif /* COMPAT_FREEBSD32 */
 		call_trapsignal(td, SIGTRAP, TRAP_BRKPT, (void *)frame->tf_elr,
 		    exception);
-		userret(td, frame);
 		break;
 	case EXCP_WATCHPT_EL0:
 		call_trapsignal(td, SIGTRAP, TRAP_TRACE, (void *)far,
 		    exception);
-		userret(td, frame);
 		break;
 	case EXCP_MSR:
 		/*
@@ -778,7 +799,6 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		if (!undef_insn(frame))
 			call_trapsignal(td, SIGILL, ILL_PRVOPC,
 			    (void *)frame->tf_elr, exception);
-		userret(td, frame);
 		break;
 	case EXCP_SOFTSTP_EL0:
 		PROC_LOCK(td->td_proc);
@@ -791,24 +811,22 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		PROC_UNLOCK(td->td_proc);
 		call_trapsignal(td, SIGTRAP, TRAP_TRACE,
 		    (void *)frame->tf_elr, exception);
-		userret(td, frame);
 		break;
 	case EXCP_BTI:
 		call_trapsignal(td, SIGILL, ILL_ILLOPC, (void *)frame->tf_elr,
 		    exception);
-		userret(td, frame);
 		break;
 	case EXCP_MOE:
 		handle_moe(td, frame, esr);
-		userret(td, frame);
 		break;
 	default:
 		call_trapsignal(td, SIGBUS, BUS_OBJERR, (void *)frame->tf_elr,
 		    exception);
-		userret(td, frame);
 		break;
 	}
 
+	if (!skip_userret)
+		userret(td, frame);
 	KASSERT(
 	    (td->td_pcb->pcb_fpflags & ~(PCB_FP_USERMASK|PCB_FP_SVEVALID)) == 0,
 	    ("Kernel VFP flags set while entering userspace"));

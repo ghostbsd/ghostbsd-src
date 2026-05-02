@@ -461,8 +461,8 @@ kmsan_thread_alloc(struct thread *td)
 	__builtin_memset(mtd, 0, sizeof(*mtd));
 	mtd->ctx = 0;
 
-	if (td->td_kstack != 0)
-		kmsan_mark((void *)td->td_kstack, ptoa(td->td_kstack_pages),
+	if (td->td_kstack != NULL)
+		kmsan_mark(td->td_kstack, ptoa(td->td_kstack_pages),
 		    KMSAN_STATE_UNINIT);
 
 	td->td_kmsan = mtd;
@@ -662,6 +662,7 @@ void __msan_poison_alloca(const void *, uint64_t, const char *);
 void __msan_unpoison_alloca(const void *, uint64_t);
 void __msan_warning(msan_orig_t);
 msan_tls_t *__msan_get_context_state(void);
+intptr_t __msan_test_shadow(const void *, size_t);
 
 void
 __msan_instrument_asm_store(const void *addr, size_t size)
@@ -724,6 +725,23 @@ __msan_get_context_state(void)
 		return (&dummy_tls);
 	mtd = curthread->td_kmsan;
 	return (&mtd->tls[mtd->ctx]);
+}
+
+intptr_t
+__msan_test_shadow(const void *addr, size_t len)
+{
+	uint8_t *shad;
+
+	if (__predict_false(!kmsan_enabled))
+		return (-1);
+	if (__predict_false(kmsan_md_unsupported((vm_offset_t)addr)))
+		return (-1);
+
+	shad = (uint8_t *)kmsan_md_addr_to_shad((vm_offset_t)addr);
+	for (size_t i = 0; i < len; i++)
+		if (shad[i] != 0)
+			return (i);
+	return (-1);
 }
 
 /* -------------------------------------------------------------------------- */

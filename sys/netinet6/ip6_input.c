@@ -63,7 +63,6 @@
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
-#include "opt_route.h"
 #include "opt_rss.h"
 #include "opt_sctp.h"
 
@@ -118,6 +117,7 @@
 #include <netinet6/mld6_var.h>
 #include <netinet6/nd6.h>
 #include <netinet6/in6_rss.h>
+#include <netinet6/ip6_mroute.h>
 #ifdef SCTP
 #include <netinet/sctp_pcb.h>
 #include <netinet6/sctp6_var.h>
@@ -682,21 +682,6 @@ ip6_input(struct mbuf *m)
 		in6_ifstat_inc(rcvif, ifs6_in_addrerr);
 		goto bad;
 	}
-#if 0
-	/*
-	 * Reject packets with IPv4 compatible addresses (auto tunnel).
-	 *
-	 * The code forbids auto tunnel relay case in RFC1933 (the check is
-	 * stronger than RFC1933).  We may want to re-enable it if mech-xx
-	 * is revised to forbid relaying case.
-	 */
-	if (IN6_IS_ADDR_V4COMPAT(&ip6->ip6_src) ||
-	    IN6_IS_ADDR_V4COMPAT(&ip6->ip6_dst)) {
-		IP6STAT_INC(ip6s_badscope);
-		in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_addrerr);
-		goto bad;
-	}
-#endif
 	/*
 	 * Try to forward the packet, but if we fail continue.
 	 * ip6_tryforward() does not generate redirects, so fall
@@ -890,7 +875,7 @@ passin:
 	/*
 	 * Forward if desirable.
 	 */
-	if (V_ip6_mrouter &&
+	if (V_ip6_mrouting_enabled &&
 	    IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
 		/*
 		 * If we are acting as a multicast router, all

@@ -40,6 +40,7 @@
 #include <sys/pmc.h>
 #include <sys/pmckern.h>
 #include <sys/smp.h>
+#include <sys/sysctl.h>
 #include <sys/systm.h>
 
 #include <machine/cpu.h>
@@ -53,44 +54,15 @@ DPCPU_DEFINE_STATIC(uint32_t, nmi_counter);
 
 /* AMD K8 PMCs */
 struct amd_descr {
-	struct pmc_descr pm_descr;  /* "base class" */
-	uint32_t	pm_evsel;   /* address of EVSEL register */
-	uint32_t	pm_perfctr; /* address of PERFCTR register */
+	struct pmc_descr pm_descr;   /* "base class" */
+	uint32_t	pm_evsel;    /* address of EVSEL register */
+	uint32_t	pm_perfctr;  /* address of PERFCTR register */
+	enum sub_class	pm_subclass; /* register subclass */
 };
 
-/* Counter hardware. */
-#define	PMCDESC(evsel, perfctr)						\
-	{								\
-		.pm_descr = {						\
-			.pd_name  = "",					\
-			.pd_class = PMC_CLASS_K8,			\
-			.pd_caps  = AMD_PMC_CAPS,			\
-			.pd_width = 48					\
-		},							\
-		.pm_evsel   = (evsel),					\
-		.pm_perfctr = (perfctr)					\
-	}
-
-static struct amd_descr amd_pmcdesc[AMD_NPMCS] =
-{
-	PMCDESC(AMD_PMC_EVSEL_0,	AMD_PMC_PERFCTR_0),
-	PMCDESC(AMD_PMC_EVSEL_1,	AMD_PMC_PERFCTR_1),
-	PMCDESC(AMD_PMC_EVSEL_2,	AMD_PMC_PERFCTR_2),
-	PMCDESC(AMD_PMC_EVSEL_3,	AMD_PMC_PERFCTR_3),
-	PMCDESC(AMD_PMC_EVSEL_4,	AMD_PMC_PERFCTR_4),
-	PMCDESC(AMD_PMC_EVSEL_5,	AMD_PMC_PERFCTR_5),
-	PMCDESC(AMD_PMC_EVSEL_EP_L3_0,	AMD_PMC_PERFCTR_EP_L3_0),
-	PMCDESC(AMD_PMC_EVSEL_EP_L3_1,	AMD_PMC_PERFCTR_EP_L3_1),
-	PMCDESC(AMD_PMC_EVSEL_EP_L3_2,	AMD_PMC_PERFCTR_EP_L3_2),
-	PMCDESC(AMD_PMC_EVSEL_EP_L3_3,	AMD_PMC_PERFCTR_EP_L3_3),
-	PMCDESC(AMD_PMC_EVSEL_EP_L3_4,	AMD_PMC_PERFCTR_EP_L3_4),
-	PMCDESC(AMD_PMC_EVSEL_EP_L3_5,	AMD_PMC_PERFCTR_EP_L3_5),
-	PMCDESC(AMD_PMC_EVSEL_EP_DF_0,	AMD_PMC_PERFCTR_EP_DF_0),
-	PMCDESC(AMD_PMC_EVSEL_EP_DF_1,	AMD_PMC_PERFCTR_EP_DF_1),
-	PMCDESC(AMD_PMC_EVSEL_EP_DF_2,	AMD_PMC_PERFCTR_EP_DF_2),
-	PMCDESC(AMD_PMC_EVSEL_EP_DF_3,	AMD_PMC_PERFCTR_EP_DF_3)
-};
-
+static int amd_npmcs;
+static int amd_core_npmcs, amd_l3_npmcs, amd_df_npmcs;
+static struct amd_descr amd_pmcdesc[AMD_NPMCS_MAX];
 struct amd_event_code_map {
 	enum pmc_event	pe_ev;	 /* enum value */
 	uint16_t	pe_code; /* encoded event mask */
@@ -203,9 +175,66 @@ const int amd_event_codes_size = nitems(amd_event_codes);
  * Per-processor information
  */
 struct amd_cpu {
-	struct pmc_hw	pc_amdpmcs[AMD_NPMCS];
+	struct pmc_hw	pc_amdpmcs[AMD_NPMCS_MAX];
 };
 static struct amd_cpu **amd_pcpu;
+
+/* Populated by amd_init_policy(); PRECISERETIRE is OR-ed in per-allocation. */
+static uint64_t amd_core_allowed_mask;
+static uint64_t amd_l3_allowed_mask;
+static uint64_t amd_df_allowed_mask;
+
+static uint64_t amd_core_extra_mask;
+static uint64_t amd_l3_extra_mask;
+static uint64_t amd_df_extra_mask;
+
+SYSCTL_DECL(_kern_hwpmc);
+
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, amd_core_extra_mask, CTLFLAG_RDTUN,
+    &amd_core_extra_mask, 0,
+    "Extra allowed bits in AMD core PMU PERFEVTSEL (override; default 0)");
+
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, amd_l3_extra_mask, CTLFLAG_RDTUN,
+    &amd_l3_extra_mask, 0,
+    "Extra allowed bits in AMD L3 PMU control (override; default 0)");
+
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, amd_df_extra_mask, CTLFLAG_RDTUN,
+    &amd_df_extra_mask, 0,
+    "Extra allowed bits in AMD DF PMU control (override; default 0)");
+
+static void
+amd_init_policy(void)
+{
+	int family;
+
+	family = CPUID_TO_FAMILY(cpu_id);
+
+	amd_core_allowed_mask = AMD_VALID_BITS;
+
+	amd_l3_allowed_mask = (family <= 0x17) ?
+	    AMD_PMC_L3_FAMILY17_MASK : AMD_PMC_L3_FAMILY19_MASK;
+
+	amd_df_allowed_mask = (family <= 0x19) ?
+	    AMD_PMC_DF_FAMILY17_MASK : AMD_PMC_DF_FAMILY1A_MASK;
+}
+
+static uint64_t
+amd_config_mask(enum sub_class subclass, uint64_t caps)
+{
+
+	switch (subclass) {
+	case PMC_AMD_SUB_CLASS_CORE:
+		return (amd_core_allowed_mask | amd_core_extra_mask |
+		    (((caps & PMC_CAP_PRECISE) != 0) ?
+		    AMD_PMC_PRECISERETIRE : 0));
+	case PMC_AMD_SUB_CLASS_L3_CACHE:
+		return (amd_l3_allowed_mask | amd_l3_extra_mask);
+	case PMC_AMD_SUB_CLASS_DATA_FABRIC:
+		return (amd_df_allowed_mask | amd_df_extra_mask);
+	default:
+		return (0);
+	}
+}
 
 /*
  * Read a PMC value from the MSR.
@@ -219,7 +248,7 @@ amd_read_pmc(int cpu, int ri, struct pmc *pm, pmc_value_t *v)
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] illegal CPU value %d", __LINE__, cpu));
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] illegal row-index %d", __LINE__, ri));
 	KASSERT(amd_pcpu[cpu],
 	    ("[amd,%d] null per-cpu, cpu %d", __LINE__, cpu));
@@ -264,7 +293,7 @@ amd_write_pmc(int cpu, int ri, struct pmc *pm, pmc_value_t v)
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] illegal CPU value %d", __LINE__, cpu));
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] illegal row-index %d", __LINE__, ri));
 
 	pd = &amd_pmcdesc[ri];
@@ -293,7 +322,7 @@ amd_config_pmc(int cpu, int ri, struct pmc *pm)
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] illegal CPU value %d", __LINE__, cpu));
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] illegal row-index %d", __LINE__, ri));
 
 	phw = &amd_pcpu[cpu]->pc_amdpmcs[ri];
@@ -362,7 +391,7 @@ amd_allocate_pmc(int cpu __unused, int ri, struct pmc *pm,
 	enum pmc_event pe;
 	int i;
 
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] illegal row index %d", __LINE__, ri));
 
 	pd = &amd_pmcdesc[ri].pm_descr;
@@ -376,26 +405,30 @@ amd_allocate_pmc(int cpu __unused, int ri, struct pmc *pm,
 
 	caps = pm->pm_caps;
 
+	if (((caps & PMC_CAP_PRECISE) != 0) &&
+	    ((pd->pd_caps & PMC_CAP_PRECISE) == 0))
+		return (EINVAL);
+
 	PMCDBG2(MDP, ALL, 1,"amd-allocate ri=%d caps=0x%x", ri, caps);
 
 	/* Validate sub-class. */
-	if ((ri >= 0 && ri < 6) && a->pm_md.pm_amd.pm_amd_sub_class !=
-	    PMC_AMD_SUB_CLASS_CORE)
-		return (EINVAL);
-	if ((ri >= 6 && ri < 12) && a->pm_md.pm_amd.pm_amd_sub_class !=
-	    PMC_AMD_SUB_CLASS_L3_CACHE)
-		return (EINVAL);
-	if ((ri >= 12 && ri < 16) && a->pm_md.pm_amd.pm_amd_sub_class !=
-	    PMC_AMD_SUB_CLASS_DATA_FABRIC)
+	if (amd_pmcdesc[ri].pm_subclass != a->pm_md.pm_amd.pm_amd_sub_class)
 		return (EINVAL);
 
 	if (strlen(pmc_cpuid) != 0) {
-		pm->pm_md.pm_amd.pm_amd_evsel = a->pm_md.pm_amd.pm_amd_config;
-		PMCDBG2(MDP, ALL, 2,"amd-allocate ri=%d -> config=0x%x", ri,
-		    a->pm_md.pm_amd.pm_amd_config);
+		config = a->pm_md.pm_amd.pm_amd_config;
+		if ((config & ~amd_config_mask(amd_pmcdesc[ri].pm_subclass,
+		    caps)) != 0)
+			return (EINVAL);
+		pm->pm_md.pm_amd.pm_amd_evsel = config;
+		PMCDBG2(MDP, ALL, 2, "amd-allocate ri=%d -> config=0x%jx",
+		    ri, (uintmax_t)config);
 		return (0);
 	}
 
+	/*
+	 * Everything below this is for supporting older processors.
+	 */
 	pe = a->pm_ev;
 
 	/* map ev to the correct event mask code */
@@ -455,7 +488,7 @@ amd_release_pmc(int cpu, int ri, struct pmc *pmc __unused)
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] illegal CPU value %d", __LINE__, cpu));
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] illegal row-index %d", __LINE__, ri));
 
 	phw = &amd_pcpu[cpu]->pc_amdpmcs[ri];
@@ -477,13 +510,18 @@ amd_start_pmc(int cpu __diagused, int ri, struct pmc *pm)
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] illegal CPU value %d", __LINE__, cpu));
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] illegal row-index %d", __LINE__, ri));
 
 	pd = &amd_pmcdesc[ri];
 
 	PMCDBG2(MDP, STA, 1, "amd-start cpu=%d ri=%d", cpu, ri);
 
+	/*
+	 * Triggered by DF counters because all DF MSRs are shared.  We need to
+	 * change the code to honor the per-package flag in the JSON event
+	 * definitions.
+	 */
 	KASSERT(AMD_PMC_IS_STOPPED(pd->pm_evsel),
 	    ("[amd,%d] pmc%d,cpu%d: Starting active PMC \"%s\"", __LINE__,
 	    ri, cpu, pd->pm_descr.pd_name));
@@ -509,7 +547,7 @@ amd_stop_pmc(int cpu __diagused, int ri, struct pmc *pm)
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] illegal CPU value %d", __LINE__, cpu));
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] illegal row-index %d", __LINE__, ri));
 
 	pd = &amd_pmcdesc[ri];
@@ -567,6 +605,10 @@ amd_intr(struct trapframe *tf)
 
 	pac = amd_pcpu[cpu];
 
+	retval = pmc_ibs_intr(tf);
+	if (retval)
+		goto done;
+
 	/*
 	 * look for all PMCs that have interrupted:
 	 * - look for a running, sampling PMC which has overflowed
@@ -578,7 +620,10 @@ amd_intr(struct trapframe *tf)
 	 * a single interrupt. Check all the valid pmcs for
 	 * overflow.
 	 */
-	for (i = 0; i < AMD_CORE_NPMCS; i++) {
+	for (i = 0; i < amd_npmcs; i++) {
+		if (amd_pmcdesc[i].pm_subclass != PMC_AMD_SUB_CLASS_CORE)
+		    break;
+
 		if ((pm = pac->pc_amdpmcs[i].phw_pmc) == NULL ||
 		    !PMC_IS_SAMPLING_MODE(PMC_TO_MODE(pm))) {
 			continue;
@@ -634,6 +679,7 @@ amd_intr(struct trapframe *tf)
 		}
 	}
 
+done:
 	if (retval)
 		counter_u64_add(pmc_stats.pm_intr_processed, 1);
 	else
@@ -654,7 +700,7 @@ amd_describe(int cpu, int ri, struct pmc_info *pi, struct pmc **ppmc)
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] illegal CPU %d", __LINE__, cpu));
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] row-index %d out of range", __LINE__, ri));
 
 	phw = &amd_pcpu[cpu]->pc_amdpmcs[ri];
@@ -680,10 +726,55 @@ amd_describe(int cpu, int ri, struct pmc_info *pi, struct pmc **ppmc)
 static int
 amd_get_msr(int ri, uint32_t *msr)
 {
-	KASSERT(ri >= 0 && ri < AMD_NPMCS,
+	int df_idx;
+
+	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] ri %d out of range", __LINE__, ri));
 
-	*msr = amd_pmcdesc[ri].pm_perfctr - AMD_PMC_PERFCTR_0;
+	/*
+	 * Map counter row index to RDPMC ECX value.
+	 *
+	 * AMD BKDG 24594 rev 3.37, page 440,
+	 * "RDPMC Read Performance-Monitoring Counter":
+	 *   ECX 0-5:   Core counters 0-5
+	 *   ECX 6-9:   DF/Northbridge counters 0-3
+	 *   ECX 10-15: L3 Cache counters 0-5
+	 *   ECX 16-27: DF/Northbridge counters 4-15
+	 *
+	 * AMD PPR 57930-A0 section 2.1.9,
+	 * "Register Sharing" for DF counter details.
+	 */
+	if (ri < amd_core_npmcs) {
+		/* ECX 0-5: Core counters */
+		*msr = ri;
+	} else if (ri < amd_core_npmcs + amd_l3_npmcs) {
+		/* ECX 10-15: L3 Cache counters */
+		*msr = 10 + (ri - amd_core_npmcs);
+	} else {
+		/* ECX 6-9: DF counters 0-3
+		 * ECX 16-27: DF counters 4-15 */
+		df_idx = ri - amd_core_npmcs - amd_l3_npmcs;
+		if (df_idx < 4)
+			*msr = 6 + df_idx;
+		else if (df_idx < 16)
+			*msr = 16 + (df_idx - 4);
+		else
+			return (EINVAL);
+	}
+	return (0);
+}
+
+/*
+ * Return the capabilities of the given PMC.
+ */
+static int
+amd_get_caps(int ri, uint32_t *caps)
+{
+	KASSERT(ri >= 0 && ri < amd_npmcs,
+	    ("[amd,%d] ri %d out of range", __LINE__, ri));
+
+	*caps = amd_pmcdesc[ri].pm_descr.pd_caps;
+
 	return (0);
 }
 
@@ -715,7 +806,7 @@ amd_pcpu_init(struct pmc_mdep *md, int cpu)
 
 	KASSERT(pc != NULL, ("[amd,%d] NULL per-cpu pointer", __LINE__));
 
-	for (n = 0, phw = pac->pc_amdpmcs; n < AMD_NPMCS; n++, phw++) {
+	for (n = 0, phw = pac->pc_amdpmcs; n < amd_npmcs; n++, phw++) {
 		phw->phw_state = PMC_PHW_FLAG_IS_ENABLED |
 		    PMC_PHW_CPU_TO_STATE(cpu) | PMC_PHW_INDEX_TO_STATE(n);
 		phw->phw_pmc = NULL;
@@ -733,22 +824,12 @@ amd_pcpu_fini(struct pmc_mdep *md, int cpu)
 {
 	struct amd_cpu *pac;
 	struct pmc_cpu *pc;
-	uint32_t evsel;
 	int first_ri, i;
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[amd,%d] insane cpu number (%d)", __LINE__, cpu));
 
 	PMCDBG1(MDP, INI, 1, "amd-cleanup cpu=%d", cpu);
-
-	/*
-	 * First, turn off all PMCs on this CPU.
-	 */
-	for (i = 0; i < 4; i++) { /* XXX this loop is now not needed */
-		evsel = rdmsr(AMD_PMC_EVSEL_0 + i);
-		evsel &= ~AMD_PMC_ENABLE;
-		wrmsr(AMD_PMC_EVSEL_0 + i, evsel);
-	}
 
 	/*
 	 * Next, free up allocated space.
@@ -759,7 +840,7 @@ amd_pcpu_fini(struct pmc_mdep *md, int cpu)
 	amd_pcpu[cpu] = NULL;
 
 #ifdef	HWPMC_DEBUG
-	for (i = 0; i < AMD_NPMCS; i++) {
+	for (i = 0; i < AMD_NPMCS_K8; i++) {
 		KASSERT(pac->pc_amdpmcs[i].phw_pmc == NULL,
 		    ("[amd,%d] CPU%d/PMC%d in use", __LINE__, cpu, i));
 		KASSERT(AMD_PMC_IS_STOPPED(AMD_PMC_EVSEL_0 + i),
@@ -775,7 +856,7 @@ amd_pcpu_fini(struct pmc_mdep *md, int cpu)
 	/*
 	 * Reset pointers in the MI 'per-cpu' state.
 	 */
-	for (i = 0; i < AMD_NPMCS; i++)
+	for (i = 0; i < amd_npmcs; i++)
 		pc->pc_hwpmcs[i + first_ri] = NULL;
 
 	free(pac, M_PMC);
@@ -791,8 +872,9 @@ pmc_amd_initialize(void)
 	struct pmc_classdep *pcd;
 	struct pmc_mdep *pmc_mdep;
 	enum pmc_cputype cputype;
-	int error, i, ncpus;
+	int error, i, ncpus, nclasses;
 	int family, model, stepping;
+	struct amd_descr *d;
 
 	/*
 	 * The presence of hardware performance counters on the AMD
@@ -824,6 +906,88 @@ pmc_amd_initialize(void)
 	}
 
 	/*
+	 * From PPR for AMD Family 1Ah, a new cpuid leaf specifies the maximum
+	 * number of PMCs of each type.  If we do not have that leaf, we use
+	 * the prior default values that are only valid if we have the feature
+	 * bit enabled in CPU.
+	 */
+	if ((amd_feature2 & AMDID2_PCXC) != 0) {
+		amd_core_npmcs = AMD_PMC_CORE_DEFAULT;
+	} else {
+		amd_core_npmcs = AMD_NPMCS_K8;
+	}
+	amd_l3_npmcs = AMD_PMC_L3_DEFAULT;
+	amd_df_npmcs = AMD_PMC_DF_DEFAULT;
+
+	if (cpu_exthigh >= CPUID_EXTPERFMON) {
+		u_int regs[4];
+		do_cpuid(CPUID_EXTPERFMON, regs);
+		if (regs[1] != 0) {
+			amd_core_npmcs = EXTPERFMON_CORE_PMCS(regs[1]);
+			amd_df_npmcs = EXTPERFMON_DF_PMCS(regs[1]);
+		}
+	}
+
+	/* Enable the newer core counters */
+	for (i = 0; i < amd_core_npmcs; i++) {
+		d = &amd_pmcdesc[i];
+		snprintf(d->pm_descr.pd_name, PMC_NAME_MAX,
+		    "K8-%d", i);
+		d->pm_descr.pd_class = PMC_CLASS_K8;
+		d->pm_descr.pd_caps = AMD_PMC_CAPS;
+		/*
+		 * Zen 5 can precisely count retire events.
+		 *
+		 * Refer to PPR Vol 1 for AMD Family 1Ah Model 02h C1 57238
+		 * Rev. 0.24 September 29, 2024.
+		 */
+		if ((family >= 0x1a) && (i == 2))
+			d->pm_descr.pd_caps |= PMC_CAP_PRECISE;
+		d->pm_descr.pd_width = 48;
+		if ((amd_feature2 & AMDID2_PCXC) != 0) {
+			d->pm_evsel = AMD_PMC_CORE_BASE + 2 * i;
+			d->pm_perfctr = AMD_PMC_CORE_BASE + 2 * i + 1;
+		} else {
+			d->pm_evsel = AMD_PMC_EVSEL_0 + i;
+			d->pm_perfctr = AMD_PMC_PERFCTR_0 + i;
+		}
+		d->pm_subclass = PMC_AMD_SUB_CLASS_CORE;
+	}
+	amd_npmcs = amd_core_npmcs;
+
+	if ((amd_feature2 & AMDID2_PTSCEL2I) != 0) {
+		/* Enable the LLC/L3 counters */
+		for (i = 0; i < amd_l3_npmcs; i++) {
+			d = &amd_pmcdesc[amd_npmcs + i];
+			snprintf(d->pm_descr.pd_name, PMC_NAME_MAX,
+			    "K8-L3-%d", i);
+			d->pm_descr.pd_class = PMC_CLASS_K8;
+			d->pm_descr.pd_caps = AMD_PMC_L3_CAPS;
+			d->pm_descr.pd_width = 48;
+			d->pm_evsel = AMD_PMC_L3_BASE + 2 * i;
+			d->pm_perfctr = AMD_PMC_L3_BASE + 2 * i + 1;
+			d->pm_subclass = PMC_AMD_SUB_CLASS_L3_CACHE;
+		}
+		amd_npmcs += amd_l3_npmcs;
+	}
+
+	if ((amd_feature2 & AMDID2_PNXC) != 0) {
+		/* Enable the data fabric counters */
+		for (i = 0; i < amd_df_npmcs; i++) {
+			d = &amd_pmcdesc[amd_npmcs + i];
+			snprintf(d->pm_descr.pd_name, PMC_NAME_MAX,
+			    "K8-DF-%d", i);
+			d->pm_descr.pd_class = PMC_CLASS_K8;
+			d->pm_descr.pd_caps = AMD_PMC_DF_CAPS;
+			d->pm_descr.pd_width = 48;
+			d->pm_evsel = AMD_PMC_DF_BASE + 2 * i;
+			d->pm_perfctr = AMD_PMC_DF_BASE + 2 * i + 1;
+			d->pm_subclass = PMC_AMD_SUB_CLASS_DATA_FABRIC;
+		}
+		amd_npmcs += amd_df_npmcs;
+	}
+
+	/*
 	 * Allocate space for pointers to PMC HW descriptors and for
 	 * the MDEP structure used by MI code.
 	 */
@@ -831,10 +995,16 @@ pmc_amd_initialize(void)
 	    M_WAITOK | M_ZERO);
 
 	/*
-	 * These processors have two classes of PMCs: the TSC and
-	 * programmable PMCs.
+	 * These processors have two or three classes of PMCs: the TSC,
+	 * programmable PMCs, and AMD IBS.
 	 */
-	pmc_mdep = pmc_mdep_alloc(2);
+	if ((amd_feature2 & AMDID2_IBS) != 0) {
+		nclasses = 3;
+	} else {
+		nclasses = 2;
+	}
+
+	pmc_mdep = pmc_mdep_alloc(nclasses);
 
 	ncpus = pmc_cpu_max();
 
@@ -848,15 +1018,9 @@ pmc_amd_initialize(void)
 
 	pcd->pcd_caps		= AMD_PMC_CAPS;
 	pcd->pcd_class		= PMC_CLASS_K8;
-	pcd->pcd_num		= AMD_NPMCS;
+	pcd->pcd_num		= amd_npmcs;
 	pcd->pcd_ri		= pmc_mdep->pmd_npmc;
 	pcd->pcd_width		= 48;
-
-	/* fill in the correct pmc name and class */
-	for (i = 0; i < AMD_NPMCS; i++) {
-		snprintf(amd_pmcdesc[i].pm_descr.pd_name, PMC_NAME_MAX, "K8-%d",
-		    i);
-	}
 
 	pcd->pcd_allocate_pmc	= amd_allocate_pmc;
 	pcd->pcd_config_pmc	= amd_config_pmc;
@@ -870,15 +1034,24 @@ pmc_amd_initialize(void)
 	pcd->pcd_start_pmc	= amd_start_pmc;
 	pcd->pcd_stop_pmc	= amd_stop_pmc;
 	pcd->pcd_write_pmc	= amd_write_pmc;
+	pcd->pcd_get_caps	= amd_get_caps;
 
 	pmc_mdep->pmd_cputype	= cputype;
 	pmc_mdep->pmd_intr	= amd_intr;
 	pmc_mdep->pmd_switch_in	= amd_switch_in;
 	pmc_mdep->pmd_switch_out = amd_switch_out;
 
-	pmc_mdep->pmd_npmc	+= AMD_NPMCS;
+	pmc_mdep->pmd_npmc	+= amd_npmcs;
+
+	amd_init_policy();
 
 	PMCDBG0(MDP, INI, 0, "amd-initialize");
+
+	if (nclasses >= 3) {
+		error = pmc_ibs_initialize(pmc_mdep, ncpus);
+		if (error != 0)
+			goto error;
+	}
 
 	return (pmc_mdep);
 

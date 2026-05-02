@@ -32,11 +32,15 @@
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
+#include "opt_kern_tls.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/kernel.h>
+#ifdef KERN_TLS
+#include <sys/ktls.h>
+#endif
 #include <sys/sysctl.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
@@ -75,6 +79,7 @@
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
+#include <netinet/tcp_log_buf.h>
 #include <netinet/tcpip.h>
 
 #include <netinet/udp.h>
@@ -125,15 +130,18 @@ tcp_twstart(struct tcpcb *tp)
 
 	NET_EPOCH_ASSERT();
 	INP_WLOCK_ASSERT(inp);
-
-	/* A dropped inp should never transition to TIME_WAIT state. */
-	KASSERT((inp->inp_flags & INP_DROPPED) == 0, ("tcp_twstart: "
-	    "(inp->inp_flags & INP_DROPPED) != 0"));
+	MPASS(!(tp->t_flags & TF_DISCONNECTED));
 
 	tcp_state_change(tp, TCPS_TIME_WAIT);
 	tcp_free_sackholes(tp);
 	soisdisconnected(inp->inp_socket);
 
+#ifdef KERN_TLS
+	/* release ktls snd tag now that no more data can be sent */
+	if (tptosocket(tp)->so_snd.sb_tls_info != NULL) {
+		ktls_release_snd_tag(tptosocket(tp)->so_snd.sb_tls_info);
+	}
+#endif
 	if (tp->t_flags & TF_ACKNOW)
 		(void) tcp_output(tp);
 
@@ -217,12 +225,17 @@ tcp_twcheck(struct inpcb *inp, struct tcpopt *to, struct tcphdr *th,
 	/*
 	 * If a new connection request is received
 	 * while in TIME_WAIT, drop the old connection
-	 * and start over if the sequence numbers
-	 * are above the previous ones.
+	 * and start over if allowed by RFC 6191.
 	 * Allow UDP port number changes in this case.
 	 */
 	if (((thflags & (TH_SYN | TH_ACK)) == TH_SYN) &&
-	    SEQ_GT(th->th_seq, tp->rcv_nxt)) {
+	    ((((tp->t_flags & TF_RCVD_TSTMP) != 0) &&
+	      ((to->to_flags & TOF_TS) != 0) &&
+	      TSTMP_LT(tp->ts_recent, to->to_tsval)) ||
+	     (((tp->t_flags & TF_RCVD_TSTMP) == 0) &&
+	      ((to->to_flags & TOF_TS) != 0) &&
+	      (V_tcp_tolerate_missing_ts == 0)) ||
+	     SEQ_GT(th->th_seq, tp->rcv_nxt))) {
 		/*
 		 * In case we can't upgrade our lock just pretend we have
 		 * lost this packet.
@@ -286,8 +299,10 @@ tcp_twcheck(struct inpcb *inp, struct tcpopt *to, struct tcphdr *th,
 	/*
 	 * Acknowledge the segment if it has data or is not a duplicate ACK.
 	 */
-	if (thflags != TH_ACK || tlen != 0 ||
+	if ((thflags & (TH_SYN | TH_FIN)) != 0 || tlen != 0 ||
 	    th->th_seq != tp->rcv_nxt || th->th_ack != tp->snd_nxt) {
+		TCP_LOG_EVENT(tp, th, NULL, NULL, TCP_LOG_IN, 0, tlen, NULL,
+		    true);
 		TCP_PROBE5(receive, NULL, NULL, m, NULL, th);
 		tcp_respond(tp, mtod(m, void *), th, m, tp->rcv_nxt,
 		    tp->snd_nxt, TH_ACK);

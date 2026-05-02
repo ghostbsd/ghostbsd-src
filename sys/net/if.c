@@ -248,7 +248,6 @@ int	(*carp_master_p)(struct ifaddr *);
 int	(*carp_forus_p)(struct ifnet *ifp, u_char *dhost);
 int	(*carp_output_p)(struct ifnet *ifp, struct mbuf *m,
     const struct sockaddr *sa);
-int	(*carp_ioctl_p)(struct ifreq *, u_long, struct thread *);   
 int	(*carp_attach_p)(struct ifaddr *, int);
 void	(*carp_detach_p)(struct ifaddr *, bool);
 #endif
@@ -429,8 +428,12 @@ VNET_SYSINIT(vnet_if_init, SI_SUB_INIT_IF, SI_ORDER_SECOND, vnet_if_init,
 static void
 if_link_ifnet(struct ifnet *ifp)
 {
-
 	IFNET_WLOCK();
+
+	MPASS(refcount_load(&ifp->if_refcount) > 0);
+	MPASS(ifp->if_vnet == curvnet);
+	MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
+
 	CK_STAILQ_INSERT_TAIL(&V_ifnet, ifp, if_link);
 #ifdef VIMAGE
 	curvnet->vnet_ifcnt++;
@@ -444,18 +447,23 @@ if_unlink_ifnet(struct ifnet *ifp, bool vmove)
 	struct ifnet *iter;
 	int found = 0;
 
+	sx_assert(&ifnet_detach_sxlock, SX_XLOCKED);
 	IFNET_WLOCK();
 	CK_STAILQ_FOREACH(iter, &V_ifnet, if_link)
 		if (iter == ifp) {
+			MPASS(refcount_load(&ifp->if_refcount) > 0);
+			MPASS(ifp->if_vnet == curvnet);
+			MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
+
 			CK_STAILQ_REMOVE(&V_ifnet, ifp, ifnet, if_link);
+#ifdef VIMAGE
+			curvnet->vnet_ifcnt--;
+#endif
 			if (!vmove)
 				ifp->if_flags |= IFF_DYING;
 			found = 1;
 			break;
 		}
-#ifdef VIMAGE
-	curvnet->vnet_ifcnt--;
-#endif
 	IFNET_WUNLOCK();
 
 	return (found);
@@ -472,6 +480,8 @@ vnet_if_return(const void *unused __unused)
 
 	i = 0;
 
+	/* The lock has already been aquired in vnet_destroy() */
+	sx_assert(&ifnet_detach_sxlock, SX_XLOCKED);
 	/*
 	 * We need to protect our access to the V_ifnet tailq. Ordinarily we'd
 	 * enter NET_EPOCH, but that's not possible, because if_vmove() calls
@@ -500,9 +510,7 @@ vnet_if_return(const void *unused __unused)
 	IFNET_WUNLOCK();
 
 	for (int j = 0; j < i; j++) {
-		sx_xlock(&ifnet_detach_sxlock);
 		if_vmove(pending[j], pending[j]->if_home_vnet);
-		sx_xunlock(&ifnet_detach_sxlock);
 	}
 
 	free(pending, M_IFNET);
@@ -1021,14 +1029,23 @@ if_detach(struct ifnet *ifp)
 {
 	bool found;
 
+	/*
+	 * The driver private data holds a strong reference to the ifnet, and
+	 * it is actually the "owner", hence this routine shall never fail.
+	 *
+	 * Ideally we can loop retrying when we lose race with other threads
+	 * those run if_unlink_ifnet(). For simplicity, use ifnet_detach_sxlock
+	 * to serialize all the detach / vmove operations.
+	 */
+	sx_xlock(&ifnet_detach_sxlock);
 	CURVNET_SET_QUIET(ifp->if_vnet);
 	found = if_unlink_ifnet(ifp, false);
-	if (found) {
-		sx_xlock(&ifnet_detach_sxlock);
-		if_detach_internal(ifp, false);
-		sx_xunlock(&ifnet_detach_sxlock);
-	}
+	if (! found)
+		panic("%s: interface is not on the active list",
+		    ifp->if_xname);
+	if_detach_internal(ifp, false);
 	CURVNET_RESTORE();
+	sx_xunlock(&ifnet_detach_sxlock);
 }
 
 /*
@@ -1184,14 +1201,25 @@ if_vmove(struct ifnet *ifp, struct vnet *new_vnet)
  * Move an ifnet to or from another child prison/vnet, specified by the jail id.
  */
 static int
-if_vmove_loan(struct thread *td, struct ifnet *ifp, char *ifname, int jid)
+if_vmove_loan(struct thread *td, char *ifname, int jid)
 {
 	struct prison *pr;
-	struct ifnet *difp;
+	struct ifnet *ifp, *difp;
 	bool found;
-	bool shutdown;
 
-	MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
+	MPASS(curthread == td);
+	MPASS(curvnet == TD_TO_VNET(td));
+
+	/*
+	 * We check the existence of the interface, and will later try to
+	 * unlink it from the "active" list, so it is sufficient to only
+	 * hold a weak reference to it.
+	 * Be aware that it is unsafe to access any member of it, until it
+	 * is proven to be safe to ( say it was on the "active" list ).
+	 */
+	ifp = ifunit(ifname);
+	if (ifp == NULL)
+		return (ENXIO);
 
 	/* Try to find the prison within our visibility. */
 	sx_slock(&allprison_lock);
@@ -1199,14 +1227,13 @@ if_vmove_loan(struct thread *td, struct ifnet *ifp, char *ifname, int jid)
 	sx_sunlock(&allprison_lock);
 	if (pr == NULL)
 		return (ENXIO);
-	prison_hold_locked(pr);
-	mtx_unlock(&pr->pr_mtx);
-
-	/* Do not try to move the iface from and to the same prison. */
-	if (pr->pr_vnet == ifp->if_vnet) {
-		prison_free(pr);
+	/* Do not try to move the iface from and to the same vnet. */
+	if (pr->pr_vnet == TD_TO_VNET(td)) {
+		mtx_unlock(&pr->pr_mtx);
 		return (EEXIST);
 	}
+	prison_hold_locked(pr);
+	mtx_unlock(&pr->pr_mtx);
 
 	/* Make sure the named iface does not exists in the dst. prison/vnet. */
 	/* XXX Lock interfaces to avoid races. */
@@ -1218,14 +1245,6 @@ if_vmove_loan(struct thread *td, struct ifnet *ifp, char *ifname, int jid)
 		return (EEXIST);
 	}
 	sx_xlock(&ifnet_detach_sxlock);
-
-	/* Make sure the VNET is stable. */
-	shutdown = VNET_IS_SHUTTING_DOWN(ifp->if_vnet);
-	if (shutdown) {
-		sx_xunlock(&ifnet_detach_sxlock);
-		prison_free(pr);
-		return (EBUSY);
-	}
 
 	found = if_unlink_ifnet(ifp, true);
 	if (! found) {
@@ -1252,8 +1271,7 @@ if_vmove_reclaim(struct thread *td, char *ifname, int jid)
 	struct prison *pr;
 	struct vnet *vnet_dst;
 	struct ifnet *ifp;
-	int found __diagused;
- 	bool shutdown;
+	int found;
 
 	/* Try to find the prison within our visibility. */
 	sx_slock(&allprison_lock);
@@ -1266,33 +1284,30 @@ if_vmove_reclaim(struct thread *td, char *ifname, int jid)
 
 	/* Make sure the named iface exists in the source prison/vnet. */
 	CURVNET_SET(pr->pr_vnet);
-	ifp = ifunit(ifname);		/* XXX Lock to avoid races. */
+	ifp = ifunit(ifname);
 	if (ifp == NULL) {
 		CURVNET_RESTORE();
 		prison_free(pr);
 		return (ENXIO);
 	}
 
-	/* Do not try to move the iface from and to the same prison. */
+	/* Do not try to move the iface from and to the same vnet. */
 	vnet_dst = TD_TO_VNET(td);
-	if (vnet_dst == ifp->if_vnet) {
+	if (vnet_dst == pr->pr_vnet) {
 		CURVNET_RESTORE();
 		prison_free(pr);
 		return (EEXIST);
 	}
 
-	/* Make sure the VNET is stable. */
-	shutdown = VNET_IS_SHUTTING_DOWN(ifp->if_vnet);
-	if (shutdown) {
+	/* Get interface back from child jail/vnet. */
+	sx_xlock(&ifnet_detach_sxlock);
+	found = if_unlink_ifnet(ifp, true);
+	if (! found) {
+		sx_xunlock(&ifnet_detach_sxlock);
 		CURVNET_RESTORE();
 		prison_free(pr);
-		return (EBUSY);
+		return (ENODEV);
 	}
-
-	/* Get interface back from child jail/vnet. */
-	found = if_unlink_ifnet(ifp, true);
-	MPASS(found);
-	sx_xlock(&ifnet_detach_sxlock);
 	if_vmove(ifp, vnet_dst);
 	sx_xunlock(&ifnet_detach_sxlock);
 	CURVNET_RESTORE();
@@ -2124,14 +2139,13 @@ ifunit_ref(const char *name)
 	NET_EPOCH_ENTER(et);
 	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		if (strncmp(name, ifp->if_xname, IFNAMSIZ) == 0 &&
-		    !(ifp->if_flags & IFF_DYING))
+		    !(ifp->if_flags & IFF_DYING)) {
+			MPASS(ifp->if_vnet == curvnet);
+			MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
+			if_ref(ifp);
 			break;
+		}
 	}
-	if (ifp != NULL) {
-		if_ref(ifp);
-		MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
-	}
-
 	NET_EPOCH_EXIT(et);
 	return (ifp);
 }
@@ -2144,8 +2158,12 @@ ifunit(const char *name)
 
 	NET_EPOCH_ENTER(et);
 	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
-		if (strncmp(name, ifp->if_xname, IFNAMSIZ) == 0)
+		if (strncmp(name, ifp->if_xname, IFNAMSIZ) == 0) {
+			MPASS(refcount_load(&ifp->if_refcount) > 0);
+			MPASS(ifp->if_vnet == curvnet);
+			MPASS(ifindex_table[ifp->if_index].ife_ifnet == ifp);
 			break;
+		}
 	}
 	NET_EPOCH_EXIT(et);
 	return (ifp);
@@ -2266,6 +2284,8 @@ const struct ifcap_nv_bit_name ifcap2_nv_bit_names[] = {
 	CAP2NV(RXTLS4),
 	CAP2NV(RXTLS6),
 	CAP2NV(IPSEC_OFFLOAD),
+	CAP2NV(GENEVE_HWCSUM),
+	CAP2NV(GENEVE_HWTSO),
 	{0, NULL}
 };
 #undef CAPNV
@@ -2586,15 +2606,6 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		error = if_rename(ifp, new_name);
 		break;
 
-#ifdef VIMAGE
-	case SIOCSIFVNET:
-		error = priv_check(td, PRIV_NET_SETIFVNET);
-		if (error)
-			return (error);
-		error = if_vmove_loan(td, ifp, ifr->ifr_name, ifr->ifr_jid);
-		break;
-#endif
-
 	case SIOCSIFMETRIC:
 		error = priv_check(td, PRIV_NET_SETIFMETRIC);
 		if (error)
@@ -2882,6 +2893,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 	ifr = (struct ifreq *)data;
 	switch (cmd) {
 #ifdef VIMAGE
+	case SIOCSIFVNET:
+		error = priv_check(td, PRIV_NET_SETIFVNET);
+		if (error == 0)
+			error = if_vmove_loan(td, ifr->ifr_name, ifr->ifr_jid);
+		goto out_noref;
+
 	case SIOCSIFRVNET:
 		error = priv_check(td, PRIV_NET_SETIFVNET);
 		if (error == 0)
@@ -2900,11 +2917,8 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 	case SIOCIFDESTROY:
 		error = priv_check(td, PRIV_NET_IFDESTROY);
 
-		if (error == 0) {
-			sx_xlock(&ifnet_detach_sxlock);
+		if (error == 0)
 			error = if_clone_destroy(ifr->ifr_name);
-			sx_xunlock(&ifnet_detach_sxlock);
-		}
 		goto out_noref;
 
 	case SIOCIFGCLONERS:
@@ -2923,15 +2937,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct thread *td)
 		error = if_getgroupmembers(req);
 		goto out_noref;
 	}
-#if defined(INET) || defined(INET6)
-	case SIOCSVH:
-	case SIOCGVH:
-		if (carp_ioctl_p == NULL)
-			error = EPROTONOSUPPORT;
-		else
-			error = (*carp_ioctl_p)(ifr, cmd, td);
-		goto out_noref;
-#endif
 	}
 
 	ifp = ifunit_ref(ifr->ifr_name);
@@ -3022,14 +3027,6 @@ if_rename(struct ifnet *ifp, char *new_name)
 	if (ifunit(new_name) != NULL)
 		return (EEXIST);
 
-	/*
-	 * XXX: Locking.  Nothing else seems to lock if_flags,
-	 * and there are numerous other races with the
-	 * ifunit() checks not being atomic with namespace
-	 * changes (renames, vmoves, if_attach, etc).
-	 */
-	ifp->if_flags |= IFF_RENAMING;
-
 	if_printf(ifp, "changing name to '%s'\n", new_name);
 
 	IF_ADDR_WLOCK(ifp);
@@ -3057,8 +3054,6 @@ if_rename(struct ifnet *ifp, char *new_name)
 	IF_ADDR_WUNLOCK(ifp);
 
 	EVENTHANDLER_INVOKE(ifnet_rename_event, ifp, old_name);
-
-	ifp->if_flags &= ~IFF_RENAMING;
 
 	snprintf(strbuf, sizeof(strbuf), "name=%s", new_name);
 	devctl_notify("IFNET", old_name, "RENAME", strbuf);

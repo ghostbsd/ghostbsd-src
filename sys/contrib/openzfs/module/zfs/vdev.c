@@ -31,6 +31,7 @@
  * Copyright (c) 2019, Datto Inc. All rights reserved.
  * Copyright (c) 2021, 2025, Klara, Inc.
  * Copyright (c) 2021, 2023 Hewlett Packard Enterprise Development LP.
+ * Copyright (c) 2026, Seagate Technology, LLC.
  */
 
 #include <sys/zfs_context.h>
@@ -766,6 +767,8 @@ vdev_alloc_common(spa_t *spa, uint_t id, uint64_t guid, vdev_ops_t *ops)
 	    VDEV_PROP_SLOW_IO_EVENTS);
 	vd->vdev_slow_io_n = vdev_prop_default_numeric(VDEV_PROP_SLOW_IO_N);
 	vd->vdev_slow_io_t = vdev_prop_default_numeric(VDEV_PROP_SLOW_IO_T);
+
+	vd->vdev_scheduler = vdev_prop_default_numeric(VDEV_PROP_SCHEDULER);
 
 	list_link_init(&vd->vdev_config_dirty_node);
 	list_link_init(&vd->vdev_state_dirty_node);
@@ -3094,8 +3097,11 @@ vdev_dtl_dirty(vdev_t *vd, vdev_dtl_type_t t, uint64_t txg, uint64_t size)
 	ASSERT(spa_writeable(vd->vdev_spa));
 
 	mutex_enter(&vd->vdev_dtl_lock);
-	if (!zfs_range_tree_contains(rt, txg, size))
+	if (!zfs_range_tree_contains(rt, txg, size)) {
+		/* Clear whatever is there already. */
+		zfs_range_tree_clear(rt, txg, size);
 		zfs_range_tree_add(rt, txg, size);
+	}
 	mutex_exit(&vd->vdev_dtl_lock);
 }
 
@@ -3423,23 +3429,51 @@ vdev_dtl_reassess_impl(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
 				/* leaf vdevs only */
 				continue;
 			}
+			int children = vd->vdev_children;
+			int width = children;
 			if (t == DTL_PARTIAL) {
 				/* i.e. non-zero */
 				minref = 1;
 			} else if (vdev_get_nparity(vd) != 0) {
 				/* RAIDZ, DRAID */
 				minref = vdev_get_nparity(vd) + 1;
+				if (vd->vdev_ops == &vdev_draid_ops) {
+					vdev_draid_config_t *vdc = vd->vdev_tsd;
+					minref = vdc->vdc_nparity + 1;
+					children = vdc->vdc_children;
+				}
 			} else {
 				/* any kind of mirror */
 				minref = vd->vdev_children;
 			}
+			/*
+			 * For dRAID with failure domains, count failures
+			 * only once for any i-th child failure in each failure
+			 * group, but only if the failures threshold is not
+			 * reached in any of the groups.
+			 */
+			boolean_t safe2skip = B_FALSE;
+			if (width > children &&
+			    vdev_draid_fail_domain_allowed(vd))
+				safe2skip = B_TRUE;
+
 			space_reftree_create(&reftree);
-			for (int c = 0; c < vd->vdev_children; c++) {
-				vdev_t *cvd = vd->vdev_child[c];
-				mutex_enter(&cvd->vdev_dtl_lock);
-				space_reftree_add_map(&reftree,
-				    cvd->vdev_dtl[s], 1);
-				mutex_exit(&cvd->vdev_dtl_lock);
+			for (int c = 0; c < children; c++) {
+				for (int i = c; i < width; i += children) {
+					vdev_t *cvd = vd->vdev_child[i];
+
+					mutex_enter(&cvd->vdev_dtl_lock);
+					space_reftree_add_map(&reftree,
+					    cvd->vdev_dtl[s], 1);
+					boolean_t empty =
+					    zfs_range_tree_is_empty(
+					    cvd->vdev_dtl[s]);
+					mutex_exit(&cvd->vdev_dtl_lock);
+
+					if (s == DTL_OUTAGE && !empty &&
+					    safe2skip)
+						break;
+				}
 			}
 			space_reftree_generate_map(&reftree,
 			    vd->vdev_dtl[t], minref);
@@ -3969,6 +4003,12 @@ vdev_load(vdev_t *vd)
 
 		error = vdev_prop_get_int(vd, VDEV_PROP_SLOW_IO_T,
 		    &vd->vdev_slow_io_t);
+		if (error && error != ENOENT)
+			vdev_dbgmsg(vd, "vdev_load: zap_lookup(zap=%llu) "
+			    "failed [error=%d]", (u_longlong_t)zapobj, error);
+
+		error = vdev_prop_get_int(vd, VDEV_PROP_SCHEDULER,
+		    &vd->vdev_scheduler);
 		if (error && error != ENOENT)
 			vdev_dbgmsg(vd, "vdev_load: zap_lookup(zap=%llu) "
 			    "failed [error=%d]", (u_longlong_t)zapobj, error);
@@ -4674,7 +4714,7 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 	vd->vdev_stat.vs_checksum_errors = 0;
 	vd->vdev_stat.vs_dio_verify_errors = 0;
 	vd->vdev_stat.vs_slow_ios = 0;
-	atomic_store_64(&vd->vdev_outlier_count, 0);
+	atomic_store_64((volatile uint64_t *)&vd->vdev_outlier_count, 0);
 	vd->vdev_read_sit_out_expire = 0;
 
 	for (int c = 0; c < vd->vdev_children; c++)
@@ -5212,11 +5252,13 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 	if (type == ZIO_TYPE_WRITE && txg != 0 &&
 	    (!(flags & ZIO_FLAG_IO_REPAIR) ||
 	    (flags & ZIO_FLAG_SCAN_THREAD) ||
+	    zio->io_priority == ZIO_PRIORITY_REBUILD ||
 	    spa->spa_claiming)) {
 		/*
 		 * This is either a normal write (not a repair), or it's
 		 * a repair induced by the scrub thread, or it's a repair
-		 * made by zil_claim() during spa_load() in the first txg.
+		 * made by zil_claim() during spa_load() in the first txg,
+		 * or its repair induced by rebuild (sequential resilver).
 		 * In the normal case, we commit the DTL change in the same
 		 * txg as the block was born.  In the scrub-induced repair
 		 * case, we know that scrubs run in first-pass syncing context,
@@ -5227,27 +5269,38 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 		 * self-healing writes triggered by normal (non-scrubbing)
 		 * reads, because we have no transactional context in which to
 		 * do so -- and it's not clear that it'd be desirable anyway.
+		 *
+		 * For rebuild, since we don't have any information about BPs
+		 * and txgs that are being rebuilt, we need to add all known
+		 * txgs (starting from TXG_INITIAL) to DTL so that during
+		 * healing resilver we would be able to check all txgs at
+		 * vdev_draid_need_resilver().
 		 */
+		uint64_t size = 1;
 		if (vd->vdev_ops->vdev_op_leaf) {
 			uint64_t commit_txg = txg;
 			if (flags & ZIO_FLAG_SCAN_THREAD) {
 				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
 				ASSERT(spa_sync_pass(spa) == 1);
-				vdev_dtl_dirty(vd, DTL_SCRUB, txg, 1);
+				vdev_dtl_dirty(vd, DTL_SCRUB, txg, size);
 				commit_txg = spa_syncing_txg(spa);
 			} else if (spa->spa_claiming) {
 				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
 				commit_txg = spa_first_txg(spa);
+			} else if (zio->io_priority == ZIO_PRIORITY_REBUILD) {
+				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
+				vdev_rebuild_txgs(vd->vdev_top, &txg, &size);
+				commit_txg = spa_open_txg(spa);
 			}
 			ASSERT(commit_txg >= spa_syncing_txg(spa));
-			if (vdev_dtl_contains(vd, DTL_MISSING, txg, 1))
+			if (vdev_dtl_contains(vd, DTL_MISSING, txg, size))
 				return;
 			for (pvd = vd; pvd != rvd; pvd = pvd->vdev_parent)
-				vdev_dtl_dirty(pvd, DTL_PARTIAL, txg, 1);
+				vdev_dtl_dirty(pvd, DTL_PARTIAL, txg, size);
 			vdev_dirty(vd->vdev_top, VDD_DTL, vd, commit_txg);
 		}
 		if (vd != rvd)
-			vdev_dtl_dirty(vd, DTL_MISSING, txg, 1);
+			vdev_dtl_dirty(vd, DTL_MISSING, txg, size);
 	}
 }
 
@@ -6259,6 +6312,13 @@ vdev_prop_set(vdev_t *vd, nvlist_t *innvl, nvlist_t *outnvl)
 			}
 			vd->vdev_slow_io_t = intval;
 			break;
+		case VDEV_PROP_SCHEDULER:
+			if (nvpair_value_uint64(elem, &intval) != 0) {
+				error = EINVAL;
+				break;
+			}
+			vd->vdev_scheduler = intval;
+			break;
 		default:
 			/* Most processing is done in vdev_props_set_sync */
 			break;
@@ -6273,6 +6333,15 @@ end:
 
 	return (dsl_sync_task(spa->spa_name, NULL, vdev_props_set_sync,
 	    innvl, 6, ZFS_SPACE_CHECK_EXTRA_RESERVED));
+}
+
+static int
+vdev_get_child_idx(vdev_t *vd, uint64_t c_guid)
+{
+	for (int c = 0; c < vd->vdev_children; c++)
+		if (vd->vdev_child[c]->vdev_guid == c_guid)
+			return (c);
+	return (0);
 }
 
 int
@@ -6380,6 +6449,25 @@ vdev_prop_get(vdev_t *vd, nvlist_t *innvl, nvlist_t *outnvl)
 			case VDEV_PROP_PARITY:
 				vdev_prop_add_list(outnvl, propname, NULL,
 				    vdev_get_nparity(vd), ZPROP_SRC_NONE);
+				continue;
+			case VDEV_PROP_FDOMAIN:
+			case VDEV_PROP_FGROUP:
+				if (vd->vdev_ops->vdev_op_leaf &&
+				    vd->vdev_top != NULL &&
+				    vd->vdev_top->vdev_ops ==
+				    &vdev_draid_ops) {
+					vdev_draid_config_t *vdc =
+					    vd->vdev_top->vdev_tsd;
+					if (vdc->vdc_width == vdc->vdc_children)
+						continue;
+					int c_idx = vdev_get_child_idx(
+					    vd->vdev_top, vd->vdev_guid);
+					vdev_prop_add_list(outnvl, propname,
+					    NULL, prop == VDEV_PROP_FDOMAIN ?
+					    (c_idx % vdc->vdc_children) :
+					    (c_idx / vdc->vdc_children),
+					    ZPROP_SRC_NONE);
+				}
 				continue;
 			case VDEV_PROP_PATH:
 				if (vd->vdev_path == NULL)
@@ -6664,6 +6752,7 @@ vdev_prop_get(vdev_t *vd, nvlist_t *innvl, nvlist_t *outnvl)
 			case VDEV_PROP_IO_T:
 			case VDEV_PROP_SLOW_IO_N:
 			case VDEV_PROP_SLOW_IO_T:
+			case VDEV_PROP_SCHEDULER:
 				err = vdev_prop_get_int(vd, prop, &intval);
 				if (err && err != ENOENT)
 					break;

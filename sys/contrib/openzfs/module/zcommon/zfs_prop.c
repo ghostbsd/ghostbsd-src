@@ -497,9 +497,14 @@ zfs_prop_init(void)
 	/* inherit index (boolean) properties */
 	zprop_register_index(ZFS_PROP_ATIME, "atime", 1, PROP_INHERIT,
 	    ZFS_TYPE_FILESYSTEM, "on | off", "ATIME", boolean_table, sfeatures);
-	zprop_register_index(ZFS_PROP_RELATIME, "relatime", 1, PROP_INHERIT,
-	    ZFS_TYPE_FILESYSTEM, "on | off", "RELATIME", boolean_table,
-	    sfeatures);
+	zprop_register_index(ZFS_PROP_RELATIME, "relatime",
+#ifdef __FreeBSD__
+	    0,	/* FreeBSD does not natively support relatime. */
+#else
+	    1,
+#endif
+	    PROP_INHERIT, ZFS_TYPE_FILESYSTEM, "on | off", "RELATIME",
+	    boolean_table, sfeatures);
 	zprop_register_index(ZFS_PROP_DEVICES, "devices", 1, PROP_INHERIT,
 	    ZFS_TYPE_FILESYSTEM | ZFS_TYPE_SNAPSHOT, "on | off", "DEVICES",
 	    boolean_table, sfeatures);
@@ -520,6 +525,10 @@ zfs_prop_init(void)
 	zprop_register_index(ZFS_PROP_ZONED, "zoned", 0, PROP_INHERIT,
 	    ZFS_TYPE_FILESYSTEM, "on | off", "ZONED", boolean_table, sfeatures);
 #endif
+	/* UID-based zoning for rootless containers */
+	zprop_register_number(ZFS_PROP_ZONED_UID, "zoned_uid", 0,
+	    PROP_INHERIT, ZFS_TYPE_FILESYSTEM, "<uid> | none", "ZONED_UID",
+	    B_FALSE, sfeatures);
 	zprop_register_index(ZFS_PROP_VSCAN, "vscan", 0, PROP_INHERIT,
 	    ZFS_TYPE_FILESYSTEM, "on | off", "VSCAN", boolean_table, sfeatures);
 	zprop_register_index(ZFS_PROP_NBMAND, "nbmand", 0, PROP_INHERIT,
@@ -643,8 +652,8 @@ zfs_prop_init(void)
 	    ZFS_TYPE_VOLUME, "512 to 16M, power of 2", "VOLBLOCK", B_FALSE,
 	    sfeatures);
 	zprop_register_index(ZFS_PROP_VOLTHREADING, "volthreading",
-	    1, PROP_DEFAULT, ZFS_TYPE_VOLUME, "on | off", "zvol threading",
-	    boolean_table, sfeatures);
+	    1, PROP_DEFAULT, ZFS_TYPE_VOLUME, "on | off",
+	    "VOLTHREAD", boolean_table, sfeatures);
 	zprop_register_number(ZFS_PROP_USEDSNAP, "usedbysnapshots", 0,
 	    PROP_READONLY, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME, "<size>",
 	    "USEDSNAP", B_FALSE, sfeatures);
@@ -795,6 +804,12 @@ zfs_prop_init(void)
 	    PROP_TYPE_NUMBER, 0, NULL, PROP_READONLY, ZFS_TYPE_FILESYSTEM |
 	    ZFS_TYPE_VOLUME, "<date>", "SNAPSHOTS_CHANGED", B_FALSE, B_TRUE,
 	    B_TRUE, NULL, sfeatures);
+
+	zprop_register_impl(ZFS_PROP_SNAPSHOTS_CHANGED_NSECS,
+	    "snapshots_changed_nsecs", PROP_TYPE_NUMBER, 0, NULL,
+	    PROP_READONLY, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME, "<nsec>",
+	    "SNAPSHOTS_CHANGED_NSECS", B_FALSE, B_TRUE, B_TRUE, NULL,
+	    sfeatures);
 
 	zprop_register_index(ZFS_PROP_LONGNAME, "longname", 0, PROP_INHERIT,
 	    ZFS_TYPE_FILESYSTEM, "on | off", "LONGNAME", boolean_table,

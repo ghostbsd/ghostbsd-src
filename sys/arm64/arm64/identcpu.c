@@ -632,7 +632,7 @@ static const struct mrs_field id_aa64dfr0_fields[] = {
 	MRS_FIELD(ID_AA64DFR0, PMSS, false, MRS_LOWER, 0, id_aa64dfr0_pmss),
 	MRS_FIELD(ID_AA64DFR0, BRPs, false, MRS_LOWER, MRS_USERSPACE,
 	    id_aa64dfr0_brps),
-	MRS_FIELD(ID_AA64DFR0, PMUVer, true, MRS_LOWER, 0, id_aa64dfr0_pmuver),
+	MRS_FIELD(ID_AA64DFR0, PMUVer, false, MRS_LOWER, 0, id_aa64dfr0_pmuver),
 	MRS_FIELD(ID_AA64DFR0, TraceVer, false, MRS_LOWER, 0,
 	    id_aa64dfr0_tracever),
 	MRS_FIELD(ID_AA64DFR0, DebugVer, false, MRS_LOWER | MRS_SAFE(0x6), 0,
@@ -2514,7 +2514,7 @@ mrs_field_cmp(uint64_t a, uint64_t b, u_int shift, int width, bool sign)
 	return (a - b);
 }
 
-bool
+void
 get_kernel_reg_iss(u_int iss, uint64_t *val)
 {
 	int i;
@@ -2522,18 +2522,18 @@ get_kernel_reg_iss(u_int iss, uint64_t *val)
 	for (i = 0; i < nitems(user_regs); i++) {
 		if (user_regs[i].iss == iss) {
 			*val = CPU_DESC_FIELD(kern_cpu_desc, i);
-			return (true);
+			return;
 		}
 	}
 
-	return (false);
+	panic("%s: Invalid register %x", __func__, iss);
 }
 
 /*
  * Fetch the specified register's value, ensuring that individual field values
  * do not exceed those in the mask.
  */
-bool
+void
 get_kernel_reg_iss_masked(u_int iss, uint64_t *valp, uint64_t mask)
 {
 	const struct mrs_field *fields;
@@ -2549,11 +2549,11 @@ get_kernel_reg_iss_masked(u_int iss, uint64_t *valp, uint64_t mask)
 				    fields[j].shift, fields[j].sign);
 			}
 			*valp = mask;
-			return (true);
+			return;
 		}
 	}
 
-	return (false);
+	panic("%s: Invalid register %x", __func__, iss);
 }
 
 bool
@@ -2675,14 +2675,15 @@ update_special_regs(u_int cpu)
 
 	if (cpu == 0) {
 		/* Create a user visible cpu description with safe values */
-		memset(&user_cpu_desc, 0, sizeof(user_cpu_desc));
+		memset_early(&user_cpu_desc, 0, sizeof(user_cpu_desc));
 		/* Safe values for these registers */
 		user_cpu_desc.id_aa64pfr0 = ID_AA64PFR0_AdvSIMD_NONE |
 		    ID_AA64PFR0_FP_NONE | ID_AA64PFR0_EL1_64 |
 		    ID_AA64PFR0_EL0_64;
 		user_cpu_desc.id_aa64dfr0 = ID_AA64DFR0_DebugVer_8;
 		/* Create the Linux user visible cpu description */
-		memcpy(&l_user_cpu_desc, &user_cpu_desc, sizeof(user_cpu_desc));
+		memcpy_early(&l_user_cpu_desc, &user_cpu_desc,
+		    sizeof(user_cpu_desc));
 	}
 
 	desc = get_cpu_desc(cpu);
@@ -2826,6 +2827,26 @@ identify_cpu_sysinit(void *dummy __unused)
 		prev_desc = desc;
 	}
 
+	if (dic && idc) {
+		arm64_icache_sync_range = &arm64_dic_idc_icache_sync_range;
+		if (bootverbose)
+			printf("Enabling DIC & IDC ICache sync\n");
+	} else if (idc) {
+		arm64_icache_sync_range = &arm64_idc_aliasing_icache_sync_range;
+		if (bootverbose)
+			printf("Enabling IDC ICache sync\n");
+	}
+}
+/*
+ * This needs to run early to ensure the kernel ID registers have been
+ * updated for all CPUs before they are used by ifunc resolvers, etc.
+ */
+SYSINIT(identify_cpu, SI_SUB_CPU, SI_ORDER_MIDDLE,
+    identify_cpu_sysinit, NULL);
+
+static void
+identify_hwcaps_sysinit(void *dummy __unused)
+{
 #ifdef INVARIANTS
 	/* Check we dont update the special registers after this point */
 	hwcaps_set = true;
@@ -2848,16 +2869,6 @@ identify_cpu_sysinit(void *dummy __unused)
 	elf32_hwcap |= parse_cpu_features_hwcap32();
 #endif
 
-	if (dic && idc) {
-		arm64_icache_sync_range = &arm64_dic_idc_icache_sync_range;
-		if (bootverbose)
-			printf("Enabling DIC & IDC ICache sync\n");
-	} else if (idc) {
-		arm64_icache_sync_range = &arm64_idc_aliasing_icache_sync_range;
-		if (bootverbose)
-			printf("Enabling IDC ICache sync\n");
-	}
-
 	if ((elf_hwcap & HWCAP_ATOMICS) != 0) {
 		lse_supported = true;
 		if (bootverbose)
@@ -2872,11 +2883,14 @@ identify_cpu_sysinit(void *dummy __unused)
 	install_sys_handler(user_idreg_handler);
 }
 /*
- * This needs to be after the APs have stareted as they may have errata that
+ * This needs to be after the APs have started as they may have errata that
  * means we need to mask out ID registers & that could affect hwcaps, etc.
+ *
+ * The errata handling runs at SI_SUB_CONFIGURE, SI_ORDER_MIDDLE + 1, so this
+ * needs to be later than that.
  */
-SYSINIT(identify_cpu, SI_SUB_CONFIGURE, SI_ORDER_ANY, identify_cpu_sysinit,
-    NULL);
+SYSINIT(identify_hwcaps, SI_SUB_CONFIGURE, SI_ORDER_MIDDLE + 2,
+    identify_hwcaps_sysinit, NULL);
 
 static void
 cpu_features_sysinit(void *dummy __unused)
@@ -3072,10 +3086,10 @@ print_cpu_cache(struct cpu_desc *desc, struct sbuf *sb, uint64_t ccs,
 	 * register.
 	 */
 	if ((desc->id_aa64mmfr2 & ID_AA64MMFR2_CCIDX_64))
-		cache_size = (CCSIDR_NSETS_64(ccs) + 1) *
-		    (CCSIDR_ASSOC_64(ccs) + 1);
+		cache_size = (CCSIDR_NumSets64(ccs) + 1) *
+		    (CCSIDR_Assoc64(ccs) + 1);
 	else
-		cache_size = (CCSIDR_NSETS(ccs) + 1) * (CCSIDR_ASSOC(ccs) + 1);
+		cache_size = (CCSIDR_NumSets(ccs) + 1) * (CCSIDR_Assoc(ccs) + 1);
 
 	cache_size *= line_size;
 	sbuf_printf(sb, "%zuKB (%s)", cache_size / 1024,
@@ -3363,7 +3377,7 @@ identify_cpu(u_int cpu)
 		int j = 0;
 		if ((clidr & CLIDR_CTYPE_IO)) {
 			WRITE_SPECIALREG(csselr_el1,
-			    CSSELR_Level(i) | CSSELR_InD);
+			    CSSELR_Level(i) | CSSELR_InD_IC);
 			desc->ccsidr[i][j++] =
 			    READ_SPECIALREG(ccsidr_el1);
 		}

@@ -232,7 +232,7 @@ link_elf_protect_range(elf_file_t ef, vm_offset_t start, vm_offset_t end,
 		return;
 	if (ef->preloaded) {
 #ifdef __amd64__
-		error = pmap_change_prot(start, end - start, prot);
+		error = pmap_change_prot((void *)start, end - start, prot);
 		KASSERT(error == 0,
 		    ("link_elf_protect_range: pmap_change_prot() returned %d",
 		    error));
@@ -1716,7 +1716,7 @@ elf_obj_cleanup_globals_cache(elf_file_t ef)
 
 	for (i = 0; i < ef->ddbsymcnt; i++) {
 		sym = ef->ddbsymtab + i;
-		if (sym->st_shndx == SHN_FBSD_CACHED) {
+		if (sym->st_shndx == SHN_FREEBSD_CACHED) {
 			sym->st_shndx = SHN_UNDEF;
 			sym->st_value = 0;
 		}
@@ -1785,7 +1785,7 @@ elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps, Elf_Addr *res)
 		 * above.
 		 */
 		if (res1 != 0) {
-			sym->st_shndx = SHN_FBSD_CACHED;
+			sym->st_shndx = SHN_FREEBSD_CACHED;
 			sym->st_value = res1;
 			*res = res1;
 			return (0);

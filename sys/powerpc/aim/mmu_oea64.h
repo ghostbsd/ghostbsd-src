@@ -46,7 +46,7 @@ extern const struct mmu_kobj oea64_mmu;
  */
 
 /* Allocate physical memory for use in moea64_bootstrap. */
-vm_offset_t	moea64_bootstrap_alloc(vm_size_t size, vm_size_t align);
+vm_paddr_t	moea64_bootstrap_alloc(vm_size_t size, vm_size_t align);
 /* Set an LPTE structure to match the contents of a PVO */
 void	moea64_pte_from_pvo(const struct pvo_entry *pvo, struct lpte *lpte);
 
@@ -139,5 +139,6 @@ extern u_long		moea64_pteg_count;
 extern u_long		moea64_pteg_mask;
 extern int		n_slbs;
 extern bool		moea64_has_lp_4k_16m;
+extern u_int		phys_avail_count;
 
 #endif /* _POWERPC_AIM_MMU_OEA64_H */

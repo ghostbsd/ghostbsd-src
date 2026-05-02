@@ -60,6 +60,17 @@
 #include <linux/pci_ids.h>
 #include <linux/pm.h>
 
+/*
+ * <linux/ioport.h> should be included here, like Linux, but we can't have that
+ * because Linux `struct resource` definition would conflict with FreeBSD
+ * native definition.
+ *
+ * At least the amdgpu DRM driver (amdgpu_isp.c at the time of this writing)
+ * relies on this indirect include to get the definition of Linux `struct
+ * resource`. As a workaround, we include <linux/ioport.h> from
+ * <linux/mfd/core.h>.
+ */
+
 #include <linux/kernel.h>	/* pr_debug */
 
 struct pci_device_id {
@@ -75,24 +86,6 @@ struct pci_device_id {
 #define	MODULE_DEVICE_TABLE_BUS_pci(_bus, _table)			\
 MODULE_PNP_INFO("U32:vendor;U32:device;V32:subvendor;V32:subdevice",	\
     _bus, lkpi_ ## _table, _table, nitems(_table) - 1)
-
-/* Linux has an empty element at the end of the ID table -> nitems() - 1. */
-#define	MODULE_DEVICE_TABLE(_bus, _table)				\
-									\
-static device_method_t _ ## _bus ## _ ## _table ## _methods[] = {	\
-	DEVMETHOD_END							\
-};									\
-									\
-static driver_t _ ## _bus ## _ ## _table ## _driver = {			\
-	"lkpi_" #_bus #_table,						\
-	_ ## _bus ## _ ## _table ## _methods,				\
-	0								\
-};									\
-									\
-DRIVER_MODULE(lkpi_ ## _table, _bus, _ ## _bus ## _ ## _table ## _driver,\
-	0, 0);								\
-									\
-MODULE_DEVICE_TABLE_BUS_ ## _bus(_bus, _table)
 
 #define	PCI_ANY_ID			-1U
 
@@ -1338,6 +1331,13 @@ pci_dev_present(const struct pci_device_id *cur)
 		cur++;
 	}
 	return (0);
+}
+
+static inline bool
+pci_dev_is_disconnected(const struct pci_dev *pdev)
+{
+	pr_debug("TODO: %s\n", __func__);
+	return (false);
 }
 
 static inline const struct pci_device_id *

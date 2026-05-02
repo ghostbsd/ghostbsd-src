@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -231,7 +233,7 @@ sethistsize(const char *hs)
 
 	if (hist != NULL) {
 		if (hs == NULL || !is_number(hs))
-			histsize = 100;
+			histsize = 128;
 		else
 			histsize = atoi(hs);
 		history(hist, &he, H_SETSIZE, histsize);

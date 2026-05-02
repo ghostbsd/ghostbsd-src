@@ -461,6 +461,9 @@ extern long first_page;			/* first physical page number */
  */
 vm_page_t PHYS_TO_VM_PAGE(vm_paddr_t pa);
 
+#define	DMAP_TO_VM_PAGE(va)	PHYS_TO_VM_PAGE(DMAP_TO_PHYS(va))
+#define	VM_PAGE_TO_DMAP(entry)	PHYS_TO_DMAP(VM_PAGE_TO_PHYS(entry))
+
 /*
  * vm_page allocation arguments for the functions vm_page_alloc(),
  * vm_page_alloc_contig(), vm_page_alloc_noobj(), vm_page_grab(), and
@@ -487,6 +490,7 @@ vm_page_t PHYS_TO_VM_PAGE(vm_paddr_t pa);
 #define VM_ALLOC_INTERRUPT	1
 #define VM_ALLOC_SYSTEM		2
 #define	VM_ALLOC_CLASS_MASK	3
+#define	VM_ALLOC_AVAIL0		0x0004
 #define	VM_ALLOC_WAITOK		0x0008	/* (gnp) Sleep and retry */
 #define	VM_ALLOC_WAITFAIL	0x0010	/* (acgnp) Sleep and return error */
 #define	VM_ALLOC_WIRED		0x0020	/* (acgnp) Allocate a wired page */

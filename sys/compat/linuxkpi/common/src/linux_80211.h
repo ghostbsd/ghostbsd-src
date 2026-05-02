@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2020-2023 The FreeBSD Foundation
+ * Copyright (c) 2020-2026 The FreeBSD Foundation
  * Copyright (c) 2020-2021 Bjoern A. Zeeb
  *
  * This software was developed by Björn Zeeb under sponsorship from
@@ -57,6 +57,7 @@
 #define	D80211_IMPROVE		0x00000002
 #endif
 #define	D80211_IMPROVE_TXQ	0x00000004
+#define	D80211_CHANDEF		0x00000008
 #define	D80211_TRACE		0x00000010
 #define	D80211_TRACEOK		0x00000020
 #define	D80211_SCAN		0x00000040
@@ -250,9 +251,13 @@ struct lkpi_hw {	/* name it mac80211_sc? */
 	struct sx			lvif_sx;
 
 	struct list_head		lchanctx_list;
+	struct list_head		lchanctx_list_reserved;
 	struct netdev_hw_addr_list	mc_list;
 	unsigned int			mc_flags;
 	struct sx			mc_sx;
+
+	struct cfg80211_chan_def	dflt_chandef;
+	struct cfg80211_chan_def	scan_chandef;
 
 	struct mtx			txq_mtx;
 	uint32_t			txq_generation[IEEE80211_NUM_ACS];
@@ -314,6 +319,7 @@ struct lkpi_hw {	/* name it mac80211_sc? */
 	bool				mc_all_multi;
 	bool				update_wme;
 	bool				rxq_stopped;
+	bool				emulate_chanctx;
 
 	/* Must be last! */
 	struct ieee80211_hw		hw __aligned(CACHE_LINE_SIZE);
@@ -328,6 +334,7 @@ struct lkpi_chanctx {
 	struct list_head		entry;
 
 	bool				added_to_drv;	/* Managed by MO */
+	struct lkpi_vif			*lvif;		/* Backpointer. */
 
 	struct ieee80211_chanctx_conf	chanctx_conf __aligned(CACHE_LINE_SIZE);
 };
@@ -469,6 +476,10 @@ void lkpi_80211_mo_change_chanctx(struct ieee80211_hw *,
     struct ieee80211_chanctx_conf *, uint32_t);
 void lkpi_80211_mo_remove_chanctx(struct ieee80211_hw *,
     struct ieee80211_chanctx_conf *);
+void lkpi_80211_mo_vif_cfg_changed(struct ieee80211_hw *, struct ieee80211_vif *,
+    uint64_t, bool);
+void lkpi_80211_mo_link_info_changed(struct ieee80211_hw *, struct ieee80211_vif *,
+    struct ieee80211_bss_conf *, uint64_t, uint8_t, bool);
 void lkpi_80211_mo_bss_info_changed(struct ieee80211_hw *, struct ieee80211_vif *,
     struct ieee80211_bss_conf *, uint64_t);
 int lkpi_80211_mo_conf_tx(struct ieee80211_hw *, struct ieee80211_vif *,
@@ -481,7 +492,8 @@ void lkpi_80211_mo_mgd_complete_tx(struct ieee80211_hw *, struct ieee80211_vif *
     struct ieee80211_prep_tx_info *);
 void lkpi_80211_mo_tx(struct ieee80211_hw *, struct ieee80211_tx_control *,
     struct sk_buff *);
-void lkpi_80211_mo_wake_tx_queue(struct ieee80211_hw *, struct ieee80211_txq *);
+void lkpi_80211_mo_wake_tx_queue(struct ieee80211_hw *, struct ieee80211_txq *,
+    bool);
 void lkpi_80211_mo_sync_rx_queues(struct ieee80211_hw *);
 void lkpi_80211_mo_sta_pre_rcu_remove(struct ieee80211_hw *,
     struct ieee80211_vif *, struct ieee80211_sta *);

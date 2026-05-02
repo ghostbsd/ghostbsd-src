@@ -120,8 +120,6 @@ vm_offset_t vector_page;
 /* The address at which the kernel was loaded.  Set early in initarm(). */
 vm_paddr_t arm_physmem_kernaddr;
 
-extern int *end;
-
 #ifdef FDT
 vm_paddr_t pmap_pa;
 vm_offset_t systempage;
@@ -207,7 +205,7 @@ cpu_startup(void *dummy)
 
 	bufinit();
 	vm_pager_bufferinit();
-	pcb->pcb_regs.sf_sp = (u_int)thread0.td_kstack +
+	pcb->pcb_regs.sf_sp = (uintptr_t)thread0.td_kstack +
 	    USPACE_SVC_STACK_TOP;
 	pmap_set_pcb_pagedir(kernel_pmap, pcb);
 }
@@ -375,7 +373,7 @@ pcpu0_init(void)
  * Initialize proc0
  */
 static void
-init_proc0(vm_offset_t kstack)
+init_proc0(void *kstack)
 {
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
@@ -447,6 +445,8 @@ initarm(struct arm_boot_params *abp)
 
 	set_cpufuncs();
 	cpuinfo_init();
+	sched_instance_select();
+	link_elf_ireloc();
 
 	/*
 	 * Find the dtb passed in by the boot loader.
@@ -522,9 +522,6 @@ initarm(struct arm_boot_params *abp)
 
 	/* Do basic tuning, hz etc */
 	init_param1();
-
-	sched_instance_select();
-	/* link_elf_ireloc(); */
 
 	/*
 	 * Allocate a page for the system page mapped to 0xffff0000
@@ -625,7 +622,7 @@ initarm(struct arm_boot_params *abp)
 	 */
 	/* Set stack for exception handlers */
 	undefined_init();
-	init_proc0(kernelstack);
+	init_proc0((void *)kernelstack);
 	arm_vector_init(ARM_VECTORS_HIGH, ARM_VEC_ALL);
 	enable_interrupts(PSR_A);
 	pmap_bootstrap(0);
@@ -656,7 +653,7 @@ initarm(struct arm_boot_params *abp)
 	}
 #endif
 
-	return ((void *)STACKALIGN(thread0.td_pcb));
+	return (STACKALIGN(thread0.td_pcb));
 
 }
 #endif /* FDT */

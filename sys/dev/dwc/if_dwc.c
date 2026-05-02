@@ -527,13 +527,13 @@ dwc_attach(device_t dev)
 		sc->txpbl = pbl;
 	if (OF_getencprop(sc->node, "snps,rxpbl", &sc->rxpbl, sizeof(uint32_t)) <= 0)
 		sc->rxpbl = pbl;
-	if (OF_hasprop(sc->node, "snps,no-pbl-x8") == 1)
+	if (OF_hasprop(sc->node, "snps,no-pbl-x8"))
 		sc->nopblx8 = true;
-	if (OF_hasprop(sc->node, "snps,fixed-burst") == 1)
+	if (OF_hasprop(sc->node, "snps,fixed-burst"))
 		sc->fixed_burst = true;
-	if (OF_hasprop(sc->node, "snps,mixed-burst") == 1)
+	if (OF_hasprop(sc->node, "snps,mixed-burst"))
 		sc->mixed_burst = true;
-	if (OF_hasprop(sc->node, "snps,aal") == 1)
+	if (OF_hasprop(sc->node, "snps,aal"))
 		sc->aal = true;
 
 	error = clk_set_assigned(dev, ofw_bus_get_node(dev));
@@ -684,7 +684,7 @@ static device_method_t dwc_methods[] = {
 	DEVMETHOD(miibus_writereg,	dwc1000_miibus_write_reg),
 	DEVMETHOD(miibus_statchg,	dwc1000_miibus_statchg),
 
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 driver_t dwc_driver = {

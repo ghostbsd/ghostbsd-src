@@ -26,6 +26,8 @@
                     ..
                 ..
             ..
+            pkgconf           tags=package=pkgconf-dev
+            ..
             samplerate        tags=package=sound-dev
             ..
             sqlite3           tags=package=libsqlite3-dev
@@ -40,7 +42,7 @@
     ..
     lib
         clang
-            19
+            21
                 include
                     cuda_wrappers
                         bits
@@ -181,8 +183,8 @@
         ..
         hyperv
         ..
-        lpr
-            ru
+        lpr			tags=package=lp
+            ru			tags=package=lp
             ..
         ..
         sendmail
@@ -199,7 +201,7 @@
     sbin
     ..
     share
-        atf             tags=package=tests
+        atf             tags=package=atf
         ..
         bhyve
             gdb
@@ -236,17 +238,15 @@
         doc
             IPv6
             ..
-            atf             tags=package=tests
+            atf             tags=package=atf
             ..
-            kyua            tags=package=tests
+            kyua            tags=package=kyua
             ..
             legal
             ..
             llvm            tags=package=clang
                 clang       tags=package=clang
                 ..
-            ..
-            ncurses
             ..
             ntp
                 drivers
@@ -336,7 +336,7 @@
                     ..
                 ..
             ..
-            kyua            tags=package=tests
+            kyua            tags=package=kyua
             ..
             libusb20
             ..
@@ -346,15 +346,13 @@
             ..
             netgraph
             ..
-            perfmon
-            ..
             pf
             ..
             ppi
             ..
             ppp
             ..
-            printing
+            printing		tags=package=lp
             ..
             scsi_target
             ..
@@ -485,10 +483,10 @@
                 ..
             ..
         ..
-        kyua            tags=package=tests
-            misc            tags=package=tests
+        kyua            tags=package=kyua
+            misc            tags=package=kyua
             ..
-            store           tags=package=tests
+            store           tags=package=kyua
             ..
         ..
         locale

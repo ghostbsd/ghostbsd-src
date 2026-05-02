@@ -100,7 +100,7 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 
 	ptrauth_fork(td2, td1);
 
-	tf = (struct trapframe *)STACKALIGN((struct trapframe *)pcb2 - 1);
+	tf = STACKALIGN((struct trapframe *)pcb2 - 1);
 	bcopy(td1->td_frame, tf, sizeof(*tf));
 	tf->tf_x[0] = 0;
 	tf->tf_x[1] = 0;
@@ -122,6 +122,8 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 
 	/* Copy the TCR_EL1 value */
 	td2->td_proc->p_md.md_tcr = td1->td_proc->p_md.md_tcr;
+
+	td2->td_md.md_sctlr = td1->td_md.md_sctlr;
 
 #if defined(PERTHREAD_SSP)
 	/* Set the new canary */
@@ -191,6 +193,8 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 	/* Setup to release spin count in fork_exit(). */
 	td->td_md.md_spinlock_count = 1;
 	td->td_md.md_saved_daif = PSR_DAIF_DEFAULT;
+
+	td->td_md.md_sctlr = td0->td_md.md_sctlr;
 
 #if defined(PERTHREAD_SSP)
 	/* Set the new canary */

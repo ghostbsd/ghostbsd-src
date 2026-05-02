@@ -38,7 +38,7 @@
 .\" ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
 .\" SOFTWARE.
 .\"
-.Dd July 9, 2025
+.Dd February 26, 2026
 .Dt DEVD.CONF 5
 .Os
 .Sh NAME
@@ -246,7 +246,7 @@ The time this event was processed, in seconds since 1970 dot fraction.
 Device name of parent bus.
 .It Li cdev
 Device node path if one is created by the
-.Xr devfs 5
+.Xr devfs 4
 filesystem.
 .It Li class
 Device class.
@@ -400,11 +400,11 @@ String containing the temperature of the core that has become too hot.
 .It Li DEVFS
 .It Li DEVFS Ta Li CDEV Ta Li CREATE Ta
 The
-.Xr devfs 5
+.Xr devfs 4
 node is created.
 .It Li DEVFS Ta Li CDEV Ta Li DESTROY Ta
 The
-.Xr devfs 5
+.Xr devfs 4
 node is destroyed.
 .El
 .Pp
@@ -666,6 +666,8 @@ variable.
 Connected output device specified in
 .Pa cdev
 variable.
+.It Li SND Ta Li CONN Ta Li NODEV Ta
+No connected devices.
 .El
 .Pp
 .\"
@@ -913,7 +915,7 @@ has many additional examples.
 .Sh SEE ALSO
 .Xr cam 4 ,
 .Xr coretemp 4 ,
-.Xr devfs 5 ,
+.Xr devfs 4 ,
 .Xr re_format 7 ,
 .Xr devd 8
 .Sh BUGS

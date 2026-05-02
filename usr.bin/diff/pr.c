@@ -28,8 +28,11 @@
 #include <sys/wait.h>
 
 #include <err.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <paths.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -40,57 +43,58 @@
 
 #define _PATH_PR "/usr/bin/pr"
 
+extern char **environ;
+
 struct pr *
 start_pr(char *file1, char *file2)
 {
 	int pfd[2];
-	int pr_pd;
 	pid_t pid;
 	char *header;
 	struct pr *pr;
+	posix_spawn_file_actions_t fa;
+	posix_spawnattr_t sa;
+	int error;
 
 	pr = xcalloc(1, sizeof(*pr));
 
 	xasprintf(&header, "%s %s %s", diffargs, file1, file2);
 	signal(SIGPIPE, SIG_IGN);
 	fflush(stdout);
-	rewind(stdout);
-	if (pipe(pfd) == -1)
+	if (pipe2(pfd, O_CLOEXEC) == -1)
 		err(2, "pipe");
-	switch ((pid = pdfork(&pr_pd, PD_CLOEXEC))) {
-	case -1:
-		status |= 2;
-		free(header);
-		err(2, "No more processes");
-	case 0:
-		/* child */
-		if (pfd[0] != STDIN_FILENO) {
-			dup2(pfd[0], STDIN_FILENO);
-			close(pfd[0]);
+
+	if ((error = posix_spawnattr_init(&sa)) != 0)
+		errc(2, error, "posix_spawnattr_init");
+	if ((error = posix_spawn_file_actions_init(&fa)) != 0)
+		errc(2, error, "posix_spawn_file_actions_init");
+
+	posix_spawnattr_setprocdescp_np(&sa, &pr->procd, 0);
+
+	if (pfd[0] != STDIN_FILENO)
+		posix_spawn_file_actions_adddup2(&fa, pfd[0], STDIN_FILENO);
+
+	char *argv[] = { __DECONST(char *, _PATH_PR),
+	    __DECONST(char *, "-h"), header, NULL };
+	error = posix_spawn(&pid, _PATH_PR, &fa, &sa, argv, environ);
+	if (error != 0)
+		errc(2, error, "could not spawn pr");
+
+	posix_spawn_file_actions_destroy(&fa);
+	posix_spawnattr_destroy(&sa);
+
+	/* parent */
+	if (pfd[1] == STDOUT_FILENO) {
+		pr->ostdout = STDOUT_FILENO;
+	} else {
+		if ((pr->ostdout = dup(STDOUT_FILENO)) < 0 ||
+		    dup2(pfd[1], STDOUT_FILENO) < 0) {
+			err(2, "stdout");
 		}
 		close(pfd[1]);
-		execl(_PATH_PR, _PATH_PR, "-h", header, (char *)0);
-		_exit(127);
-	default:
-
-		/* parent */
-		if (pfd[1] != STDOUT_FILENO) {
-			pr->ostdout = dup(STDOUT_FILENO);
-			dup2(pfd[1], STDOUT_FILENO);
-			close(pfd[1]);
-		}
-		close(pfd[0]);
-		rewind(stdout);
-		free(header);
-		pr->kq = kqueue();
-		if (pr->kq == -1)
-			err(2, "kqueue");
-		pr->e = xmalloc(sizeof(struct kevent));
-		EV_SET(pr->e, pr_pd, EVFILT_PROCDESC, EV_ADD, NOTE_EXIT, 0,
-		    NULL);
-		if (kevent(pr->kq, pr->e, 1, NULL, 0, NULL) == -1)
-			err(2, "kevent");
 	}
+	close(pfd[0]);
+	free(header);
 	return (pr);
 }
 
@@ -105,14 +109,14 @@ stop_pr(struct pr *pr)
 
 	fflush(stdout);
 	if (pr->ostdout != STDOUT_FILENO) {
-		close(STDOUT_FILENO);
 		dup2(pr->ostdout, STDOUT_FILENO);
 		close(pr->ostdout);
 	}
-	if (kevent(pr->kq, NULL, 0, pr->e, 1, NULL) == -1)
-		err(2, "kevent");
-	wstatus = pr->e[0].data;
-	close(pr->kq);
+	while (pdwait(pr->procd, &wstatus, WEXITED, NULL, NULL) == -1) {
+		if (errno != EINTR)
+			err(2, "pdwait");
+	}
+	close(pr->procd);
 	free(pr);
 	if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0)
 		errx(2, "pr exited abnormally");

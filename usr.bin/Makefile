@@ -24,10 +24,12 @@ SUBDIR=	apply \
 	comm \
 	command \
 	compress \
+	cpio \
 	csplit \
 	ctlstat \
 	cut \
 	diff \
+	diff3 \
 	dirname \
 	dtc \
 	du \
@@ -185,7 +187,6 @@ SUBDIR=	apply \
 SUBDIR.${MK_ACCT}+=	lastcomm
 SUBDIR.${MK_AT}+=	at
 SUBDIR.${MK_BLUETOOTH}+=	bluetooth
-SUBDIR.${MK_BSD_CPIO}+=	cpio
 SUBDIR.${MK_CALENDAR}+=	calendar
 .if ${MK_CLANG} != "no" || ${MK_LLVM_BINUTILS} != "no" || \
     ${MK_LLD} != "no" || ${MK_LLDB} != "no"
@@ -206,9 +207,6 @@ SUBDIR.${MK_GAMES}+=	pom
 SUBDIR.${MK_GAMES}+=	primes
 SUBDIR.${MK_GAMES}+=	random
 SUBDIR+=		gh-bc
-.if ${MK_GNU_DIFF} == "no"
-SUBDIR+=		diff3
-.endif
 SUBDIR.${MK_HESIOD}+=	hesinfo
 SUBDIR.${MK_ICONV}+=	iconv
 SUBDIR.${MK_ICONV}+=	mkcsmapper
@@ -236,6 +234,8 @@ SUBDIR.${MK_NIS}+=	ypcat
 SUBDIR.${MK_NIS}+=	ypmatch
 SUBDIR.${MK_NIS}+=	ypwhich
 SUBDIR.${MK_OPENSSH}+=	ssh-copy-id
+SUBDIR.${MK_PKGCONF}+=	bomtool
+SUBDIR.${MK_PKGCONF}+=	pkgconf
 SUBDIR.${MK_QUOTAS}+=	quota
 SUBDIR.${MK_SENDMAIL}+=	vacation
 SUBDIR.${MK_SOUND}+=	beep
@@ -250,6 +250,7 @@ SUBDIR.${MK_TFTP}+=	tftp
 # Only build the elftoolchain tools if we aren't using the LLVM ones.
 SUBDIR.${MK_TOOLCHAIN}+=	addr2line
 SUBDIR.${MK_TOOLCHAIN}+=	ar
+SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
 SUBDIR.${MK_TOOLCHAIN}+=	nm
 SUBDIR.${MK_TOOLCHAIN}+=	readelf
 SUBDIR.${MK_TOOLCHAIN}+=	size
@@ -257,9 +258,6 @@ SUBDIR.${MK_TOOLCHAIN}+=	size
 SUBDIR.${MK_TOOLCHAIN}+=	c89
 SUBDIR.${MK_TOOLCHAIN}+=	c99
 SUBDIR.${MK_TOOLCHAIN}+=	ctags
-.if ${MK_LLVM_CXXFILT} == "no"
-SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
-.endif
 # ELF Tool Chain elfcopy required for EFI objects (PR280771)
 SUBDIR.${MK_TOOLCHAIN}+=	elfcopy
 SUBDIR.${MK_TOOLCHAIN}+=	file2c

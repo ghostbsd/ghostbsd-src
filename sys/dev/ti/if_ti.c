@@ -261,7 +261,7 @@ static device_method_t ti_methods[] = {
 	DEVMETHOD(device_attach,	ti_attach),
 	DEVMETHOD(device_detach,	ti_detach),
 	DEVMETHOD(device_shutdown,	ti_shutdown),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t ti_driver = {
@@ -1635,10 +1635,10 @@ ti_newbuf_jumbo(struct ti_softc *sc, int idx, struct mbuf *m_old)
 		}
 		for (i = 0; i < NPAYLOAD; i++){
 		/* Attach the buffer to the mbuf. */
-			m[i]->m_data = (void *)sf_buf_kva(sf[i]);
+			m[i]->m_data = sf_buf_kva(sf[i]);
 			m[i]->m_len = PAGE_SIZE;
 			MEXTADD(m[i], sf_buf_kva(sf[i]), PAGE_SIZE,
-			    sf_mext_free, (void*)sf_buf_kva(sf[i]), sf[i],
+			    sf_mext_free, sf_buf_kva(sf[i]), sf[i],
 			    0, EXT_DISPOSABLE);
 			m[i]->m_next = m[i+1];
 		}
@@ -1703,7 +1703,7 @@ nobufs:
 		if (m[i])
 			m_freem(m[i]);
 		if (sf[i])
-			sf_mext_free((void *)sf_buf_kva(sf[i]), sf[i]);
+			sf_mext_free(sf_buf_kva(sf[i]), sf[i]);
 	}
 	return (ENOBUFS);
 }

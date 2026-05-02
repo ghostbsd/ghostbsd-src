@@ -43,6 +43,12 @@ case "$OS" in
     OSv="almalinux9"
     URL="https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2"
     ;;
+  alpine3-23)
+    OSNAME="Alpine Linux 3.23.2"
+    # Alpine Linux v3.22 and v3.23 are unknown to osinfo as of 2025-12-26.
+    OSv="alpinelinux3.21"
+    URL="https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/generic_alpine-3.23.2-x86_64-bios-cloudinit-r0.qcow2"
+    ;;
   archlinux)
     OSNAME="Archlinux"
     URL="https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"
@@ -72,11 +78,6 @@ case "$OS" in
     OPTS[0]="--boot"
     OPTS[1]="uefi=on"
     ;;
-  fedora41)
-    OSNAME="Fedora 41"
-    OSv="fedora-unknown"
-    URL="https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
-    ;;
   fedora42)
     OSNAME="Fedora 42"
     OSv="fedora-unknown"
@@ -95,8 +96,8 @@ case "$OS" in
     KSRC="$FREEBSD_REL/../amd64/$FreeBSD/src.txz"
     NIC="rtl8139"
     ;;
-  freebsd14-3r)
-    FreeBSD="14.3-RELEASE"
+  freebsd14-4r)
+    FreeBSD="14.4-RELEASE"
     OSNAME="FreeBSD $FreeBSD"
     OSv="freebsd14.0"
     URLxz="$FREEBSD_REL/$FreeBSD/amd64/Latest/FreeBSD-$FreeBSD-amd64-BASIC-CI.raw.xz"
@@ -110,8 +111,8 @@ case "$OS" in
     KSRC="$FREEBSD_SNAP/../amd64/$FreeBSD/src.txz"
     NIC="rtl8139"
     ;;
-  freebsd14-3s)
-    FreeBSD="14.3-STABLE"
+  freebsd14-4s)
+    FreeBSD="14.4-STABLE"
     OSNAME="FreeBSD $FreeBSD"
     OSv="freebsd14.0"
     URLxz="$FREEBSD_SNAP/$FreeBSD/amd64/Latest/FreeBSD-$FreeBSD-amd64-BASIC-CI-ufs.raw.xz"
@@ -187,17 +188,49 @@ DISK="/dev/zvol/zpool/openzfs"
 sudo zfs create -ps -b 64k -V 80g zpool/openzfs
 while true; do test -b $DISK && break; sleep 1; done
 
-# we are downloading via axel, curl and wget are mostly slower and
-# require more return value checking
+# We first try to download with 'axel', which is faster than curl, but fallback
+# to curl if that doesn't work.  It is hoped that the curl fallback will get
+# around the occasional "ERROR 502: Bad Gateway" errors.
 IMG="/mnt/tests/cloud-image"
-if [ ! -z "$URLxz" ]; then
-  echo "Loading $URLxz ..."
-  time axel -q -o "$IMG" "$URLxz"
-  echo "Loading $KSRC ..."
-  time axel -q -o ~/src.txz $KSRC
-else
-  echo "Loading $URL ..."
-  time axel -q -o "$IMG" "$URL"
+for cmd in 'axel -q -o' 'curl --fail -LSs -o' ; do
+  if [ ! -z "$URLxz" ]; then
+    echo "Loading $URLxz with $cmd..."
+    time eval "$cmd $IMG $URLxz" || true
+
+    if [ ! -s ~/src.txz ] ; then
+      echo "Loading $KSRC with $cmd..."
+      time eval "$cmd ~/src.txz $KSRC" || true
+    fi
+  else
+    echo "Loading $URL with $cmd..."
+    time eval "$cmd $IMG $URL" || true
+  fi
+
+  if [ -s "$IMG" ] ; then
+    # Successful download
+    break
+  fi
+done
+
+# SPECIAL CASE
+# FreeBSD sometimes has broken links in their "current/" URL.  Go back up a
+# level and look for other images that might work.  For example:
+#
+# https://download.freebsd.org/snapshots/CI-IMAGES/16.0-CURRENT/amd64/:
+#
+# 20251110/
+# 20251209/
+# 20260420/
+# current/
+#
+# In this case let's say the raw.xz link in current/ is bad, so look though the
+# other snapshot links for the newest existing raw.xz file.
+if [ ! -z "$URLxz" ] && [ ! -s "$IMG" ] ; then
+  URLxz=$(wget --accept "*.raw.xz" --spider -np --recursive  --no-verbose \
+    $(dirname $(dirname $URLxz)) 2>&1  | awk '/200 OK/{print $(NF-2)}' | \
+    sort -n | tail -n 1)
+  echo "Couldn't download FreeBSD raw.xz.  Trying fallback snapshot $URLxz"
+  curl --fail -LSs -o $IMG $URLxz
 fi
 
 echo "Importing VM image to zvol..."
@@ -216,13 +249,21 @@ if [ ${OS:0:7} != "freebsd" ]; then
 hostname: $OS
 
 users:
-- name: root
-  shell: $BASH
-- name: zfs
-  sudo: ALL=(ALL) NOPASSWD:ALL
-  shell: $BASH
-  ssh_authorized_keys:
-    - $PUBKEY
+  - name: root
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+  - name: zfs
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - $PUBKEY
+    # Workaround for Alpine Linux.
+    lock_passwd: false
+    passwd: '*'
+
+packages:
+  - sudo
+  - bash
 
 growpart:
   mode: auto
@@ -304,4 +345,24 @@ else
   ssh root@vm0 'service sshd restart'
   scp ~/src.txz "root@vm0:/tmp/src.txz"
   ssh root@vm0 'tar -C / -zxf /tmp/src.txz'
+fi
+
+#
+# Config for Alpine Linux similar to FreeBSD.
+#
+if [ ${OS:0:6} == "alpine" ]; then
+  while pidof /usr/bin/qemu-system-x86_64 >/dev/null; do
+    ssh 2>/dev/null zfs@vm0 "uname -a" && break
+  done
+  # Enable community and testing repositories.
+  ssh zfs@vm0 "sudo rm -rf /etc/apk/repositories"
+  ssh zfs@vm0 "sudo setup-apkrepos -c1"
+  ssh zfs@vm0 "echo '@testing http://dl-cdn.alpinelinux.org/alpine/edge/testing' | sudo tee -a /etc/apk/repositories"
+  # Upgrade to edge or latest-stable.
+  #ssh zfs@vm0 "sudo sed -i 's#/v[0-9]\+\.[0-9]\+/#/edge/#g' /etc/apk/repositories"
+  #ssh zfs@vm0 "sudo sed -i 's#/v[0-9]\+\.[0-9]\+/#/latest-stable/#g' /etc/apk/repositories"
+  # Update and upgrade after repository setup.
+  ssh zfs@vm0 "sudo apk update"
+  ssh zfs@vm0 "sudo apk add --upgrade apk-tools"
+  ssh zfs@vm0 "sudo apk upgrade --available"
 fi

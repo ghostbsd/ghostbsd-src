@@ -242,10 +242,6 @@ build_tree()
 	(cd $1 && printf '%s\n' $autogenfiles >> $metatmp && \
 	    rm -f $autogenfiles) || return 1
 
-	# Remove empty files.  These just clutter the output of 'diff'.
-	(cd $1 && find . -type f -size 0 -delete -print >> $metatmp) || \
-	    return 1
-
 	# Trim empty directories.
 	(cd $1 && find . -depth -type d -empty -delete -print >> $metatmp) || \
 	    return 1
@@ -531,9 +527,15 @@ diffnode()
 			echo
 			;;
 		$COMPARE_DIFFFILES)
+			if [ -n "$difflistonly" ]; then
+				echo
+				echo "Changed: $3"
+				echo
+				break;
+			fi
 			echo "Index: $3"
 			rule "="
-			diff -u $diffargs -L "$3 ($4)" $1/$3 -L "$3 ($5)" $2/$3
+			diff -u $diffargs -L "$3 ($4)" -L "$3 ($5)" $1/$3 $2/$3
 			;;
 	esac
 }
@@ -1791,10 +1793,14 @@ ignore=
 nobuild=
 preworld=
 noroot=
-while getopts "d:m:nprs:t:A:BD:FI:L:M:N" option; do
+difflistonly=
+while getopts "d:lm:nprs:t:A:BD:FI:L:M:N" option; do
 	case "$option" in
 		d)
 			WORKDIR=$OPTARG
+			;;
+		l)
+			difflistonly=YES
 			;;
 		m)
 			MAKE_CMD=$OPTARG

@@ -89,6 +89,8 @@ extern u_int32_t newnfs_false, newnfs_true;
 extern int nfscl_debuglevel;
 extern int nfscl_enablecallb;
 extern int nfs_numnfscbd;
+extern struct timeval nfsboottime;
+extern uint32_t nfs_exchangeboot;
 NFSREQSPINLOCK;
 NFSCLSTATEMUTEX;
 int nfscl_inited = 0;
@@ -433,9 +435,11 @@ nfscl_deleg(mount_t mp, struct nfsclclient *clp, u_int8_t *nfhp,
 {
 	struct nfscldeleg *tdp;
 	struct nfsmount *nmp;
+	bool trydelegret;
 
 	KASSERT(mp != NULL, ("nfscl_deleg: mp NULL"));
 	nmp = VFSTONFS(mp);
+	trydelegret = false;
 
 	/*
 	 * Since a delegation might be added to the mount,
@@ -467,6 +471,9 @@ nfscl_deleg(mount_t mp, struct nfsclclient *clp, u_int8_t *nfhp,
 		 * Read delegation.  Otherwise, return the new delegation.
 		 */
 		if (dp != NULL) {
+			if (NFSBCMP(dp->nfsdl_stateid.other,
+			    tdp->nfsdl_stateid.other, NFSX_STATEIDOTHER))
+				trydelegret = true;
 			if ((dp->nfsdl_flags & NFSCLDL_WRITE) != 0 &&
 			    (tdp->nfsdl_flags & NFSCLDL_READ) != 0) {
 				TAILQ_REMOVE(&clp->nfsc_deleg, tdp, nfsdl_list);
@@ -485,7 +492,8 @@ nfscl_deleg(mount_t mp, struct nfsclclient *clp, u_int8_t *nfhp,
 	}
 	NFSUNLOCKCLSTATE();
 	if (tdp != NULL) {
-		nfscl_trydelegreturn(tdp, cred, nmp, p);
+		if (trydelegret)
+			nfscl_trydelegreturn(tdp, cred, nmp, p);
 		free(tdp, M_NFSCLDELEG);
 	}
 	return (0);
@@ -877,9 +885,11 @@ nfscl_getcl(struct mount *mp, struct ucred *cred, NFSPROC_T *p,
 	if (cred != NULL) {
 		getcredhostuuid(cred, uuid, sizeof uuid);
 		idlen = strlen(uuid);
-		if (idlen > 0)
+		if (idlen > 0) {
+			nfscl_uuidcheck(uuid);
+			idlen = strlen(uuid);
 			idlen += sizeof (u_int64_t);
-		else
+		} else
 			idlen += sizeof (u_int64_t) + 16; /* 16 random bytes */
 		newclp = malloc(
 		    sizeof (struct nfsclclient) + idlen - 1, M_NFSCLCLIENT,
@@ -990,6 +1000,15 @@ nfscl_getcl(struct mount *mp, struct ucred *cred, NFSPROC_T *p,
 		 * such that the server throws away the clientid before
 		 * receiving the SetClientIDConfirm.
 		 */
+		/*
+		 * Must be done here while locked and before calling
+		 * nfsrpc_setclient().
+		 */
+		if (nfs_exchangeboot == 0) {
+			nfs_exchangeboot = nfsboottime.tv_sec;
+			if (nfs_exchangeboot == 0)
+				nfs_exchangeboot = arc4random();
+		}
 		if (clp->nfsc_renew > 0)
 			clidinusedelay = NFSCL_LEASE(clp->nfsc_renew) * 2;
 		else

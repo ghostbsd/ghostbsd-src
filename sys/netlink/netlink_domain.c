@@ -330,14 +330,17 @@ nl_attach(struct socket *so, int proto, struct thread *td)
 	    so, is_linux ? "(linux) " : "", curproc->p_pid,
 	    nl_get_proto_name(proto));
 
-	nlp = malloc(sizeof(struct nlpcb), M_PCB, M_WAITOK | M_ZERO);
+	mtx_init(&so->so_snd_mtx, "netlink so_snd", NULL, MTX_DEF);
+	mtx_init(&so->so_rcv_mtx, "netlink so_rcv", NULL, MTX_DEF);
 	error = soreserve(so, nl_sendspace, nl_recvspace);
 	if (error != 0) {
-		free(nlp, M_PCB);
+		mtx_destroy(&so->so_snd_mtx);
+		mtx_destroy(&so->so_rcv_mtx);
 		return (error);
 	}
 	TAILQ_INIT(&so->so_rcv.nl_queue);
 	TAILQ_INIT(&so->so_snd.nl_queue);
+	nlp = malloc(sizeof(struct nlpcb), M_PCB, M_WAITOK | M_ZERO);
 	so->so_pcb = nlp;
 	nlp->nl_socket = so;
 	nlp->nl_proto = proto;
@@ -516,6 +519,9 @@ nl_close(struct socket *so)
 		TAILQ_REMOVE(&so->so_rcv.nl_queue, nb, tailq);
 		nl_buf_free(nb);
 	}
+
+	mtx_destroy(&so->so_snd_mtx);
+	mtx_destroy(&so->so_rcv_mtx);
 
 	NL_LOG(LOG_DEBUG3, "socket %p, detached", so);
 
@@ -718,7 +724,7 @@ nl_soreceive(struct socket *so, struct sockaddr **psa, struct uio *uio,
 	 * least one message, we would return it and won't truncate the next.
 	 *
 	 * We use same code for normal and MSG_PEEK case.  At first queue pass
-	 * we scan nl_bufs and count lenght.  In case we can read entire buffer
+	 * we scan nl_bufs and count length.  In case we can read entire buffer
 	 * at one write everything is trivial.  In case we can not, we save
 	 * pointer to the last (or partial) nl_buf and in the !peek case we
 	 * split the queue into two pieces.  We can safely drop the queue lock,

@@ -1,19 +1,19 @@
 /*
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2024-2025 The FreeBSD Foundation
+ * Copyright (c) 2024-2026 The FreeBSD Foundation
  *
  * This software was developed by Aymeric Wibo <obiwac@freebsd.org>
  * under sponsorship from the FreeBSD Foundation.
  */
 
 #include <sys/param.h>
-#include <sys/kernel.h>
-#include <sys/module.h>
 #include <sys/bus.h>
+#include <sys/eventhandler.h>
+#include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/module.h>
 #include <sys/uuid.h>
-#include <sys/kdb.h>
 
 #include <machine/_inttypes.h>
 
@@ -45,6 +45,7 @@ enum intel_dsm_index {
 	/* Only for Microsoft DSM set. */
 	DSM_MODERN_ENTRY_NOTIF		= 7,
 	DSM_MODERN_EXIT_NOTIF		= 8,
+	DSM_MODERN_TURN_ON_DISPLAY	= 9,
 };
 
 enum amd_dsm_index {
@@ -67,7 +68,9 @@ struct dsm_set {
 	const char		*name;
 	int			revision;
 	struct uuid		uuid;
+	uint64_t		dsms_supported;
 	uint64_t		dsms_expected;
+	uint64_t		extra_dsms;
 };
 
 static struct dsm_set intel_dsm_set = {
@@ -86,8 +89,9 @@ static struct dsm_set intel_dsm_set = {
 		0xc4eb40a0, 0x6cd2, 0x11e2, 0xbc, 0xfd,
 		{0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66},
 	},
-	.dsms_expected = DSM_GET_DEVICE_CONSTRAINTS | DSM_DISPLAY_OFF_NOTIF |
-	    DSM_DISPLAY_ON_NOTIF | DSM_ENTRY_NOTIF | DSM_EXIT_NOTIF,
+	.dsms_expected = (1 << DSM_GET_DEVICE_CONSTRAINTS) |
+	    (1 << DSM_DISPLAY_OFF_NOTIF) | (1 << DSM_DISPLAY_ON_NOTIF) |
+	    (1 << DSM_ENTRY_NOTIF) | (1 << DSM_EXIT_NOTIF),
 };
 
 SYSCTL_INT(_debug_acpi_spmc, OID_AUTO, intel_dsm_revision, CTLFLAG_RW,
@@ -102,9 +106,11 @@ static struct dsm_set ms_dsm_set = {
 		0x11e00d56, 0xce64, 0x47ce, 0x83, 0x7b,
 		{0x1f, 0x89, 0x8f, 0x9a, 0xa4, 0x61},
 	},
-	.dsms_expected = DSM_DISPLAY_OFF_NOTIF | DSM_DISPLAY_ON_NOTIF |
-	    DSM_ENTRY_NOTIF | DSM_EXIT_NOTIF | DSM_MODERN_ENTRY_NOTIF |
-	    DSM_MODERN_EXIT_NOTIF,
+	.dsms_expected = (1 << DSM_DISPLAY_OFF_NOTIF) |
+	    (1 << DSM_DISPLAY_ON_NOTIF) | (1 << DSM_ENTRY_NOTIF) |
+	    (1 << DSM_EXIT_NOTIF) | (1 << DSM_MODERN_ENTRY_NOTIF) |
+	    (1 << DSM_MODERN_EXIT_NOTIF),
+	.extra_dsms = (1 << DSM_MODERN_TURN_ON_DISPLAY),
 };
 
 static struct dsm_set amd_dsm_set = {
@@ -124,9 +130,9 @@ static struct dsm_set amd_dsm_set = {
 		0xe3f32452, 0xfebc, 0x43ce, 0x90, 0x39,
 		{0x93, 0x21, 0x22, 0xd3, 0x77, 0x21},
 	},
-	.dsms_expected = AMD_DSM_GET_DEVICE_CONSTRAINTS | AMD_DSM_ENTRY_NOTIF |
-	    AMD_DSM_EXIT_NOTIF | AMD_DSM_DISPLAY_OFF_NOTIF |
-	    AMD_DSM_DISPLAY_ON_NOTIF,
+	.dsms_expected = (1 << AMD_DSM_GET_DEVICE_CONSTRAINTS) |
+	    (1 << AMD_DSM_ENTRY_NOTIF) | (1 << AMD_DSM_EXIT_NOTIF) |
+	    (1 << AMD_DSM_DISPLAY_OFF_NOTIF) | (1 << AMD_DSM_DISPLAY_ON_NOTIF),
 };
 
 SYSCTL_INT(_debug_acpi_spmc, OID_AUTO, amd_dsm_revision, CTLFLAG_RW,
@@ -158,6 +164,9 @@ struct acpi_spmc_softc {
 	ACPI_OBJECT		*obj;
 	enum dsm_set_flags	dsm_sets;
 
+	struct eventhandler_entry	*eh_suspend;
+	struct eventhandler_entry	*eh_resume;
+
 	bool				constraints_populated;
 	size_t				constraint_count;
 	struct acpi_spmc_constraint	*constraints;
@@ -167,6 +176,9 @@ static void	acpi_spmc_check_dsm_set(struct acpi_spmc_softc *sc,
 		    ACPI_HANDLE handle, struct dsm_set *dsm_set);
 static int	acpi_spmc_get_constraints(device_t dev);
 static void	acpi_spmc_free_constraints(struct acpi_spmc_softc *sc);
+
+static void	acpi_spmc_suspend(device_t dev, enum power_stype stype);
+static void	acpi_spmc_resume(device_t dev, enum power_stype stype);
 
 static int
 acpi_spmc_probe(device_t dev)
@@ -182,13 +194,19 @@ acpi_spmc_probe(device_t dev)
 	if (ACPI_ID_PROBE(device_get_parent(dev), dev, spmc_ids, &name) > 0)
 		return (ENXIO);
 
-	handle = acpi_get_handle(dev);
-	if (handle == NULL)
+	if (device_get_unit(dev) > 0) {
+		device_printf(dev, "shouldn't have more than one SPMC");
 		return (ENXIO);
+	}
+
+	handle = acpi_get_handle(dev);
+	/* ACPI_ID_PROBE() above cannot succeed without a handle. */
+	MPASS(handle != NULL);
 
 	sc = device_get_softc(dev);
+	sc->dev = dev;
 
-	/* Check which sets of DSM's are supported. */
+	/* Check which sets of DSMs are supported. */
 	sc->dsm_sets = 0;
 
 	acpi_spmc_check_dsm_set(sc, handle, &intel_dsm_set);
@@ -198,8 +216,8 @@ acpi_spmc_probe(device_t dev)
 	if (sc->dsm_sets == 0)
 		return (ENXIO);
 
-	device_set_descf(dev, "Low Power S0 Idle (DSM sets 0x%x)",
-	    sc->dsm_sets);
+	device_set_descf(dev, "System Power Management Controller "
+	    "(DSM sets 0x%x)", sc->dsm_sets);
 
 	return (0);
 }
@@ -207,10 +225,7 @@ acpi_spmc_probe(device_t dev)
 static int
 acpi_spmc_attach(device_t dev)
 {
-	struct acpi_spmc_softc *sc;
-
-	sc = device_get_softc(dev);
-	sc->dev = dev;
+	struct acpi_spmc_softc *sc = device_get_softc(dev);
 
 	sc->handle = acpi_get_handle(dev);
 	if (sc->handle == NULL)
@@ -221,7 +236,12 @@ acpi_spmc_attach(device_t dev)
 	sc->constraints = NULL;
 
 	/* Get device constraints. We can only call this once so do this now. */
-	acpi_spmc_get_constraints(sc->dev);
+	acpi_spmc_get_constraints(dev);
+
+	sc->eh_suspend = EVENTHANDLER_REGISTER(acpi_post_dev_suspend,
+	    acpi_spmc_suspend, dev, 0);
+	sc->eh_resume = EVENTHANDLER_REGISTER(acpi_pre_dev_resume,
+	    acpi_spmc_resume, dev, 0);
 
 	return (0);
 }
@@ -229,6 +249,11 @@ acpi_spmc_attach(device_t dev)
 static int
 acpi_spmc_detach(device_t dev)
 {
+	struct acpi_spmc_softc *sc = device_get_softc(dev);
+
+	EVENTHANDLER_DEREGISTER(acpi_post_dev_suspend, sc->eh_suspend);
+	EVENTHANDLER_DEREGISTER(acpi_pre_dev_resume, sc->eh_resume);
+
 	acpi_spmc_free_constraints(device_get_softc(dev));
 	return (0);
 }
@@ -237,8 +262,10 @@ static void
 acpi_spmc_check_dsm_set(struct acpi_spmc_softc *sc, ACPI_HANDLE handle,
     struct dsm_set *dsm_set)
 {
-	const uint64_t dsms_supported = acpi_DSMQuery(handle,
+	uint64_t dsms_supported = acpi_DSMQuery(handle,
 	    (uint8_t *)&dsm_set->uuid, dsm_set->revision);
+	const uint64_t min_dsms = dsm_set->dsms_expected;
+	const uint64_t max_dsms = min_dsms | dsm_set->extra_dsms;
 
 	/*
 	 * Check if DSM set supported at all.  We do this by checking the
@@ -246,26 +273,28 @@ acpi_spmc_check_dsm_set(struct acpi_spmc_softc *sc, ACPI_HANDLE handle,
 	 */
 	if ((dsms_supported & 1) == 0)
 		return;
-	if ((dsms_supported & dsm_set->dsms_expected)
-	    != dsm_set->dsms_expected) {
+	dsms_supported &= ~1;
+	dsm_set->dsms_supported = dsms_supported;
+	sc->dsm_sets |= dsm_set->flag;
+
+	if ((dsms_supported & min_dsms) != min_dsms)
 		device_printf(sc->dev, "DSM set %s does not support expected "
 		    "DSMs (%#" PRIx64 " vs %#" PRIx64 "). "
 		    "Some methods may fail.\n",
-		    dsm_set->name, dsms_supported, dsm_set->dsms_expected);
-	}
-	sc->dsm_sets |= dsm_set->flag;
+		    dsm_set->name, dsms_supported, min_dsms);
+
+	if ((dsms_supported & ~max_dsms) != 0)
+		device_printf(sc->dev, "DSM set %s supports more DSMs than "
+		    "expected (%#" PRIx64 " vs %#" PRIx64 ").\n", dsm_set->name,
+		    dsms_supported, max_dsms);
 }
 
 static void
 acpi_spmc_free_constraints(struct acpi_spmc_softc *sc)
 {
-	if (sc->constraints == NULL)
-		return;
-
-	for (size_t i = 0; i < sc->constraint_count; i++) {
-		if (sc->constraints[i].name != NULL)
-			free(sc->constraints[i].name, M_TEMP);
-	}
+	for (size_t i = 0; i < sc->constraint_count; i++)
+		free(sc->constraints[i].name, M_TEMP);
+	sc->constraint_count = 0;
 
 	free(sc->constraints, M_TEMP);
 	sc->constraints = NULL;
@@ -307,11 +336,12 @@ acpi_spmc_get_constraints_spec(struct acpi_spmc_softc *sc, ACPI_OBJECT *object)
 			return (ENOMEM);
 		}
 
+		detail = &constraint_obj->Package.Elements[2];
 		/*
 		 * The first element in the device constraint detail package is
 		 * the revision, and should always be zero.
 		 */
-		revision = constraint_obj->Package.Elements[0].Integer.Value;
+		revision = detail->Package.Elements[0].Integer.Value;
 		if (revision != 0) {
 			device_printf(sc->dev, "Unknown revision %d for "
 			    "device constraint detail package\n", revision);
@@ -319,7 +349,6 @@ acpi_spmc_get_constraints_spec(struct acpi_spmc_softc *sc, ACPI_OBJECT *object)
 			continue;
 		}
 
-		detail = &constraint_obj->Package.Elements[2];
 		constraint_package = &detail->Package.Elements[1];
 
 		constraint->lpi_uid =
@@ -582,26 +611,32 @@ acpi_spmc_exit_notif(device_t dev)
 		acpi_spmc_run_dsm(dev, &amd_dsm_set, AMD_DSM_EXIT_NOTIF);
 	if ((sc->dsm_sets & DSM_SET_MS) != 0) {
 		acpi_spmc_run_dsm(dev, &ms_dsm_set, DSM_EXIT_NOTIF);
+		if (ms_dsm_set.dsms_supported &
+		    (1 << DSM_MODERN_TURN_ON_DISPLAY))
+			acpi_spmc_run_dsm(dev, &ms_dsm_set,
+			    DSM_MODERN_TURN_ON_DISPLAY);
 		acpi_spmc_run_dsm(dev, &ms_dsm_set, DSM_MODERN_EXIT_NOTIF);
 	}
 }
 
-static int
-acpi_spmc_suspend(device_t dev)
+static void
+acpi_spmc_suspend(device_t dev, enum power_stype stype)
 {
+	if (stype != POWER_STYPE_SUSPEND_TO_IDLE)
+		return;
+
 	acpi_spmc_display_off_notif(dev);
 	acpi_spmc_entry_notif(dev);
-
-	return (0);
 }
 
-static int
-acpi_spmc_resume(device_t dev)
+static void
+acpi_spmc_resume(device_t dev, enum power_stype stype)
 {
+	if (stype != POWER_STYPE_SUSPEND_TO_IDLE)
+		return;
+
 	acpi_spmc_exit_notif(dev);
 	acpi_spmc_display_on_notif(dev);
-
-	return (0);
 }
 
 static device_method_t acpi_spmc_methods[] = {

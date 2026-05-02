@@ -130,6 +130,19 @@
 /* POWER9 only permits a 64k partition table size. */
 #define	PART_SIZE	0x10000
 
+/*
+ * These values are derived from the POWER8 user manual Version 1.3
+ * (16-March-2016), 3.8.4 (large page support) and 3.8.16 (TLBIE Invalidate
+ * Entry instructions.)
+ *
+ * Notably:
+ *
+ * + POWER8 supports an MPSS (Multple Page Sizes per Segment) configuration
+ *   of 4KB base, 16MB actual page size
+ * + RB[56:58] encoding for 16MB page == 100, RB[54:55] segment either 00 or 01
+ * + RB[56:58] encoding for 4K page == 000, RB[54:55] segment either 00 or 01
+ */
+
 /* Actual page sizes (to be used with tlbie, when L=0) */
 #define	AP_4K		0x00
 #define	AP_16M		0x80
@@ -183,7 +196,8 @@ TLBIE(uint64_t vpn, uint64_t oldptehi)
 				    "memory");
 			__asm __volatile("eieio; tlbsync; ptesync" :::
 			    "memory");
-			goto done;
+			tlbie_lock = 0;
+			return;
 #endif
 		}
 	}
@@ -197,20 +211,8 @@ TLBIE(uint64_t vpn, uint64_t oldptehi)
 	    (oldptehi & LPTE_KERNEL_VSID_BIT) == 0)
 		vpn |= AP_16M;
 
-	/*
-	 * Explicitly clobber r0.  The tlbie instruction has two forms: an old
-	 * one used by PowerISA 2.03 and prior, and a newer one used by PowerISA
-	 * 2.06 (maybe 2.05?) and later.  We need to support both, and it just
-	 * so happens that since we use 4k pages we can simply zero out r0, and
-	 * clobber it, and the assembler will interpret the single-operand form
-	 * of tlbie as having RB set, and everything else as 0.  The RS operand
-	 * in the newer form is in the same position as the L(page size) bit of
-	 * the old form, so a slong as RS is 0, we're good on both sides.
-	 */
-	__asm __volatile("li 0, 0 \n tlbie %0, 0" :: "r"(vpn) : "r0", "memory");
+	__asm __volatile("tlbie %0, %1" :: "r"(vpn), "r"(0) : "memory");
 	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
-done:
-
 #else
 	vpn_hi = (uint32_t)(vpn >> 32);
 	vpn_lo = (uint32_t)vpn;
@@ -568,9 +570,9 @@ moea64_bootstrap_native(vm_offset_t kernelstart, vm_offset_t kernelend)
 	case IBMPOWER8:
 	case IBMPOWER8E:
 	case IBMPOWER8NVL:
-		moea64_need_lock = false;
-		break;
 	case IBMPOWER9:
+	case IBMPOWER10:
+	case IBMPOWER11:
 		moea64_need_lock = false;
 		break;
 	case IBMPOWER4:
@@ -606,17 +608,16 @@ moea64_bootstrap_native(vm_offset_t kernelstart, vm_offset_t kernelend)
 	 * its own size. Pick the larger of the two, which works on all
 	 * systems.
 	 */
-	moea64_pteg_table = (struct lpte *)moea64_bootstrap_alloc(size, 
-	    MAX(256*1024, size));
+	pa = moea64_bootstrap_alloc(size, MAX(256*1024, size));
 	if (hw_direct_map)
-		moea64_pteg_table =
-		    (struct lpte *)PHYS_TO_DMAP((vm_offset_t)moea64_pteg_table);
+		moea64_pteg_table = PHYS_TO_DMAP(pa);
+	else
+		moea64_pteg_table = (struct lpte *)pa;
+
 	/* Allocate partition table (ISA 3.0). */
 	if (cpu_features2 & PPC_FEATURE2_ARCH_3_00) {
-		moea64_part_table =
-		    (struct pate *)moea64_bootstrap_alloc(PART_SIZE, PART_SIZE);
-		moea64_part_table =
-		    (struct pate *)PHYS_TO_DMAP((vm_offset_t)moea64_part_table);
+		pa = moea64_bootstrap_alloc(PART_SIZE, PART_SIZE);
+		moea64_part_table = PHYS_TO_DMAP(pa);
 	}
 	DISABLE_TRANS(msr);
 	bzero(__DEVOLATILE(void *, moea64_pteg_table), moea64_pteg_count *
@@ -624,7 +625,7 @@ moea64_bootstrap_native(vm_offset_t kernelstart, vm_offset_t kernelend)
 	if (cpu_features2 & PPC_FEATURE2_ARCH_3_00) {
 		bzero(__DEVOLATILE(void *, moea64_part_table), PART_SIZE);
 		moea64_part_table[0].pagetab = htobe64(
-			(DMAP_TO_PHYS((vm_offset_t)moea64_pteg_table)) |
+			(DMAP_TO_PHYS(moea64_pteg_table)) |
 			(uintptr_t)(flsl((moea64_pteg_count - 1) >> 11)));
 	}
 	ENABLE_TRANS(msr);

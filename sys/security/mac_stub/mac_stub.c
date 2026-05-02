@@ -574,6 +574,31 @@ stub_mount_create(struct ucred *cred, struct mount *mp,
 
 }
 
+static int
+stub_mount_check_mount(struct ucred *cred, struct vnode *vp,
+    struct label *vplabel, struct vfsconf *vfsconf,
+    struct vfsoptlist **optlist, uint64_t fsflags)
+{
+
+	return (0);
+}
+
+static int
+stub_mount_check_update(struct ucred *cred, struct mount *mp,
+    struct label *mplabel, struct vfsoptlist **optlist, uint64_t fsflags)
+{
+
+	return (0);
+}
+
+static int
+stub_mount_check_unmount(struct ucred *cred, struct mount *mp,
+    struct label *mplabel, uint64_t flags)
+{
+
+	return (0);
+}
+
 static void
 stub_netinet_arp_send(struct ifnet *ifp, struct label *iflpabel,
     struct mbuf *m, struct label *mlabel)
@@ -910,6 +935,12 @@ stub_prison_check_remove(struct ucred *cred, struct prison *pr,
 static void
 stub_prison_created(struct ucred *cred, struct prison *pr,
     struct label *prlabel)
+{
+
+}
+
+static void
+stub_prison_cleanup(struct ucred *cred, struct prison *pr)
 {
 
 }
@@ -1858,6 +1889,9 @@ static struct mac_policy_ops stub_ops =
 	.mpo_mount_create = stub_mount_create,
 	.mpo_mount_destroy_label = stub_destroy_label,
 	.mpo_mount_init_label = stub_init_label,
+	.mpo_mount_check_mount = stub_mount_check_mount,
+	.mpo_mount_check_update = stub_mount_check_update,
+	.mpo_mount_check_unmount = stub_mount_check_unmount,
 
 	.mpo_netinet_arp_send = stub_netinet_arp_send,
 	.mpo_netinet_firewall_reply = stub_netinet_firewall_reply,
@@ -1923,6 +1957,7 @@ static struct mac_policy_ops stub_ops =
 	.mpo_prison_check_set = stub_prison_check_set,
 	.mpo_prison_check_remove = stub_prison_check_remove,
 	.mpo_prison_created = stub_prison_created,
+	.mpo_prison_cleanup = stub_prison_cleanup,
 	.mpo_prison_attached = stub_prison_attached,
 
 	.mpo_priv_check = stub_priv_check,

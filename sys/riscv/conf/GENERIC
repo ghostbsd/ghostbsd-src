@@ -30,12 +30,12 @@ options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
 options 	TCP_HHOOK		# hhook(9) framework for TCP
 options 	IPSEC_SUPPORT		# Allow kldload of ipsec and tcpmd5
-options 	ROUTE_MPATH		# Multipath routing support
 options		FIB_ALGO		# Modular fib lookups
 options 	TCP_OFFLOAD		# TCP offload
 options 	TCP_BLACKBOX		# Enhanced TCP event logging
 options 	TCP_RFC7413		# TCP Fast Open
 options 	SCTP_SUPPORT		# Allow kldload of SCTP
+options 	KERN_TLS		# TLS transmit & receive offload
 options 	FFS			# Berkeley Fast Filesystem
 options 	SOFTUPDATES		# Enable FFS soft updates support
 options 	UFS_ACL			# Support for access control lists
@@ -172,10 +172,12 @@ options 	KDB_TRACE		# Print a stack trace for a panic.
 include "std.debug"
 # options 	EARLY_PRINTF=sbi
 
+# Compression support
+options 	GZIO			# gzip (dumps)
+options 	ZSTDIO			# zstd (dumps, tarfs, uzip, zfs)
+
 # Kernel dump features.
 options 	EKCD			# Support for encrypted kernel dumps
-options 	GZIO			# gzip-compressed kernel and user dumps
-options 	ZSTDIO			# zstd-compressed kernel and user dumps
 options 	DEBUGNET		# debugnet networking
 options 	NETDUMP			# netdump(4) client support
 

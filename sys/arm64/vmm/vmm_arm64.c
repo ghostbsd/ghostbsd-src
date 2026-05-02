@@ -251,10 +251,7 @@ vmmops_modinit(int ipinum)
 		return (ENODEV);
 	}
 
-	if (!get_kernel_reg(ID_AA64MMFR0_EL1, &id_aa64mmfr0_el1)) {
-		printf("vmm: Unable to read ID_AA64MMFR0_EL1\n");
-		return (ENXIO);
-	}
+	get_kernel_reg(ID_AA64MMFR0_EL1, &id_aa64mmfr0_el1);
 	pa_range_field = ID_AA64MMFR0_PARange_VAL(id_aa64mmfr0_el1);
 	/*
 	 * Use 3 levels to give us up to 39 bits with 4k pages, or
@@ -394,6 +391,8 @@ vmmops_modinit(int ipinum)
 #ifdef SMP
 	el2_regs.vtcr_el2 |= VTCR_EL2_SH0_IS;
 #endif
+	if (pmap_vs_enabled())
+		el2_regs.vtcr_el2 |= VTCR_EL2_VS;
 	/*
 	 * If FEAT_LPA2 is enabled in the host then we need to enable it here
 	 * so the page tables created by pmap.c are correct. The meaning of
@@ -522,15 +521,25 @@ vmmops_init(struct vm *vm, pmap_t pmap)
 	hyp->vm = vm;
 	hyp->vgic_attached = false;
 
-	if (get_kernel_reg(ID_AA64MMFR0_EL1, &idreg)) {
-		if (ID_AA64MMFR0_ECV_VAL(idreg) >= ID_AA64MMFR0_ECV_POFF)
-			hyp->feats |= HYP_FEAT_ECV_POFF;
+	get_kernel_reg(ID_AA64MMFR0_EL1, &idreg);
+	if (ID_AA64MMFR0_ECV_VAL(idreg) >= ID_AA64MMFR0_ECV_POFF)
+		hyp->feats |= HYP_FEAT_ECV_POFF;
+
+	switch (ID_AA64MMFR0_FGT_VAL(idreg)) {
+	case ID_AA64MMFR0_FGT_NONE:
+		break;
+	default:
+	case ID_AA64MMFR0_FGT_8_9:
+		hyp->feats |= HYP_FEAT_FGT2;
+		/* FALLTHROUGH */
+	case ID_AA64MMFR0_FGT_8_6:
+		hyp->feats |= HYP_FEAT_FGT;
+		break;
 	}
 
-	if (get_kernel_reg(ID_AA64MMFR1_EL1, &idreg)) {
-		if (ID_AA64MMFR1_HCX_VAL(idreg) >= ID_AA64MMFR1_HCX_IMPL)
-			hyp->feats |= HYP_FEAT_HCX;
-	}
+	get_kernel_reg(ID_AA64MMFR1_EL1, &idreg);
+	if (ID_AA64MMFR1_HCX_VAL(idreg) >= ID_AA64MMFR1_HCX_IMPL)
+		hyp->feats |= HYP_FEAT_HCX;
 
 	vtimer_vminit(hyp);
 	vgic_vminit(hyp);

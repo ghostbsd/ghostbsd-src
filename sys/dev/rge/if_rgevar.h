@@ -30,7 +30,8 @@ enum rge_mac_type {
 	MAC_UNKNOWN = 1,
 	MAC_R25,
 	MAC_R25B,
-	MAC_R25D,
+	MAC_R25D_1,
+	MAC_R25D_2,
 	MAC_R26_1,
 	MAC_R26_2,
 	MAC_R27
@@ -122,7 +123,6 @@ struct rge_rx {
 	int			rge_rxq_prodidx;
 	int			rge_rxq_considx;
 
-//	struct if_rxring	rge_rx_ring;
 	bus_addr_t		rge_rx_list_paddr;
 	bus_dmamap_t		rge_rx_list_map;
 	struct rge_rx_desc	*rge_rx_list;
@@ -136,7 +136,6 @@ struct rge_queues {
 	void			*q_ihc;
 	int			q_index;
 	char			q_name[16];
-//	pci_intr_handle_t	q_ih;
 	struct rge_tx		q_tx;
 	struct rge_rx		q_rx;
 };
@@ -170,8 +169,6 @@ struct rge_softc {
 	bus_dma_tag_t		sc_dmat_rx_buf;
 	bus_dma_tag_t		sc_dmat_stats_buf;
 
-//	pci_chipset_tag_t	sc_pc;
-//	pcitag_t		sc_tag;
 	struct ifmedia		sc_media;	/* media info */
 	enum rge_mac_type	rge_type;
 
@@ -203,7 +200,12 @@ struct rge_softc {
 #define RGE_IMTYPE_SIM		1
 	int			sc_watchdog;
 
+	int			rge_if_flags;
+
 	uint32_t		sc_debug;
+
+	int			sc_rx_process_limit;
+	int			sc_disable_aspm;
 
 	struct rge_drv_stats	sc_drv_stats;
 

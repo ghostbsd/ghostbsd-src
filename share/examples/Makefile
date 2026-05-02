@@ -22,10 +22,8 @@ LDIRS=	BSD_daemon \
 	mdoc \
 	netgraph \
 	oci \
-	perfmon \
 	ppi \
 	ppp \
-	printing \
 	ses \
 	scsi_target \
 	sound \
@@ -203,12 +201,6 @@ SE_OCI= \
 	README \
 	Containerfile.pkg
 
-SE_DIRS+=	perfmon
-SE_PERFMON= \
-	Makefile \
-	README \
-	perfmon.c \
-
 .if ${MK_PF} != "no"
 SE_DIRS+=	pf
 .if ${MK_STAGING} == "no"
@@ -250,6 +242,8 @@ SE_PPP= \
 	ppp.secret.span-isp \
 	ppp.secret.span-isp.working
 
+.if ${MK_LPR} != "no"
+LDIRS+=		printing
 SE_DIRS+=	printing
 SE_PRINTINGPACKAGE=lp
 SE_PRINTING= \
@@ -269,6 +263,7 @@ SE_PRINTING= \
 	psif \
 	pstf \
 	pstfX
+.endif
 
 SE_DIRS+=	ses
 SE_SES= \
@@ -321,6 +316,7 @@ SE_DIRS+=	sound
 SE_SOUND= \
 	kqueue.c \
 	midi.c \
+	mmap.c \
 	oss.h \
 	poll.c \
 	select.c \

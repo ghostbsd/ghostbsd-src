@@ -85,7 +85,16 @@
 #define TCP_EI_BITS_RST_IN_FR	0x200	/* a front state reset */
 #define TCP_EI_BITS_2MS_TIMER	0x400	/* 2 MSL timer expired */
 
-#if defined(_KERNEL) || defined(_WANT_TCPCB)
+#define TCP_TRK_TRACK_FLG_EMPTY 0x00	/* Available */
+#define TCP_TRK_TRACK_FLG_USED  0x01	/* In use */
+#define TCP_TRK_TRACK_FLG_OPEN  0x02	/* End is not valid (open range request) */
+#define TCP_TRK_TRACK_FLG_SEQV  0x04	/* We had a sendfile that touched it  */
+#define TCP_TRK_TRACK_FLG_COMP  0x08	/* Sendfile as placed the last bits (range req only) */
+#define TCP_TRK_TRACK_FLG_FSND	0x10	/* First send has been done into the seq space */
+#define TCP_TRK_TRACK_FLG_LSND	0x20	/* We were able to set the Last Sent */
+#define MAX_TCP_TRK_REQ 5		/* Max we will have at once */
+
+#if defined(_KERNEL)
 #include <sys/_callout.h>
 #include <sys/osd.h>
 
@@ -135,15 +144,6 @@ struct sackhint {
 #define SEGQ_EMPTY(tp) TAILQ_EMPTY(&(tp)->t_segq)
 
 STAILQ_HEAD(tcp_log_stailq, tcp_log_mem);
-
-#define TCP_TRK_TRACK_FLG_EMPTY 0x00	/* Available */
-#define TCP_TRK_TRACK_FLG_USED  0x01	/* In use */
-#define TCP_TRK_TRACK_FLG_OPEN  0x02	/* End is not valid (open range request) */
-#define TCP_TRK_TRACK_FLG_SEQV  0x04	/* We had a sendfile that touched it  */
-#define TCP_TRK_TRACK_FLG_COMP  0x08	/* Sendfile as placed the last bits (range req only) */
-#define TCP_TRK_TRACK_FLG_FSND	0x10	/* First send has been done into the seq space */
-#define TCP_TRK_TRACK_FLG_LSND	0x20	/* We were able to set the Last Sent */
-#define MAX_TCP_TRK_REQ 5		/* Max we will have at once */
 
 struct tcp_sendfile_track {
 	uint64_t timestamp;	/* User sent timestamp */
@@ -493,14 +493,14 @@ struct tcpcb {
 	uint32_t tcp_hybrid_start;	/* Num of times we started hybrid pacing */
 	uint32_t tcp_hybrid_stop;	/* Num of times we stopped hybrid pacing */
 	uint32_t tcp_hybrid_error;	/* Num of times we failed to start hybrid pacing */
-	struct tcp_sendfile_track t_tcpreq_info[MAX_TCP_TRK_REQ];
+	struct tcp_sendfile_track *t_tcpreq_info;
 #endif
 #ifdef TCP_ACCOUNTING
 	uint64_t tcp_cnt_counters[TCP_NUM_CNT_COUNTERS];
 	uint64_t tcp_proc_time[TCP_NUM_CNT_COUNTERS];
 #endif
 };
-#endif	/* _KERNEL || _WANT_TCPCB */
+#endif	/* _KERNEL */
 
 #ifdef _KERNEL
 struct tcptemp {
@@ -789,7 +789,7 @@ tcp_packets_this_ack(struct tcpcb *tp, tcp_seq ack)
 #define	TF_TSO		0x01000000	/* TSO enabled on this connection */
 #define	TF_TOE		0x02000000	/* this connection is offloaded */
 #define	TF_CLOSED	0x04000000	/* close(2) called on socket */
-#define TF_SENTSYN      0x08000000      /* At least one syn has been sent */
+#define	TF_DISCONNECTED	0x08000000	/* went through tcp_close() */
 #define	TF_LRD		0x10000000	/* Lost Retransmission Detection */
 #define	TF_CONGRECOVERY	0x20000000	/* congestion recovery mode */
 #define	TF_WASCRECOVERY	0x40000000	/* was in congestion recovery */
@@ -803,7 +803,7 @@ tcp_packets_this_ack(struct tcpcb *tp, tcp_seq ack)
     "\15TF_NOPUSH\16TF_PREVVALID\17TF_WAKESOR\20TF_GPUTINPROG" \
     "\21TF_MORETOCOME\22TF_SONOTCONN\23TF_LASTIDLE\24TF_RXWIN0SENT" \
     "\25TF_FASTRECOVERY\26TF_WASFRECOVERY\27TF_SIGNATURE\30TF_FORCEDATA" \
-    "\31TF_TSO\32TF_TOE\33TF_CLOSED\34TF_SENTSYN" \
+    "\31TF_TSO\32TF_TOE\33TF_CLOSED\34TF_UNUSED" \
     "\35TF_LRD\36TF_CONGRECOVERY\37TF_WASCRECOVERY\40TF_FASTOPEN"
 
 #define	IN_FASTRECOVERY(t_flags)	(t_flags & TF_FASTRECOVERY)

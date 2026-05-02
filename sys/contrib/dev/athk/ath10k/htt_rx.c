@@ -820,8 +820,7 @@ int ath10k_htt_rx_alloc(struct ath10k_htt *htt)
 	}
 
 	htt->rx_ring.netbufs_ring =
-		kcalloc(htt->rx_ring.size, sizeof(struct sk_buff *),
-			GFP_KERNEL);
+		kzalloc_objs(struct sk_buff *, htt->rx_ring.size);
 	if (!htt->rx_ring.netbufs_ring)
 		goto err_netbuf;
 
@@ -849,9 +848,6 @@ int ath10k_htt_rx_alloc(struct ath10k_htt *htt)
 	timer_setup(timer, ath10k_htt_rx_ring_refill_retry, 0);
 
 	spin_lock_init(&htt->rx_ring.lock);
-#if defined(__FreeBSD__)
-	spin_lock_init(&htt->tx_fetch_ind_q.lock);
-#endif
 
 	htt->rx_ring.fill_cnt = 0;
 	htt->rx_ring.sw_rd_idx.msdu_payld = 0;
@@ -1670,6 +1666,7 @@ static void ath10k_htt_rx_h_undecap_nwifi(struct ath10k *ar,
 	ether_addr_copy(ieee80211_get_DA(hdr), da);
 	ether_addr_copy(ieee80211_get_SA(hdr), sa);
 #elif defined(__FreeBSD__)
+	/* ieee80211_get_[DS]A() do not take a const argument. */
 	hdr2 = (struct ieee80211_hdr *)msdu->data;
 	ether_addr_copy(ieee80211_get_DA(hdr2), da);
 	ether_addr_copy(ieee80211_get_SA(hdr2), sa);
@@ -1812,6 +1809,7 @@ static void ath10k_htt_rx_h_undecap_eth(struct ath10k *ar,
 	ether_addr_copy(ieee80211_get_DA(hdr), da);
 	ether_addr_copy(ieee80211_get_SA(hdr), sa);
 #elif defined(__FreeBSD__)
+	/* ieee80211_get_[DS]A() do not take a const argument. */
 	hdr2 = (struct ieee80211_hdr *)msdu->data;
 	ether_addr_copy(ieee80211_get_DA(hdr2), da);
 	ether_addr_copy(ieee80211_get_SA(hdr2), sa);

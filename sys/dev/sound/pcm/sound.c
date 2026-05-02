@@ -81,6 +81,7 @@ static int
 sysctl_hw_snd_default_unit(SYSCTL_HANDLER_ARGS)
 {
 	struct snddev_info *d;
+	char buf[32];
 	int error, unit;
 
 	unit = snd_unit;
@@ -95,6 +96,12 @@ sysctl_hw_snd_default_unit(SYSCTL_HANDLER_ARGS)
 		snd_unit = unit;
 		snd_unit_auto = 0;
 		bus_topo_unlock();
+
+		snprintf(buf, sizeof(buf), "cdev=dsp%d", snd_unit);
+		if (d->reccount > 0)
+			devctl_notify("SND", "CONN", "IN", buf);
+		if (d->playcount > 0)
+			devctl_notify("SND", "CONN", "OUT", buf);
 	}
 	return (error);
 }
@@ -235,7 +242,6 @@ pcm_getdevinfo(device_t dev)
 unsigned int
 pcm_getbuffersize(device_t dev, unsigned int minbufsz, unsigned int deflt, unsigned int maxbufsz)
 {
-	struct snddev_info *d = device_get_softc(dev);
 	int sz, x;
 
 	sz = 0;
@@ -256,8 +262,6 @@ pcm_getbuffersize(device_t dev, unsigned int minbufsz, unsigned int deflt, unsig
 	} else {
 		sz = deflt;
 	}
-
-	d->bufsz = sz;
 
 	return sz;
 }
@@ -399,12 +403,6 @@ pcm_register(device_t dev, char *str)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "rec",
 	    CTLFLAG_RD | CTLFLAG_MPSAFE, 0, "recording channels node");
 
-	/* XXX: a user should be able to set this with a control tool, the
-	   sysadmin then needs min+max sysctls for this */
-	SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
-	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
-            OID_AUTO, "buffersize", CTLFLAG_RD, &d->bufsz, 0,
-	    "allocated buffer size");
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "bitperfect", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE, d,
@@ -476,6 +474,8 @@ pcm_unregister(device_t dev)
 		snd_unit = pcm_best_unit(-1);
 		if (snd_unit_auto == 0)
 			snd_unit_auto = 1;
+		if (snd_unit < 0)
+			devctl_notify("SND", "CONN", "NODEV", NULL);
 	}
 
 	return (0);

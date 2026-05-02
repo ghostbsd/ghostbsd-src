@@ -276,7 +276,7 @@ void
 initializecpu(void)
 {
 	uint64_t msr;
-	uint32_t cr4;
+	uint64_t cr4;
 
 	TSENTER();
 	cr4 = rcr4();
@@ -289,6 +289,19 @@ initializecpu(void)
 
 	if (cpu_stdext_feature2 & CPUID_STDEXT2_PKU)
 		cr4 |= CR4_PKE;
+
+	/*
+	 * Any CPU having Linear Address Space Separation (LASS)
+	 * should have SMAP, but check it to be sure.  Otherwise
+	 * userspace accesses from kernel cannot work.
+	 */
+	if (IS_BSP() && (cpu_stdext_feature4 & CPUID_STDEXT4_LASS) != 0 &&
+	    (cpu_stdext_feature & CPUID_STDEXT_SMAP) != 0) {
+		lass_enabled = 1;
+		TUNABLE_INT_FETCH("hw.lass", &lass_enabled);
+	}
+	if (lass_enabled)
+		cr4 |= CR4_LASS;
 
 	/*
 	 * If SMEP is present, we only need to flush RSB (by default)

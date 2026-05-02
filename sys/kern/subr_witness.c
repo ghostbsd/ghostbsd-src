@@ -2136,6 +2136,15 @@ witness_warn(int flags, struct lock_object *lock, const char *fmt, ...)
 		n += witness_list_locks(&lock_list, printf);
 	} else
 		sched_unpin();
+
+	if (td->td_no_sleeping != 0 && (flags & WARN_SLEEPOK) != 0) {
+		va_start(ap, fmt);
+		vprintf(fmt, ap);
+		va_end(ap);
+		printf(" with %d sleep inhibitors\n", td->td_no_sleeping);
+		n += td->td_no_sleeping;
+	}
+
 	if (flags & WARN_PANIC && n)
 		kassert_panic("%s", __func__);
 	else
@@ -3112,12 +3121,6 @@ sysctl_debug_witness_badstacks(SYSCTL_HANDLER_ARGS)
 }
 
 #ifdef DDB
-static int
-sbuf_db_printf_drain(void *arg __unused, const char *data, int len)
-{
-	return (db_printf("%.*s", len, data));
-}
-
 DB_SHOW_COMMAND_FLAGS(badstacks, db_witness_badstacks, DB_CMD_MEMSAFE)
 {
 	struct sbuf sb;

@@ -31,7 +31,7 @@
 
 struct arm64_bootparams {
 	vm_offset_t	modulep;
-	vm_offset_t	kern_stack;
+	void		*kern_stack;
 	vm_paddr_t	kern_ttbr0;
 	int		boot_el;	/* EL the kernel booted from */
 	int		pad;
@@ -54,7 +54,6 @@ vm_offset_t parse_boot_param(struct arm64_bootparams *abp);
 void parse_fdt_bootargs(void);
 #endif
 int memory_mapping_mode(vm_paddr_t pa);
-extern void (*pagezero)(void *);
 
 #ifdef SOCDEV_PA
 /*

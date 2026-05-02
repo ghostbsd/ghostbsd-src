@@ -89,9 +89,7 @@ SYSCTL_INT(_hw, OID_AUTO, uart_noise_threshold, CTLFLAG_RWTUN,
  * options EARLY_PRINTF=ns8250
 */
 #if CHECK_EARLY_PRINTF(ns8250)
-#if !(defined(__amd64__) || defined(__i386__))
-#error ns8250 early putc is x86 specific as it uses inb/outb
-#endif
+#if (defined(__amd64__) || defined(__i386__))
 static void
 uart_ns8250_early_putc(int c)
 {
@@ -103,7 +101,45 @@ uart_ns8250_early_putc(int c)
 		continue;
 	outb(tx, c);
 }
+#elif (defined(__arm__) || defined(__aarch64__))
+#ifndef UART_NS8250_EARLY_REG_IO_WIDTH
+#error Option 'UART_NS8250_EARLY_REG_IO_WIDTH' is missing.
+#endif
+#ifndef UART_NS8250_EARLY_REG_SHIFT
+#error Option 'UART_NS8250_EARLY_REG_SHIFT' is missing.
+#endif
+
+#if UART_NS8250_EARLY_REG_IO_WIDTH == 1
+#define T uint8_t
+#elif UART_NS8250_EARLY_REG_IO_WIDTH == 2
+#define T uint16_t
+#elif UART_NS8250_EARLY_REG_IO_WIDTH == 4
+#define T uint32_t
+
+#else
+#error Invalid/unsupported UART_NS8250_EARLY_REG_IO_WIDTH value
+#endif
+
+#include <machine/machdep.h>
+
+static void
+uart_ns8250_early_putc(int c)
+{
+	volatile T *stat;
+	volatile T *tx;
+
+	stat = (T *)(socdev_va + (REG_LSR << UART_NS8250_EARLY_REG_SHIFT));
+	tx = (T *)(socdev_va + (REG_DATA << UART_NS8250_EARLY_REG_SHIFT));
+
+	while ((*stat & LSR_THRE) == 0)
+		continue;
+	*tx =  c & 0xff;
+}
+#else
+#error ns8250 early putc is not implemented for current architecture
+#endif
 early_putc_t *early_putc = uart_ns8250_early_putc;
+#undef DTYPE
 #endif /* EARLY_PRINTF */
 
 /*
@@ -963,6 +999,15 @@ ns8250_bus_probe(struct uart_softc *sc)
 			uart_setreg(bas, REG_IER, ier);
 			uart_setreg(bas, REG_MCR, mcr);
 			uart_setreg(bas, REG_FCR, 0);
+			/*
+			 * The Alder Lake AMT SOL Redirection device will never
+			 * set LSR_OE (when in loopback mode at least) and
+			 * instead block further input by not setting LSR_TEMT.
+			 * Recovering the device afterwards into a working
+			 * state requires re-writing the LCR register.  This
+			 * should be harmless on all other devices.
+			 */
+			uart_setreg(bas, REG_LCR, uart_getreg(bas, REG_LCR));
 			uart_barrier(bas);
 			count = 0;
 			goto describe;

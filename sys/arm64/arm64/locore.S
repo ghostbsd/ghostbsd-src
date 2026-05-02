@@ -44,7 +44,7 @@
  * This can be used early on when we don't know the CPUs endianness.
  */
 .macro	mov_q reg, val
-	mov	\reg, :abs_g0_nc:\val
+	movz	\reg, :abs_g0_nc:\val
 .if (\val >> 16) & 0xffff != 0
 	movk	\reg, :abs_g1_nc:\val
 .endif
@@ -398,7 +398,7 @@ LENTRY(enter_kernel_el)
 	 */
 
 	/* Configure the Hypervisor */
-	ldr	x2, =(HCR_RW | HCR_APK | HCR_API)
+	ldr	x2, =(HCR_RW | HCR_APK | HCR_API | HCR_ATA)
 	msr	hcr_el2, x2
 
 	/* Stash value of HCR_EL2 for later */
@@ -1063,6 +1063,21 @@ LENTRY(start_mmu)
 	isb
 
 	ldr	x2, mair
+
+	/*
+	 * If FEAT_MTE2 is supported, configure GCR_EL1 and clear the TFSR
+	 * registers of any pending tag check faults
+	 */
+	CHECK_CPU_FEAT(x3, ID_AA64PFR1, MTE, MTE2, 1f)
+
+	/* Set GCR_EL1, non-zero tags excluded by default */
+	mov	x3, #(GCR_Exclude_MASK | GCR_RRND)
+	msr	GCR_EL1_REG, x3
+
+	/* Clear any pending tag check faults */
+	msr TFSR_EL1_REG, xzr
+	msr TFSRE0_EL1_REG, xzr
+1:
 	msr	mair_el1, x2
 
 	/*
@@ -1119,7 +1134,8 @@ mair:
 		MAIR_ATTR(MAIR_NORMAL_NC, VM_MEMATTR_UNCACHEABLE)   |	\
 		MAIR_ATTR(MAIR_NORMAL_WB, VM_MEMATTR_WRITE_BACK)    |	\
 		MAIR_ATTR(MAIR_NORMAL_WT, VM_MEMATTR_WRITE_THROUGH) |	\
-		MAIR_ATTR(MAIR_DEVICE_nGnRE, VM_MEMATTR_DEVICE_nGnRE)
+		MAIR_ATTR(MAIR_DEVICE_nGnRE, VM_MEMATTR_DEVICE_nGnRE) | \
+		MAIR_ATTR(MAIR_NORMAL_TG, VM_MEMATTR_TAGGED)
 tcr:
 #if PAGE_SIZE == PAGE_SIZE_4K
 #define	TCR_TG	(TCR_TG1_4K | TCR_TG0_4K)

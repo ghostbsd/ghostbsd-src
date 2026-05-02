@@ -28,7 +28,6 @@
 #include <sys/cdefs.h>
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_route.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -452,6 +451,7 @@ nhop_create_from_nhop(struct rib_head *rnh, const struct nhop_object *nh_orig,
 		nhop_free(nh);
 		return (error);
 	}
+	set_nhop_expire_from_info(nh, info);
 
 	*pnh = nhop_get_nhop(nh, &error);
 
@@ -492,17 +492,17 @@ finalize_nhop(struct nh_control *ctl, struct nhop_object *nh, bool link)
 	/* Allocate per-cpu packet counter */
 	nh->nh_pksent = counter_u64_alloc(M_NOWAIT);
 	if (nh->nh_pksent == NULL) {
+		FIB_NH_LOG(LOG_WARNING, nh, "counter_u64_alloc() failed");
 		nhop_free(nh);
 		RTSTAT_INC(rts_nh_alloc_failure);
-		FIB_NH_LOG(LOG_WARNING, nh, "counter_u64_alloc() failed");
 		return (ENOMEM);
 	}
 
 	if (!reference_nhop_deps(nh)) {
+		FIB_NH_LOG(LOG_WARNING, nh, "interface reference failed");
 		counter_u64_free(nh->nh_pksent);
 		nhop_free(nh);
 		RTSTAT_INC(rts_nh_alloc_failure);
-		FIB_NH_LOG(LOG_WARNING, nh, "interface reference failed");
 		return (EAGAIN);
 	}
 
@@ -644,28 +644,21 @@ nhop_free(struct nhop_object *nh)
 void
 nhop_ref_any(struct nhop_object *nh)
 {
-#ifdef ROUTE_MPATH
+
 	if (!NH_IS_NHGRP(nh))
 		nhop_ref_object(nh);
 	else
 		nhgrp_ref_object((struct nhgrp_object *)nh);
-#else
-	nhop_ref_object(nh);
-#endif
 }
 
 void
 nhop_free_any(struct nhop_object *nh)
 {
 
-#ifdef ROUTE_MPATH
 	if (!NH_IS_NHGRP(nh))
 		nhop_free(nh);
 	else
 		nhgrp_free((struct nhgrp_object *)nh);
-#else
-	nhop_free(nh);
-#endif
 }
 
 /* Nhop-related methods */
@@ -1169,12 +1162,11 @@ nhop_print_buf(const struct nhop_object *nh, char *buf, size_t bufsize)
 char *
 nhop_print_buf_any(const struct nhop_object *nh, char *buf, size_t bufsize)
 {
-#ifdef ROUTE_MPATH
+
 	if (NH_IS_NHGRP(nh))
 		return (nhgrp_print_buf((const struct nhgrp_object *)nh, buf, bufsize));
-	else
-#endif
-		return (nhop_print_buf(nh, buf, bufsize));
+
+	return (nhop_print_buf(nh, buf, bufsize));
 }
 
 /*

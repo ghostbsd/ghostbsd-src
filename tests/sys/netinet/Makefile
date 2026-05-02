@@ -9,10 +9,11 @@ ATF_TESTS_C=	broadcast \
 		fibs_multibind_test \
 		ip_reass_test \
 		ip6_v4mapped_test \
+		raw \
 		so_reuseport_lb_test \
 		socket_afinet \
 		tcp_connect_port_test \
-		tcp_implied_connect \
+		tcp_socket \
 		tcp_md5_getsockopt \
 		udp_bindings \
 		udp_io
@@ -28,9 +29,10 @@ ATF_TESTS_SH=	arp \
 		output \
 		redirect
 
-ATF_TESTS_PYTEST+=	carp.py
-ATF_TESTS_PYTEST+=	igmp.py
-ATF_TESTS_PYTEST+=	tcp_hpts_test.py
+ATF_TESTS_PYTEST+=	carp.py \
+			igmp.py \
+			ip_mroute.py \
+			tcp_hpts_test.py
 
 LIBADD.so_reuseport_lb_test=	pthread
 LIBADD.udp_bindings=		pthread
@@ -49,9 +51,15 @@ TEST_METADATA.forward+=	required_programs="python"	\
 TEST_METADATA.multicast+= execenv="jail"		\
 			execenv_jail_params="vnet"
 TEST_METADATA.output+=	required_programs="python"
+TEST_METADATA.raw+=	execenv="jail"			\
+			execenv_jail_params="vnet allow.raw_sockets"
 TEST_METADATA.redirect+= required_programs="python"
 
-PROGS=	udp_dontroute tcp_user_cookie multicast-send multicast-receive
+PROGS=	ip6_mrouted	\
+	multicast-send	\
+	multicast-receive \
+	tcp_user_cookie \
+	udp_dontroute
 
 ${PACKAGE}FILES+=		redirect.py
 

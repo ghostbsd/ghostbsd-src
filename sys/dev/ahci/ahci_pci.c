@@ -294,6 +294,8 @@ static const struct {
 	{0x91821b4b, 0x00, "Marvell 88SE9182",	AHCI_Q_IOMMU_BUSWIDE},
 	{0x91831b4b, 0x00, "Marvell 88SS9183",	AHCI_Q_IOMMU_BUSWIDE},
 	{0x91a01b4b, 0x00, "Marvell 88SE91Ax",	AHCI_Q_IOMMU_BUSWIDE},
+	{0x91a31b4b, 0x00, "Marvell 88SE9128",	AHCI_Q_ALTSIG |
+	    AHCI_Q_IOMMU_BUSWIDE},
 	{0x92151b4b, 0x00, "Marvell 88SE9215",  0},
 	{0x92201b4b, 0x00, "Marvell 88SE9220",  AHCI_Q_ALTSIG |
 	    AHCI_Q_IOMMU_BUSWIDE},
@@ -523,7 +525,8 @@ ahci_pci_attach(device_t dev)
 	 * here, or the user has to change the mode in the BIOS
 	 * from RST to AHCI.
 	 */
-	if (pci_get_vendor(dev) == 0x8086) {
+	if (pci_get_vendor(dev) == 0x8086 &&
+	    rman_get_size(ctlr->r_mem) >= 512 * 1024) {
 		uint32_t vscap;
 
 		vscap = ATA_INL(ctlr->r_mem, AHCI_VSCAP);

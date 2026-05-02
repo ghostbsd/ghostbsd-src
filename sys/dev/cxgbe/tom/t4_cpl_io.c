@@ -245,13 +245,13 @@ send_reset(struct adapter *sc, struct toepcb *toep, uint32_t snd_nxt)
 	struct cpl_abort_req *req;
 	int tid = toep->tid;
 	struct inpcb *inp = toep->inp;
-	struct tcpcb *tp = intotcpcb(inp);	/* don't use if INP_DROPPED */
+	struct tcpcb *tp = intotcpcb(inp);
 
 	INP_WLOCK_ASSERT(inp);
 
 	CTR6(KTR_CXGBE, "%s: tid %d (%s), toep_flags 0x%x, inp_flags 0x%x%s",
 	    __func__, toep->tid,
-	    inp->inp_flags & INP_DROPPED ? "inp dropped" :
+	    tp->t_flags & TF_DISCONNECTED ? "TCP disconnected" :
 	    tcpstates[tp->t_state],
 	    toep->flags, inp->inp_flags,
 	    toep->flags & TPF_ABORT_SHUTDOWN ?
@@ -273,7 +273,7 @@ send_reset(struct adapter *sc, struct toepcb *toep, uint32_t snd_nxt)
 	req = wrtod(wr);
 
 	INIT_TP_WR_MIT_CPL(req, CPL_ABORT_REQ, tid);
-	if (inp->inp_flags & INP_DROPPED)
+	if (tp->t_flags & TF_DISCONNECTED)
 		req->rsvd0 = htobe32(snd_nxt);
 	else
 		req->rsvd0 = htobe32(tp->snd_nxt);
@@ -284,7 +284,7 @@ send_reset(struct adapter *sc, struct toepcb *toep, uint32_t snd_nxt)
 	 * XXX: What's the correct way to tell that the inp hasn't been detached
 	 * from its socket?  Should I even be flushing the snd buffer here?
 	 */
-	if ((inp->inp_flags & INP_DROPPED) == 0) {
+	if ((tp->t_flags & TF_DISCONNECTED) == 0) {
 		struct socket *so = inp->inp_socket;
 
 		if (so != NULL)	/* because I'm not sure.  See comment above */
@@ -496,9 +496,6 @@ t4_close_conn(struct adapter *sc, struct toepcb *toep)
 #define MIN_ISO_TX_CREDITS  (howmany(sizeof(struct cpl_tx_data_iso), 16))
 #define MIN_TX_CREDITS(iso)						\
 	(MIN_OFLD_TX_CREDITS + ((iso) ? MIN_ISO_TX_CREDITS : 0))
-#define MIN_OFLD_TX_V2_CREDITS (howmany(sizeof(struct fw_ofld_tx_data_v2_wr) + 1, 16))
-#define MIN_TX_V2_CREDITS(iso)						\
-	(MIN_OFLD_TX_V2_CREDITS + ((iso) ? MIN_ISO_TX_CREDITS : 0))
 
 _Static_assert(MAX_OFLD_TX_CREDITS <= MAX_OFLD_TX_SDESC_CREDITS,
     "MAX_OFLD_TX_SDESC_CREDITS too small");
@@ -546,46 +543,6 @@ max_dsgl_nsegs(int tx_credits, int iso)
 	return (nseg);
 }
 
-/* Maximum amount of immediate data we could stuff in a WR */
-static inline int
-max_imm_payload_v2(int tx_credits, int iso)
-{
-	const int iso_cpl_size = iso ? sizeof(struct cpl_tx_data_iso) : 0;
-
-	KASSERT(tx_credits >= 0 &&
-		tx_credits <= MAX_OFLD_TX_CREDITS,
-		("%s: %d credits", __func__, tx_credits));
-
-	if (tx_credits < MIN_TX_V2_CREDITS(iso))
-		return (0);
-
-	return (tx_credits * 16 - sizeof(struct fw_ofld_tx_data_v2_wr) -
-	    iso_cpl_size);
-}
-
-/* Maximum number of SGL entries we could stuff in a WR */
-static inline int
-max_dsgl_nsegs_v2(int tx_credits, int iso, int imm_payload)
-{
-	int nseg = 1;	/* ulptx_sgl has room for 1, rest ulp_tx_sge_pair */
-	int sge_pair_credits = tx_credits - MIN_TX_V2_CREDITS(iso);
-
-	KASSERT(tx_credits >= 0 &&
-		tx_credits <= MAX_OFLD_TX_CREDITS,
-		("%s: %d credits", __func__, tx_credits));
-
-	if (tx_credits < MIN_TX_V2_CREDITS(iso) ||
-	    sge_pair_credits <= howmany(imm_payload, 16))
-		return (0);
-	sge_pair_credits -= howmany(imm_payload, 16);
-
-	nseg += 2 * (sge_pair_credits * 16 / 24);
-	if ((sge_pair_credits * 16) % 24 == 16)
-		nseg++;
-
-	return (nseg);
-}
-
 static inline void
 write_tx_wr(void *dst, struct toepcb *toep, int fw_wr_opcode,
     unsigned int immdlen, unsigned int plen, uint8_t credits, int shove,
@@ -611,35 +568,6 @@ write_tx_wr(void *dst, struct toepcb *toep, int fw_wr_opcode,
 				(toep->params.nagle == 0 ? 0 :
 				F_FW_OFLD_TX_DATA_WR_ALIGNPLDSHOVE));
 	}
-}
-
-static inline void
-write_tx_v2_wr(void *dst, struct toepcb *toep,  int fw_wr_opcode,
-    unsigned int immdlen, unsigned int plen, uint8_t credits, int shove,
-    int ulp_submode)
-{
-	struct fw_ofld_tx_data_v2_wr *txwr = dst;
-	uint32_t flags;
-
-	memset(txwr, 0, sizeof(*txwr));
-	txwr->op_to_immdlen = htobe32(V_WR_OP(fw_wr_opcode) |
-	    V_FW_WR_IMMDLEN(immdlen));
-	txwr->flowid_len16 = htobe32(V_FW_WR_FLOWID(toep->tid) |
-	    V_FW_WR_LEN16(credits));
-	txwr->plen = htobe32(plen);
-	flags = V_TX_ULP_MODE(ULP_MODE_NVMET) | V_TX_ULP_SUBMODE(ulp_submode) |
-	    V_TX_URG(0) | V_TX_SHOVE(shove);
-
-	if (toep->params.tx_align > 0) {
-		if (plen < 2 * toep->params.emss)
-			flags |= F_FW_OFLD_TX_DATA_WR_LSODISABLE;
-		else
-			flags |= F_FW_OFLD_TX_DATA_WR_ALIGNPLD |
-			    (toep->params.nagle == 0 ? 0 :
-				F_FW_OFLD_TX_DATA_WR_ALIGNPLDSHOVE);
-	}
-
-	txwr->lsodisable_to_flags = htobe32(flags);
 }
 
 /*
@@ -1300,7 +1228,7 @@ write_nvme_mbuf_wr(struct toepcb *toep, struct mbuf *sndptr)
 {
 	struct mbuf *m;
 	const struct nvme_tcp_common_pdu_hdr *hdr;
-	struct fw_v2_nvmet_tx_data_wr *txwr;
+	struct fw_ofld_tx_data_wr *txwr;
 	struct cpl_tx_data_iso *cpl_iso;
 	void *p;
 	struct wrqe *wr;
@@ -1330,29 +1258,16 @@ write_nvme_mbuf_wr(struct toepcb *toep, struct mbuf *sndptr)
 		return (wr);
 	}
 
-	/*
-	 * The first mbuf is the PDU header that is always sent as
-	 * immediate data.
-	 */
-	imm_data = sndptr->m_len;
-
 	iso = mbuf_iscsi_iso(sndptr);
-	max_imm = max_imm_payload_v2(tx_credits, iso);
-
-	/*
-	 * Not enough credits for the PDU header.
-	 */
-	if (imm_data > max_imm)
-		return (NULL);
-
-	max_nsegs = max_dsgl_nsegs_v2(tx_credits, iso, imm_data);
+	max_imm = max_imm_payload(tx_credits, iso);
+	max_nsegs = max_dsgl_nsegs(tx_credits, iso);
 	iso_mss = mbuf_iscsi_iso_mss(sndptr);
 
-	plen = imm_data;
+	plen = 0;
 	nsegs = 0;
 	max_nsegs_1mbuf = 0; /* max # of SGL segments in any one mbuf */
 	nomap_mbuf_seen = false;
-	for (m = sndptr->m_next; m != NULL; m = m->m_next) {
+	for (m = sndptr; m != NULL; m = m->m_next) {
 		int n;
 
 		if (m->m_flags & M_EXTPG)
@@ -1440,13 +1355,13 @@ write_nvme_mbuf_wr(struct toepcb *toep, struct mbuf *sndptr)
 	if (iso)
 		wr_len += sizeof(struct cpl_tx_data_iso);
 	if (plen <= max_imm && !nomap_mbuf_seen) {
-		/* Immediate data tx for full PDU */
+		/* Immediate data tx */
 		imm_data = plen;
 		wr_len += plen;
 		nsegs = 0;
 	} else {
 		/* DSGL tx for PDU data */
-		wr_len += roundup2(imm_data, 16);
+		imm_data = 0;
 		wr_len += sizeof(struct ulptx_sgl) +
 		    ((3 * (nsegs - 1)) / 2 + ((nsegs - 1) & 1)) * 8;
 	}
@@ -1460,7 +1375,7 @@ write_nvme_mbuf_wr(struct toepcb *toep, struct mbuf *sndptr)
 	credits = howmany(wr->wr_len, 16);
 
 	if (iso) {
-		write_tx_v2_wr(txwr, toep, FW_V2_NVMET_TX_DATA_WR,
+		write_tx_wr(txwr, toep, FW_ISCSI_TX_DATA_WR,
 		    imm_data + sizeof(struct cpl_tx_data_iso),
 		    adjusted_plen, credits, shove, ulp_submode | ULP_ISO);
 		cpl_iso = (struct cpl_tx_data_iso *)(txwr + 1);
@@ -1470,16 +1385,15 @@ write_nvme_mbuf_wr(struct toepcb *toep, struct mbuf *sndptr)
 		    hdr->pdo);
 		p = cpl_iso + 1;
 	} else {
-		write_tx_v2_wr(txwr, toep, FW_V2_NVMET_TX_DATA_WR, imm_data,
+		write_tx_wr(txwr, toep, FW_OFLD_TX_DATA_WR, imm_data,
 		    adjusted_plen, credits, shove, ulp_submode);
 		p = txwr + 1;
 	}
 
-	/* PDU header (and immediate data payload). */
-	m_copydata(sndptr, 0, imm_data, p);
-	if (nsegs != 0) {
-		p = roundup2((char *)p + imm_data, 16);
-		write_tx_sgl(p, sndptr->m_next, NULL, nsegs, max_nsegs_1mbuf);
+	if (imm_data != 0) {
+		m_copydata(sndptr, 0, plen, p);
+	} else {
+		write_tx_sgl(p, sndptr, NULL, nsegs, max_nsegs_1mbuf);
 		if (wr_len & 0xf) {
 			uint64_t *pad = (uint64_t *)((uintptr_t)txwr + wr_len);
 			*pad = 0;
@@ -1674,8 +1588,8 @@ t4_tod_output(struct toedev *tod, struct tcpcb *tp)
 	struct toepcb *toep = tp->t_toe;
 
 	INP_WLOCK_ASSERT(inp);
-	KASSERT((inp->inp_flags & INP_DROPPED) == 0,
-	    ("%s: inp %p dropped.", __func__, inp));
+	KASSERT((tp->t_flags & TF_DISCONNECTED) == 0,
+	    ("%s: tcpcb %p disconnected", __func__, tp));
 	KASSERT(toep != NULL, ("%s: toep is NULL", __func__));
 
 	t4_push_data(sc, toep, 0);
@@ -1693,8 +1607,8 @@ t4_send_fin(struct toedev *tod, struct tcpcb *tp)
 	struct toepcb *toep = tp->t_toe;
 
 	INP_WLOCK_ASSERT(inp);
-	KASSERT((inp->inp_flags & INP_DROPPED) == 0,
-	    ("%s: inp %p dropped.", __func__, inp));
+	KASSERT((tp->t_flags & TF_DISCONNECTED) == 0,
+	    ("%s: tcpcb %p disconnected", __func__, tp));
 	KASSERT(toep != NULL, ("%s: toep is NULL", __func__));
 
 	toep->flags |= TPF_SEND_FIN;
@@ -1714,8 +1628,8 @@ t4_send_rst(struct toedev *tod, struct tcpcb *tp)
 	struct toepcb *toep = tp->t_toe;
 
 	INP_WLOCK_ASSERT(inp);
-	KASSERT((inp->inp_flags & INP_DROPPED) == 0,
-	    ("%s: inp %p dropped.", __func__, inp));
+	KASSERT((tp->t_flags & TF_DISCONNECTED) == 0,
+	    ("%s: tcpcb %p disconnected", __func__, tp));
 	KASSERT(toep != NULL, ("%s: toep is NULL", __func__));
 
 	/* hmmmm */
@@ -2007,7 +1921,7 @@ do_abort_req(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	}
 	toep->flags |= TPF_ABORT_SHUTDOWN;
 
-	if ((inp->inp_flags & INP_DROPPED) == 0) {
+	if ((tp->t_flags & TF_DISCONNECTED) == 0) {
 		struct socket *so = inp->inp_socket;
 
 		if (so != NULL)
@@ -2096,16 +2010,15 @@ do_rx_data(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	m_adj(m, sizeof(*cpl));
 	len = m->m_pkthdr.len;
 
+	tp = intotcpcb(inp);
 	INP_WLOCK(inp);
-	if (inp->inp_flags & INP_DROPPED) {
-		CTR4(KTR_CXGBE, "%s: tid %u, rx (%d bytes), inp_flags 0x%x",
-		    __func__, tid, len, inp->inp_flags);
+	if (tp->t_flags & TF_DISCONNECTED) {
+		CTR4(KTR_CXGBE, "%s: tid %u, rx (%d bytes), t_flags 0x%x",
+		    __func__, tid, len, tp->t_flags);
 		INP_WUNLOCK(inp);
 		m_freem(m);
 		return (0);
 	}
-
-	tp = intotcpcb(inp);
 
 	if (__predict_false(ulp_mode(toep) == ULP_MODE_TLS &&
 	   toep->flags & TPF_TLS_RECEIVE)) {
@@ -2256,6 +2169,7 @@ do_fw4_ack(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	}
 
 	inp = toep->inp;
+	tp = intotcpcb(inp);
 
 	KASSERT(opcode == CPL_FW4_ACK,
 	    ("%s: unexpected opcode 0x%x", __func__, opcode));
@@ -2269,10 +2183,8 @@ do_fw4_ack(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 		return (0);
 	}
 
-	KASSERT((inp->inp_flags & INP_DROPPED) == 0,
-	    ("%s: inp_flags 0x%x", __func__, inp->inp_flags));
-
-	tp = intotcpcb(inp);
+	KASSERT((tp->t_flags & TF_DISCONNECTED) == 0,
+	    ("%s: t_flags 0x%x", __func__, tp->t_flags));
 
 	if (cpl->flags & CPL_FW4_ACK_FLAGS_SEQVAL) {
 		tcp_seq snd_una = be32toh(cpl->snd_una);
@@ -2713,8 +2625,9 @@ sendanother:
 	/* Inlined tcp_usr_send(). */
 
 	inp = toep->inp;
+	tp = intotcpcb(inp);
 	INP_WLOCK(inp);
-	if (inp->inp_flags & INP_DROPPED) {
+	if (tp->t_flags & TF_DISCONNECTED) {
 		INP_WUNLOCK(inp);
 		SOCK_IO_SEND_UNLOCK(so);
 		error = ECONNRESET;
@@ -2728,8 +2641,7 @@ sendanother:
 	sbappendstream(sb, m, 0);
 	m = NULL;
 
-	if (!(inp->inp_flags & INP_DROPPED)) {
-		tp = intotcpcb(inp);
+	if (!(tp->t_flags & TF_DISCONNECTED)) {
 		if (moretocome)
 			tp->t_flags |= TF_MORETOCOME;
 		error = tcp_output(tp);

@@ -71,10 +71,8 @@ __DEFAULT_YES_OPTIONS = \
     BOOT \
     BOOTPARAMD \
     BOOTPD \
-    BSD_CPIO \
     BSDINSTALL \
     BSNMP \
-    BZIP2 \
     CALENDAR \
     CAROOT \
     CCD \
@@ -102,7 +100,6 @@ __DEFAULT_YES_OPTIONS = \
     FREEBSD_UPDATE \
     FTP \
     GAMES \
-    GNU_DIFF \
     GOOGLETEST \
     GPIO \
     HAST \
@@ -126,16 +123,17 @@ __DEFAULT_YES_OPTIONS = \
     LLD_BOOTSTRAP \
     LLVM_ASSERTIONS \
     LLVM_BINUTILS \
+    LLVM_BINUTILS_BOOTSTRAP \
     LLVM_COV \
-    LLVM_CXXFILT \
     LOADER_BIOS_TEXTONLY \
     LOADER_GELI \
+    LOADER_IA32 \
     LOADER_KBOOT \
     LOADER_LUA \
     LOADER_OFW \
     LOADER_PXEBOOT \
     LOADER_UBOOT \
-    LOADER_IA32 \
+    LOADER_ZFS \
     LOCALES \
     LOCATE \
     LPR \
@@ -159,6 +157,8 @@ __DEFAULT_YES_OPTIONS = \
     PAM \
     PF \
     PKGBOOTSTRAP \
+    PKGCONF \
+    PKGSERVE \
     PMC \
     PPP \
     PTHREADS_ASSERTIONS \
@@ -194,7 +194,6 @@ __DEFAULT_YES_OPTIONS = \
     WPA_SUPPLICANT_EAPOL \
     ZFS \
     ZFS_TESTS \
-    LOADER_ZFS \
     ZONEINFO
 
 __DEFAULT_NO_OPTIONS = \
@@ -203,18 +202,18 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_EXTRAS \
     CLANG_FORMAT \
     CLEAN \
-    DIALOG \
     DETECT_TZ_CHANGES \
+    DIALOG \
     DISK_IMAGE_TOOLS_BOOTSTRAP \
     DTRACE_ASAN \
     DTRACE_TESTS \
-    EXPERIMENTAL \
     HESIOD \
     IPFILTER_IPFS \
-    LOADER_VERBOSE \
-    LOADER_VERIEXEC_PASS_MANIFEST \
     LLVM_FULL_DEBUGINFO \
     LLVM_LINK_STATIC_LIBRARIES \
+    LOADER_USB \
+    LOADER_VERBOSE \
+    LOADER_VERIEXEC_PASS_MANIFEST \
     MALLOC_PRODUCTION \
     OFED_EXTRA \
     OPENLDAP \
@@ -247,7 +246,6 @@ __LIBC_MALLOC_DEFAULT=	jemalloc
 .for var in \
     BLACKLIST \
     BLOCKLIST \
-    BZIP2 \
     INET \
     INET6 \
     KERBEROS \
@@ -408,6 +406,14 @@ MK_BLOCKLIST:=	no
 MK_BLOCKLIST_SUPPORT:=	no
 .endif
 
+.if ${MK_BLOCKLIST} == "no"
+MK_BLACKLIST:=	no
+.endif
+
+.if ${MK_BLOCKLIST_SUPPORT} == "no"
+MK_BLACKLIST_SUPPORT:=	no
+.endif
+
 .if ${MK_CDDL} == "no"
 MK_CTF:=	no
 MK_DTRACE:=	no
@@ -488,6 +494,7 @@ MK_ZONEINFO_LEAPSECONDS_SUPPORT:= no
 MK_CLANG_BOOTSTRAP:= no
 MK_ELFTOOLCHAIN_BOOTSTRAP:= no
 MK_LLD_BOOTSTRAP:= no
+MK_LLVM_BINUTILS_BOOTSTRAP:= no
 .endif
 
 .if ${MK_TOOLCHAIN} == "no"
@@ -504,21 +511,10 @@ MK_CLANG_FULL:= no
 MK_LLVM_COV:= no
 .endif
 
-# CUSE is needed only by virtual_oss, but virtual_oss is part of MK_SOUND.
-.if ${MK_CUSE} == "no"
-MK_SOUND:= no
-.endif
-
 .if ${MK_ASAN} == "yes"
 # In order to get sensible backtraces from ASAN we have to install
 # llvm-symbolizer as /usr/bin/addr2line instead of the elftoolchain version.
 MK_LLVM_BINUTILS:=	yes
-.endif
-
-.if ${MK_LLVM_BINUTILS} == "yes"
-# MK_LLVM_CXXFILT is a subset of MK_LLVM_BINUTILS and should therefore be
-# enabled if MK_LLVM_BINUTILS is set.
-MK_LLVM_CXXFILT:=	yes
 .endif
 
 .if ${MK_LOADER_VERIEXEC} == "no"

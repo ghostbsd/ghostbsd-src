@@ -32,6 +32,9 @@
 #ifndef _NET_ROUTE_H_
 #define _NET_ROUTE_H_
 
+#ifdef _KERNEL
+#include <sys/_eventhandler.h>
+#endif
 #include <net/vnet.h>
 
 /*
@@ -124,32 +127,18 @@ VNET_DECLARE(u_int, rt_add_addr_allfibs); /* Announce interfaces to all fibs */
 #define	V_fib_hash_outbound	VNET(fib_hash_outbound)
 VNET_DECLARE(u_int, fib_hash_outbound);
 
+typedef void (*rtnumfibs_change_t)(void *, uint32_t);
+EVENTHANDLER_DECLARE(rtnumfibs_change, rtnumfibs_change_t);
+
 /* Outbound flowid generation rules */
 #ifdef RSS
-
 #define fib4_calc_packet_hash		xps_proto_software_hash_v4
 #define fib6_calc_packet_hash		xps_proto_software_hash_v6
 #define	CALC_FLOWID_OUTBOUND_SENDTO	true
-
-#ifdef ROUTE_MPATH
-#define	CALC_FLOWID_OUTBOUND		V_fib_hash_outbound
-#else
-#define	CALC_FLOWID_OUTBOUND		false
-#endif
-
 #else /* !RSS */
-
 #define fib4_calc_packet_hash		fib4_calc_software_hash
 #define fib6_calc_packet_hash		fib6_calc_software_hash
-
-#ifdef ROUTE_MPATH
 #define	CALC_FLOWID_OUTBOUND_SENDTO	V_fib_hash_outbound
-#define	CALC_FLOWID_OUTBOUND		V_fib_hash_outbound
-#else
-#define	CALC_FLOWID_OUTBOUND_SENDTO	false
-#define	CALC_FLOWID_OUTBOUND		false
-#endif
-
 #endif /* RSS */
 
 

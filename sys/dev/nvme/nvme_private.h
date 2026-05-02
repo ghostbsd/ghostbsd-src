@@ -225,8 +225,6 @@ struct nvme_controller {
 #define	QUIRK_INTEL_ALIGNMENT	4		/* Pre NVMe 1.3 performance alignment */
 #define QUIRK_AHCI		8		/* Attached via AHCI redirect */
 
-	bus_space_tag_t		bus_tag;
-	bus_space_handle_t	bus_handle;
 	int			resource_id;
 	struct resource		*resource;
 
@@ -286,8 +284,6 @@ struct nvme_controller {
 	struct nvme_qpair	adminq;
 	struct nvme_qpair	*ioq;
 
-	struct nvme_registers		*regs;
-
 	struct nvme_controller_data	cdata;
 	struct nvme_namespace		ns[NVME_MAX_NAMESPACES];
 
@@ -300,8 +296,8 @@ struct nvme_controller {
 	struct nvme_async_event_request	aer[NVME_MAX_ASYNC_EVENTS];
 
 	uint32_t			is_resetting;
-	u_int				fail_on_reset;
 
+	bool				fail_on_reset;
 	bool				is_failed;
 	bool				is_failed_admin;
 	bool				is_dying;
@@ -330,20 +326,17 @@ struct nvme_controller {
 	offsetof(struct nvme_registers, reg)
 
 #define nvme_mmio_read_4(sc, reg)					       \
-	bus_space_read_4((sc)->bus_tag, (sc)->bus_handle,		       \
-	    nvme_mmio_offsetof(reg))
+	bus_read_4((sc)->resource, nvme_mmio_offsetof(reg))
 
 #define nvme_mmio_write_4(sc, reg, val)					       \
-	bus_space_write_4((sc)->bus_tag, (sc)->bus_handle,		       \
-	    nvme_mmio_offsetof(reg), val)
+	bus_write_4((sc)->resource, nvme_mmio_offsetof(reg), val)
 
 #define nvme_mmio_write_8(sc, reg, val)					       \
 	do {								       \
-		bus_space_write_4((sc)->bus_tag, (sc)->bus_handle,	       \
-		    nvme_mmio_offsetof(reg), val & 0xFFFFFFFF); 	       \
-		bus_space_write_4((sc)->bus_tag, (sc)->bus_handle,	       \
-		    nvme_mmio_offsetof(reg)+4,				       \
-		    (val & 0xFFFFFFFF00000000ULL) >> 32);		       \
+		bus_write_4((sc)->resource, nvme_mmio_offsetof(reg),	       \
+		    (val) & 0xFFFFFFFF);				       \
+		bus_write_4((sc)->resource, nvme_mmio_offsetof(reg) + 4,       \
+		    ((val) & 0xFFFFFFFF00000000ULL) >> 32);		       \
 	} while (0);
 
 #define nvme_printf(ctrlr, fmt, args...)	\
@@ -502,11 +495,13 @@ _nvme_allocate_request(const int how, nvme_cb_fn_t cb_fn, void *cb_arg)
 }
 
 static __inline struct nvme_request *
-nvme_allocate_request_vaddr(void *payload, uint32_t payload_size,
+nvme_allocate_request_vaddr(void *payload, size_t payload_size,
     const int how, nvme_cb_fn_t cb_fn, void *cb_arg)
 {
 	struct nvme_request *req;
 
+	KASSERT(payload_size <= UINT32_MAX,
+	    ("payload size %zu exceeds maximum", payload_size));
 	req = _nvme_allocate_request(how, cb_fn, cb_arg);
 	if (req != NULL) {
 		req->payload = memdesc_vaddr(payload, payload_size);

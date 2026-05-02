@@ -52,11 +52,10 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 #include "opt_mfi.h"
 
-#include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/abi_compat.h>
 #include <sys/sysctl.h>
 #include <sys/malloc.h>
 #include <sys/kernel.h>
@@ -371,9 +370,6 @@ mfi_attach(struct mfi_softc *sc)
 
 	if (sc == NULL)
 		return EINVAL;
-
-	device_printf(sc->mfi_dev, "Megaraid SAS driver Ver %s \n",
-	    MEGASAS_VERSION);
 
 	mtx_init(&sc->mfi_io_lock, "MFI I/O lock", NULL, MTX_DEF);
 	sx_init(&sc->mfi_config_lock, "MFI config");
@@ -765,6 +761,10 @@ mfi_attach(struct mfi_softc *sc)
 		    sc->mfi_cdev, "%s", "megaraid_sas_ioctl_node");
 	if (sc->mfi_cdev != NULL)
 		sc->mfi_cdev->si_drv1 = sc;
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(sc->mfi_dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->mfi_dev)),
+	    OID_AUTO, "driver_version", CTLFLAG_RD, MEGASAS_VERSION,
+	    strlen(MEGASAS_VERSION), "driver version");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(sc->mfi_dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->mfi_dev)),
 	    OID_AUTO, "delete_busy_volumes", CTLFLAG_RW,
@@ -3083,8 +3083,6 @@ out:
 		free(ioc_buf, M_MFIBUF);
 	return (error);
 }
-
-#define	PTRIN(p)		((void *)(uintptr_t)(p))
 
 static int
 mfi_ioctl(struct cdev *dev, u_long cmd, caddr_t arg, int flag, struct thread *td)

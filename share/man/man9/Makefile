@@ -144,6 +144,7 @@ MAN=	accept_filter.9 \
 	drbr.9 \
 	driver.9 \
 	DRIVER_MODULE.9 \
+	ecn.9 \
 	efirt.9 \
 	epoch.9 \
 	ether_gen_addr.9 \
@@ -173,6 +174,7 @@ MAN=	accept_filter.9 \
 	gone_in.9 \
 	hardclock.9 \
 	hash.9 \
+	hashalloc.9 \
 	hashinit.9 \
 	hexdump.9 \
 	hhook.9 \
@@ -1108,6 +1110,10 @@ MLINKS+=drbr.9 drbr_free.9 \
 MLINKS+=DRIVER_MODULE.9 DRIVER_MODULE_ORDERED.9 \
 	DRIVER_MODULE.9 EARLY_DRIVER_MODULE.9 \
 	DRIVER_MODULE.9 EARLY_DRIVER_MODULE_ORDERED.9
+MLINKS+=ecn.9 ip_ecn_ingress.9 \
+	ecn.9 ip_ecn_egress.9 \
+	ecn.9 ip6_ecn_ingress.9 \
+	ecn.9 ip6_ecn_egress.9
 MLINKS+=epoch.9 epoch_context.9 \
 	epoch.9 epoch_alloc.9 \
 	epoch.9 epoch_free.9 \
@@ -1211,6 +1217,7 @@ MLINKS+=hash.9 hash32.9 \
 	hash.9 hash32_strne.9 \
 	hash.9 jenkins_hash.9 \
 	hash.9 jenkins_hash32.9
+MLINKS+=hashalloc.9 hashfree.9
 MLINKS+=hashinit.9 hashdestroy.9 \
 	hashinit.9 hashinit_flags.9 \
 	hashinit.9 phashinit.9

@@ -1,5 +1,7 @@
 /* ed.h: type and constant definitions for the ed editor. */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 1993 Andrew Moore
  * All rights reserved.
  *
@@ -34,6 +36,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <wchar.h>
+#include <wctype.h>
 
 #define ERR		(-2)
 #define EMOD		(-3)

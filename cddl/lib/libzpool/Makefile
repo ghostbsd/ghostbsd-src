@@ -133,6 +133,7 @@ KERNEL_C = \
 	space_map.c \
 	space_reftree.c \
 	txg.c \
+	u8_textprep.c \
 	trace.c \
 	uberblock.c \
 	unique.c \
@@ -161,7 +162,6 @@ KERNEL_C = \
 	vdev_removal.c \
 	vdev_root.c \
 	vdev_trim.c \
-	xxhash.c \
 	zap.c \
 	zap_leaf.c \
 	zap_micro.c \
@@ -176,6 +176,7 @@ KERNEL_C = \
         zfs_chksum.c \
 	zfs_crrd.c \
 	zfs_debug_common.c \
+	zfs_file_os.c \
 	zfs_fm.c \
 	zfs_fuid.c \
 	zfs_impl.c \
@@ -205,6 +206,7 @@ KERNEL_C = \
 	zstd_lazy.c \
 	zstd_ldm.c \
 	zstd_opt.c \
+	zstd_preSplit.c \
 	zthr.c
 
 ARCH_C =
@@ -250,9 +252,7 @@ LUA_C = \
 	lvm.c \
 	lzio.c
 
-UNICODE_C = u8_textprep.c
-
-SRCS+=		${USER_C} ${KERNEL_C} ${LUA_C} ${UNICODE_C} ${ARCH_C}
+SRCS+=		${USER_C} ${KERNEL_C} ${LUA_C} ${ARCH_C}
 
 
 WARNS?=		2
@@ -266,6 +266,7 @@ CFLAGS+= \
 	-I${SRCTOP}/cddl/compat/opensolaris/include \
 	-I${ZFSTOP}/module/icp/include \
 	-I${SRCTOP}/compat/linuxkpi/common/include/linux \
+	-include ${ZFSTOP}/include/sys/simd_config.h \
 	-include ${ZFSTOP}/include/os/freebsd/spl/sys/ccompile.h \
 	-DHAVE_ISSETUGID \
 	-include ${SRCTOP}/sys/modules/zfs/zfs_config.h \
@@ -280,7 +281,6 @@ CFLAGS+=	-DWANTS_MUTEX_OWNED
 CFLAGS+=	-I${SRCTOP}/lib/libpthread/thread
 CFLAGS+=	-I${SRCTOP}/lib/libpthread/sys
 CFLAGS+=	-I${SRCTOP}/lib/libthr/arch/${MACHINE_CPUARCH}/include
-CFLAGS.gcc+=	-fms-extensions
 
 LIBADD=		md pthread z spl icp nvpair avl umem
 
@@ -292,6 +292,11 @@ CSTD=	c99
 CFLAGS+=	-g -DDEBUG=1
 
 CFLAGS.gcc+=	-Wno-pointer-to-int-cast
+
+# Some versions of LLVM contain duplicate typedefs in the <*intrin.h> headers,
+# which are not allowed prior to C11; since libzpool is built with C99, make
+# this not be an error.
+CFLAGS.clang+=	-Wno-error=typedef-redefinition
 
 # Pointer values are used as debugging "tags" to mark reference count
 # ownerships and in some cases the tag reference is dropped after an

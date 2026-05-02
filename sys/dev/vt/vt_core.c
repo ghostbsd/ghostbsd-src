@@ -804,11 +804,11 @@ vt_machine_kbdevent(struct vt_device *vd, int c)
 		return (1);
 	case SPCLKEY | STBY: /* XXX Not present in kbdcontrol parser. */
 		/* Put machine into Stand-By mode. */
-		power_pm_suspend(POWER_SLEEP_STATE_STANDBY);
+		power_pm_suspend(POWER_SSTATE_TRANSITION_STANDBY);
 		return (1);
 	case SPCLKEY | SUSP: /* kbdmap(5) keyword `susp`. */
 		/* Suspend machine. */
-		power_pm_suspend(POWER_SLEEP_STATE_SUSPEND);
+		power_pm_suspend(POWER_SSTATE_TRANSITION_SUSPEND);
 		return (1);
 	}
 
@@ -952,6 +952,9 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 			VT_UNLOCK(vd);
 			break;
 		}
+		case BKEY | BTAB: /* Back tab (usually, shift+tab). */
+			terminal_input_special(vw->vw_terminal, TKEY_BTAB);
+			break;
 		case FKEY | F(1):  case FKEY | F(2):  case FKEY | F(3):
 		case FKEY | F(4):  case FKEY | F(5):  case FKEY | F(6):
 		case FKEY | F(7):  case FKEY | F(8):  case FKEY | F(9):
@@ -1681,27 +1684,41 @@ vtterm_splash(struct vt_device *vd)
 	uintptr_t image;
 	vt_axis_t top, left;
 
-	si = MD_FETCH(preload_kmdp, MODINFOMD_SPLASH, struct splash_info *);
-	if (!(vd->vd_flags & VDF_TEXTMODE) && (boothowto & RB_MUTE)) {
-		if (si == NULL) {
-			top = (vd->vd_height - vt_logo_height) / 2;
-			left = (vd->vd_width - vt_logo_width) / 2;
-			vd->vd_driver->vd_bitblt_bmp(vd, vd->vd_curwindow,
-			    vt_logo_image, NULL, vt_logo_width, vt_logo_height,
-			    left, top, TC_WHITE, TC_BLACK);
-		} else {
-			if (si->si_depth != 4)
-				return;
-			image = (uintptr_t)si + sizeof(struct splash_info);
-			image = roundup2(image, 8);
-			top = (vd->vd_height - si->si_height) / 2;
-			left = (vd->vd_width - si->si_width) / 2;
-			vd->vd_driver->vd_bitblt_argb(vd, vd->vd_curwindow,
-			    (unsigned char *)image, si->si_width, si->si_height,
-			    left, top);
-		}
-		vd->vd_flags |= VDF_SPLASH;
+	if ((vd->vd_flags & VDF_TEXTMODE) != 0 || (boothowto & RB_MUTE) == 0)
+		return;
+
+	si = MD_FETCH(preload_kmdp, rebooting == 1 ? MODINFOMD_SHTDWNSPLASH :
+	    MODINFOMD_SPLASH, struct splash_info *);
+	if (si == NULL) {
+		if (vd->vd_driver->vd_bitblt_bmp == NULL)
+			return;
+	} else if (vd->vd_driver->vd_bitblt_argb == NULL)
+		return;
+
+	if (rebooting == 1) {
+		if (vd->vd_driver->vd_blank == NULL)
+			return;
+		vd->vd_driver->vd_blank(vd, TC_BLACK);
 	}
+
+	if (si == NULL) {
+		top = (vd->vd_height - vt_logo_height) / 2;
+		left = (vd->vd_width - vt_logo_width) / 2;
+		vd->vd_driver->vd_bitblt_bmp(vd,
+		    vd->vd_curwindow, vt_logo_image, NULL, vt_logo_width,
+		    vt_logo_height, left, top, TC_WHITE, TC_BLACK);
+	} else {
+		if (si->si_depth != 4)
+			return;
+		image = (uintptr_t)si + sizeof(struct splash_info);
+		image = roundup2(image, 8);
+		top = (vd->vd_height - si->si_height) / 2;
+		left = (vd->vd_width - si->si_width) / 2;
+		vd->vd_driver->vd_bitblt_argb(vd, vd->vd_curwindow,
+		    (unsigned char *)image, si->si_width, si->si_height,
+		    left, top);
+	}
+	vd->vd_flags |= VDF_SPLASH;
 }
 #endif
 
@@ -1828,6 +1845,15 @@ vt_init_font_static(void)
 	if (font != NULL)
 		vt_font_assigned = font;
 }
+
+#ifdef DEV_SPLASH
+static int
+vt_shutdown_splash(struct vt_window *vw)
+{
+	vtterm_splash(vw->vw_device);
+	return (0);
+}
+#endif
 
 static void
 vtterm_cnprobe(struct terminal *tm, struct consdev *cp)
@@ -1963,6 +1989,9 @@ vtterm_cngetc(struct terminal *tm)
 				vw->vw_flags &= ~VWF_SCROLL;
 				VTBUF_SLCK_DISABLE(&vw->vw_buf);
 			}
+			break;
+		case SPCLKEY | BTAB: /* Back tab (usually, shift+tab). */
+			vw->vw_kbdsq = "\x1b[Z";
 			break;
 		/* XXX: KDB can handle history. */
 		case SPCLKEY | FKEY | F(50): /* Arrow up. */
@@ -3171,6 +3200,10 @@ vt_upgrade(struct vt_device *vd)
 				/* For existing console window. */
 				EVENTHANDLER_REGISTER(shutdown_pre_sync,
 				    vt_window_switch, vw, SHUTDOWN_PRI_DEFAULT);
+#ifdef DEV_SPLASH
+				EVENTHANDLER_REGISTER(shutdown_pre_sync,
+				    vt_shutdown_splash, vw, SHUTDOWN_PRI_DEFAULT + 1);
+#endif
 			}
 		}
 	}

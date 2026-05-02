@@ -1441,7 +1441,8 @@ struct pf_test_ctx {
 	int			 rewrite;
 	int			 limiter_drop;
 	u_short			 reason;
-	struct pf_src_node	*sns[PF_SN_MAX];
+	struct pf_krule_slist	*match_rules;
+	struct pf_krule_item	*last_match_rule;
 	struct pf_krule		*nr;
 	struct pf_krule		*tr;
 	struct pf_krule		**rm;
@@ -1498,7 +1499,7 @@ struct pfsync_state_1301 {
 	u_int8_t	 state_flags;
 	u_int8_t	 timeout;
 	u_int8_t	 sync_flags;
-	u_int8_t	 updates;	/* unused */
+	u_int8_t	 __spare2;
 } __packed;
 
 struct pfsync_state_1400 {
@@ -2620,9 +2621,8 @@ struct pf_ifspeed_v1 {
 #endif /* _KERNEL */
 
 #ifdef _KERNEL
-LIST_HEAD(pf_ksrc_node_list, pf_ksrc_node);
 struct pf_srchash {
-	struct pf_ksrc_node_list		nodes;
+	LIST_HEAD(pf_ksrc_node_list, pf_ksrc_node) nodes;
 	struct mtx			lock;
 };
 
@@ -2852,6 +2852,7 @@ extern void			 pf_addrcpy(struct pf_addr *, const struct pf_addr *,
 				    sa_family_t);
 void				pf_free_rule(struct pf_krule *);
 
+struct inpcb;
 int	pf_test_eth(int, int, struct ifnet *, struct mbuf **, struct inpcb *);
 int	pf_scan_sctp(struct pf_pdesc *);
 #if defined(INET) || defined(INET6)
@@ -3128,10 +3129,7 @@ int	pf_osfp_match(struct pf_osfp_enlist *, pf_osfp_t);
 #ifdef _KERNEL
 void			 pf_print_host(struct pf_addr *, u_int16_t, sa_family_t);
 
-enum pf_test_status	 pf_step_into_anchor(struct pf_test_ctx *, struct pf_krule *,
-			    struct pf_krule_slist *match_rules);
-enum pf_test_status	 pf_match_rule(struct pf_test_ctx *, struct pf_kruleset *,
-			    struct pf_krule_slist *);
+enum pf_test_status	 pf_step_into_anchor(struct pf_test_ctx *, struct pf_krule *);
 void			 pf_step_into_keth_anchor(struct pf_keth_anchor_stackframe *,
 			    int *, struct pf_keth_ruleset **,
 			    struct pf_keth_rule **, struct pf_keth_rule **,

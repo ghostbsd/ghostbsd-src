@@ -14750,8 +14750,8 @@ rack_init(struct tcpcb *tp, void **ptr)
 	 */
 	rack_convert_rtts(tp);
 	rack_log_hystart_event(rack, rack->r_ctl.roundends, 20);
-	if ((tptoinpcb(tp)->inp_flags & INP_DROPPED) == 0) {
-		/* We do not start any timers on DROPPED connections */
+	if ((tp->t_flags & TF_DISCONNECTED) == 0) {
+		/* We do not start any timers on disconnected connections */
 		if (tp->t_fb->tfb_chg_query == NULL) {
 			rack_start_hpts_timer(rack, tp, tcp_get_usecs(NULL), 0, 0, 0);
 		} else {
@@ -15709,6 +15709,8 @@ rack_do_compressed_ack_processing(struct tcpcb *tp, struct socket *so, struct mb
 			tcp_packets_this_ack(tp, ae->ack),
 			ae->codepoint))
 			rack_cong_signal(tp, CC_ECN, ae->ack, __LINE__);
+		if (tp->t_flags & TF_ACKNOW)
+			rack->r_wanted_output = 1;
 #ifdef TCP_ACCOUNTING
 		/* Count for the specific type of ack in */
 		if (tp->t_flags2 & TF2_TCP_ACCOUNTING) {
@@ -16566,7 +16568,8 @@ rack_do_segment_nounlock(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 	    tcp_packets_this_ack(tp, th->th_ack),
 	    iptos))
 		rack_cong_signal(tp, CC_ECN, th->th_ack, __LINE__);
-
+	if (tp->t_flags & TF_ACKNOW)
+		rack->r_wanted_output = 1;
 	/*
 	 * If echoed timestamp is later than the current time, fall back to
 	 * non RFC1323 RTT calculation.  Normalize timestamp if syncookies
@@ -17175,7 +17178,7 @@ pace_to_fill_cwnd(struct tcp_rack *rack, int32_t pacing_delay, uint32_t len, uin
 		return (pacing_delay);
 	/*
 	 * first lets calculate the b/w based on the last us-rtt
-	 * and the the smallest send window.
+	 * and the smallest send window.
 	 */
 	fill_bw = min(rack->rc_tp->snd_cwnd, rack->r_ctl.cwnd_to_use);
 	if (rack->rc_fillcw_apply_discount) {
@@ -20742,8 +20745,17 @@ just_return_nolock:
 			 * The idea behind that is instead of having to have
 			 * the peer wait for the delayed-ack timer to run off
 			 * we send an ack that makes the peer send us an ack.
+			 *
+			 * Note we do not send anything if its been less than
+			 * a srtt.
 			 */
-			rack_send_ack_challange(rack);
+			uint64_t tmark;
+
+			tmark = tcp_get_u64_usecs(&tv);
+			if ((tmark > rack->r_ctl.lt_timemark) &&
+			    (((tmark - rack->r_ctl.lt_timemark) / 1000) > tp->t_srtt)) {
+				rack_send_ack_challange(rack);
+			}
 		}
 		if (tot_len_this_send > 0) {
 			rack->r_ctl.fsb.recwin = recwin;
@@ -21143,7 +21155,7 @@ send:
 			to.to_tsecr = tp->ts_recent;
 			to.to_flags |= TOF_TS;
 			if ((len == 0) &&
-			    (TCPS_HAVEESTABLISHED(tp->t_state)) &&
+			    (tp->t_state == TCPS_ESTABLISHED) &&
 			    ((ms_cts - rack->r_ctl.last_rcv_tstmp_for_rtt) > RCV_PATH_RTT_MS) &&
 			    (tp->snd_una == tp->snd_max) &&
 			    (flags & TH_ACK) &&
@@ -22094,10 +22106,8 @@ out:
 		 * Now for special SYN/FIN handling.
 		 */
 		if (flags & (TH_SYN | TH_FIN)) {
-			if ((flags & TH_SYN) &&
-			    ((tp->t_flags & TF_SENTSYN) == 0)) {
+			if ((flags & TH_SYN) != 0 && tp->snd_max == tp->iss) {
 				tp->snd_max++;
-				tp->t_flags |= TF_SENTSYN;
 			}
 			if ((flags & TH_FIN) &&
 			    ((tp->t_flags & TF_SENTFIN) == 0)) {

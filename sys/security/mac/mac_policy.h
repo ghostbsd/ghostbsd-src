@@ -101,6 +101,7 @@ struct sysctl_req;
 struct thread;
 struct ucred;
 struct vattr;
+struct vfsconf;
 struct vfsoptlist;
 struct vnode;
 
@@ -295,6 +296,14 @@ typedef void	(*mpo_mount_create_t)(struct ucred *cred, struct mount *mp,
 		    struct label *mplabel);
 typedef void	(*mpo_mount_destroy_label_t)(struct label *label);
 typedef void	(*mpo_mount_init_label_t)(struct label *label);
+typedef int	(*mpo_mount_check_mount_t)(struct ucred *cred, struct vnode *vp,
+		    struct label *vplabel, struct vfsconf *vfsp,
+		    struct vfsoptlist **optlist, uint64_t fsflags);
+typedef int	(*mpo_mount_check_update_t)(struct ucred *cred,
+		    struct mount *mp, struct label *mplabel,
+		    struct vfsoptlist **optlist, uint64_t fsflags);
+typedef int	(*mpo_mount_check_unmount_t)(struct ucred *cred,
+		    struct mount *mp, struct label *mplabel, uint64_t flags);
 
 typedef void	(*mpo_netinet_arp_send_t)(struct ifnet *ifp,
 		    struct label *ifplabel, struct mbuf *m,
@@ -436,6 +445,8 @@ typedef int	(*mpo_prison_check_remove_t)(struct ucred *cred,
 		    struct prison *pr, struct label *prlabel);
 typedef void	(*mpo_prison_created_t)(struct ucred *cred,
 		    struct prison *pr, struct label *prlabel);
+typedef void	(*mpo_prison_cleanup_t)(struct ucred *cred,
+		    struct prison *pr);
 typedef void	(*mpo_prison_attached_t)(struct ucred *cred,
 		    struct prison *pr, struct label *prlabel, struct proc *p,
 		    struct label *proclabel);
@@ -844,6 +855,9 @@ struct mac_policy_ops {
 	mpo_mount_create_t			mpo_mount_create;
 	mpo_mount_destroy_label_t		mpo_mount_destroy_label;
 	mpo_mount_init_label_t			mpo_mount_init_label;
+	mpo_mount_check_mount_t			mpo_mount_check_mount;
+	mpo_mount_check_update_t		mpo_mount_check_update;
+	mpo_mount_check_unmount_t		mpo_mount_check_unmount;
 
 	mpo_netinet_arp_send_t			mpo_netinet_arp_send;
 	mpo_netinet_firewall_reply_t		mpo_netinet_firewall_reply;
@@ -909,6 +923,7 @@ struct mac_policy_ops {
 	mpo_prison_check_set_t			mpo_prison_check_set;
 	mpo_prison_check_remove_t		mpo_prison_check_remove;
 	mpo_prison_created_t			mpo_prison_created;
+	mpo_prison_cleanup_t			mpo_prison_cleanup;
 	mpo_prison_attached_t			mpo_prison_attached;
 
 	mpo_priv_check_t			mpo_priv_check;
@@ -1055,9 +1070,9 @@ struct mac_policy_ops {
  * structure, as its layout is statically compiled into all policies.
  */
 struct mac_policy_conf {
-	char				*mpc_name;	/* policy name */
-	char				*mpc_fullname;	/* policy full name */
-	struct mac_policy_ops		*mpc_ops;	/* policy operations */
+	const char			*mpc_name;	/* policy name */
+	const char			*mpc_fullname;	/* policy full name */
+	const struct mac_policy_ops	*mpc_ops;	/* policy operations */
 	int				 mpc_loadtime_flags;	/* flags */
 	int				*mpc_field_off; /* security field */
 	int				 mpc_runtime_flags; /* flags */
@@ -1089,8 +1104,9 @@ struct mac_policy_conf {
  *   4                       8.x
  *   5                       14.x
  *   6                       15.x
+ *   7                       16.x
  */
-#define	MAC_VERSION	6
+#define	MAC_VERSION	7
 
 #define	MAC_POLICY_SET(mpops, mpname, mpfullname, mpflags, privdata_wanted) \
 	static struct mac_policy_conf mpname##_mac_policy_conf = {	\

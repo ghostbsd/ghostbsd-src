@@ -99,10 +99,12 @@ options 	KDB_TRACE		# Print a stack trace for a panic.
 # For full debugger support use (turn off in stable branch):
 include "std.debug"
 
+# Compression support
+options 	GZIO			# gzip (dumps)
+options 	ZSTDIO			# zstd (dumps, tarfs, uzip, zfs)
+
 # Kernel dump features.
 options 	EKCD			# Support for encrypted kernel dumps
-options 	GZIO			# gzip-compressed kernel and user dumps
-options 	ZSTDIO			# zstd-compressed kernel and user dumps
 options 	DEBUGNET		# debugnet networking
 options 	NETDUMP			# netdump(4) client support
 
@@ -178,6 +180,8 @@ device		dc		# DEC/Intel 21143 and various workalikes
 device		fxp		# Intel EtherExpress PRO/100B (82557, 82558)
 device		re		# Realtek 8139C+/8169/8169S/8110S
 device		rl		# Realtek 8129/8139
+
+device		mdio		# MDIO bus
 
 # Nvidia/Mellanox Connect-X 4 and later, Ethernet only
 # mlx5ib requires ibcore infra and is not included by default

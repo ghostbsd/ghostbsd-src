@@ -72,6 +72,10 @@
 #include <machine/smp.h>
 #include <machine/specialreg.h>
 #include <x86/init.h>
+#include <x86/kvm.h>
+#include <contrib/xen/arch-x86/cpuid.h>
+#include <x86/bhyve.h>
+#include <dev/hyperv/vmbus/x86/hyperv_reg.h>
 
 #ifdef DDB
 #include <sys/interrupt.h>
@@ -230,11 +234,11 @@ static struct lvt elvts[] = {
 		.lvt_edgetrigger = 1,
 		.lvt_activehi = 1,
 		.lvt_masked = 1,
-		.lvt_active = 0,
-		.lvt_mode = APIC_LVT_DM_FIXED,
+		.lvt_active = 1,
+		.lvt_mode = APIC_LVT_DM_NMI,
 		.lvt_vector = 0,
 		.lvt_reg = LAPIC_EXT_LVT0,
-		.lvt_desc = "ELVT0",
+		.lvt_desc = "IBS",
 	},
 	[APIC_ELVT_MCA] = {
 		.lvt_edgetrigger = 1,
@@ -528,7 +532,10 @@ elvt_mode(struct lapic *la, u_int idx, uint32_t value)
 	KASSERT(idx <= APIC_ELVT_MAX,
 	    ("%s: idx %u out of range", __func__, idx));
 
-	elvt = &la->la_elvts[idx];
+	if (la->la_elvts[idx].lvt_active)
+	    elvt = &la->la_elvts[idx];
+	else
+	    elvt = &elvts[idx];
 	KASSERT(elvt->lvt_active, ("%s: ELVT%u is not active", __func__, idx));
 	KASSERT(elvt->lvt_edgetrigger,
 	    ("%s: ELVT%u is not edge triggered", __func__, idx));
@@ -963,9 +970,16 @@ lapic_reenable_pcint(void)
 
 	if (refcount_load(&pcint_refcnt) == 0)
 		return;
+
 	value = lapic_read32(LAPIC_LVT_PCINT);
 	value &= ~APIC_LVT_M;
 	lapic_write32(LAPIC_LVT_PCINT, value);
+
+	if ((amd_feature2 & AMDID2_IBS) != 0) {
+		value = lapic_read32(LAPIC_EXT_LVT0);
+		value &= ~APIC_LVT_M;
+		lapic_write32(LAPIC_EXT_LVT0, value);
+	}
 }
 
 static void
@@ -976,6 +990,11 @@ lapic_update_pcint(void *dummy)
 	la = &lapics[lapic_id()];
 	lapic_write32(LAPIC_LVT_PCINT, lvt_mode(la, APIC_LVT_PMC,
 	    lapic_read32(LAPIC_LVT_PCINT)));
+
+	if ((amd_feature2 & AMDID2_IBS) != 0) {
+		lapic_write32(LAPIC_EXT_LVT0, elvt_mode(la, APIC_ELVT_IBS,
+		    lapic_read32(LAPIC_EXT_LVT0)));
+	}
 }
 
 void
@@ -1022,6 +1041,9 @@ lapic_enable_pcint(void)
 		return (1);
 	lvts[APIC_LVT_PMC].lvt_masked = 0;
 
+	if ((amd_feature2 & AMDID2_IBS) != 0)
+		elvts[APIC_ELVT_IBS].lvt_masked = 0;
+
 	MPASS(mp_ncpus == 1 || smp_started);
 	smp_rendezvous(NULL, lapic_update_pcint, NULL, NULL);
 	return (1);
@@ -1045,6 +1067,7 @@ lapic_disable_pcint(void)
 	if (!refcount_release(&pcint_refcnt))
 		return;
 	lvts[APIC_LVT_PMC].lvt_masked = 1;
+	elvts[APIC_ELVT_IBS].lvt_masked = 1;
 
 #ifdef SMP
 	/* The APs should always be started when hwpmc is unloaded. */
@@ -1426,6 +1449,9 @@ lapic_handle_intr(int vector, struct trapframe *frame)
 
 	isrc = intr_lookup_source(apic_idt_to_irq(PCPU_GET(apic_id),
 	    vector));
+	KASSERT(isrc != NULL,
+	    ("lapic_handle_intr: vector %d unrecognized at lapic %u",
+	    vector, PCPU_GET(apic_id)));
 	intr_execute_handlers(isrc, frame);
 }
 
@@ -2064,6 +2090,47 @@ apic_setup_local(void *dummy __unused)
 }
 SYSINIT(apic_setup_local, SI_SUB_CPU, SI_ORDER_SECOND, apic_setup_local, NULL);
 
+/* Are we in a VM which supports the Extended Destination ID standard? */
+int apic_ext_dest_id = -1;
+SYSCTL_INT(_machdep, OID_AUTO, apic_ext_dest_id, CTLFLAG_RDTUN, &apic_ext_dest_id, 0,
+    "Use APIC Extended Destination IDs");
+
+/* Detect support for Extended Destination IDs. */
+static void
+detect_extended_dest_id(void)
+{
+	u_int regs[4];
+
+	/* Check if we support extended destination IDs. */
+	switch (vm_guest) {
+	case VM_GUEST_XEN:
+		cpuid_count(hv_base + 4, 0, regs);
+		if (regs[0] & XEN_HVM_CPUID_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	case VM_GUEST_HV:
+		cpuid_count(CPUID_LEAF_HV_STACK_INTERFACE, 0, regs);
+		if (regs[0] != HYPERV_STACK_INTERFACE_EAX_SIG)
+			break;
+		cpuid_count(CPUID_LEAF_HV_STACK_PROPERTIES, 0, regs);
+		if (regs[0] & HYPERV_PROPERTIES_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	case VM_GUEST_KVM:
+		kvm_cpuid_get_features(regs);
+		if (regs[0] & KVM_FEATURE_MSI_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	case VM_GUEST_BHYVE:
+		if (hv_high < CPUID_BHYVE_FEATURES)
+			break;
+		cpuid_count(CPUID_BHYVE_FEATURES, 0, regs);
+		if (regs[0] & CPUID_BHYVE_FEAT_EXT_DEST_ID)
+			apic_ext_dest_id = 1;
+		break;
+	}
+}
+
 /*
  * Setup the I/O APICs.
  */
@@ -2074,6 +2141,10 @@ apic_setup_io(void *dummy __unused)
 
 	if (best_enum == NULL)
 		return;
+
+	/* Check hypervisor support for extended destination IDs. */
+	if (apic_ext_dest_id == -1)
+		detect_extended_dest_id();
 
 	/*
 	 * Local APIC must be registered before other PICs and pseudo PICs
