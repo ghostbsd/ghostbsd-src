@@ -1,7 +1,7 @@
 #
 # Copyright (c) 2017 Dell EMC
 # All rights reserved.
-# Copyright (c) 2025 Klara, Inc.
+# Copyright (c) 2025-2026 Klara, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -26,6 +26,7 @@
 #
 
 : ${CHKPATH:="mnt"}
+: ${NODEV:="#NODEV"}
 
 atf_test_case F_flag
 F_flag_head()
@@ -234,9 +235,9 @@ t_flag_head()
 {
 	atf_set	"descr" "Verify the output format for -t"
 }
-
 t_flag_body()
 {
+	export TZ=UTC
 	atf_check touch foo
 	atf_check touch -d 1970-01-01T00:00:42 foo
 	atf_check -o inline:'42\n' \
@@ -307,6 +308,7 @@ atf_test_case devname cleanup
 devname_head()
 {
 	atf_set	"descr" "Verify that %Sd outputs a device name"
+	atf_set "require.user" "root"
 }
 devname_body()
 {
@@ -322,6 +324,7 @@ devname_body()
 
 	atf_check -o inline:"$devname\n" stat -f '%Sd' "$CHKPATH"
 	atf_check -o inline:"$devname\n" stat -f '%Sr' "$devpath"
+	atf_check -o inline:"$NODEV\n" stat -f '%Sr' "$CHKPATH"
 }
 devname_cleanup()
 {

@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd April 14, 2026
+.Dd April 23, 2026
 .Dt FREEBSD-BASE 7
 .Os
 .Sh NAME
@@ -50,7 +50,7 @@ and
 .Dq CURRENT
 .\" re@ will provide their own repository before release, at which
 .\" point this text will need updating.
-branches are hosted on the Internet at 
+branches are hosted on the Internet at
 .Lk https://pkg.freebsd.org .
 These packages are updated when new errata or security updates are
 released (for supported release versions), or twice daily for
@@ -92,7 +92,8 @@ option was enabled when building the system, which is not the default.
 .El
 .Pp
 The exact set of available subpackages differs for each individual
-package.  For example, some packages may not provide any development
+package.
+For example, some packages may not provide any development
 files, in which case the
 .Sy -dev
 subpackage is not present.
@@ -217,6 +218,27 @@ for a different target than the host system):
 pkg -r /ppcdev -oABI=FreeBSD:16:powerpc64le \e
     install FreeBSD-set-devel
 .Ed
+.Ss Adding a locally built repository for snapshots
+Disable the predefined repository,
+and add a local repo for locally built base system packages:
+.Bd -literal -offset indent
+cat << EOF > /usr/local/etc/pkg/repos/FreeBSD.conf
+FreeBSD-base: { enabled: no }
+FreeBSD-local: {
+	url: "file:///usr/obj/usr/src/repo/${ABI}/latest",
+	enabled: yes
+}
+EOF
+.Ed
+.Pp
+The packages are created by the
+.Xr build 7
+system at
+.Pa ${REPODIR}/${PKG_ABI}/<VERSION> ,
+which defaults to the example directory.
+.Pp
+.Sy Note :
+The repo must have a different name than the predefined repository.
 .Ss Unregister a currently running system
 Systems managed through
 .Xr pkg 8
