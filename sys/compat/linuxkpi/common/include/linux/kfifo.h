@@ -30,11 +30,30 @@
 
 #include <sys/types.h>
 
+#include <linux/array_size.h>
 #include <linux/slab.h>
 #include <linux/gfp.h>
 
-#define	INIT_KFIFO(x)	0
-#define	DECLARE_KFIFO(x, y, z)
+/*
+ * INIT_KFIFO() is used to initialize the structure declared with
+ * DECLARE_KFIFO(). It doesn't work with DECLARE_KFIFO_PTR().
+ */
+#define	INIT_KFIFO(_kf)							\
+	({								\
+		(_kf).total = nitems((_kf).head);			\
+		(_kf).count = 0;					\
+		(_kf).first = 0;					\
+		(_kf).last = 0;						\
+	})
+
+#define	DECLARE_KFIFO(_name, _type, _size)				\
+	struct kfifo_ ## _name {					\
+		size_t		total;					\
+		size_t		count;					\
+		size_t		first;					\
+		size_t		last;					\
+		_type		head[_size];				\
+	} _name
 
 #define	DECLARE_KFIFO_PTR(_name, _type)					\
 	struct kfifo_ ## _name {					\
@@ -71,7 +90,7 @@
 		(_kf)->head[(_kf)->last] = (_e);			\
 		(_kf)->count++;						\
 		(_kf)->last++;						\
-		if ((_kf)->last > (_kf)->total)				\
+		if ((_kf)->last >= (_kf)->total)			\
 			(_kf)->last = 0;				\
 		_rc = true;						\
 	}								\
@@ -89,7 +108,7 @@
 		*(_e) = (_kf)->head[(_kf)->first];			\
 		(_kf)->count--;						\
 		(_kf)->first++;						\
-		if ((_kf)->first > (_kf)->total)			\
+		if ((_kf)->first >= (_kf)->total)			\
 			(_kf)->first = 0;				\
 		_rc = true;						\
 	}								\

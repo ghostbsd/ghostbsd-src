@@ -39,6 +39,11 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 
+#include <linux/compiler.h>
+#include <linux/types.h>
+#include <linux/errno.h>
+#include <linux/cleanup.h>
+
 struct linux_file;
 
 #undef file
@@ -178,6 +183,8 @@ static inline struct fd fdget(unsigned int fd)
 	struct linux_file *f = linux_fget(fd);
 	return (struct fd){f};
 }
+
+#define	fd_file(fd)	((fd).linux_file)
 
 #define	file		linux_file
 #define	fget(...)	linux_fget(__VA_ARGS__)

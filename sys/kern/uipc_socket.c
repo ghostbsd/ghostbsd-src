@@ -1303,18 +1303,20 @@ solisten_enqueue(struct socket *so, int connstatus)
 
 #if defined(SCTP) || defined(SCTP_SUPPORT)
 /*
- * Socket part of sctp_peeloff().  Detach a new socket from an
+ * Socket part of sctp_peeloff().  Create a new socket for an
  * association.  The new socket is returned with a reference.
  *
  * XXXGL: reduce copy-paste with solisten_clone().
  */
 struct socket *
-sopeeloff(struct socket *head)
+sopeeloff(struct socket *head, struct protosw *so_proto)
 {
 	struct socket *so;
 
 	VNET_ASSERT(head->so_vnet != NULL, ("%s:%d so_vnet is NULL, head=%p",
 	    __func__, __LINE__, head));
+	KASSERT(head->so_type == SOCK_SEQPACKET,
+	    ("%s: unexpecte so_type: %d", __func__, head->so_type));
 	so = soalloc(head->so_vnet);
 	if (so == NULL) {
 		log(LOG_DEBUG, "%s: pcb %p: New socket allocation failure: "
@@ -1322,12 +1324,12 @@ sopeeloff(struct socket *head)
 		    __func__, head->so_pcb);
 		return (NULL);
 	}
-	so->so_type = head->so_type;
+	so->so_type = SOCK_STREAM;
 	so->so_options = head->so_options;
 	so->so_linger = head->so_linger;
 	so->so_state = (head->so_state & SS_NBIO) | SS_ISCONNECTED;
 	so->so_fibnum = head->so_fibnum;
-	so->so_proto = head->so_proto;
+	so->so_proto = so_proto;
 	so->so_cred = crhold(head->so_cred);
 #ifdef MAC
 	mac_socket_newconn(head, so);
@@ -1734,7 +1736,7 @@ so_splice(struct socket *so, struct socket *so2, struct splice *splice)
 		return (error);
 	}
 	SOCK_SENDBUF_LOCK(so2);
-	if (so->so_snd.sb_tls_info != NULL) {
+	if (so2->so_snd.sb_tls_info != NULL) {
 		SOCK_SENDBUF_UNLOCK(so2);
 		SOCK_UNLOCK(so2);
 		mtx_lock(&sp->mtx);

@@ -349,15 +349,9 @@ mrsas_find_ident(device_t dev)
 static int
 mrsas_probe(device_t dev)
 {
-	static u_int8_t first_ctrl = 1;
 	struct mrsas_ident *id;
 
 	if ((id = mrsas_find_ident(dev)) != NULL) {
-		if (first_ctrl) {
-			printf("AVAGO MegaRAID SAS FreeBSD mrsas driver version: %s\n",
-			    MRSAS_VERSION);
-			first_ctrl = 0;
-		}
 		device_set_desc(dev, id->desc);
 		/* between BUS_PROBE_DEFAULT and BUS_PROBE_LOW_PRIORITY */
 		return (-30);

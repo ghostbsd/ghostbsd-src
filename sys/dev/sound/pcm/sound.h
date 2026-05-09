@@ -75,15 +75,12 @@
 #include <sys/mutex.h>
 #include <sys/condvar.h>
 
-struct pcm_channel;
-struct pcm_feeder;
-struct snd_dbuf;
 struct snd_mixer;
 
-#include <dev/sound/pcm/buffer.h>
 #include <dev/sound/pcm/matrix.h>
 #include <dev/sound/pcm/channel.h>
 #include <dev/sound/pcm/feeder.h>
+#include <dev/sound/pcm/buffer.h>
 #include <dev/sound/pcm/mixer.h>
 #include <dev/sound/pcm/dsp.h>
 
@@ -204,7 +201,6 @@ struct snddev_info {
 	} channels;
 	unsigned playcount, reccount, pvchancount, rvchancount;
 	unsigned flags;
-	unsigned int bufsz;
 	void *devinfo;
 	device_t dev;
 	char status[SND_STATUSLEN];

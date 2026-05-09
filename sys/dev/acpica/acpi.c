@@ -1040,6 +1040,7 @@ acpi_child_deleted(device_t dev, device_t child)
 
     if (acpi_get_device(dinfo->ad_handle) == child)
 	AcpiDetachData(dinfo->ad_handle, acpi_fake_objhandler);
+    free(dinfo, M_ACPIDEV);
 }
 
 /*
@@ -4102,25 +4103,28 @@ struct acpi_ioctl_hook
     void			 *arg;
 };
 
-static TAILQ_HEAD(,acpi_ioctl_hook)	acpi_ioctl_hooks;
-static int				acpi_ioctl_hooks_initted;
+static TAILQ_HEAD(,acpi_ioctl_hook) acpi_ioctl_hooks =
+	TAILQ_HEAD_INITIALIZER(acpi_ioctl_hooks);
 
 int
 acpi_register_ioctl(u_long cmd, acpi_ioctl_fn fn, void *arg)
 {
-    struct acpi_ioctl_hook	*hp;
+    struct acpi_ioctl_hook *hp, *thp;
 
-    if ((hp = malloc(sizeof(*hp), M_ACPIDEV, M_NOWAIT)) == NULL)
-	return (ENOMEM);
+    hp = malloc(sizeof(*hp), M_ACPIDEV, M_WAITOK);
     hp->cmd = cmd;
     hp->fn = fn;
     hp->arg = arg;
 
     ACPI_LOCK(acpi);
-    if (acpi_ioctl_hooks_initted == 0) {
-	TAILQ_INIT(&acpi_ioctl_hooks);
-	acpi_ioctl_hooks_initted = 1;
+    TAILQ_FOREACH(thp, &acpi_ioctl_hooks, link) {
+	if (thp->cmd == cmd) {
+	    ACPI_UNLOCK(acpi);
+	    free(hp, M_ACPIDEV);
+	    return (EBUSY);
+	}
     }
+
     TAILQ_INSERT_TAIL(&acpi_ioctl_hooks, hp, link);
     ACPI_UNLOCK(acpi);
 
@@ -4142,6 +4146,21 @@ acpi_deregister_ioctl(u_long cmd, acpi_ioctl_fn fn)
 	free(hp, M_ACPIDEV);
     }
     ACPI_UNLOCK(acpi);
+}
+
+void
+acpi_deregister_ioctls(acpi_ioctl_fn fn)
+{
+	struct acpi_ioctl_hook *hp, *thp;
+
+	ACPI_LOCK(acpi);
+	TAILQ_FOREACH_SAFE(hp, &acpi_ioctl_hooks, link, thp) {
+		if (hp->fn == fn) {
+			TAILQ_REMOVE(&acpi_ioctl_hooks, hp, link);
+			free(hp, M_ACPIDEV);
+		}
+	}
+	ACPI_UNLOCK(acpi);
 }
 
 static int
@@ -4171,11 +4190,10 @@ acpiioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag, struct thread *t
      * Scan the list of registered ioctls, looking for handlers.
      */
     ACPI_LOCK(acpi);
-    if (acpi_ioctl_hooks_initted)
-	TAILQ_FOREACH(hp, &acpi_ioctl_hooks, link) {
-	    if (hp->cmd == cmd)
-		break;
-	}
+    TAILQ_FOREACH(hp, &acpi_ioctl_hooks, link) {
+	if (hp->cmd == cmd)
+	    break;
+    }
     ACPI_UNLOCK(acpi);
     if (hp)
 	return (hp->fn(cmd, addr, hp->arg));

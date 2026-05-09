@@ -183,9 +183,6 @@ _GCC_BROKEN=Missing atomic builtins in libc++.
 .if ${TARGET_ARCH:Mpowerpc64*}
 _GCC_BROKEN=libsys.so.7.full has a LOAD segment with RWX permissions.
 .endif
-.if ${TARGET} == "riscv"
-_GCC_BROKEN=boot code linker script issues.
-.endif
 .if defined(_GCC_BROKEN)
 .warning Target ${TARGET} is broken with GCC: ${_GCC_BROKEN}
 .if defined(TRY_GCC_BROKEN)
@@ -1211,7 +1208,7 @@ _includes:
 .if !empty(SUBDIR_OVERRIDE) && make(buildworld)
 	${_+_}cd ${.CURDIR}; ${WMAKE} MK_INCLUDES=yes SHARED=symlinks includes
 .endif
-	${_+_}cd ${.CURDIR};  ${WMAKE} test-includes
+	${_+_}cd ${.CURDIR}; ${WMAKE} test-includes
 _libraries:
 	@echo
 	@echo "--------------------------------------------------------------"
@@ -1579,6 +1576,7 @@ makeman: .PHONY
 # Ensure no regressions in self-includeability of sys/*.h and net*/*.h
 test-includes: .PHONY
 	${_+_}cd ${.CURDIR}/tools/build/test-includes; \
+	    ${WMAKEENV} ${MAKE} ${WORLD_FLAGS} obj; \
 	    ${WMAKEENV} ${MAKE} ${WORLD_FLAGS} DESTDIR=${WORLDTMP} test-includes
 
 # We can't assume here that ${TMPPATH} will include ${PATH} or /usr/libexec

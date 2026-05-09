@@ -651,6 +651,7 @@ contrib/zstd/lib/compress/zstd_compress.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/zstd_compress_literals.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/zstd_compress_sequences.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/zstd_compress_superblock.c	optional zstdio compile-with "${ZSTD_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+contrib/zstd/lib/compress/zstd_preSplit.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/fse_compress.c	optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/hist.c		optional zstdio compile-with ${ZSTD_C}
 contrib/zstd/lib/compress/huf_compress.c	optional zstdio compile-with ${ZSTD_C}
@@ -2302,6 +2303,8 @@ dev/ixgbe/ixgbe_phy.c		optional ix inet | ixv inet \
 dev/ixgbe/ixgbe_api.c		optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/ixgbe/ixgbe_common.c	optional ix inet | ixv inet \
+	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
+dev/ixgbe/ixgbe_fw_logging.c	optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/ixgbe/ixgbe_mbx.c		optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
@@ -4647,6 +4650,8 @@ compat/linuxkpi/common/src/linux_dmi.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_domain.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_eventfd.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_firmware.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_folio.c	optional compat_linuxkpi \
@@ -4685,9 +4690,13 @@ compat/linuxkpi/common/src/linux_rcu.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C} -I$S/contrib/ck/include"
 compat/linuxkpi/common/src/linux_schedule.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_seq_buf.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_shmemfs.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_shrinker.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_siphash.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_skbuff.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
