@@ -14,5 +14,5 @@ of downloaded updates, and includes support for rollback of failed updates.
 EOD
 
 annotations {
-	set = "minimal,minimal-jail"
+	set = "optional,optional-jail"
 }
