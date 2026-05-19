@@ -324,13 +324,19 @@ evdev_register_common(struct evdev_dev *evdev)
 			goto bail_out;
 	}
 
+	/* Create sysctls before cdev so they exist when devd fires the CREATE
+	 * event.  Userspace (e.g. libudev-devd) reads kern.evdev.input.N.*
+	 * immediately on receiving that event; creating the cdev first causes
+	 * a race where sysctlbyname() fails because the entries are not yet
+	 * registered. */
+	evdev_sysctl_create(evdev);
+
 	/* Create char device node */
 	ret = evdev_cdev_create(evdev);
-	if (ret != 0)
+	if (ret != 0) {
+		sysctl_ctx_free(&evdev->ev_sysctl_ctx);
 		goto bail_out;
-
-	/* Create sysctls (for device enumeration without /dev/input access rights) */
-	evdev_sysctl_create(evdev);
+	}
 
 bail_out:
 	if (ret != 0)
