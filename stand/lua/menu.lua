@@ -34,6 +34,8 @@ local config = require("config")
 local screen = require("screen")
 local drawer = require("drawer")
 
+core.recordDefaults()
+
 local menu = {}
 
 local drawn_menu
@@ -213,6 +215,17 @@ menu.boot_options = {
 			end,
 			func = core.setVerbose,
 			alias = {"v", "V"},
+		},
+		-- mute logs
+		{
+			entry_type = core.MENU_ENTRY,
+			name = function()
+				return  "Mute " ..
+					OnOff(color.highlight("L") ..
+					"ogs    :", core.mute)
+			end,
+			func = core.setMute,
+			alias = {"l", "L"},
 		},
 	},
 }
