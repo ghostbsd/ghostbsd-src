@@ -531,6 +531,7 @@ static int verbose = PSM_DEBUG;
 static int synaptics_support = 1;
 static int trackpoint_support = 1;
 static int elantech_support = 1;
+static int explorer_sidebuttons = 0;
 static int mux_disabled = -1;
 
 /* for backward compatibility */
@@ -2991,6 +2992,9 @@ SYSCTL_INT(_hw_psm, OID_AUTO, trackpoint_support, CTLFLAG_RDTUN,
 SYSCTL_INT(_hw_psm, OID_AUTO, elantech_support, CTLFLAG_RDTUN,
     &elantech_support, 0, "Enable support for Elantech touchpads");
 
+SYSCTL_INT(_hw_psm, OID_AUTO, explorer_sidebuttons, CTLFLAG_RW,
+    &explorer_sidebuttons, 0, "Enable support for Intellimouse Explorer side buttons");
+
 SYSCTL_INT(_hw_psm, OID_AUTO, mux_disabled, CTLFLAG_RDTUN,
     &mux_disabled, 0, "Disable active multiplexing");
 
@@ -4998,6 +5002,10 @@ psmsoftintr(void *arg)
 			z = (pb->ipacket[3] & MOUSE_EXPLORER_ZNEG) ?
 			    (pb->ipacket[3] & 0x0f) - 16 :
 			    (pb->ipacket[3] & 0x0f);
+			if (!explorer_sidebuttons)
+			{
+				break;
+			}
 			ms.button |=
 			    (pb->ipacket[3] & MOUSE_EXPLORER_BUTTON4DOWN) ?
 			    MOUSE_BUTTON4DOWN : 0;
