@@ -36,6 +36,7 @@ local default_acpi = false
 local default_safe_mode = false
 local default_single_user = false
 local default_verbose = false
+local default_mute = true
 
 local bootenv_list = "bootenvs"
 
@@ -46,17 +47,17 @@ local function composeLoaderCmd(cmd_name, argstr)
 	return cmd_name
 end
 
-local function recordDefaults()
+function core.recordDefaults()
 	local boot_single = loader.getenv("boot_single") or "no"
 	local boot_verbose = loader.getenv("boot_verbose") or "no"
+	local boot_mute = loader.getenv("boot_mute") or "no"
 
 	default_acpi = core.getACPI()
 	default_single_user = boot_single:lower() ~= "no"
 	default_verbose = boot_verbose:lower() ~= "no"
+	default_mute = boot_mute:lower() ~= "no"
 
-	core.setACPI(default_acpi)
-	core.setSingleUser(default_single_user)
-	core.setVerbose(default_verbose)
+	core.setDefaults()
 end
 
 
@@ -113,11 +114,23 @@ function core.setVerbose(verbose)
 
 	if verbose then
 		loader.setenv("boot_verbose", "YES")
-		loader.setenv("boot_mute", "NO")
 	else
 		loader.unsetenv("boot_verbose")
 	end
 	core.verbose = verbose
+end
+
+function core.setMute(mute)
+	if mute == nil then
+		mute = not core.mute
+	end
+
+	if mute then
+		loader.setenv("boot_mute", "YES")
+	else
+		loader.unsetenv("boot_mute")
+	end
+	core.mute = mute
 end
 
 function core.setSingleUser(single_user)
@@ -405,6 +418,7 @@ function core.setDefaults()
 	core.setSafeMode(default_safe_mode)
 	core.setSingleUser(default_single_user)
 	core.setVerbose(default_verbose)
+	core.setMute(default_mute)
 end
 
 function core.autoboot(argstr)
@@ -598,6 +612,5 @@ if core.loaderTooOld() then
 	print("**********************************************************************")
 end
 
-recordDefaults()
 hook.register("config.reloaded", core.clearCachedKernels)
 return core
