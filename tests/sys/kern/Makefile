@@ -7,6 +7,7 @@ TESTSRC=	${SRCTOP}/contrib/netbsd-tests/kernel
 
 TESTSDIR=	${TESTSBASE}/sys/kern
 
+ATF_TESTS_C+=	aslr
 ATF_TESTS_C+=	basic_signal
 ATF_TESTS_C+=	copy_file_range
 .if ${MACHINE_ARCH} != "i386" && ${MACHINE_ARCH} != "powerpc" && \
@@ -22,6 +23,7 @@ ATF_TESTS_C+=	exterr_test
 ATF_TESTS_C+=	fdgrowtable_test
 ATF_TESTS_C+=	getdirentries_test
 ATF_TESTS_C+=	jail_lookup_root
+ATF_TESTS_C+=	jaildesc
 ATF_TESTS_C+=	inotify_test
 ATF_TESTS_C+=	kill_zombie
 .if ${MK_OPENSSL} != "no"
@@ -31,6 +33,7 @@ ATF_TESTS_C+=	ktrace_test
 ATF_TESTS_C+=	listener_wakeup
 ATF_TESTS_C+=	module_test
 ATF_TESTS_C+=	prace
+ATF_TESTS_C+=	procdesc
 ATF_TESTS_C+=	ptrace_test
 TEST_METADATA.ptrace_test+=		timeout="15"
 ATF_TESTS_C+=	reaper
@@ -82,8 +85,10 @@ PROGS+=		coredump_phnum_helper
 PROGS+=		pdeathsig_helper
 PROGS+=		sendfile_helper
 
+LIBADD.aslr+=				util
 LIBADD.copy_file_range+=		md
 LIBADD.jail_lookup_root+=		jail util
+LIBADD.jaildesc+=			pthread
 CFLAGS.sys_getrandom+=			-I${SRCTOP}/sys/contrib/zstd/lib
 LIBADD.sys_getrandom+=			zstd
 LIBADD.sys_getrandom+=			c
@@ -95,6 +100,7 @@ LIBADD.kcov+=				pthread
 CFLAGS.ktls_test+=			-DOPENSSL_API_COMPAT=0x10100000L
 LIBADD.ktls_test+=			crypto util
 LIBADD.listener_wakeup+=		pthread
+LIBADD.procdesc+=			pthread
 LIBADD.shutdown_dgram+=			pthread
 LIBADD.socket_msg_waitall+=		pthread
 LIBADD.socket_splice+=			pthread

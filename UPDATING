@@ -12,6 +12,76 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20260609:
+	15.0-RELEASE-p10 EN-26:14.syslogd
+			EN-26:15.openssl
+			SA-26:25.thr
+			SA-26:26.ktls
+			SA-26:27.sound
+			SA-26:28.capsicum
+			SA-26:29.ip6_multicast
+			SA-26:30.linux
+			SA-26:31.arm64
+			SA-26:32.elf
+			SA-26:33.unbound
+			SA-26:34.vt
+			SA-26:35.openssl
+			SA-26:36.ldns
+
+	syslogd(8) memory leak in casper_ttymsg(). [EN-26:14.syslogd]
+
+	Update OpenSSL to 3.0.20 and 3.5.6. [EN-26:15.openssl]
+
+	Missing permission check in thr_kill2(2). [SA-26:25.thr]
+
+	Arbitrary file overwrite via the KTLS receive path. [SA-26:26.ktls]
+
+	Multiple vulnerabilities in the sound(4) mmap path. [SA-26:27.sound]
+
+	sigqueue(2) missing capability mode restriction. [SA-26:28.capsicum]
+
+	Use-after-free bug in the IPV6_MSFILTER socket option handler. [SA-26:29.ip6_multicast]
+
+	Flaw in Linuxulator execution of setugid binaries. [SA-26:30.linux]
+
+	Arm CPU errata may bypass page table permission changes. [SA-26:31.arm64]
+
+	ASLR bypass for setuid executables via procctl(2). [SA-26:32.elf]
+
+	Multiple vulnerabilities in unbound. [SA-26:33.unbound]
+
+	Integer overflow in vt(4) CONS_HISTORY ioctl. [SA-26:34.vt]
+
+	Multiple vulnerabilities in OpenSSL. [SA-26:35.openssl]
+
+	Insufficient response validation in the ldns stub resolver. [SA-26:36.ldns]
+
+20260520:
+	15.0-RELEASE-p9	SA-26:18.setcred
+			SA-26:19.file
+			SA-26:20.fusefs
+			SA-26:21.ptrace
+			SA-26:22.libcasper
+			SA-26:23.bsdinstall
+			SA-26:24.cap_net
+			EN-26:13.freebsd-update
+
+	Stack buffer overflow via setcred(2). [SA-26:18.setcred]
+
+	Kernel use-after-free via file descriptor syscalls. [SA-26:19.file]
+
+	Heap overflow in FUSE_LISTXATTR. [SA-26:20.fusefs]
+
+	Missing validation in ptrace(PT_SC_REMOTE). [SA-26:21.ptrace]
+
+	Stack overflow via select() file descriptor set overflow. [SA-26:22.libcasper]
+
+	Remote code execution via Wi-Fi access point scans. [SA-26:23.bsdinstall]
+
+	Incorrect libcap_net limitation list manipulation. [SA-26:24.cap_net]
+
+	freebsd-update attempts to merge a generated file. [EN-26:13.freebsd-update]
+
 20260430:
 	15.0-RELEASE-p8	EN-26:11.dhclient
 
