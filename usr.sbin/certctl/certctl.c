@@ -523,6 +523,8 @@ write_certs(const char *dir, struct cert_tree *tree)
 				tmppath = xasprintf(".%s", path);
 				fd = openat(d, tmppath,
 				    O_CREAT | O_WRONLY | O_EXCL, mode);
+				if (!unprivileged && fd >= 0)
+					(void)fchmod(fd, mode);
 			}
 		}
 		/* write the certificate */
@@ -594,6 +596,8 @@ write_bundle(const char *dir, const char *file, struct cert_tree *tree)
 	} else {
 		tmpfile = xasprintf(".%s", file);
 		fd = openat(d, tmpfile, O_WRONLY | O_CREAT | O_EXCL, mode);
+		if (!unprivileged && fd >= 0)
+			(void)fchmod(fd, mode);
 	}
 	if (fd < 0 || (f = fdopen(fd, "w")) == NULL) {
 		if (tmpfile != NULL && fd >= 0) {
@@ -1093,6 +1097,7 @@ int
 main(int argc, char *argv[])
 {
 	const char *command;
+	unsigned int i;
 	int opt;
 
 	while ((opt = getopt(argc, argv, "BcD:d:g:lL:M:no:Uv")) != -1)
@@ -1155,8 +1160,8 @@ main(int argc, char *argv[])
 
 	set_defaults();
 
-	for (unsigned i = 0; commands[i].name != NULL; i++)
+	for (i = 0; commands[i].name != NULL; i++)
 		if (strcmp(command, commands[i].name) == 0)
-			exit(!!commands[i].func(argc, argv));
+			exit(commands[i].func(argc, argv) == 0 ? 0 : 1);
 	usage();
 }

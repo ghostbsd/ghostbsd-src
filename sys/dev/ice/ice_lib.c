@@ -9680,8 +9680,7 @@ ice_apply_saved_phy_req_to_cfg(struct ice_softc *sc,
 
 finalize_link_speed:
 
-	/* Cache new user settings for speeds */
-	pi->phy.curr_user_speed_req = phy_data.user_speeds_intr;
+	/* Update phy types in config */
 	cfg->phy_type_low = htole64(phy_low);
 	cfg->phy_type_high = htole64(phy_high);
 
@@ -9987,16 +9986,21 @@ ice_init_saved_phy_cfg(struct ice_softc *sc)
 	device_t dev = sc->dev;
 	int status;
 	u64 phy_low, phy_high;
-	u8 report_mode = ICE_AQC_REPORT_TOPO_CAP_MEDIA;
 
+	/*
+	 * If the FW supports Link Management V2 we don't need
+	 * to save initial PHY configuration as it can be always
+	 * read from FW.
+	 */
 	if (ice_is_bit_set(sc->feat_en, ICE_FEATURE_LINK_MGMT_VER_2))
-		report_mode = ICE_AQC_REPORT_DFLT_CFG;
-	status = ice_aq_get_phy_caps(pi, false, report_mode, &pcaps, NULL);
+		return;
+
+	status = ice_aq_get_phy_caps(pi, false, ICE_AQC_REPORT_TOPO_CAP_MEDIA,
+	    &pcaps, NULL);
 	if (status) {
 		device_printf(dev,
-		    "%s: ice_aq_get_phy_caps (%s) failed; status %s, aq_err %s\n",
+		    "%s: ice_aq_get_phy_caps failed; status %s, aq_err %s\n",
 		    __func__,
-		    report_mode == ICE_AQC_REPORT_DFLT_CFG ? "DFLT" : "w/MEDIA",
 		    ice_status_str(status),
 		    ice_aq_str(hw->adminq.sq_last_status));
 		return;
@@ -11342,10 +11346,10 @@ ice_get_port_topology(struct ice_hw *hw, u8 lport,
 		return err;
 
 	if (cage_type == 0x11 ||  /* SFP */
-	   cage_type == 0x12) {   /* SFP28 */
+	    cage_type == 0x12) {   /* SFP28 */
 		port_topology->serdes_lane_count = 1;
 	} else if (cage_type == 0x13 ||  /* QSFP */
-		  cage_type == 0x14) {   /* QSFP28 */
+	    cage_type == 0x14) {   /* QSFP28 */
 		u8 max_speed = 0;
 
 		err = ice_get_maxspeed(hw, port_topology->primary_serdes_lane,
@@ -11360,7 +11364,8 @@ ice_get_port_topology(struct ice_hw *hw, u8 lport,
 
 		if (max_speed == ICE_AQC_PORT_OPT_MAX_LANE_100G)
 			port_topology->serdes_lane_count = 4;
-		else if (max_speed == ICE_AQC_PORT_OPT_MAX_LANE_50G)
+		else if (max_speed == ICE_AQC_PORT_OPT_MAX_LANE_50G ||
+		    max_speed == ICE_AQC_PORT_OPT_MAX_LANE_40G)
 			port_topology->serdes_lane_count = 2;
 		else
 			port_topology->serdes_lane_count = 1;

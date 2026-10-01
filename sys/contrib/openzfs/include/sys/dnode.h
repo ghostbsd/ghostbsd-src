@@ -449,6 +449,8 @@ void dnode_diduse_space(dnode_t *dn, int64_t space);
 void dnode_new_blkid(dnode_t *dn, uint64_t blkid, dmu_tx_t *tx,
     boolean_t have_read, boolean_t force);
 uint64_t dnode_block_freed(dnode_t *dn, uint64_t blkid);
+uint64_t dnode_block_freed_after(dnode_t *dn, uint64_t blkid,
+    uint64_t override_txg);
 void dnode_init(void);
 void dnode_fini(void);
 int dnode_next_offset(dnode_t *dn, int flags, uint64_t *off,
@@ -651,6 +653,19 @@ extern dnode_sums_t dnode_sums;
 #define	FREE_VERIFY(db, start, end, tx)
 
 #endif
+
+/*
+ * Assert that we are not modifying the range tree for the syncing TXG from
+ * a non-syncing thread. We verify that either the transaction group is
+ * strictly newer than the one currently syncing (meaning it's being modified
+ * in open context), OR the current thread is the sync thread itself. If this
+ * triggers, it indicates a race where dn_free_ranges is being modified while
+ * dnode_sync() may be iterating over it.
+ */
+#define	FREE_RANGE_VERIFY(tx, dn) \
+	ASSERT((tx)->tx_txg > spa_syncing_txg((dn)->dn_objset->os_spa) || \
+	    dmu_objset_pool((dn)->dn_objset)->dp_tx.tx_sync_thread == \
+	    curthread)
 
 #ifdef	__cplusplus
 }

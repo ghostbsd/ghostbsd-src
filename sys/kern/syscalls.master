@@ -264,7 +264,7 @@
 25	AUE_GETEUID	STD|CAPENABLED {
 		uid_t geteuid(void);
 	}
-26	AUE_PTRACE	STD {
+26	AUE_PTRACE	STD|CAPENABLED {
 		int ptrace(
 		    int req,
 		    pid_t pid,
@@ -1430,7 +1430,7 @@
 		    _Out_ _Contains_timet_ struct ffclock_estimate *cest
 		);
 	}
-244	AUE_NULL	STD {
+244	AUE_NULL	STD|CAPENABLED {
 		int clock_nanosleep(
 		    clockid_t clock_id,
 		    int flags,
@@ -3422,4 +3422,27 @@
 		    int flags
 		);
 	}
+603	AUE_PDOPENPID	STD|CAPENABLED {
+		int pdopenpid(
+		    pid_t pid,
+		    int flags
+		);
+	}
+604	AUE_NULL	STD {
+		int pddupfd(
+			int pd,
+			int fd,
+			int flags
+		);
+	}
+605	AUE_PDPTRACE	STD|CAPENABLED {
+		int pdptrace(
+			int req,
+			int pfd,
+			int lwpid,
+			_Inout_opt_ _Contains_long_ptr_ void *addr,
+			int data
+		);
+	}
+
 ; vim: syntax=off

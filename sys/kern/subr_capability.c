@@ -88,10 +88,12 @@ const cap_rights_t cap_mmap_rights = CAP_RIGHTS_INITIALIZER(CAP_MMAP);
 const cap_rights_t cap_mkdirat_rights = CAP_RIGHTS_INITIALIZER(CAP_MKDIRAT);
 const cap_rights_t cap_mkfifoat_rights = CAP_RIGHTS_INITIALIZER(CAP_MKFIFOAT);
 const cap_rights_t cap_mknodat_rights = CAP_RIGHTS_INITIALIZER(CAP_MKNODAT);
+const cap_rights_t cap_pddupfd_rights = CAP_RIGHTS_INITIALIZER(CAP_PDDUPFD);
 const cap_rights_t cap_pdgetpid_rights = CAP_RIGHTS_INITIALIZER(CAP_PDGETPID);
 const cap_rights_t cap_pdkill_rights = CAP_RIGHTS_INITIALIZER(CAP_PDKILL);
 const cap_rights_t cap_pdwait_rights = CAP_RIGHTS_INITIALIZER(CAP_PDWAIT);
 const cap_rights_t cap_pread_rights = CAP_RIGHTS_INITIALIZER(CAP_PREAD);
+const cap_rights_t cap_ptrace_rights = CAP_RIGHTS_INITIALIZER(CAP_PTRACE);
 const cap_rights_t cap_pwrite_rights = CAP_RIGHTS_INITIALIZER(CAP_PWRITE);
 const cap_rights_t cap_read_rights = CAP_RIGHTS_INITIALIZER(CAP_READ);
 const cap_rights_t cap_recv_rights = CAP_RIGHTS_INITIALIZER(CAP_RECV);
@@ -312,6 +314,29 @@ cap_rights_is_valid(const cap_rights_t *rights)
 	}
 
 	return (true);
+}
+
+cap_rights_t *
+cap_rights_intersect(cap_rights_t *dst, const cap_rights_t *src)
+{
+	unsigned int i, n;
+
+	assert(CAPVER(dst) == CAP_RIGHTS_VERSION_00);
+	assert(CAPVER(src) == CAP_RIGHTS_VERSION_00);
+	assert(CAPVER(dst) == CAPVER(src));
+	assert(cap_rights_is_valid(src));
+	assert(cap_rights_is_valid(dst));
+
+	n = CAPARSIZE(dst);
+	assert(n >= CAPARSIZE_MIN && n <= CAPARSIZE_MAX);
+
+	for (i = 0; i < n; i++)
+		dst->cr_rights[i] &= src->cr_rights[i] | ~0x01FFFFFFFFFFFFFFULL;
+
+	assert(cap_rights_is_valid(src));
+	assert(cap_rights_is_valid(dst));
+
+	return (dst);
 }
 
 cap_rights_t *

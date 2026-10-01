@@ -2272,14 +2272,21 @@ flush_write_batch_impl(struct receive_writer_arg *rwa)
 
 		if (drrw->drr_logical_size != dn->dn_datablksz) {
 			/*
-			 * The WRITE record is larger than the object's block
-			 * size.  We must be receiving an incremental
-			 * large-block stream into a dataset that previously did
-			 * a non-large-block receive.  Lightweight writes must
-			 * be exactly one block, so we need to decompress the
-			 * data (if compressed) and do a normal dmu_write().
+			 * The WRITE record size does not match the
+			 * object's block size.  This happens when the
+			 * record is larger than the block size (an
+			 * incremental large-block stream received into a
+			 * dataset that previously did a non-large-block
+			 * receive), and also when it is a smaller trailing
+			 * chunk from splitting a large block for a stream
+			 * sent without large blocks: a single-block object
+			 * can have a non-power-of-2 block size, so its final
+			 * SPA_OLD_MAXBLOCKSIZE-sized chunk may be shorter
+			 * than the block size.  Either way a lightweight
+			 * write is not possible (those must cover exactly
+			 * one block), so we decompress the data (if
+			 * compressed) and do a normal dmu_write().
 			 */
-			ASSERT3U(drrw->drr_logical_size, >, dn->dn_datablksz);
 			if (DRR_WRITE_COMPRESSED(drrw)) {
 				abd_t *decomp_abd =
 				    abd_alloc_linear(drrw->drr_logical_size,
@@ -2484,7 +2491,9 @@ receive_process_write_record(struct receive_writer_arg *rwa,
 	}
 
 	struct receive_record_arg *first_rrd = list_head(&rwa->write_batch);
-	struct drr_write *first_drrw = &first_rrd->header.drr_u.drr_write;
+	struct drr_write *first_drrw = NULL;
+	if (first_rrd != NULL)
+		first_drrw = &first_rrd->header.drr_u.drr_write;
 	uint64_t batch_size =
 	    MIN(zfs_recv_write_batch_size, DMU_MAX_ACCESS / 2);
 	if (first_rrd != NULL &&
@@ -2901,16 +2910,20 @@ receive_read_record(dmu_recv_cookie_t *drc)
 	{
 		struct drr_object *drro =
 		    &drc->drc_rrd->header.drr_u.drr_object;
-		uint32_t size = DRR_OBJECT_PAYLOAD_SIZE(drro);
+		uint32_t size;
 		void *buf = NULL;
 		dmu_object_info_t doi;
 
+		size = DRR_OBJECT_PAYLOAD_SIZE(drro);
+		if (size > SPA_MAXBLOCKSIZE)
+			return (SET_ERROR(ERANGE));
+
 		if (size != 0)
-			buf = kmem_zalloc(size, KM_SLEEP);
+			buf = vmem_zalloc(size, KM_SLEEP);
 
 		err = receive_read_payload_and_next_header(drc, size, buf);
 		if (err != 0) {
-			kmem_free(buf, size);
+			vmem_free(buf, size);
 			return (err);
 		}
 		err = dmu_object_info(drc->drc_os, drro->drr_object, &doi);
@@ -2934,7 +2947,11 @@ receive_read_record(dmu_recv_cookie_t *drc)
 	case DRR_WRITE:
 	{
 		struct drr_write *drrw = &drc->drc_rrd->header.drr_u.drr_write;
-		int size = DRR_WRITE_PAYLOAD_SIZE(drrw);
+		uint64_t size = DRR_WRITE_PAYLOAD_SIZE(drrw);
+
+		if (size > SPA_MAXBLOCKSIZE)
+			return (SET_ERROR(ERANGE));
+
 		abd_t *abd = abd_alloc_linear(size, B_FALSE);
 		err = receive_read_payload_and_next_header(drc, size,
 		    abd_to_buf(abd));
@@ -2951,12 +2968,18 @@ receive_read_record(dmu_recv_cookie_t *drc)
 	{
 		struct drr_write_embedded *drrwe =
 		    &drc->drc_rrd->header.drr_u.drr_write_embedded;
-		uint32_t size = P2ROUNDUP(drrwe->drr_psize, 8);
-		void *buf = kmem_zalloc(size, KM_SLEEP);
+		uint32_t size;
+		void *buf;
+
+		size = P2ROUNDUP(drrwe->drr_psize, 8);
+		if (size > SPA_MAXBLOCKSIZE)
+			return (SET_ERROR(ERANGE));
+
+		buf = vmem_zalloc(size, KM_SLEEP);
 
 		err = receive_read_payload_and_next_header(drc, size, buf);
 		if (err != 0) {
-			kmem_free(buf, size);
+			vmem_free(buf, size);
 			return (err);
 		}
 
@@ -2985,7 +3008,11 @@ receive_read_record(dmu_recv_cookie_t *drc)
 	case DRR_SPILL:
 	{
 		struct drr_spill *drrs = &drc->drc_rrd->header.drr_u.drr_spill;
-		int size = DRR_SPILL_PAYLOAD_SIZE(drrs);
+		uint64_t size = DRR_SPILL_PAYLOAD_SIZE(drrs);
+
+		if (size > SPA_MAXBLOCKSIZE)
+			return (SET_ERROR(ERANGE));
+
 		abd_t *abd = abd_alloc_linear(size, B_FALSE);
 		err = receive_read_payload_and_next_header(drc, size,
 		    abd_to_buf(abd));
@@ -3136,7 +3163,7 @@ receive_process_record(struct receive_writer_arg *rwa,
 			abd_free(rrd->abd);
 			rrd->abd = NULL;
 		} else if (rrd->payload != NULL) {
-			kmem_free(rrd->payload, rrd->payload_size);
+			vmem_free(rrd->payload, rrd->payload_size);
 			rrd->payload = NULL;
 		}
 		return (0);
@@ -3150,7 +3177,7 @@ receive_process_record(struct receive_writer_arg *rwa,
 				rrd->abd = NULL;
 				rrd->payload = NULL;
 			} else if (rrd->payload != NULL) {
-				kmem_free(rrd->payload, rrd->payload_size);
+				vmem_free(rrd->payload, rrd->payload_size);
 				rrd->payload = NULL;
 			}
 
@@ -3163,7 +3190,7 @@ receive_process_record(struct receive_writer_arg *rwa,
 	{
 		struct drr_object *drro = &rrd->header.drr_u.drr_object;
 		err = receive_object(rwa, drro, rrd->payload);
-		kmem_free(rrd->payload, rrd->payload_size);
+		vmem_free(rrd->payload, rrd->payload_size);
 		rrd->payload = NULL;
 		break;
 	}
@@ -3201,7 +3228,7 @@ receive_process_record(struct receive_writer_arg *rwa,
 		struct drr_write_embedded *drrwe =
 		    &rrd->header.drr_u.drr_write_embedded;
 		err = receive_write_embedded(rwa, drrwe, rrd->payload);
-		kmem_free(rrd->payload, rrd->payload_size);
+		vmem_free(rrd->payload, rrd->payload_size);
 		rrd->payload = NULL;
 		break;
 	}
@@ -3270,7 +3297,7 @@ receive_writer_thread(void *arg)
 			rrd->abd = NULL;
 			rrd->payload = NULL;
 		} else if (rrd->payload != NULL) {
-			kmem_free(rrd->payload, rrd->payload_size);
+			vmem_free(rrd->payload, rrd->payload_size);
 			rrd->payload = NULL;
 		}
 		/*

@@ -493,6 +493,8 @@
         ..
         dhclient
         ..
+        fsck_msdosfs
+        ..
         growfs
         ..
         ifconfig
@@ -826,6 +828,8 @@
         fs
             fusefs
             ..
+            pjdfstest
+            ..
             tarfs
             ..
             tmpfs
@@ -884,6 +888,8 @@
         mac
             bsdextended
             ..
+            do
+            ..
             ipacl
             ..
             portacl
@@ -899,6 +905,8 @@
                 ..
             ..
             routing
+            ..
+            wg
             ..
         ..
         netgraph
@@ -964,6 +972,8 @@
             ..
             utimensat
             ..
+        ..
+        pmc
         ..
         posixshm
         ..

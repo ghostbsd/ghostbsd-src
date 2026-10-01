@@ -1,7 +1,7 @@
 /*-
  * Copyright (c) 2015-2016 Mellanox Technologies, Ltd.
  * All rights reserved.
- * Copyright (c) 2020-2025 The FreeBSD Foundation
+ * Copyright (c) 2020-2026 The FreeBSD Foundation
  *
  * Portions of this software were developed by Björn Zeeb
  * under sponsorship from the FreeBSD Foundation.
@@ -26,6 +26,15 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/*
+ * We have two ways to create a pci_dev (pdev):
+ * (1) coming from the device_attach DEVMETHOD, and
+ * (2) the other from manual creation via lkpinew_pci_dev().
+ *
+ * Only devices from (1) end up on our LinuxKPI global pci_devices list.
+ * All others are "place fillers" -- XXX if only "place filler" was always true.
  */
 
 #include <sys/param.h>
@@ -100,6 +109,7 @@ static int linux_backlight_get_status(device_t dev, struct backlight_props *prop
 static int linux_backlight_update_status(device_t dev, struct backlight_props *props);
 static int linux_backlight_get_info(device_t dev, struct backlight_info *info);
 static void lkpi_pcim_iomap_table_release(struct device *, void *);
+static void lkpinew_pci_dev_release(struct device *);
 
 static device_method_t pci_methods[] = {
 	DEVMETHOD(device_probe, linux_pci_probe),
@@ -172,6 +182,8 @@ linux_pdev_dma_uninit(struct pci_dev *pdev)
 	struct linux_dma_priv *priv;
 
 	priv = pdev->dev.dma_priv;
+	if (priv == NULL)
+		return (0);
 	if (priv->dmat)
 		bus_dma_tag_destroy(priv->dmat);
 	if (priv->dmat_coherent)
@@ -308,8 +320,9 @@ linux_pci_find(device_t dev, const struct pci_device_id **idp)
 struct pci_dev *
 lkpi_pci_get_device(uint32_t vendor, uint32_t device, struct pci_dev *odev)
 {
-	struct pci_dev *pdev, *found;
+	struct pci_dev *pdev, *found, *odev0;
 
+	odev0 = odev;
 	found = NULL;
 	spin_lock(&pci_lock);
 	list_for_each_entry(pdev, &pci_devices, links) {
@@ -328,6 +341,7 @@ lkpi_pci_get_device(uint32_t vendor, uint32_t device, struct pci_dev *odev)
 	}
 	pci_dev_get(found);
 	spin_unlock(&pci_lock);
+	pci_dev_put(odev0);
 
 	return (found);
 }
@@ -335,9 +349,82 @@ lkpi_pci_get_device(uint32_t vendor, uint32_t device, struct pci_dev *odev)
 static void
 lkpi_pci_dev_release(struct device *dev)
 {
+	struct pci_dev *pdev;
 
+	/*
+	 * Before anything else, we have to free all the dynamic
+	 * resource which are on the devres list.
+	 * Otherwise we risk that supporting infrastructure
+	 * is gone and we panic 'randomly'.
+	 */
 	lkpi_devres_release_free_list(dev);
+
+	/*
+	 * Now undo linux_pci_attach_device() in reverse-ish
+	 * order.
+	 */
+	pdev = to_pci_dev(dev);
+
+	/*
+	 * pdrv->remove happens before pci_put_dev() in
+	 * linux_pci_detach_device(), which means the driver should have
+	 * cleaned up before we get here; see irqents and mmio below.
+	 */
+
+	/* Clear the hierarchy recursively to root. */
+	if (pdev->bus->self != pdev) {
+		pci_dev_put(pdev->bus->self);
+		pdev->bus->self = NULL;
+	}
+
+	if (pdev->root != NULL) {
+		lkpinew_pci_dev_release(&pdev->root->dev); /* pci_dev_put(pdev->root); ? */
+		pdev->root = NULL;
+	}
+
+	spin_lock(&pci_lock);
+	list_del(&pdev->links);
+	spin_unlock(&pci_lock);
+
+	linux_pdev_dma_uninit(pdev);
+
+	/* irq? */
+
+	/* Undo lkpifill_pci_dev(). */
+	/* devres is gone already; went at the very top. */
+	if (!list_empty_careful(&pdev->dev.irqents)) {
+		dev_warn(&pdev->dev, "%s: driver did not clean up; "
+		    "leaking IRQs\n", __func__);
+		/*
+		 * XXX add private function to interrupt.h/linux_interrupt.c
+		 * to walk the list and call free_irq on each if we have to.
+		 */
+	}
+
 	spin_lock_destroy(&dev->devres_lock);
+	spin_lock_destroy(&pdev->pcie_cap_lock);
+
+	if (!TAILQ_EMPTY(&pdev->mmio)) {
+		dev_warn(&pdev->dev, "%s: driver did not clean up; "
+		    "leaking mmio resources\n", __func__);
+		/* XXX we have two functions to walk and release in here. */
+	}
+
+	if (pdev->msi_desc != NULL) {
+		for (int i = pci_msi_count(pdev->dev.bsddev) - 1; i >= 0; i--)
+			free(pdev->msi_desc[i], M_DEVBUF);
+		free(pdev->msi_desc, M_DEVBUF);
+	}
+
+	free(pdev->bus, M_DEVBUF);
+	kfree(pdev->path_name);
+
+	/*
+	 * Lastly, apply an internal hack in order to signal
+	 * that this was run (device reference fully dropped).
+	 * See comment in linux_pci_detach_device().
+	 */
+	pdev->dev.release = NULL;
 }
 
 static int
@@ -395,6 +482,7 @@ lkpifill_pci_dev(device_t dev, struct pci_dev *pdev)
 	spin_lock_init(&pdev->dev.devres_lock);
 	INIT_LIST_HEAD(&pdev->dev.devres_head);
 	INIT_LIST_HEAD(&pdev->dev.irqents);
+	INIT_LIST_HEAD(&pdev->links);
 
 	return (0);
 }
@@ -613,7 +701,7 @@ linux_pci_attach_device(device_t dev, struct pci_driver *pdrv,
 	pdev->irq = pdev->dev.irq;
 	error = linux_pdev_dma_init(pdev);
 	if (error)
-		goto out_dma_init;
+		goto out_err;
 
 	spin_lock(&pci_lock);
 	list_add(&pdev->links, &pci_devices);
@@ -628,7 +716,7 @@ linux_pci_attach_device(device_t dev, struct pci_driver *pdrv,
 		pbus = lkpinew_pci_dev(parent);
 		if (pbus == NULL) {
 			error = ENXIO;
-			goto out_dma_init;
+			goto out_err;
 		}
 	}
 	pcie_find_root_port(pbus);
@@ -643,19 +731,11 @@ linux_pci_attach_device(device_t dev, struct pci_driver *pdrv,
 	if (pdrv != NULL) {
 		error = pdrv->probe(pdev, id);
 		if (error)
-			goto out_probe;
+			goto out_err;
 	}
 	return (0);
 
-/* XXX the cleanup does not match the allocation up there. */
-out_probe:
-	free(pdev->bus, M_DEVBUF);
-	spin_lock_destroy(&pdev->pcie_cap_lock);
-	linux_pdev_dma_uninit(pdev);
-out_dma_init:
-	spin_lock(&pci_lock);
-	list_del(&pdev->links);
-	spin_unlock(&pci_lock);
+out_err:
 	put_device(&pdev->dev);
 	return (-error);
 }
@@ -664,14 +744,16 @@ static int
 linux_pci_detach(device_t dev)
 {
 	struct pci_dev *pdev;
+	int error;
 
 	pdev = device_get_softc(dev);
-
 	MPASS(pdev != NULL);
 
-	device_set_desc(dev, NULL);
+	error = linux_pci_detach_device(pdev);
+	if (error == 0)
+		device_set_desc(dev, NULL);
 
-	return (linux_pci_detach_device(pdev));
+	return (error);
 }
 
 int
@@ -680,21 +762,51 @@ linux_pci_detach_device(struct pci_dev *pdev)
 
 	linux_set_current(curthread);
 
+	/*
+	 * We cannot do much here as almost everything will have
+	 * to happen as the last reference to the LinuxKPI device
+	 * goes away.  That will call the release function,
+	 * which lkpifill_pci_dev() set.  That is were most
+	 * of the cleanup will happen.  But before that give
+	 * the driver a chance to cleanup.
+	 * The big problem is that the Linux KPI does not
+	 * report back if it was the last kref (well kref
+	 * does report back but then kobj, dev, pdev do not).
+	 * So we have little way of knowing if the release
+	 * happened or not.  We have to play tricks for that
+	 * and we can given the softc (pdev) is still valid
+	 * until we return from here.
+	 */
+
 	if (pdev->pdrv != NULL)
 		pdev->pdrv->remove(pdev);
 
-	if (pdev->root != NULL)
-		pci_dev_put(pdev->root);
-	free(pdev->bus, M_DEVBUF);
-	linux_pdev_dma_uninit(pdev);
+	pci_dev_put(pdev);
 
-	spin_lock(&pci_lock);
-	list_del(&pdev->links);
-	spin_unlock(&pci_lock);
-	spin_lock_destroy(&pdev->pcie_cap_lock);
-	put_device(&pdev->dev);
+	/*
+	 * We (ab)use the release function as a guard to
+	 * know if we made it there and the device is gone.
+	 */
+	if (pdev->dev.release != lkpi_pci_dev_release)
+		return (0);
 
-	return (0);
+	/*
+	 * Detach failed.
+	 * We need to re-acquire the ref and wait for
+	 * the other refs to be gone... In theory this
+	 * should never happen, so log it!
+	 * XXX I wish there was a KPI to query the ref.
+	 *
+	 * If we do not error and wait, we will have a
+	 * LinuxKPI device dangling active with pointers
+	 * but the FreeBSD device_t will be 'gone'.
+	 */
+	device_printf(pdev->dev.bsddev, "%s failed due to %u other pending "
+	    "references on the LinuxKPI device.\n", __func__,
+	    kref_read(&pdev->dev.kobj.kref));
+	pci_dev_get(pdev);
+
+	return (EBUSY);
 }
 
 static int
@@ -1463,6 +1575,9 @@ pci_alloc_irq_vectors(struct pci_dev *pdev, int minv, int maxv,
 {
 	int error;
 
+	if ((flags & PCI_IRQ_AFFINITY) != 0) {
+		pr_debug("%s: TODO PCI_IRQ_AFFINITY\n", __func__);
+	}
 	if (flags & PCI_IRQ_MSIX) {
 		struct msix_entry *entries;
 		int i;
@@ -1496,7 +1611,7 @@ out:
 }
 
 struct msi_desc *
-lkpi_pci_msi_desc_alloc(int irq)
+lkpi_pci_msi_desc_alloc(unsigned int irq)
 {
 	struct device *dev;
 	struct pci_dev *pdev;
@@ -1725,8 +1840,8 @@ lkpi_dma_unmap(struct device *dev, dma_addr_t dma_addr, size_t len,
 	/* dma_sync_single_for_cpu() unrolled to avoid lock recursicn. */
 	switch (direction) {
 	case DMA_BIDIRECTIONAL:
-		bus_dmamap_sync(obj->dmat, obj->dmamap, BUS_DMASYNC_POSTREAD);
-		bus_dmamap_sync(obj->dmat, obj->dmamap, BUS_DMASYNC_PREREAD);
+		bus_dmamap_sync(obj->dmat, obj->dmamap,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		break;
 	case DMA_TO_DEVICE:
 		bus_dmamap_sync(obj->dmat, obj->dmamap, BUS_DMASYNC_POSTWRITE);
@@ -1799,7 +1914,7 @@ linux_dma_alloc_coherent(struct device *dev, size_t size,
 
 struct lkpi_devres_dmam_coherent {
 	size_t size;
-	dma_addr_t *handle;
+	dma_addr_t handle;
 	void *mem;
 };
 
@@ -1809,7 +1924,7 @@ lkpi_dmam_free_coherent(struct device *dev, void *p)
 	struct lkpi_devres_dmam_coherent *dr;
 
 	dr = p;
-	dma_free_coherent(dev, dr->size, dr->mem, *dr->handle);
+	dma_free_coherent(dev, dr->size, dr->mem, dr->handle);
 }
 
 static int
@@ -1835,7 +1950,7 @@ linuxkpi_dmam_free_coherent(struct device *dev, size_t size,
 {
 	struct lkpi_devres_dmam_coherent match = {
 		.size		= size,
-		.handle		= &dma_handle,
+		.handle		= dma_handle,
 		.mem		= addr
 	};
 	int error;
@@ -1862,7 +1977,7 @@ linuxkpi_dmam_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_ha
 
 	dr->size = size;
 	dr->mem = linux_dma_alloc_coherent(dev, size, dma_handle, flag);
-	dr->handle = dma_handle;
+	dr->handle = *dma_handle;
 	if (dr->mem == NULL) {
 		lkpi_devres_free(dr);
 		return (NULL);
@@ -1870,6 +1985,56 @@ linuxkpi_dmam_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_ha
 
 	lkpi_devres_add(dev, dr);
 	return (dr->mem);
+}
+
+void *
+linuxkpi_dma_alloc_noncoherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
+    enum dma_data_direction direction, gfp_t gfp)
+{
+	struct linux_dma_priv *priv;
+	size_t align;
+	void *mem;
+
+	size = PAGE_ALIGN(size);
+	align = PAGE_SIZE << get_order(size);
+	mem = kmem_alloc_contig(size, gfp & GFP_NATIVE_MASK, 0, BUS_SPACE_MAXADDR,
+	    align, 0, VM_MEMATTR_DEFAULT);
+	if (mem == NULL) {
+		*dma_handle = 0;
+		return (NULL);
+	}
+
+	priv = dev->dma_priv;
+	*dma_handle = linux_dma_map_phys_common(dev, vtophys(mem), size, priv->dmat);
+	if (*dma_handle == 0) {
+		kmem_free(mem, size);
+		mem = NULL;
+	}
+	return (mem);
+}
+
+void
+linuxkpi_dma_free_noncoherent(struct device *dev, size_t size, void *vaddr,
+    dma_addr_t dma_handle, enum dma_data_direction direction)
+{
+	lkpi_dma_unmap(dev, dma_handle, size, direction, 0);
+	kmem_free(vaddr, size);
+}
+
+void *
+linuxkpi_dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *dma_handle,
+    gfp_t gfp, unsigned long attrs)
+{
+	return (linuxkpi_dma_alloc_noncoherent(dev, size, dma_handle,
+	    DMA_BIDIRECTIONAL, gfp));
+}
+
+void
+linuxkpi_dma_free_attrs(struct device *dev, size_t size, void *vaddr,
+    dma_addr_t dma_handle, unsigned long attrs)
+{
+	linuxkpi_dma_free_noncoherent(dev, size, vaddr, dma_handle,
+	    DMA_BIDIRECTIONAL);
 }
 
 void
@@ -1892,6 +2057,17 @@ linuxkpi_dma_sync(struct device *dev, dma_addr_t dma_addr, size_t size,
 	}
 
 	bus_dmamap_sync(obj->dmat, obj->dmamap, op);
+	DMA_PRIV_UNLOCK(priv);
+}
+
+void
+lkpi_dma_sync_sg(struct device *dev, struct scatterlist *sgl, bus_dmasync_op_t op)
+{
+	struct linux_dma_priv *priv;
+
+	priv = dev->dma_priv;
+	DMA_PRIV_LOCK(priv);
+	bus_dmamap_sync(priv->dmat, sgl->dma_map, op);
 	DMA_PRIV_UNLOCK(priv);
 }
 
@@ -1936,13 +2112,14 @@ linux_dma_map_sg_attrs(struct device *dev, struct scatterlist *sgl, int nents,
 
 	switch (direction) {
 	case DMA_BIDIRECTIONAL:
-		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_PREWRITE);
+		bus_dmamap_sync(priv->dmat, sgl->dma_map,
+		    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
 		break;
 	case DMA_TO_DEVICE:
-		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_PREREAD);
+		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_PREWRITE);
 		break;
 	case DMA_FROM_DEVICE:
-		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_PREWRITE);
+		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_PREREAD);
 		break;
 	default:
 		break;
@@ -1970,8 +2147,8 @@ linux_dma_unmap_sg_attrs(struct device *dev, struct scatterlist *sgl,
 
 	switch (direction) {
 	case DMA_BIDIRECTIONAL:
-		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_POSTREAD);
-		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_PREREAD);
+		bus_dmamap_sync(priv->dmat, sgl->dma_map,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		break;
 	case DMA_TO_DEVICE:
 		bus_dmamap_sync(priv->dmat, sgl->dma_map, BUS_DMASYNC_POSTWRITE);

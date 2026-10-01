@@ -139,7 +139,6 @@ CFLAGS+=	-include ${.OBJDIR}/opt_global.h
 CFLAGS+=	-I. -I${SYSDIR} -I${SYSDIR}/contrib/ck/include
 
 CFLAGS.gcc+=	-finline-limit=${INLINE_LIMIT}
-CFLAGS.gcc+=	-fms-extensions
 CFLAGS.gcc+= --param inline-unit-growth=100
 CFLAGS.gcc+= --param large-function-growth=1000
 
@@ -159,9 +158,7 @@ LDFLAGS+=	-d
 .endif
 LDFLAGS+=	-warn-common
 
-.if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mbuild-id}
 LDFLAGS+=	--build-id=sha1
-.endif
 
 CFLAGS+=	${DEBUG_FLAGS}
 .if ${MACHINE_CPUARCH} == aarch64 || ${MACHINE_CPUARCH} == amd64 || \

@@ -45,6 +45,7 @@ SUBDIR=	\
 	${_armv8_rng} \
 	${_asmc} \
 	ata \
+	${_aq} \
 	ath \
 	ath_dfs \
 	ath_hal \
@@ -296,6 +297,7 @@ SUBDIR=	\
 	nlsysevent \
 	nge \
 	nmdm \
+	ntsync \
 	nullfs \
 	${_ntb} \
 	nvd \
@@ -539,6 +541,7 @@ SUBDIR+=	fdt
     ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	linprocfs
 SUBDIR+=	linsysfs
+SUBDIR+=	linux_ntsync
 .endif
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	linux
@@ -742,6 +745,7 @@ _imx=		imx
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
+_aq=		aq
 _agp=		agp
 .if ${MACHINE_CPUARCH} == "i386" || !empty(COMPAT_FREEBSD32_ENABLED)
 _aout=		aout
@@ -830,6 +834,7 @@ _nfe=		nfe
 _nvram=		nvram
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
 _padlock=	padlock
+_padlock_rng=	padlock_rng
 _rdrand_rng=	rdrand_rng
 _rdseed_rng=	rdseed_rng
 .endif
@@ -903,9 +908,6 @@ _glxsb=		glxsb
 _pcfclock=	pcfclock
 _pst=		pst
 _sbni=		sbni
-.if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
-_padlock_rng=	padlock_rng
-.endif
 .endif
 
 .if ${MACHINE_ARCH} == "armv7"

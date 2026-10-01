@@ -1926,6 +1926,22 @@ struct renameat2_args {
 	char new_l_[PADL_(const char *)]; const char * new; char new_r_[PADR_(const char *)];
 	char flags_l_[PADL_(int)]; int flags; char flags_r_[PADR_(int)];
 };
+struct pdopenpid_args {
+	char pid_l_[PADL_(pid_t)]; pid_t pid; char pid_r_[PADR_(pid_t)];
+	char flags_l_[PADL_(int)]; int flags; char flags_r_[PADR_(int)];
+};
+struct pddupfd_args {
+	char pd_l_[PADL_(int)]; int pd; char pd_r_[PADR_(int)];
+	char fd_l_[PADL_(int)]; int fd; char fd_r_[PADR_(int)];
+	char flags_l_[PADL_(int)]; int flags; char flags_r_[PADR_(int)];
+};
+struct pdptrace_args {
+	char req_l_[PADL_(int)]; int req; char req_r_[PADR_(int)];
+	char pfd_l_[PADL_(int)]; int pfd; char pfd_r_[PADR_(int)];
+	char lwpid_l_[PADL_(int)]; int lwpid; char lwpid_r_[PADR_(int)];
+	char addr_l_[PADL_(void *)]; void * addr; char addr_r_[PADR_(void *)];
+	char data_l_[PADL_(int)]; int data; char data_r_[PADR_(int)];
+};
 int	sys__exit(struct thread *, struct _exit_args *);
 int	sys_fork(struct thread *, struct fork_args *);
 int	sys_read(struct thread *, struct read_args *);
@@ -2335,6 +2351,9 @@ int	sys_jail_remove_jd(struct thread *, struct jail_remove_jd_args *);
 int	sys_pdrfork(struct thread *, struct pdrfork_args *);
 int	sys_pdwait(struct thread *, struct pdwait_args *);
 int	sys_renameat2(struct thread *, struct renameat2_args *);
+int	sys_pdopenpid(struct thread *, struct pdopenpid_args *);
+int	sys_pddupfd(struct thread *, struct pddupfd_args *);
+int	sys_pdptrace(struct thread *, struct pdptrace_args *);
 
 #ifdef COMPAT_43
 
@@ -3336,6 +3355,9 @@ int	freebsd14_setgroups(struct thread *, struct freebsd14_setgroups_args *);
 #define	SYS_AUE_pdrfork	AUE_PDRFORK
 #define	SYS_AUE_pdwait	AUE_PDWAIT
 #define	SYS_AUE_renameat2	AUE_RENAMEAT
+#define	SYS_AUE_pdopenpid	AUE_PDOPENPID
+#define	SYS_AUE_pddupfd	AUE_NULL
+#define	SYS_AUE_pdptrace	AUE_PDPTRACE
 
 #undef PAD_
 #undef PADL_

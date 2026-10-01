@@ -60,6 +60,7 @@
 #include <vm/pmap.h>
 
 #include <x86/apicreg.h>
+#include <machine/atomic.h>
 #include <machine/clock.h>
 #include <machine/cpufunc.h>
 #include <machine/cputypes.h>
@@ -313,6 +314,8 @@ static uint64_t lapic_ipi_wait_mult;
 static int __read_mostly lapic_ds_idle_timeout = 1000000;
 #endif
 unsigned int max_apic_id;
+static lapic_thermal_handler_t *lapic_thermal_function;
+static void *lapic_thermal_function_arg;
 static int pcint_refcnt = 0;
 
 SYSCTL_NODE(_hw, OID_AUTO, apic, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
@@ -329,16 +332,6 @@ SYSCTL_INT(_hw_apic, OID_AUTO, ds_idle_timeout, CTLFLAG_RWTUN,
 #endif
 
 static void lapic_calibrate_initcount(struct lapic *la);
-
-/*
- * Calculate the max index of the present LVT entry from the value of
- * the LAPIC version register.
- */
-static int
-lapic_maxlvt(uint32_t version)
-{
-	return ((version & APIC_VER_MAXLVT) >> MAXLVTSHIFT);
-}
 
 /*
  * Use __nosanitizethread to exempt the LAPIC I/O accessors from KCSan
@@ -385,6 +378,28 @@ lapic_write32_nofence(enum LAPIC_REGISTERS reg, uint32_t val)
 	} else {
 		*(volatile uint32_t *)(lapic_map + reg * LAPIC_MEM_MUL) = val;
 	}
+}
+
+static inline uint32_t __pure2
+lapic_version(void)
+{
+	return (lapic_read32(LAPIC_VERSION));
+}
+
+/*
+ * Calculate the max index of the present LVT entry from the value of
+ * the LAPIC version register.
+ */
+static inline int __pure2
+lapic_version_maxlvt(uint32_t version)
+{
+	return ((version & APIC_VER_MAXLVT) >> MAXLVTSHIFT);
+}
+
+static inline int __pure2
+lapic_maxlvt(void)
+{
+	return (lapic_version_maxlvt(lapic_version()));
 }
 
 #ifdef SMP
@@ -593,7 +608,9 @@ lapic_init(vm_paddr_t addr)
 	setidt(APIC_ERROR_INT, pti ? IDTVEC(errorint_pti) : IDTVEC(errorint),
 	    SDT_APIC, SEL_KPL, GSEL_APIC);
 
-	/* XXX: Thermal interrupt */
+	/* Thermal interrupt */
+	setidt(APIC_THERMAL_INT, pti ? IDTVEC(thermalint_pti) : IDTVEC(thermalint),
+	    SDT_APIC, SEL_KPL, GSEL_APIC);
 
 	/* Local APIC CMCI. */
 	setidt(APIC_CMC_INT, pti ? IDTVEC(cmcint_pti) : IDTVEC(cmcint),
@@ -640,7 +657,7 @@ lapic_init(vm_paddr_t addr)
 	 * It seems that at least some KVM versions report
 	 * EOI_SUPPRESSION bit, but auto-EOI does not work.
 	 */
-	ver = lapic_read32(LAPIC_VERSION);
+	ver = lapic_version();
 	if ((ver & APIC_VER_EOI_SUPPRESSION) != 0) {
 		lapic_eoi_suppression = 1;
 		if (vm_guest == VM_GUEST_KVM) {
@@ -747,7 +764,7 @@ amd_read_ext_features(void)
 	if (cpu_vendor_id != CPU_VENDOR_AMD &&
 	    cpu_vendor_id != CPU_VENDOR_HYGON)
 		return (0);
-	version = lapic_read32(LAPIC_VERSION);
+	version = lapic_version();
 	if ((version & APIC_VER_AMD_EXT_SPACE) != 0)
 		return (lapic_read32(LAPIC_EXT_FEATURES));
 	else
@@ -772,14 +789,12 @@ amd_read_elvt_count(void)
 void
 lapic_dump(const char* str)
 {
-	uint32_t version;
-	uint32_t maxlvt;
+	const uint32_t version = lapic_version();
+	const int maxlvt = lapic_version_maxlvt(version);
 	uint32_t extf;
 	int elvt_count;
 	int i;
 
-	version = lapic_read32(LAPIC_VERSION);
-	maxlvt = lapic_maxlvt(version);
 	printf("cpu%d %s:\n", PCPU_GET(cpuid), str);
 	printf("     ID: 0x%08x   VER: 0x%08x LDR: 0x%08x DFR: 0x%08x",
 	    lapic_read32(LAPIC_ID), version,
@@ -789,9 +804,10 @@ lapic_dump(const char* str)
 	printf("\n  lint0: 0x%08x lint1: 0x%08x TPR: 0x%08x SVR: 0x%08x\n",
 	    lapic_read32(LAPIC_LVT_LINT0), lapic_read32(LAPIC_LVT_LINT1),
 	    lapic_read32(LAPIC_TPR), lapic_read32(LAPIC_SVR));
-	printf("  timer: 0x%08x therm: 0x%08x err: 0x%08x",
-	    lapic_read32(LAPIC_LVT_TIMER), lapic_read32(LAPIC_LVT_THERMAL),
+	printf("  timer: 0x%08x err: 0x%08x", lapic_read32(LAPIC_LVT_TIMER),
 	    lapic_read32(LAPIC_LVT_ERROR));
+	if (maxlvt >= APIC_LVT_THERMAL)
+		printf(" therm: 0x%08x", lapic_read32(LAPIC_LVT_THERMAL));
 	if (maxlvt >= APIC_LVT_PMC)
 		printf(" pmc: 0x%08x", lapic_read32(LAPIC_LVT_PCINT));
 	printf("\n");
@@ -836,10 +852,8 @@ static void
 lapic_early_mask_vecs(void)
 {
 	int elvt_count, lvts_count, i;
-	uint32_t version;
 
-	version = lapic_read32(LAPIC_VERSION);
-	lvts_count = min(nitems(lvts), lapic_maxlvt(version) + 1);
+	lvts_count = min(nitems(lvts), lapic_maxlvt() + 1);
 	for (i = 0; i < lvts_count; i++)
 		lapic_early_mask_vec(&lvts[i]);
 
@@ -851,9 +865,9 @@ lapic_early_mask_vecs(void)
 void
 lapic_setup(int boot)
 {
+	const uint32_t version = lapic_version();
+	const uint32_t maxlvt = lapic_version_maxlvt(version);
 	struct lapic *la;
-	uint32_t version;
-	uint32_t maxlvt;
 	register_t saveintr;
 	int elvt_count;
 	int i;
@@ -862,8 +876,6 @@ lapic_setup(int boot)
 
 	la = &lapics[lapic_id()];
 	KASSERT(la->la_present, ("missing APIC structure"));
-	version = lapic_read32(LAPIC_VERSION);
-	maxlvt = lapic_maxlvt(version);
 
 	/* Initialize the TPR to allow all interrupts. */
 	lapic_set_tpr(0);
@@ -920,7 +932,10 @@ lapic_setup(int boot)
 	    lapic_read32(LAPIC_LVT_ERROR)));
 	lapic_write32(LAPIC_ESR, 0);
 
-	/* XXX: Thermal LVT */
+	/* Thermal LVT */
+	if (maxlvt >= APIC_LVT_THERMAL)
+		lapic_write32(LAPIC_LVT_THERMAL, lvt_mode(la, APIC_LVT_THERMAL,
+		    lapic_read32(LAPIC_LVT_THERMAL)));
 
 	/* Program the CMCI LVT entry if present. */
 	if (maxlvt >= APIC_LVT_CMCI) {
@@ -1010,8 +1025,6 @@ lapic_calibrate_timer(void)
 int
 lapic_enable_pcint(void)
 {
-	u_int32_t maxlvt;
-
 #ifdef DEV_ATPIC
 	/* Fail if the local APIC is not present. */
 	if (!x2apic_mode && lapic_map == NULL)
@@ -1019,8 +1032,7 @@ lapic_enable_pcint(void)
 #endif
 
 	/* Fail if the PMC LVT is not present. */
-	maxlvt = lapic_maxlvt(lapic_read32(LAPIC_VERSION));
-	if (maxlvt < APIC_LVT_PMC)
+	if (lapic_maxlvt() < APIC_LVT_PMC)
 		return (0);
 	if (refcount_acquire(&pcint_refcnt) > 0)
 		return (1);
@@ -1034,8 +1046,6 @@ lapic_enable_pcint(void)
 void
 lapic_disable_pcint(void)
 {
-	u_int32_t maxlvt;
-
 #ifdef DEV_ATPIC
 	/* Fail if the local APIC is not present. */
 	if (!x2apic_mode && lapic_map == NULL)
@@ -1043,8 +1053,7 @@ lapic_disable_pcint(void)
 #endif
 
 	/* Fail if the PMC LVT is not present. */
-	maxlvt = lapic_maxlvt(lapic_read32(LAPIC_VERSION));
-	if (maxlvt < APIC_LVT_PMC)
+	if (lapic_maxlvt() < APIC_LVT_PMC)
 		return;
 	if (!refcount_release(&pcint_refcnt))
 		return;
@@ -1450,9 +1459,6 @@ lapic_handle_timer(struct trapframe *frame)
 	kmsan_mark(frame, sizeof(*frame), KMSAN_STATE_INITED);
 	trap_check_kstack();
 
-	if (!sched_do_timer_accounting())
-		return;
-
 	/* Look up our local APIC structure for the tick counters. */
 	la = &lapics[PCPU_GET(apic_id)];
 	(*la->la_timer_count)++;
@@ -1611,6 +1617,77 @@ lapic_enable_mca_elvt(void)
 	lapics[apic_id].la_elvts[APIC_ELVT_MCA].lvt_masked = 0;
 	lapics[apic_id].la_elvts[APIC_ELVT_MCA].lvt_active = 1;
 	return (APIC_ELVT_MCA);
+}
+
+void
+lapic_handle_thermal(void)
+{
+	lapic_thermal_handler_t *func;
+
+	func = (lapic_thermal_handler_t *)atomic_load_acq_ptr(
+	    (uintptr_t *)&lapic_thermal_function);
+
+	if (func != NULL)
+		func(PCPU_GET(cpuid), lapic_thermal_function_arg);
+
+	lapic_eoi();
+}
+
+static void
+lapic_update_thermal(void *dummy __unused)
+{
+	struct lapic *la;
+
+	la = &lapics[lapic_id()];
+	lapic_write32(LAPIC_LVT_THERMAL, lvt_mode(la, APIC_LVT_THERMAL,
+	    lapic_read32(LAPIC_LVT_THERMAL)));
+}
+
+bool
+lapic_enable_thermal(lapic_thermal_handler_t *func, void *func_arg)
+{
+#ifdef DEV_ATPIC
+	/* Fail if the local APIC is not present. */
+	if (!x2apic_mode && lapic_map == NULL)
+		return (false);
+#endif
+
+	if (lapic_maxlvt() < APIC_LVT_THERMAL)
+		return (false);
+
+	lapic_thermal_function_arg = func_arg;
+	atomic_store_rel_ptr((uintptr_t *)&lapic_thermal_function,
+	    (uintptr_t)func);
+
+	lvts[APIC_LVT_THERMAL].lvt_masked = 0;
+
+	MPASS(mp_ncpus == 1 || smp_started);
+	smp_rendezvous(NULL, lapic_update_thermal, NULL, NULL);
+
+	return (true);
+}
+
+void
+lapic_disable_thermal(void)
+{
+#ifdef DEV_ATPIC
+	/* Fail if the local APIC is not present. */
+	if (!x2apic_mode && lapic_map == NULL)
+		return;
+#endif
+
+	if (lapic_maxlvt() < APIC_LVT_THERMAL)
+		return;
+
+	lvts[APIC_LVT_THERMAL].lvt_masked = 1;
+
+#ifdef SMP
+	KASSERT(mp_ncpus == 1 || smp_started, ("thermal driver unloaded too early"));
+#endif
+	smp_rendezvous(NULL, lapic_update_thermal, NULL, NULL);
+
+	atomic_store_rel_ptr((uintptr_t *)&lapic_thermal_function,
+	    (uintptr_t)NULL);
 }
 
 void
@@ -1898,19 +1975,19 @@ DB_SHOW_COMMAND_FLAGS(lapic, db_show_lapic, DB_CMD_MEMSAFE)
 {
 	const struct lvt *l;
 	int elvt_count, lvts_count, i;
-	uint32_t v, vr;
+	const uint32_t v = lapic_version();
+	const int maxlvt = lapic_version_maxlvt(v);
+	const uint32_t vr = lapic_read32(LAPIC_SVR);
 
 	db_printf("lapic ID = %d\n", lapic_id());
-	v = lapic_read32(LAPIC_VERSION);
 	db_printf("version  = %d.%d (%#x) \n", (v & APIC_VER_VERSION) >> 4,
 	    v & 0xf, v);
-	db_printf("max LVT  = %d\n", lapic_maxlvt(v));
-	vr = lapic_read32(LAPIC_SVR);
+	db_printf("max LVT  = %d\n", maxlvt);
 	db_printf("SVR      = %02x (%s)\n", vr & APIC_SVR_VECTOR,
 	    vr & APIC_SVR_ENABLE ? "enabled" : "disabled");
 	db_printf("TPR      = %02x\n", lapic_read32(LAPIC_TPR));
 
-	lvts_count = min(nitems(lvts), lapic_maxlvt(v) + 1);
+	lvts_count = min(nitems(lvts), maxlvt + 1);
 	for (i = 0; i < lvts_count; i++) {
 		l = &lvts[i];
 		db_printf("LVT%d  (reg %#x %-5s) = %#010x\n", i, l->lvt_reg,
@@ -2298,6 +2375,8 @@ native_lapic_ipi_vectored(u_int vector, int dest)
 void (*ipi_vectored)(u_int, int) = &native_lapic_ipi_vectored;
 #endif /* SMP */
 
+void (*fred_ipi_handlers[IPI_DYN_LAST - IPI_DYN_FIRST + 1])(struct trapframe *);
+
 /*
  * Since the IDT is shared by all CPUs the IPI slot update needs to be globally
  * visible.
@@ -2312,10 +2391,9 @@ void (*ipi_vectored)(u_int, int) = &native_lapic_ipi_vectored;
  * the IDT slot update is globally visible before the IPI is delivered.
  */
 int
-lapic_ipi_alloc(inthand_t *ipifunc)
+lapic_ipi_alloc(inthand_t *ipifunc, void (*fred_ipifunc)(struct trapframe *))
 {
-	struct gate_descriptor *ip;
-	long func;
+	void (*fip)(struct trapframe *);
 	int idx, vector;
 
 	KASSERT(ipifunc != &IDTVEC(rsvd) && ipifunc != &IDTVEC(rsvd_pti),
@@ -2324,14 +2402,10 @@ lapic_ipi_alloc(inthand_t *ipifunc)
 	vector = -1;
 	mtx_lock_spin(&icu_lock);
 	for (idx = IPI_DYN_FIRST; idx <= IPI_DYN_LAST; idx++) {
-		ip = &idt[idx];
-		func = (ip->gd_hioffset << 16) | ip->gd_looffset;
-#ifdef __i386__
-		func -= setidt_disp;
-#endif
-		if ((!pti && func == (uintptr_t)&IDTVEC(rsvd)) ||
-		    (pti && func == (uintptr_t)&IDTVEC(rsvd_pti))) {
+		fip = fred_ipi_handlers[idx - IPI_DYN_FIRST];
+		if (fip == NULL) {
 			vector = idx;
+			fred_ipi_handlers[idx - IPI_DYN_FIRST] = fred_ipifunc;
 			setidt(vector, ipifunc, SDT_APIC, SEL_KPL, GSEL_APIC);
 			break;
 		}
@@ -2350,15 +2424,20 @@ lapic_ipi_free(int vector)
 	    ("%s: invalid vector %d", __func__, vector));
 
 	mtx_lock_spin(&icu_lock);
-	ip = &idt[vector];
-	func = (ip->gd_hioffset << 16) | ip->gd_looffset;
+	KASSERT(fred_ipi_handlers[vector - IPI_DYN_FIRST] != NULL,
+	    ("NULL fred func %d", vector));
+	fred_ipi_handlers[vector - IPI_DYN_FIRST] = NULL;
+	if (!fred) {
+		ip = &idt[vector];
+		func = (ip->gd_hioffset << 16) | ip->gd_looffset;
 #ifdef __i386__
-	func -= setidt_disp;
+		func -= setidt_disp;
 #endif
-	KASSERT(func != (uintptr_t)&IDTVEC(rsvd) &&
-	    func != (uintptr_t)&IDTVEC(rsvd_pti),
-	    ("invalid idtfunc %#lx", func));
-	setidt(vector, pti ? &IDTVEC(rsvd_pti) : &IDTVEC(rsvd), SDT_APIC,
-	    SEL_KPL, GSEL_APIC);
+		KASSERT(func != (uintptr_t)&IDTVEC(rsvd) &&
+		    func != (uintptr_t)&IDTVEC(rsvd_pti),
+		    ("invalid idtfunc %d %#lx", vector, func));
+		setidt(vector, pti ? &IDTVEC(rsvd_pti) : &IDTVEC(rsvd),
+		    SDT_APIC, SEL_KPL, GSEL_APIC);
+	}
 	mtx_unlock_spin(&icu_lock);
 }

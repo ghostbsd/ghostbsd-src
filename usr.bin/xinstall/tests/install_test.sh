@@ -25,6 +25,15 @@
 #
 #
 
+atf_test_case incompatible_opts
+incompatible_opts_body() {
+	printf 'test\n123\r456\r\n789\0z' >testf
+	atf_check -s not-exit:0 -e match:"specified together" \
+	    install -s -d dir1
+	atf_check -s not-exit:0 -e match:"specified together" \
+	    install -s -l s testf copyf
+}
+
 atf_test_case copy_to_empty
 copy_to_empty_body() {
 	printf 'test\n123\r456\r\n789\0z' >testf
@@ -548,7 +557,48 @@ digest_body() {
 	done
 }
 
+atf_test_case null
+null_head() {
+	atf_set "descr" "Install empty file"
+}
+null_body() {
+	atf_check mkdir dst
+	atf_check -s exit:71 -e not-empty install /dev/null dst
+	atf_check install /dev/null dst/file
+	atf_check test -f dst/file
+	atf_check test ! -s dst/file
+	# what if target already exists?
+	echo "The Magic Words are Squeamish Ossifrage" >dst/file
+	atf_check test -s dst/file
+	atf_check install /dev/null dst/file
+	atf_check test ! -s dst/file
+}
+
+atf_test_case stdin
+stdin_head() {
+	atf_set "descr" "Install stdin"
+}
+stdin_body() {
+	atf_check mkdir dst
+	echo "The Magic Words are Squeamish Ossifrage" >src
+	atf_check -s exit:71 -e not-empty install - dst <src
+	atf_check test ! -e dst/file
+	atf_check install - dst/file <src
+	atf_check cmp -s dst/file src
+	atf_check rm dst/file
+	atf_check -s exit:71 -e not-empty install /dev/stdin dst <src
+	atf_check test ! -e dst/file
+	atf_check install /dev/stdin dst/file <src
+	atf_check cmp -s dst/file src
+	# what if target already exists?
+	atf_check install - dst/file </dev/null
+	atf_check test ! -s dst/file
+	atf_check install /dev/stdin dst/file <src
+	atf_check cmp -s dst/file src
+}
+
 atf_init_test_cases() {
+	atf_add_test_case incompatible_opts
 	atf_add_test_case copy_to_empty
 	atf_add_test_case copy_to_nonexistent
 	atf_add_test_case copy_to_nonexistent_dir
@@ -595,4 +645,6 @@ atf_init_test_cases() {
 	atf_add_test_case set_optional_exec
 	atf_add_test_case metalog
 	atf_add_test_case digest
+	atf_add_test_case null
+	atf_add_test_case stdin
 }

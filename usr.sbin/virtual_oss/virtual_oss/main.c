@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2012-2022 Hans Petter Selasky
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +37,7 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <grp.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -1618,7 +1621,6 @@ int	voss_is_recording = 1;
 int	voss_has_synchronization;
 volatile sig_atomic_t voss_exit = 0;
 
-static int voss_dsp_perm = 0666;
 static int voss_do_background;
 static int voss_baseclone = 0;
 static const char *voss_pid_path;
@@ -1638,6 +1640,7 @@ struct voss_backend *voss_tx_backend;
 static int voss_dups;
 static int voss_ntds;
 static pthread_t *voss_tds;
+static int voss_fd_sta = -1;
 
 /* XXX I do not like the prefix argument... */
 static struct voss_backend *
@@ -1843,7 +1846,7 @@ init_sndstat(vprofile_t *ptr)
 		warn("Failed to pack nvlist");
 		goto done;
 	}
-	err = ioctl(ptr->fd_sta, SNDSTIOC_ADD_USER_DEVS, &arg);
+	err = ioctl(voss_fd_sta, SNDSTIOC_ADD_USER_DEVS, &arg);
 	free(arg.buf);
 	if (err != 0) {
 		warn("Failed to issue ioctl(SNDSTIOC_ADD_USER_DEVS)");
@@ -1856,13 +1859,40 @@ done:
 	nvlist_destroy(nvl);
 }
 
+static void
+cleanup_profile(vprofile_t *pvp)
+{
+	if (pvp->oss_dev != NULL)
+		cuse_dev_destroy(pvp->oss_dev);
+	if (pvp->wav_dev != NULL)
+		cuse_dev_destroy(pvp->wav_dev);
+}
+
 static const char *
 dup_profile(vprofile_t *pvp, int *pamp, int pol, int rx_mute,
     int tx_mute, int synchronized, int is_client)
 {
 	vprofile_t *ptr;
 	struct cuse_dev *pdev;
-	int x;
+	struct group *gr;
+	const char *errstr;
+	gid_t gid;
+	int x, perm;
+
+	if (!is_client) {
+		/*
+		 * Loopback devices can be used only by users who part of the
+		 * audio group, to avoid unintended snooping by unprivileged
+		 * users.
+		 */
+		if ((gr = getgrnam("audio")) == NULL)
+			return ("getgrnam() failed");
+		gid = gr->gr_gid;
+		perm = 0660;
+	} else {
+		gid = 0;
+		perm = 0666;
+	}
 
 	rx_mute = rx_mute ? 1 : 0;
 	tx_mute = tx_mute ? 1 : 0;
@@ -1883,7 +1913,6 @@ dup_profile(vprofile_t *pvp, int *pamp, int pol, int rx_mute,
 	memcpy(ptr, pvp, sizeof(*ptr));
 
 	ptr->synchronized = synchronized;
-	ptr->fd_sta = -1;
 	TAILQ_INIT(&ptr->head);
 
 	for (x = 0; x != ptr->channels; x++) {
@@ -1916,28 +1945,31 @@ dup_profile(vprofile_t *pvp, int *pamp, int pol, int rx_mute,
 
 		/* create DSP character device */
 		pdev = cuse_dev_create(&vclient_oss_methods, ptr, NULL,
-		    0, 0, voss_dsp_perm, ptr->oss_name);
+		    0, gid, perm, ptr->oss_name);
 		if (pdev == NULL) {
-			free(ptr);
-			return ("Could not create CUSE DSP device");
+			errstr = "Could not create CUSE DSP device";
+			goto err;
 		}
+		ptr->oss_dev = pdev;
 
 		/* register to sndstat */
-		ptr->fd_sta = open("/dev/sndstat", O_WRONLY);
-		if (ptr->fd_sta < 0) {
-			warn("Could not open /dev/sndstat");
-		} else {
-			init_sndstat(ptr);
+		if (voss_fd_sta < 0) {
+			if ((voss_fd_sta = open("/dev/sndstat", O_WRONLY)) < 0) {
+				errstr = "Could not open /dev/sndstat";
+				goto err;
+			}
 		}
+		init_sndstat(ptr);
 	}
 	/* create WAV device */
 	if (ptr->wav_name[0] != 0) {
 		pdev = cuse_dev_create(&vclient_wav_methods, ptr, NULL,
-		    0, 0, voss_dsp_perm, ptr->wav_name);
+		    0, gid, perm, ptr->wav_name);
 		if (pdev == NULL) {
-			free(ptr);
-			return ("Could not create CUSE WAV device");
+			errstr = "Could not create CUSE WAV device";
+			goto err;
 		}
+		ptr->wav_dev = pdev;
 	}
 
 	atomic_lock();
@@ -1972,6 +2004,13 @@ dup_profile(vprofile_t *pvp, int *pamp, int pol, int rx_mute,
 	init_compressor(pvp);
 
 	return (voss_httpd_start(ptr));
+
+err:
+	cleanup_profile(ptr);
+	free(ptr);
+
+	return (errstr);
+
 }
 
 static void
@@ -2541,6 +2580,7 @@ main(int argc, char **argv)
 	const char *ptrerr;
 	struct sigaction sa;
 	struct cuse_dev *pdev = NULL;
+	struct virtual_profile *pvp;
 
 	TAILQ_INIT(&virtual_profile_client_head);
 	TAILQ_INIT(&virtual_profile_loopback_head);
@@ -2610,7 +2650,7 @@ main(int argc, char **argv)
 
 	if (voss_ctl_device[0] != 0) {
 		pdev = cuse_dev_create(&vctl_methods, NULL, NULL,
-		    0, 0, voss_dsp_perm, voss_ctl_device);
+		    0, 0, 0666, voss_ctl_device);
 		if (pdev == NULL)
 			errx(EX_USAGE, "Could not create '/dev/%s'", voss_ctl_device);
 
@@ -2626,8 +2666,20 @@ main(int argc, char **argv)
 
 	destroy_threads();
 
+	/* Destroy CUSE devices */
+
 	if (voss_ctl_device[0] != 0)
 		cuse_dev_destroy(pdev);
+
+	TAILQ_FOREACH(pvp, &virtual_profile_client_head, entry) {
+		cleanup_profile(pvp);
+	}
+	TAILQ_FOREACH(pvp, &virtual_profile_loopback_head, entry) {
+		cleanup_profile(pvp);
+	}
+
+	cuse_uninit();
+	close(voss_fd_sta);
 
 	return (0);
 }

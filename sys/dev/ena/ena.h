@@ -39,7 +39,7 @@
 
 #define ENA_DRV_MODULE_VER_MAJOR	2
 #define ENA_DRV_MODULE_VER_MINOR	8
-#define ENA_DRV_MODULE_VER_SUBMINOR	3
+#define ENA_DRV_MODULE_VER_SUBMINOR	4
 
 #define ENA_DRV_MODULE_NAME		"ena"
 
@@ -263,7 +263,7 @@ struct ena_tx_buffer {
 	bus_dmamap_t dmamap;
 
 	/* Used to detect missing tx packets */
-	struct bintime timestamp;
+	sbintime_t timestamp;
 	bool print_once;
 
 #ifdef DEV_NETMAP

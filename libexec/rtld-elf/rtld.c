@@ -342,16 +342,6 @@ const char *ld_env_prefix = LD_;
 
 static void (*rtld_exit_ptr)(void);
 
-/*
- * Fill in a DoneList with an allocation large enough to hold all of
- * the currently-loaded objects.  Keep this as a macro since it calls
- * alloca and we want that to occur within the scope of the caller.
- */
-#define donelist_init(dlp)                                             \
-	((dlp)->objs = alloca(obj_count * sizeof(dlp)->objs[0]),       \
-	    assert((dlp)->objs != NULL), (dlp)->num_alloc = obj_count, \
-	    (dlp)->num_used = 0)
-
 #define LD_UTRACE(e, h, mb, ms, r, n)                      \
 	do {                                               \
 		if (ld_utrace != NULL)                     \
@@ -1040,6 +1030,38 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	*exit_proc = rtld_exit_ptr;
 	*objp = obj_main;
 	return ((func_ptr_type)obj_main->entry);
+}
+
+/*
+ * Fill in a DoneList with an allocation large enough to hold all of
+ * the currently-loaded   Keep this as a macro since it calls
+ * alloca and we want that to occur within the scope of the caller.
+ */
+#define	DLP_ALLOCA_LIMIT	100	/* 800 bytes on LP64 */
+#define donelist_init(_DLP, _REQ)	do {				\
+	DoneList *_dlp = _DLP;						\
+	SymLook *_r = _REQ;						\
+	_dlp->num_alloc = obj_count,					\
+	_dlp->req = NULL;						\
+	if (_dlp->num_alloc > DLP_ALLOCA_LIMIT) {			\
+		_dlp->objs = xcalloc(_dlp->num_alloc, sizeof(_dlp->objs[0])); \
+		if (_r != NULL && _r->donelist_mem == NULL) {		\
+			_r->donelist_mem = _dlp->objs;			\
+			_dlp->req = _r;				\
+		}							\
+	} else {							\
+		_dlp->objs = alloca(_dlp->num_alloc * sizeof(_dlp->objs[0])); \
+	}								\
+	_dlp->num_used = 0;						\
+} while (0)
+
+static void
+donelist_free(DoneList *dlp)
+{
+	if (dlp->num_alloc > DLP_ALLOCA_LIMIT)
+		free(dlp->objs);
+	if (dlp->req != NULL)
+		dlp->req->donelist_mem = NULL;
 }
 
 void *
@@ -1757,14 +1779,19 @@ digest_phdr(const Elf_Phdr *phdr, int phnum, caddr_t entry, const char *path)
 void
 digest_notes(Obj_Entry *obj, Elf_Addr note_start, Elf_Addr note_end)
 {
-	const Elf_Note *note;
+	const Elf_Note *note, *next_note;
 	const char *note_name;
 	uintptr_t p;
 
-	for (note = (const Elf_Note *)note_start; (Elf_Addr)note < note_end;
-	    note = (const Elf_Note *)((const char *)(note + 1) +
-		roundup2(note->n_namesz, sizeof(Elf32_Addr)) +
-		roundup2(note->n_descsz, sizeof(Elf32_Addr)))) {
+	for (note = (const Elf_Note *)note_start;; note = next_note) {
+		if ((Elf_Addr)note + sizeof(Elf_Note) > note_end)
+			break;
+		next_note = (const Elf_Note *)((const char *)(note + 1) +
+		    roundup2(note->n_namesz, sizeof(Elf32_Addr)) +
+		    roundup2(note->n_descsz, sizeof(Elf32_Addr)));
+		if ((Elf_Addr)next_note > note_end)
+			break;
+
 		if (arch_digest_note(obj, note))
 			continue;
 
@@ -1777,7 +1804,7 @@ digest_notes(Obj_Entry *obj, Elf_Addr note_start, Elf_Addr note_end)
 			continue;
 		note_name = (const char *)(note + 1);
 		if (strncmp(NOTE_FREEBSD_VENDOR, note_name,
-			sizeof(NOTE_FREEBSD_VENDOR)) != 0)
+		    sizeof(NOTE_FREEBSD_VENDOR)) != 0)
 			continue;
 		switch (note->n_type) {
 		case NT_FREEBSD_ABI_TAG:
@@ -2319,7 +2346,7 @@ init_dag(Obj_Entry *root)
 
 	if (root->dag_inited)
 		return;
-	donelist_init(&donelist);
+	donelist_init(&donelist, NULL);
 
 	/* Root object belongs to own DAG. */
 	objlist_push_tail(&root->dldags, root);
@@ -2342,6 +2369,7 @@ init_dag(Obj_Entry *root)
 		}
 	}
 	root->dag_inited = true;
+	donelist_free(&donelist);
 }
 
 static void
@@ -3159,7 +3187,8 @@ objlist_call_fini(Objlist *list, Obj_Entry *root, RtldLockState *lockstate)
 				for (index = elm->obj->fini_array_num - 1;
 				    index >= 0; index--) {
 					if (fini_addr[index] != 0 &&
-					    fini_addr[index] != 1) {
+					    fini_addr[index] != 1 &&
+					    fini_addr[index] != (Elf_Addr)-1) {
 				dbg("calling fini function for %s at %p",
 						    elm->obj->path,
 						    (void *)fini_addr[index]);
@@ -3265,7 +3294,8 @@ objlist_call_init(Objlist *list, RtldLockState *lockstate)
 			for (index = 0; index < elm->obj->init_array_num;
 			    index++) {
 				if (init_addr[index] != 0 &&
-				    init_addr[index] != 1) {
+				    init_addr[index] != 1 &&
+				    init_addr[index] != (Elf_Addr)-1) {
 				dbg("calling init function for %s at %p",
 					    elm->obj->path,
 					    (void *)init_addr[index]);
@@ -4101,8 +4131,11 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 
 	LD_UTRACE(UTRACE_DLSYM_START, handle, NULL, 0, 0, name);
 	rlock_acquire(rtld_bind_lock, &lockstate);
-	if (sigsetjmp(lockstate.env, 0) != 0)
+	if (sigsetjmp(lockstate.env, 0) != 0) {
 		lock_upgrade(rtld_bind_lock, &lockstate);
+		free(req.donelist_mem);
+		req.donelist_mem = NULL;
+	}
 	if (handle == NULL || handle == RTLD_NEXT || handle == RTLD_DEFAULT ||
 	    handle == RTLD_SELF) {
 		if ((obj = obj_from_addr(retaddr)) == NULL) {
@@ -4171,7 +4204,7 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 			return (NULL);
 		}
 
-		donelist_init(&donelist);
+		donelist_init(&donelist, &req);
 		if (obj->mainprog) {
 			/* Handle obtained by dlopen(NULL, ...) implies global
 			 * scope. */
@@ -4202,6 +4235,7 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 				defobj = req.defobj_out;
 			}
 		}
+		donelist_free(&donelist);
 	}
 
 	if (def != NULL) {
@@ -4729,21 +4763,24 @@ get_program_var_addr(const char *name, RtldLockState *lockstate)
 {
 	SymLook req;
 	DoneList donelist;
+	const void **res;
 
 	symlook_init(&req, name);
 	req.lockstate = lockstate;
-	donelist_init(&donelist);
+	donelist_init(&donelist, NULL);
 	if (symlook_global(&req, &donelist) != 0)
 		return (NULL);
 	if (ELF_ST_TYPE(req.sym_out->st_info) == STT_FUNC)
-		return ((const void **)make_function_pointer(req.sym_out,
-		    req.defobj_out));
+		res = (const void **)make_function_pointer(req.sym_out,
+		    req.defobj_out);
 	else if (ELF_ST_TYPE(req.sym_out->st_info) == STT_GNU_IFUNC)
-		return ((const void **)rtld_resolve_ifunc(req.defobj_out,
-		    req.sym_out));
+		res = (const void **)rtld_resolve_ifunc(req.defobj_out,
+		    req.sym_out);
 	else
-		return ((const void **)(req.defobj_out->relocbase +
-		    req.sym_out->st_value));
+		res = (const void **)(req.defobj_out->relocbase +
+		    req.sym_out->st_value);
+	donelist_free(&donelist);
+	return (res);
 }
 
 /*
@@ -4818,7 +4855,7 @@ symlook_default(SymLook *req, const Obj_Entry *refobj)
 	SymLook req1;
 	int res;
 
-	donelist_init(&donelist);
+	donelist_init(&donelist, req);
 	symlook_init_from_req(&req1, req);
 
 	/*
@@ -4871,6 +4908,7 @@ symlook_default(SymLook *req, const Obj_Entry *refobj)
 		}
 	}
 
+	donelist_free(&donelist);
 	return (req->sym_out != NULL ? 0 : ESRCH);
 }
 
@@ -4952,13 +4990,15 @@ symlook_obj_load_filtees(SymLook *req, SymLook *req1, const Obj_Entry *obj,
     Needed_Entry *needed)
 {
 	DoneList donelist;
-	int flags;
+	int flags, res;
 
 	flags = (req->flags & SYMLOOK_EARLY) != 0 ? RTLD_LO_EARLY : 0;
 	load_filtees(__DECONST(Obj_Entry *, obj), flags, req->lockstate);
-	donelist_init(&donelist);
+	donelist_init(&donelist, NULL);
 	symlook_init_from_req(req1, req);
-	return (symlook_needed(req1, needed, &donelist));
+	res = symlook_needed(req1, needed, &donelist);
+	donelist_free(&donelist);
+	return (res);
 }
 
 /*
@@ -5423,6 +5463,11 @@ unref_dag(Obj_Entry *root)
 
 /*
  * Common code for MD __tls_get_addr().
+ *
+ * The tcb->tcb_dtv data structure is thread-local.  The reason that
+ * the function needs to take the rtld_bind_lock exclusive (as opposed
+ * to only shared, to safely access obj_list in allocate_module_tls())
+ * is to protect the rtld_malloc data.
  */
 static void *
 tls_get_addr_slow(struct tcb *tcb, int index, size_t offset, bool locked)
@@ -6303,6 +6348,7 @@ symlook_init_from_req(SymLook *dst, const SymLook *src)
 	dst->defobj_out = NULL;
 	dst->sym_out = NULL;
 	dst->lockstate = src->lockstate;
+	dst->donelist_mem = NULL;
 }
 
 static int
@@ -6537,27 +6583,52 @@ parse_args(char *argv[], int argc, bool *use_pathp, int *fdp,
 static int
 parse_integer(const char *str)
 {
-	static const int RADIX = 10; /* XXXJA: possibly support hex? */
+	int radix;
 	const char *orig;
-	int n;
+	int n, val;
 	char c;
 
+	if (str[0] == '0') {
+		if (str[1] == 'x') {
+			str += 2;
+			radix = 16;
+		} else if (str[1] == 'b') {
+			str += 2;
+			radix = 2;
+		} else {
+			str += 1;
+			radix = 8;
+		}
+	} else {
+		radix = 10;
+	}
 	orig = str;
 	n = 0;
 	for (c = *str; c != '\0'; c = *++str) {
-		if (c < '0' || c > '9')
+		if (c >= '0' && c <= '9')
+			val = c - '0';
+		else if (c >= 'a' && c <= 'f')
+			val = c - 'a' + 10;
+		else if (c >= 'A' && c <= 'F')
+			val = c - 'A' + 10;
+		else
+			return (-1);
+		if (val >= radix)
 			return (-1);
 
-		if (n > INT_MAX / RADIX)
+		if (n > INT_MAX / radix)
 			return (-1);
-		n *= RADIX;
-		if (n > INT_MAX - (c - '0'))
+		n *= radix;
+		if (n > INT_MAX - val)
 			return (-1);
-		n += c - '0';
+		n += val;
 	}
 
-	/* Make sure we actually parsed something. */
-	if (str == orig)
+	/*
+	 * Make sure we actually parsed something.
+	 * Allow for lone '0'.
+	 */
+	if (str == orig && radix != 8)
 		return (-1);
 	return (n);
 }
@@ -6849,31 +6920,6 @@ getenv(const char *name)
 {
 	return (__DECONST(char *, rtld_get_env_val(environ, name,
 	    strlen(name))));
-}
-
-/* malloc */
-void *
-malloc(size_t nbytes)
-{
-	return (__crt_malloc(nbytes));
-}
-
-void *
-calloc(size_t num, size_t size)
-{
-	return (__crt_calloc(num, size));
-}
-
-void
-free(void *cp)
-{
-	__crt_free(cp);
-}
-
-void *
-realloc(void *cp, size_t nbytes)
-{
-	return (__crt_realloc(cp, nbytes));
 }
 
 extern int _rtld_version__FreeBSD_version __exported;

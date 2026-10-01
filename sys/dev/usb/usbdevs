@@ -714,6 +714,8 @@ vendor DISPLAYLINK	0x17e9	DisplayLink
 vendor LENOVO		0x17ef	Lenovo
 vendor WAVESENSE	0x17f4	WaveSense
 vendor VAISALA		0x1843	Vaisala
+vendor K2L		0x184f	K2L GmbH
+vendor VERBATIM 	0x18a5	Verbatim
 vendor E3C		0x18b4	E3C Technologies
 vendor AMIT		0x18c5	AMIT
 vendor GOOGLE		0x18d1	Google
@@ -1789,6 +1791,7 @@ product DLINK DWA182C1		0x3315	DWA-182 rev C1
 product DLINK DWA180A1		0x3316	DWA-180 rev A1
 product DLINK DWA172A1		0x3318	DWA-172 rev A1
 product DLINK DWA131E1		0x3319	DWA-131 rev E1
+product DLINK DWA121B1		0x331b	DWA-121 rev B1
 product DLINK DWA182D1		0x331c	DWA-182 rev D1
 product DLINK DWA181A1		0x331e	DWA-181 rev A1
 product DLINK DWL122		0x3700	DWL-122
@@ -2761,6 +2764,9 @@ product JVC MP_PRX1		0x3008	MP-PRX1 Ethernet
 
 /* JRC products */
 product JRC AH_J3001V_J3002V	0x0001	AirH PHONE AH-J3001V/J3002V
+
+/* K2L products */
+product K2L EVB_LAN8670_USB	0x0051	Microchip EVB-LAN8670-USB 10BASE-T1S
 
 /* Kamstrrup products */
 product KAMSTRUP OPTICALEYE	0x0001	Optical Eye/3-wire
@@ -4794,6 +4800,8 @@ product TELEX MIC1		0x0001	Enhanced USB Microphone
 /* Telit products */
 product TELIT UC864E		0x1003	UC864E 3G modem
 product TELIT UC864G		0x1004	UC864G 3G modem
+product TELIT LM960		0x1040	LM960A18 LTE modem (RNDIS)
+product TELIT LM960_ECM		0x1042	LM960A18 LTE modem (ECM)
 
 /* Ten X Technology, Inc. */
 product TENX UAUDIO0		0xf211	USB audio headset
@@ -4842,6 +4850,7 @@ product TPLINK WN727NV5		0x0111	TL-WN727N v5
 product TPLINK T4UV2		0x010d	Archer T4U ver 2
 product TPLINK T4UHV1		0x0103	Archer T4UH ver 1
 product TPLINK T4UHV2		0x010e	Archer T4UH ver 2
+product TPLINK T4UV3		0x0115	Archer T4U ver 3
 product TPLINK T2UNANO		0x011e	Archer T2U Nano
 product TPLINK T2UV3		0x011f	Archer T2U ver 3
 product TPLINK T2UPLUS		0x0120	Archer T2U Plus
@@ -4933,6 +4942,9 @@ product VIALABS VL701		0x0701	VL701 USB 3.0 SATA Bridge
 
 /* Vaisala products */
 product VAISALA CABLE		0x0200	USB Interface cable
+
+/* Verbatim products */
+product VERBATIM STORENGO	0x0243	Verbatim Store N Go
 
 /* Vertex products */
 product VERTEX VW110L		0x0100	Vertex VW110L modem
@@ -5064,14 +5076,67 @@ product YAMAHA MOTIF7		0x1006	MOTIF7 MIDI Synth. Workstation
 product YAMAHA MOTIF8		0x1007	MOTIF8 MIDI Synth. Workstation
 product YAMAHA UX96		0x1008	UX96 MIDI I/F
 product YAMAHA UX16		0x1009	UX16 MIDI I/F
+product YAMAHA EOS_BX		0x100a	EOS BX MIDI I/F
+product YAMAHA UCMX		0x100c	UC-MX MIDI I/F
+product YAMAHA UCKX		0x100d	UC-KX MIDI I/F
 product YAMAHA S08		0x100e	S08 MIDI Keyboard
 product YAMAHA CLP150		0x100f	CLP-150 digital piano
 product YAMAHA CLP170		0x1010	CLP-170 digital piano
+product YAMAHA P250		0x1011	P-250 digital piano
+product YAMAHA TYROS		0x1012	TYROS MIDI Synth. Workstation
+product YAMAHA PF500		0x1013	PF-500 digital piano
+product YAMAHA S90		0x1014	S90 MIDI Synth.
+product YAMAHA MOTIFR		0x1015	MOTIF-R MIDI Synth. Workstation
+product YAMAHA MDP5		0x1016	MDP-5 MIDI I/F
+product YAMAHA CVP204		0x1017	CVP-204 digital piano
+product YAMAHA CVP206		0x1018	CVP-206 digital piano
+product YAMAHA CVP208		0x1019	CVP-208 digital piano
+product YAMAHA CVP210		0x101a	CVP-210 digital piano
+product YAMAHA PSR1100		0x101b	PSR-1100 digital piano
+product YAMAHA PSR2100		0x101c	PSR-2100 digital piano
+product YAMAHA CLP175		0x101d	CLP-175 digital piano
+product YAMAHA PSRK1		0x101e	PSR-K1 digital piano
+product YAMAHA EZJ24		0x101f	EZ-J24 digital piano
+product YAMAHA EZJ250I		0x1020	EZ-250i digital piano
+product YAMAHA MOTIF_ES6	0x1021	MOTIF ES 6 MIDI Synth. Workstation
+product YAMAHA MOTIF_ES7	0x1022	MOTIF ES 7 MIDI Synth. Workstation
+product YAMAHA MOTIF_ES8	0x1023	MOTIF ES 8 MIDI Synth. Workstation
+product YAMAHA CVP301		0x1024	CVP-301 digital piano
+product YAMAHA CVP303		0x1025	CVP-303 digital piano
+product YAMAHA CVP305		0x1026	CVP-305 digital piano
+product YAMAHA CVP307		0x1027	CVP-307 digital piano
+product YAMAHA CVP309		0x1028	CVP-309 digital piano
+product YAMAHA CVP309GP		0x1029	CVP-309GP digital piano
+product YAMAHA PSR1500		0x102a	PSR-1500 digital piano
+product YAMAHA PSR3000		0x102b	PSR-3000 digital piano
+product YAMAHA ELS01_01C	0x102e	ELS-01/01C digital piano
+product YAMAHA PSR295_293	0x1030	PSR-295/293 digital piano
+product YAMAHA DGX205_203	0x1031	DGX-205/203 digital piano
+product YAMAHA DGX305		0x1032	DGX-305 digital piano
+product YAMAHA DGX505		0x1033	DGX-505 digital piano
+product YAMAHA MOX6_MOX8	0x1503	MOX6/MOX8 MIDI Synth. Workstation
+product YAMAHA DGP7		0x2000	DGP-7 digital piano
+product YAMAHA DGP5		0x2001	DGP-5 digital piano
 product YAMAHA RPU200		0x3104	RP-U200
 product YAMAHA RTA54I		0x4000	NetVolante RTA54i Broadband&ISDN Router
 product YAMAHA RTW65B		0x4001	NetVolante RTW65b Broadband Wireless Router
 product YAMAHA RTW65I		0x4002	NetVolante RTW65i Broadband&ISDN Wireless Router
 product YAMAHA RTA55I		0x4004	NetVolante RTA55i Broadband VoIP Router
+product YAMAHA CS1D		0x5000	CS1D MIDI I/F
+product YAMAHA DSP1D		0x5001	DSP1D MIDI I/F
+product YAMAHA DME32		0x5002	DME32 MIDI I/F
+product YAMAHA DM2000		0x5003	DM2000 MIDI I/F
+product YAMAHA 02R96		0x5004	02R96 MIDI I/F
+product YAMAHA ACU16C		0x5005	ACU16-C MIDI I/F
+product YAMAHA NHB32C		0x5006	NHB32-C MIDI I/F
+product YAMAHA DM1000		0x5007	DM1000 MIDI I/F
+product YAMAHA 01V96		0x5008	01V96 MIDI I/F
+product YAMAHA SPX2000		0x5009	SPX2000 MIDI I/F
+product YAMAHA PM5D		0x500a	PM5D MIDI I/F
+product YAMAHA DME64N		0x500b	DME64N MIDI I/F
+product YAMAHA DME24N		0x500c	DME24N MIDI I/F
+product YAMAHA DTX		0x7000	DTX Electronic Drum Kit
+product YAMAHA UB99		0x7010	UB99 Multi-Effect Pedal
 
 /* Yano products */
 product YANO U640MO		0x0101	U640MO-03

@@ -1906,7 +1906,7 @@ filecaps_move(struct filecaps *src, struct filecaps *dst)
 /*
  * Fill the given filecaps structure with full rights.
  */
-static void
+void
 filecaps_fill(struct filecaps *fcaps)
 {
 
@@ -1933,6 +1933,65 @@ filecaps_free(struct filecaps *fcaps)
 
 	filecaps_free_ioctl(fcaps);
 	bzero(fcaps, sizeof(*fcaps));
+}
+
+bool
+filecaps_full(const struct filecaps *fcaps)
+{
+	cap_rights_t allrights;
+
+	CAP_ALL(&allrights);
+	return (cap_rights_contains(&fcaps->fc_rights, &allrights) &&
+	    fcaps->fc_fcntls == CAP_FCNTL_ALL && fcaps->fc_nioctls == -1);
+}
+
+/*
+ * Find the intersection of two filecaps structures and store the result in the
+ * first structure.  This is a destructive operation on the src structure.
+ */
+void
+filecaps_intersect(struct filecaps *src, struct filecaps *dst)
+{
+
+	cap_rights_intersect(&dst->fc_rights, &src->fc_rights);
+	dst->fc_fcntls &= src->fc_fcntls;
+	if (dst->fc_nioctls == -1) {
+		dst->fc_ioctls = src->fc_ioctls;
+		dst->fc_nioctls = src->fc_nioctls;
+		src->fc_ioctls = NULL;
+	} else if (src->fc_nioctls != -1) {
+		int count;
+
+		/*
+		 * ioctl lists are usually short, so this dumb merge is fine.
+		 * We could alternately sort both lists and walk them in
+		 * parallel.
+		 */
+		count = 0;
+		for (int i = 0; i < dst->fc_nioctls; i++) {
+			bool found;
+
+			found = false;
+			for (int j = 0; j < src->fc_nioctls; j++) {
+				if (dst->fc_ioctls[i] == src->fc_ioctls[j]) {
+					count++;
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				if (i != dst->fc_nioctls - 1)
+					dst->fc_ioctls[i] =
+					    dst->fc_ioctls[dst->fc_nioctls - 1];
+				dst->fc_nioctls--;
+				i--;
+			}
+		}
+		dst->fc_nioctls = count;
+	}
+	if (dst->fc_nioctls == 0)
+		filecaps_free_ioctl(dst);
+	filecaps_free(src);
 }
 
 static u_long *
@@ -3128,13 +3187,21 @@ fget_cap(struct thread *td, int fd, const cap_rights_t *needrightsp,
 #endif
 
 int
-fget_remote(struct thread *td, struct proc *p, int fd, struct file **fpp)
+fget_remote(struct thread *td, struct proc *p, int fd, struct filecaps *fcaps,
+    uint8_t *fd_flags, struct file **fpp)
 {
 	struct filedesc *fdp;
 	struct file *fp;
 	int error;
+	bool copied __diagused;
 
-	if (p == td->td_proc)	/* curproc */
+	/*
+	 * Both fcaps and fd_flags must be either requested together,
+	 * or not at all.
+	 */
+	MPASS((!(fcaps == NULL) ^ (fd_flags == NULL)));
+
+	if (p == td->td_proc && fcaps == NULL)	/* curproc */
 		return (fget_unlocked(td, fd, &cap_no_rights, fpp));
 
 	PROC_LOCK(p);
@@ -3147,6 +3214,15 @@ fget_remote(struct thread *td, struct proc *p, int fd, struct file **fpp)
 		fp = fget_noref(fdp, fd);
 		if (fp != NULL && fhold(fp)) {
 			*fpp = fp;
+			if (fd_flags != NULL) {
+				*fd_flags = fde_to_fd_flags(fdp->fd_ofiles[fd].
+				    fde_flags);
+			}
+			if (fcaps != NULL) {
+				copied = filecaps_copy(
+				    &fdp->fd_ofiles[fd].fde_caps, fcaps, true);
+				MPASS(copied);
+			}
 			error = 0;
 		} else {
 			error = EBADF;
@@ -3187,7 +3263,7 @@ fget_remote_foreach(struct thread *td, struct proc *p,
 	}
 
 	for (fd = 0; fd <= highfd; fd++) {
-		error1 = fget_remote(td, p, fd, &fp);
+		error1 = fget_remote(td, p, fd, NULL, NULL, &fp);
 		if (error1 != 0)
 			continue;
 		error = fn(p, fd, fp, arg);
@@ -3257,10 +3333,7 @@ fgetvp_lookup_smr(struct nameidata *ndp, struct vnode **vpp, int *flagsp)
 	 *
 	 * Not yet supported by fast path.
 	 */
-	CAP_ALL(&rights);
-	if (!cap_rights_contains(&ndp->ni_filecaps.fc_rights, &rights) ||
-	    ndp->ni_filecaps.fc_fcntls != CAP_FCNTL_ALL ||
-	    ndp->ni_filecaps.fc_nioctls != -1) {
+	if (!filecaps_full(&ndp->ni_filecaps)) {
 #ifdef notyet
 		ndp->ni_lcf |= NI_LCF_STRICTREL;
 #else
@@ -3362,10 +3435,7 @@ fgetvp_lookup(struct nameidata *ndp, struct vnode **vpp)
 	 * all lookups relative to it must also be
 	 * strictly relative.
 	 */
-	CAP_ALL(&rights);
-	if (!cap_rights_contains(&ndp->ni_filecaps.fc_rights, &rights) ||
-	    ndp->ni_filecaps.fc_fcntls != CAP_FCNTL_ALL ||
-	    ndp->ni_filecaps.fc_nioctls != -1) {
+	if (!filecaps_full(&ndp->ni_filecaps)) {
 		ndp->ni_lcf |= NI_LCF_STRICTREL;
 		ndp->ni_resflags |= NIRES_STRICTREL;
 	}
@@ -5107,7 +5177,7 @@ sysctl_kern_proc_ofiledesc(SYSCTL_HANDLER_ARGS)
 		return (ENOENT);
 	}
 	kif = malloc(sizeof(*kif), M_TEMP, M_WAITOK);
-	okif = malloc(sizeof(*okif), M_TEMP, M_WAITOK);
+	okif = malloc(sizeof(*okif), M_TEMP, M_WAITOK | M_ZERO);
 	PWDDESC_XLOCK(pdp);
 	pwd = pwd_hold_pwddesc(pdp);
 	if (pwd != NULL) {

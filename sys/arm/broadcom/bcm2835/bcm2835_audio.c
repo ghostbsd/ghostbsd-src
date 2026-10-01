@@ -295,10 +295,10 @@ bcm2835_audio_release(struct bcm2835_audio_info *sc)
 	int success;
 
 	if (sc->vchi_handle != VCHIQ_SERVICE_HANDLE_INVALID) {
+		/* XXX vchi_service_release(sc->vchi_handle)? */
 		success = vchi_service_close(sc->vchi_handle);
 		if (success != 0)
 			printf("vchi_service_close failed: %d\n", success);
-		vchi_service_release(sc->vchi_handle);
 		sc->vchi_handle = VCHIQ_SERVICE_HANDLE_INVALID;
 	}
 
@@ -679,7 +679,6 @@ bcmchan_trigger(kobj_t obj, void *data, int go)
 	switch (go) {
 	case PCMTRIG_START:
 		/* kickstart data flow */
-		chn_intr(sc->pch.channel);
 		ch->submitted_samples = 0;
 		ch->retrieved_samples = 0;
 		bcm2835_worker_play_start(sc);

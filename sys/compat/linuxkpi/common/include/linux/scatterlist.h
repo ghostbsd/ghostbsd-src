@@ -135,7 +135,7 @@ sg_set_page(struct scatterlist *sg, struct page *page, unsigned int len,
 static inline struct page *
 sg_page(struct scatterlist *sg)
 {
-	return ((struct page *)((sg)->page_link & ~SG_PAGE_LINK_MASK));
+	return ((struct page *)(sg->page_link & ~SG_PAGE_LINK_MASK));
 }
 
 static inline void
@@ -186,6 +186,12 @@ sg_mark_end(struct scatterlist *sg)
 {
 	sg->page_link |= SG_PAGE_LINK_LAST;
 	sg->page_link &= ~SG_PAGE_LINK_CHAIN;
+}
+
+static inline void
+sg_init_marker(struct scatterlist *sg, uint32_t num_sgs)
+{
+	sg_mark_end(&sg[num_sgs - 1]);
 }
 
 static inline void

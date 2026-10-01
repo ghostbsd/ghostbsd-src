@@ -529,9 +529,11 @@ vmxnet3_free_irqs(struct vmxnet3_softc *sc)
 
 	scctx = sc->vmx_scctx;
 
-	for (i = 0; i < scctx->isc_nrxqsets; i++) {
-		rxq = &sc->vmx_rxq[i];
-		iflib_irq_free(sc->vmx_ctx, &rxq->vxrxq_irq);
+	if (sc->vmx_rxq != NULL) {
+		for (i = 0; i < scctx->isc_nrxqsets; i++) {
+			rxq = &sc->vmx_rxq[i];
+			iflib_irq_free(sc->vmx_ctx, &rxq->vxrxq_irq);
+		}
 	}
 
 	iflib_irq_free(sc->vmx_ctx, &sc->vmx_event_intr_irq);
@@ -2056,7 +2058,12 @@ vmxnet3_update_admin_status(if_ctx_t ctx)
 	struct vmxnet3_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-	if (sc->vmx_ds->event != 0)
+	/*
+	 * iflib may invoke this routine before vmxnet3_attach_post() has
+	 * run, which is before the top level shared data area is
+	 * initialized and the device made aware of it.
+	 */
+	if (sc->vmx_ds != NULL && sc->vmx_ds->event != 0)
 		vmxnet3_evintr(sc);
 
 	vmxnet3_refresh_host_stats(sc);

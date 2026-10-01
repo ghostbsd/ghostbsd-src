@@ -113,7 +113,7 @@ map_object(int fd, const char *path, const struct stat *sb, bool ismain)
 	note_end = 0;
 	note_map = NULL;
 	note_map_len = 0;
-	segs = alloca(sizeof(segs[0]) * hdr->e_phnum);
+	segs = xcalloc(hdr->e_phnum, sizeof(segs[0]));
 	stack_flags = PF_X | PF_R | PF_W;
 	text_end = 0;
 	while (phdr < phlimit) {
@@ -338,20 +338,20 @@ map_object(int fd, const char *path, const struct stat *sb, bool ismain)
 	obj->stack_flags = stack_flags;
 	if (note_start < note_end)
 		digest_notes(obj, note_start, note_end);
-	if (note_map != NULL)
+finish:
+	if (note_map != NULL && note_map != MAP_FAILED)
 		munmap(note_map, note_map_len);
 	munmap(hdr, page_size);
+	free(segs);
 	return (obj);
 
 error1:
 	munmap(mapbase, mapsize);
 error:
-	if (note_map != NULL && note_map != MAP_FAILED)
-		munmap(note_map, note_map_len);
 	if (!phdr_in_zero_page(hdr))
 		munmap(phdr, hdr->e_phnum * sizeof(phdr[0]));
-	munmap(hdr, page_size);
-	return (NULL);
+	obj = NULL;
+	goto finish;
 }
 
 bool
@@ -477,6 +477,7 @@ obj_free(Obj_Entry *obj)
 		free(obj->path);
 	if (obj->phdr_alloc)
 		free(__DECONST(void *, obj->phdr));
+	MD_OBJ_ENTRY_FINI(obj);
 	free(obj);
 }
 
@@ -489,6 +490,7 @@ obj_new(void)
 	STAILQ_INIT(&obj->dldags);
 	STAILQ_INIT(&obj->dagmembers);
 	STAILQ_INIT(&obj->names);
+	MD_OBJ_ENTRY_INIT(obj);
 	return (obj);
 }
 

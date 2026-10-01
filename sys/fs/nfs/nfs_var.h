@@ -169,6 +169,7 @@ int nfsrv_mdscopymr(char *, char *, char *, char *, int *, char *, NFSPROC_T *,
     struct nfsdevice **);
 void nfsrv_marknospc(char *, bool);
 void nfsrv_removedeleg(fhandle_t *, struct nfsrv_descript *, NFSPROC_T *);
+void nfsrv_freestrandedstate(struct nfsrvfh *);
 
 /* nfs_nfsdserv.c */
 int nfsrvd_access(struct nfsrv_descript *, int,
@@ -373,7 +374,6 @@ int nfsrpc_destroysession(struct nfsmount *, struct nfsclsession *,
 /* nfs_clcomsubs.c */
 int nfsm_uiombuf(struct nfsrv_descript *, struct uio *, int);
 struct mbuf *nfsm_uiombuflist(struct uio *, int, u_int);
-u_int8_t *nfscl_getmyip(struct nfsmount *, struct in6_addr *, int *);
 int nfsm_getfh(struct nfsrv_descript *, struct nfsfh **);
 int nfscl_mtofh(struct nfsrv_descript *, struct nfsfh **,
         struct nfsvattr *, int *);

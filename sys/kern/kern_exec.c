@@ -26,19 +26,18 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 #include "opt_capsicum.h"
 #include "opt_hwpmc_hooks.h"
 #include "opt_hwt_hooks.h"
 #include "opt_ktrace.h"
 #include "opt_vm.h"
 
-#include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/acct.h>
 #include <sys/asan.h>
 #include <sys/capsicum.h>
 #include <sys/compressor.h>
+#include <sys/dirent.h>
 #include <sys/eventhandler.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
@@ -46,6 +45,7 @@
 #include <sys/imgact.h>
 #include <sys/imgact_elf.h>
 #include <sys/kernel.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mman.h>
@@ -341,11 +341,11 @@ post_execve(struct thread *td, int error, struct vmspace *oldvmspace)
 }
 
 /*
- * kern_execve() has the astonishing property of not always returning to
- * the caller.  If sufficiently bad things happen during the call to
- * do_execve(), it can end up calling exit1(); as a result, callers must
- * avoid doing anything which they might need to undo (e.g., allocating
- * memory).
+ * kern_execve() has the astonishing property of not always returning
+ * to the caller.  If sufficiently bad things happen during the call
+ * to do_execve(), it can end up calling exit2(). Callers must avoid
+ * doing anything which they might need to undo (e.g., allocating
+ * memory), unless called from the ptrace(PT_SC_REMOTERQ) handler.
  */
 int
 kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
@@ -382,6 +382,71 @@ execve_nosetid(struct image_params *imgp)
 	if (imgp->newcred != NULL) {
 		crfree(imgp->newcred);
 		imgp->newcred = NULL;
+	}
+}
+
+/*
+ * Returns true if the execblock was obtained, in this case the
+ * process lock is kept.  Returns false if the execblock was not
+ * obtained, but the function slept and the lock was dropped.
+ */
+bool
+execve_block(struct thread *td, struct proc *p)
+{
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	MPASS(td == curthread);
+	MPASS(p != td->td_proc || (p->p_flag & P_INEXEC) == 0);
+
+	if (p != td->td_proc && (p->p_flag & P_INEXEC) != 0) {
+		p->p_flag |= P_INEXEC_WAIT;
+		msleep(&p->p_execblock, &p->p_mtx, PDROP, "inexec", 0);
+		return (false);
+	}
+	MPASS(p->p_execblock < UINT_MAX);
+	p->p_execblock++;
+	return (true);
+}
+
+/*
+ * Might drop the process lock internally, callers must re-check the
+ * invariants afterward.
+ */
+void
+execve_block_wait(struct thread *td, struct proc *p)
+{
+	PROC_ASSERT_HELD(p);
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	while (!execve_block(td, p))
+		PROC_LOCK(p);
+}
+
+void
+execve_unblock(struct thread *td, struct proc *p)
+{
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	MPASS(td == curthread);
+
+	MPASS(p->p_execblock > 0);
+	p->p_execblock--;
+	if (p->p_execblock == 0 && (p->p_flag & P_INEXEC_WAIT) != 0) {
+		p->p_flag &= ~P_INEXEC_WAIT;
+		wakeup(&p->p_execblock);
+	}
+}
+
+void
+execve_block_pass(struct thread *td)
+{
+	struct proc *p;
+
+	MPASS(td == curthread);
+	p = td->td_proc;
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	
+	while (p->p_execblock != 0) {
+		p->p_flag |= P_INEXEC_WAIT;
+		msleep(&p->p_execblock, &p->p_mtx, 0, "exeblk", 0);
 	}
 }
 
@@ -440,6 +505,7 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	PROC_LOCK(p);
 	KASSERT((p->p_flag & P_INEXEC) == 0,
 	    ("%s(): process already has P_INEXEC flag", __func__));
+	execve_block_pass(td);
 	p->p_flag |= P_INEXEC;
 	PROC_UNLOCK(p);
 
@@ -448,6 +514,7 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	 */
 	bzero(imgp, sizeof(*imgp));
 	imgp->proc = p;
+	imgp->td = td;
 	imgp->attr = &attr;
 	imgp->args = args;
 	oldcred = p->p_ucred;
@@ -501,12 +568,46 @@ interpret:
 		newbinname[nd.ni_cnd.cn_namelen] = '\0';
 		imgp->vp = newtextvp;
 
+		if (atomic_load_8(&newtextdvp->v_type) != VDIR) {
+			struct vnode *dvp1;
+			char *buf1;
+			size_t buf1len;
+
+			/*
+			 * The newtextdvp vnode might be not a
+			 * directory when reclaimed or when the image
+			 * is mounted over a regular file.  In the
+			 * latter case, try to resolve the containing
+			 * directory.
+			 *
+			 * In any case, p_textdvp must be either a
+			 * directory or reclaimed.
+			 */
+			VOP_UNLOCK(imgp->vp);
+			dvp1 = newtextdvp;
+			buf1len = MAXNAMLEN + 1;
+			buf1 = malloc(buf1len, M_TEMP, M_WAITOK);
+			error = vn_vptocnp(&dvp1, buf1, &buf1len);
+			if (error == 0) {
+				if (atomic_load_8(&dvp1->v_type) == VDIR) {
+					newtextdvp = dvp1;
+				} else {
+					vrele(dvp1);
+					newtextdvp = NULL;
+				}
+			} else {
+				newtextdvp = NULL;
+			}
+			free(buf1, M_TEMP);
+			vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
+		}
+
 		/*
 		 * Do the best to calculate the full path to the image file.
 		 */
 		if (args->fname[0] == '/') {
 			imgp->execpath = args->fname;
-		} else {
+		} else if (newtextdvp != NULL) {
 			VOP_UNLOCK(imgp->vp);
 			freepath_size = MAXPATHLEN;
 			if (vn_fullpath_hardlink(newtextvp, newtextdvp,
@@ -909,7 +1010,10 @@ interpret:
 	 * as we're now a bona fide freshly-execed process.
 	 */
 	KNOTE_LOCKED(p->p_klist, NOTE_EXEC);
-	p->p_flag &= ~P_INEXEC;
+	MPASS(p->p_execblock == 0);
+	if ((p->p_flag & P_INEXEC_WAIT) != 0)
+		wakeup(&p->p_execblock);
+	p->p_flag &= ~(P_INEXEC | P_INEXEC_WAIT);
 
 	/* clear "fork but no exec" flag, as we _are_ execing */
 	p->p_acflag &= ~AFORK;
@@ -933,7 +1037,7 @@ interpret:
 	 */
 	if (PMC_SYSTEM_SAMPLING_ACTIVE() || PMC_PROC_IS_USING_PMCS(p)) {
 		VOP_UNLOCK(imgp->vp);
-		pe.pm_credentialschanged = credential_changing;
+		pe.pm_credentialschanged = imgp->credential_setid;
 		pe.pm_baseaddr = imgp->reloc_base;
 		pe.pm_dynaddr = imgp->et_dyn_addr;
 
@@ -959,7 +1063,7 @@ interpret:
 	/* Set values passed into the program in registers. */
 	(*p->p_sysent->sv_setregs)(td, imgp, stack_base);
 
-	VOP_MMAPPED(imgp->vp);
+	VOP_UPDATE_ATIME(imgp->vp, NULL);
 
 	SDT_PROBE1(proc, , , exec__success, args->fname);
 
@@ -1005,7 +1109,9 @@ exec_fail_dealloc:
 exec_fail:
 		/* we're done here, clear P_INEXEC */
 		PROC_LOCK(p);
-		p->p_flag &= ~P_INEXEC;
+		if ((p->p_flag & P_INEXEC_WAIT) != 0)
+			wakeup(&p->p_execblock);
+		p->p_flag &= ~(P_INEXEC | P_INEXEC_WAIT);
 		PROC_UNLOCK(p);
 
 		SDT_PROBE1(proc, , , exec__failure, error);
@@ -1041,8 +1147,7 @@ exec_fail:
 	if (error && imgp->vmspace_destroyed) {
 		/* sorry, no more process anymore. exit gracefully */
 		exec_cleanup(td, oldvmspace);
-		exit1(td, 0, SIGABRT);
-		/* NOT REACHED */
+		kern_exit(td, 0, SIGABRT);
 	}
 
 #ifdef KTRACE
@@ -1435,7 +1540,8 @@ exec_prealloc_args_kva(void *arg __unused)
 	mtx_init(&exec_args_kva_mtx, "exec args kva", NULL, MTX_DEF);
 	for (i = 0; i < exec_map_entries; i++) {
 		argkva = malloc(sizeof(*argkva), M_PARGS, M_WAITOK);
-		argkva->addr = kmap_alloc_wait(exec_map, exec_map_entry_size);
+		argkva->addr = kmap_alloc_wait(exec_map, exec_map_entry_size,
+		    ptoa(exec_map_guard_pages));
 		argkva->gen = exec_args_gen;
 		SLIST_INSERT_HEAD(&exec_args_kva_freelist, argkva, next);
 	}

@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2020-2026 The FreeBSD Foundation
- * Copyright (c) 2020-2025 Bjoern A. Zeeb
+ * Copyright (c) 2020-2026 Bjoern A. Zeeb
  *
  * This software was developed by Björn Zeeb under sponsorship from
  * the FreeBSD Foundation.
@@ -471,6 +471,7 @@ enum ieee80211_hw_flags {
 	IEEE80211_HW_TX_STATUS_NO_AMPDU_LEN,
 	IEEE80211_HW_HANDLES_QUIET_CSA,
 	IEEE80211_HW_NO_VIRTUAL_MONITOR,
+	IEEE80211_HW_HOST_BROADCAST_PS_BUFFERING,
 
 	/* Keep last. */
 	NUM_IEEE80211_HW_FLAGS
@@ -647,6 +648,7 @@ struct ieee80211_rx_status {
 	uint8_t				band;
 	uint8_t				chains;
 	int8_t				chain_signal[IEEE80211_MAX_CHAINS];
+	uint8_t				antenna;
 	int8_t				signal;
 	uint8_t				enc_flags;
 	union {
@@ -747,7 +749,7 @@ struct ieee80211_sta {
 	int		max_amsdu_subframes;
 	int		mfp, smps_mode, tdls, tdls_initiator;
 	struct ieee80211_txq			*txq[IEEE80211_NUM_TIDS + 1];	/* iwlwifi: 8 and adds +1 to tid_data, net80211::IEEE80211_TID_SIZE */
-	struct ieee80211_sta_rates		*rates;	/* some rcu thing? */
+	struct ieee80211_sta_rates		*rates;	/* some rcu thing? */			/* mt7615, and? */
 	uint8_t					addr[ETH_ALEN];
 	uint16_t				aid;
 	bool					wme;
@@ -1056,6 +1058,7 @@ struct ieee80211_ops {
         uint64_t (*get_tsf)(struct ieee80211_hw *, struct ieee80211_vif *);
         void (*set_tsf)(struct ieee80211_hw *, struct ieee80211_vif *, uint64_t);
 	void (*offset_tsf)(struct ieee80211_hw *, struct ieee80211_vif *, s64);
+	void (*reset_tsf)(struct ieee80211_hw *, struct ieee80211_vif *);
 
 	int  (*set_bitrate_mask)(struct ieee80211_hw *, struct ieee80211_vif *, const struct cfg80211_bitrate_mask *);
 	void (*set_coverage_class)(struct ieee80211_hw *, int, s16);
@@ -1197,6 +1200,7 @@ void linuxkpi_ieee80211_schedule_txq(struct ieee80211_hw *,
     struct ieee80211_txq *, bool);
 void linuxkpi_ieee80211_handle_wake_tx_queue(struct ieee80211_hw *,
 	struct ieee80211_txq *);
+int linuxkpi_ieee80211_start_tx_ba_session(struct ieee80211_sta *, uint8_t, int);
 
 /* -------------------------------------------------------------------------- */
 
@@ -2105,6 +2109,13 @@ ieee80211_sta_set_buffered(struct ieee80211_sta *sta, uint8_t tid, bool t)
 	TODO();
 }
 
+static inline struct sk_buff *
+ieee80211_get_buffered_bc(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+{
+	TODO("IEEE80211_HW_HOST_BROADCAST_PS_BUFFERING (espwl)");
+	return (NULL);
+}
+
 static __inline void
 ieee80211_sched_scan_results(struct ieee80211_hw *hw)
 {
@@ -2118,10 +2129,9 @@ ieee80211_sta_eosp(struct ieee80211_sta *sta)
 }
 
 static __inline int
-ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, uint8_t tid, int x)
+ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, uint8_t tid, int timeout)
 {
-	TODO("rtw8x");
-	return (-EINVAL);
+	return (linuxkpi_ieee80211_start_tx_ba_session(sta, tid, timeout));
 }
 
 static __inline int

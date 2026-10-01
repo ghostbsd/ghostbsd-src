@@ -3,8 +3,11 @@
 ######################################################################
 # 3) install dependencies for compiling and loading
 #
-# $1: OS name (like 'fedora41')
-# $2: (optional) Experimental Fedora kernel version, like "6.14" to
+# qemu-3-deps-vm.sh [--poweroff] OS_NAME [FEDORA_VERSION]
+#
+# --poweroff: Power off the VM after installing dependencies
+# OS_NAME: OS name (like 'fedora41')
+# FEDORA_VERSION: (optional) Experimental Fedora kernel version, like "6.14" to
 #     install instead of Fedora defaults.
 ######################################################################
 
@@ -13,7 +16,7 @@ set -eu
 function alpine() {
   echo "##[group]Install Development Tools"
   sudo apk add \
-    acl alpine-sdk attr autoconf automake bash build-base clang21 coreutils \
+    acl alpine-sdk attr autoconf automake bash build-base clang22 coreutils \
     cpio cryptsetup curl curl-dev dhcpcd eudev eudev-dev eudev-libs findutils \
     fio gawk gdb gettext-dev git grep jq libaio libaio-dev libcurl \
     libtirpc-dev libtool libunwind libunwind-dev linux-headers linux-tools \
@@ -153,6 +156,12 @@ function install_fedora_experimental_kernel {
   sudo dnf -y copr disable @kernel-vanilla/mainline
 }
 
+POWEROFF=""
+if [ "$1" == "--poweroff" ] ; then
+        POWEROFF=1
+        shift
+fi
+
 # Install dependencies
 case "$1" in
   almalinux8)
@@ -206,12 +215,38 @@ case "$1" in
   tumbleweed)
     tumbleweed
     ;;
-  ubuntu*)
+  ubuntu22|ubuntu24)
     debian
     echo "##[group]Install Ubuntu specific"
     sudo apt-get install -yq linux-tools-common libtirpc-dev \
       linux-modules-extra-$(uname -r)
     sudo apt-get install -yq dh-sequence-dkms
+
+    # Need 'build-essential' explicitly for ARM builder
+    # https://github.com/actions/runner-images/issues/9946
+    sudo apt-get install -yq build-essential
+
+    echo "##[endgroup]"
+    echo "##[group]Delete Ubuntu OpenZFS modules"
+    for i in $(find /lib/modules -name zfs -type d); do sudo rm -rvf $i; done
+    echo "##[endgroup]"
+    ;;
+  ubuntu26)
+    debian
+    echo "##[group]Install Ubuntu specific"
+    # Skip linux-modules-extra which is already installed
+    sudo apt-get install -yq linux-tools-common
+    sudo apt-get install -yq libtirpc-dev
+    sudo apt-get install -yq dh-sequence-dkms
+
+    # Need 'build-essential' explicitly for ARM builder
+    # https://github.com/actions/runner-images/issues/9946
+    sudo apt-get install -yq build-essential
+
+    # Replace sudo-rs with sudo for now because the Rust version
+    # does not support -E to preserve the entire environment
+    sudo update-alternatives --set sudo /usr/bin/sudo.ws
+
     echo "##[endgroup]"
     echo "##[group]Delete Ubuntu OpenZFS modules"
     for i in $(find /lib/modules -name zfs -type d); do sudo rm -rvf $i; done
@@ -253,8 +288,19 @@ case "$1" in
     ;;
   debian*|ubuntu*)
     sudo -E systemctl enable nfs-kernel-server
-    sudo -E systemctl enable qemu-guest-agent
     sudo -E systemctl enable smbd
+
+    # enable usershares (disabled by default on ubuntu 26.04)
+    sudo -E sed -i '/usershare max shares/s/^#//' /etc/samba/smb.conf
+
+    # add systemd drop-in to allow the service to be enabled
+    sudo -E mkdir -p /etc/systemd/system/qemu-guest-agent.service.d/
+    sudo -E tee /etc/systemd/system/qemu-guest-agent.service.d/override.conf <<EOF
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo -E systemctl daemon-reload
+    sudo -E systemctl enable qemu-guest-agent
     ;;
   *)
     # All other linux distros
@@ -278,7 +324,7 @@ case "$1" in
     echo 'GRUB_SERIAL_COMMAND="serial --speed=115200"' \
       | sudo tee -a /etc/default/grub >/dev/null
     ;;
-  ubuntu24)
+  ubuntu24|ubuntu26)
     GRUB_CFG="/boot/grub/grub.cfg"
     GRUB_MKCONFIG="grub-mkconfig"
     echo 'GRUB_DISABLE_OS_PROBER="false"' \
@@ -306,5 +352,7 @@ esac
 
 # reset cloud-init configuration and poweroff
 sudo cloud-init clean --logs
-sleep 2 && sudo poweroff &
+if [ "$POWEROFF" == "1" ] ; then
+        sleep 2 && sudo poweroff &
+fi
 exit 0

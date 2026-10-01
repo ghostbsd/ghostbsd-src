@@ -83,6 +83,7 @@
 #include <sys/socketvar.h>
 #include <sys/signalvar.h>
 #include <sys/stat.h>
+#include <sys/sysent.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
@@ -803,14 +804,9 @@ static void
 uipc_detach(struct socket *so)
 {
 	struct unpcb *unp, *unp2;
-	struct mtx *vplock;
-	struct vnode *vp;
 
 	unp = sotounpcb(so);
 	KASSERT(unp != NULL, ("uipc_detach: unp == NULL"));
-
-	vp = NULL;
-	vplock = NULL;
 
 	if (!SOLISTENING(so))
 		unp_dispose(so);
@@ -823,23 +819,9 @@ uipc_detach(struct socket *so)
 	--unp_count;
 	UNP_LINK_WUNLOCK();
 
-	UNP_PCB_UNLOCK_ASSERT(unp);
- restart:
-	if ((vp = unp->unp_vnode) != NULL) {
-		vplock = mtx_pool_find(unp_vp_mtxpool, vp);
-		mtx_lock(vplock);
-	}
 	UNP_PCB_LOCK(unp);
-	if (unp->unp_vnode != vp && unp->unp_vnode != NULL) {
-		if (vplock)
-			mtx_unlock(vplock);
-		UNP_PCB_UNLOCK(unp);
-		goto restart;
-	}
-	if ((vp = unp->unp_vnode) != NULL) {
-		VOP_UNP_DETACH(vp);
-		unp->unp_vnode = NULL;
-	}
+	KASSERT(unp->unp_vnode == NULL,
+	    ("%s: unp %p has vnode", __func__, unp));
 	if ((unp2 = unp_pcb_lock_peer(unp)) != NULL)
 		unp_disconnect(unp, unp2);
 	else
@@ -866,10 +848,7 @@ uipc_detach(struct socket *so)
 	unp->unp_addr = NULL;
 	if (!unp_pcb_rele(unp))
 		UNP_PCB_UNLOCK(unp);
-	if (vp) {
-		mtx_unlock(vplock);
-		vrele(vp);
-	}
+
 	maybe_schedule_gc();
 
 	switch (so->so_type) {
@@ -1166,8 +1145,10 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 		    eor ? M_EOR : 0);
 		if (__predict_false(error))
 			goto out2;
-	} else
+	} else {
+		uio = NULL;
 		uipc_reset_kernel_mbuf(m, &mc);
+	}
 
 	error = SOCK_IO_SEND_LOCK(so, SBLOCKWAIT(flags));
 	if (error)
@@ -1246,8 +1227,8 @@ restart:
 		if (space == 0) {
 			/* There is space only to send control. */
 			MPASS(!STAILQ_EMPTY(&cmc.mc_q));
-			mcnext = mc;
-			mc = MCHAIN_INITIALIZER(&mc);
+			mc_init(&mcnext);
+			mc_concat(&mcnext, &mc);
 		} else if (space < mc.mc_len) {
 			/* Not enough space. */
 			if (__predict_false(mc_split(&mc, &mcnext, space,
@@ -1388,8 +1369,8 @@ uipc_soreceive_stream_or_seqpacket(struct socket *so, struct sockaddr **psa,
     struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp)
 {
 	struct sockbuf *sb = &so->so_rcv;
-	struct mbuf *control, *m, *first, *last, *next;
-	u_int ctl, space, datalen, mbcnt, lastlen;
+	struct mbuf *control, *m, *first, *part, *next;
+	u_int ctl, space, datalen, mbcnt, partlen;
 	int error, flags;
 	bool nonblock, waitall, peek;
 
@@ -1460,35 +1441,41 @@ restart:
 	ctl = 0;
 	first = STAILQ_FIRST(&sb->uxst_mbq);
 	if (first->m_type == MT_CONTROL) {
+		struct mbuf *prev;
+
 		control = first;
+		prev = NULL;
+
+		/*
+		 * Unlink control messages from the socket buffer.  The head of
+		 * the socket buffer queue is updated below.
+		 */
 		STAILQ_FOREACH_FROM(first, &sb->uxst_mbq, m_stailq) {
-			if (first->m_type != MT_CONTROL)
+			if (first->m_type != MT_CONTROL) {
+				if (!peek && prev != NULL)
+					STAILQ_NEXT(prev, m_stailq) = NULL;
 				break;
+			}
 			ctl += first->m_len;
 			mbcnt += MSIZE;
 			if (first->m_flags & M_EXT)
 				mbcnt += first->m_ext.ext_size;
+			prev = first;
 		}
 	} else
 		control = NULL;
 
 	/*
-	 * Find split point for the next copyout.  On exit from the loop:
-	 * last == NULL - socket to be flushed
-	 * last != NULL
-	 *   lastlen > last->m_len - uio to be filled, last to be adjusted
-	 *   lastlen == 0          - MT_CONTROL, M_EOR or M_NOTREADY encountered
+	 * Find split point for the next copyout.  On exit from the loop,
+	 * 'next' points to the new head of the buffer STAILQ and 'datalen'
+	 * contains the amount of data we will copy out at the end.  The
+	 * copyout is protected by the I/O lock only, as writers can only
+	 * append to the buffer.  We need to record the socket buffer state
+	 * and do all length adjustments before dropping the socket buffer lock.
 	 */
-	space = uio->uio_resid;
-	datalen = 0;
-	for (m = first, last = sb->uxst_fnrdy, lastlen = 0;
-	     m != sb->uxst_fnrdy;
+	for (space = uio->uio_resid, m = next = first, part = NULL, datalen = 0;
+	     space > 0 && m != sb->uxst_fnrdy && m->m_type == MT_DATA;
 	     m = STAILQ_NEXT(m, m_stailq)) {
-		if (m->m_type != MT_DATA) {
-			last = m;
-			lastlen = 0;
-			break;
-		}
 		if (space >= m->m_len) {
 			space -= m->m_len;
 			datalen += m->m_len;
@@ -1496,29 +1483,28 @@ restart:
 			if (m->m_flags & M_EXT)
 				mbcnt += m->m_ext.ext_size;
 			if (m->m_flags & M_EOR) {
-				last = STAILQ_NEXT(m, m_stailq);
-				lastlen = 0;
 				flags |= MSG_EOR;
+				next = STAILQ_NEXT(m, m_stailq);
 				break;
 			}
 		} else {
 			datalen += space;
-			last = m;
-			lastlen = space;
+			partlen = space;
+			if (!peek) {
+				m->m_len -= partlen;
+				m->m_data += partlen;
+			}
+			next = part = m;
 			break;
 		}
+		next = STAILQ_NEXT(m, m_stailq);
 	}
 
-	UIPC_STREAM_SBCHECK(sb);
 	if (!peek) {
-		if (last == NULL)
+		if (next == NULL)
 			STAILQ_INIT(&sb->uxst_mbq);
-		else {
-			STAILQ_FIRST(&sb->uxst_mbq) = last;
-			MPASS(last->m_len > lastlen);
-			last->m_len -= lastlen;
-			last->m_data += lastlen;
-		}
+		else
+			STAILQ_FIRST(&sb->uxst_mbq) = next;
 		MPASS(sb->sb_acc >= datalen);
 		sb->sb_acc -= datalen;
 		sb->sb_ccc -= datalen;
@@ -1569,21 +1555,40 @@ restart:
 			 */
 			error = unp_externalize(control, controlp, flags);
 			control = m_free(control);
-			if (__predict_false(error && control != NULL)) {
+			if (__predict_false(error != 0)) {
 				struct mchain cmc;
 
-				mc_init_m(&cmc, control);
+				/*
+				 * Build an mbuf chain containing the remainder
+				 * of the control messages and the subsequent
+				 * data, to be prepended back to the socket
+				 * buffer.
+				 */
+				if (control != NULL)
+					mc_init_m(&cmc, control);
+				else
+					mc_init(&cmc);
+				for (m = first; datalen > 0 && m != part;
+				    m = next) {
+					datalen -= m->m_len;
+					next = STAILQ_NEXT(m, m_stailq);
+					mc_append(&cmc, m);
+				}
 
 				SOCK_RECVBUF_LOCK(so);
-				MPASS(!(sb->sb_state & SBS_CANTRCVMORE));
-
-				if (__predict_false(cmc.mc_len + sb->sb_ccc +
-				    sb->sb_ctl > sb->sb_hiwat)) {
+				if (__predict_false(
+				    (sb->sb_state & SBS_CANTRCVMORE) ||
+				    cmc.mc_len + sb->sb_ccc + sb->sb_ctl >
+				    sb->sb_hiwat)) {
 					/*
-					 * Too bad, while unp_externalize() was
-					 * failing, the other side had filled
-					 * the buffer and we can't prepend data
-					 * back. Losing data!
+					 * While the lock was dropped and we
+					 * were failing in unp_externalize(),
+					 * the peer could have a) disconnected,
+					 * b) filled the buffer so that we
+					 * can't prepend data back.
+					 * These are two edge conditions that
+					 * we just can't handle, so lose the
+					 * data and return the error.
 					 */
 					SOCK_RECVBUF_UNLOCK(so);
 					SOCK_IO_RECV_UNLOCK(so);
@@ -1602,6 +1607,10 @@ restart:
 				    sb->sb_mbcnt = 0;
 				STAILQ_FOREACH(m, &sb->uxst_mbq, m_stailq) {
 					if (m->m_type == MT_DATA) {
+						if (m == part) {
+							m->m_len += partlen;
+							m->m_data -= partlen;
+						}
 						sb->sb_acc += m->m_len;
 						sb->sb_ccc += m->m_len;
 					} else {
@@ -1641,33 +1650,34 @@ restart:
 		}
 	}
 
-	for (m = first; m != last; m = next) {
+	for (m = first; datalen > 0; m = next) {
+		void *data;
+		u_int len;
+
 		next = STAILQ_NEXT(m, m_stailq);
-		error = uiomove(mtod(m, char *), m->m_len, uio);
+		if (m == part) {
+			data = peek ?
+			    mtod(m, char *) : mtod(m, char *) - partlen;
+			len = partlen;
+		} else {
+			data = mtod(m, char *);
+			len = m->m_len;
+		}
+		error = uiomove(data, len, uio);
 		if (__predict_false(error)) {
-			SOCK_IO_RECV_UNLOCK(so);
 			if (!peek)
-				for (; m != last; m = next) {
+				for (; m != part && datalen > 0; m = next) {
 					next = STAILQ_NEXT(m, m_stailq);
+					MPASS(datalen >= m->m_len);
+					datalen -= m->m_len;
 					m_free(m);
 				}
-			return (error);
-		}
-		if (!peek)
-			m_free(m);
-	}
-	if (last != NULL && lastlen > 0) {
-		if (!peek) {
-			MPASS(!(m->m_flags & M_PKTHDR));
-			MPASS(last->m_data - M_START(last) >= lastlen);
-			error = uiomove(mtod(last, char *) - lastlen,
-			    lastlen, uio);
-		} else
-			error = uiomove(mtod(last, char *), lastlen, uio);
-		if (__predict_false(error)) {
 			SOCK_IO_RECV_UNLOCK(so);
 			return (error);
 		}
+		datalen -= len;
+		if (!peek && m != part)
+			m_free(m);
 	}
 	if (waitall && !(flags & MSG_EOR) && uio->uio_resid > 0)
 		goto restart;
@@ -2429,8 +2439,10 @@ uipc_sendfile_wait(struct socket *so, off_t need, int *space)
 			SOCK_RECVBUF_UNLOCK(so2);
 			return (EAGAIN);
 		}
-		if (!sockref)
+		if (!sockref) {
 			soref(so2);
+			sockref = true;
+		}
 		error = uipc_stream_sbwait(so2, so->so_snd.sb_timeo);
 		if (error == 0 &&
 		    __predict_false(sb->sb_state & SBS_CANTRCVMORE))
@@ -2755,8 +2767,26 @@ uipc_ctloutput(struct socket *so, struct sockopt *sopt)
 					error = EINVAL;
 			}
 			UNP_PCB_UNLOCK(unp);
-			if (error == 0)
-				error = sooptcopyout(sopt, &xu, sizeof(xu));
+			if (error != 0)
+				break;
+#ifdef COMPAT_FREEBSD32
+			if (sopt->sopt_td &&
+			    SV_PROC_FLAG(sopt->sopt_td->td_proc, SV_ILP32))
+			{
+				struct xucred32 xu32 = {};
+				int i;
+
+				xu32.cr_version = xu.cr_version;
+				xu32.cr_uid = xu.cr_uid;
+				xu32.cr_ngroups = xu.cr_ngroups;
+				for (i = 0; i < XU_NGROUPS; i++)
+					xu32.cr_groups[i] = xu.cr_groups[i];
+				xu32.cr_pid = xu.cr_pid;
+				error = sooptcopyout(sopt, &xu32, sizeof(xu32));
+				break;
+			}
+#endif
+			error = sooptcopyout(sopt, &xu, sizeof(xu));
 			break;
 
 		case LOCAL_CREDS:
@@ -2905,8 +2935,9 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 		sa = malloc(sizeof(struct sockaddr_un), M_SONAME, M_WAITOK);
 	else
 		sa = NULL;
-	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | LOCKSHARED | LOCKLEAF,
-	    UIO_SYSSPACE, buf, fd, cap_rights_init_one(&rights, CAP_CONNECTAT));
+	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | LOCKSHARED | LOCKLEAF |
+	    (fd == AT_FDCWD ? 0 : EMPTYPATH), UIO_SYSSPACE, buf, fd,
+	    cap_rights_init_one(&rights, CAP_CONNECTAT));
 	error = namei(&nd);
 	if (error)
 		vp = NULL;
@@ -3162,6 +3193,8 @@ unp_soisdisconnected(struct socket *so)
 	so->so_state |= SS_ISDISCONNECTED;
 	so->so_state &= ~SS_ISCONNECTED;
 	so->so_rcv.uxst_peer = NULL;
+	selwakeuppri(&so->so_wrsel, PSOCK);
+	KNOTE_LOCKED(&so->so_snd.sb_sel->si_note, 0);
 	socantrcvmore_locked(so);
 }
 
@@ -3464,15 +3497,25 @@ unp_freerights(struct filedescent **fdep, int fdcount)
 	free(fdep[0], M_FILECAPS);
 }
 
-static bool
-restrict_rights(struct file *fp, struct thread *td)
+/*
+ * Flags to set on the receiving side when externalizing a file descriptor.
+ * When transferring fds between jails, ensure that the receiver cannot use
+ * a dirfd to escape the jail chroot.
+ */
+static int
+externalize_fdflags(struct filedescent *fde, struct thread *td)
 {
 	struct prison *prison1, *prison2;
 
-	prison1 = fp->f_cred->cr_prison;
+	if ((fde->fde_flags & UF_RESOLVE_BENEATH) != 0)
+		return (O_RESOLVE_BENEATH);
+	prison1 = fde->fde_file->f_cred->cr_prison;
 	prison2 = td->td_ucred->cr_prison;
-	return (prison1 != prison2 && prison1->pr_root != prison2->pr_root &&
-	    prison2 != &prison0);
+	if (prison1 != prison2 && prison1->pr_root != prison2->pr_root &&
+	    prison2 != &prison0)
+		return (O_RESOLVE_BENEATH);
+	else
+		return (0);
 }
 
 static int
@@ -3538,9 +3581,9 @@ unp_externalize(struct mbuf *control, struct mbuf **controlp, int flags)
 				struct file *fp;
 
 				fp = fdep[i]->fde_file;
-				_finstall(fdesc, fp, *fdp, fdflags |
-				    (restrict_rights(fp, td) ?
-				    O_RESOLVE_BENEATH : 0), &fdep[i]->fde_caps);
+				_finstall(fdesc, fp, *fdp,
+				    fdflags | externalize_fdflags(fdep[i], td),
+				    &fdep[i]->fde_caps);
 				unp_externalize_fp(fp);
 			}
 
@@ -3776,6 +3819,7 @@ unp_internalize(struct mbuf *control, struct mchain *mc, struct thread *td)
 				fdep[i]->fde_file = fde->fde_file;
 				filecaps_copy(&fde->fde_caps,
 				    &fdep[i]->fde_caps, true);
+				fdep[i]->fde_flags = fde->fde_flags;
 				unp_internalize_fp(fdep[i]->fde_file);
 			}
 			FILEDESC_SUNLOCK(fdesc);

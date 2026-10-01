@@ -727,7 +727,8 @@ bufspace_wait(struct bufdomain *bd, struct vnode *vp, int gbflags,
 	BD_LOCK(bd);
 	while (bd->bd_wanted) {
 		if (vp != NULL && vp->v_type != VCHR &&
-		    (td->td_pflags & TDP_BUFNEED) == 0) {
+		    (td->td_pflags & TDP_BUFNEED) == 0 &&
+		    vp->v_bufobj.bo_dirty.bv_cnt > 0) {
 			BD_UNLOCK(bd);
 			/*
 			 * getblk() is called with a vnode locked, and
@@ -2032,16 +2033,13 @@ bd_flushall(struct bufdomain *bd)
 static void
 bq_insert(struct bufqueue *bq, struct buf *bp, bool unlock)
 {
-	struct bufdomain *bd;
-
 	if (bp->b_qindex != QUEUE_NONE)
 		panic("bq_insert: free buffer %p onto another queue?", bp);
 
-	bd = bufdomain(bp);
 	if (bp->b_flags & B_AGE) {
 		/* Place this buf directly on the real queue. */
 		if (bq->bq_index == QUEUE_CLEAN)
-			bq = bd->bd_cleanq;
+			bq = bufdomain(bp)->bd_cleanq;
 		BQ_LOCK(bq);
 		TAILQ_INSERT_HEAD(&bq->bq_queue, bp, b_freelist);
 	} else {
@@ -2061,9 +2059,12 @@ bq_insert(struct bufqueue *bq, struct buf *bp, bool unlock)
 		BUF_UNLOCK(bp);
 
 	if (bp->b_qindex == QUEUE_CLEAN) {
+		struct bufdomain *bd;
+
 		/*
 		 * Flush the per-cpu queue and notify any waiters.
 		 */
+		bd = bufdomain(bp);
 		if (bd->bd_wanted || (bq != bd->bd_cleanq &&
 		    bq->bq_len >= bd->bd_lim))
 			bd_flush(bd, bq);

@@ -57,6 +57,7 @@ struct image_args {
 
 struct image_params {
 	struct proc *proc;		/* our process */
+	struct thread *td;
 	struct label *execlabel;	/* optional exec label */
 	struct vnode *vp;		/* pointer to vnode of file to exec */
 	struct vm_object *object;	/* The vm object for this vp */
@@ -122,6 +123,10 @@ int	exec_shell_imgact(struct image_params *);
 int	exec_copyin_args(struct image_args *, const char *, char **, char **);
 int	pre_execve(struct thread *td, struct vmspace **oldvmspace);
 void	post_execve(struct thread *td, int error, struct vmspace *oldvmspace);
+bool	execve_block(struct thread *td, struct proc *p);
+void	execve_block_wait(struct thread *td, struct proc *p);
+void	execve_unblock(struct thread *td, struct proc *p);
+void	execve_block_pass(struct thread *td);
 #endif
 
 #endif /* !_SYS_IMGACT_H_ */

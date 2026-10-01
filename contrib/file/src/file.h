@@ -27,7 +27,7 @@
  */
 /*
  * file.h - definitions for file(1) program
- * @(#)$File: file.h,v 1.258 2024/11/27 15:37:00 christos Exp $
+ * @(#)$File: file.h,v 1.267 2026/05/17 17:10:25 christos Exp $
  */
 
 #ifndef __file_h__
@@ -179,7 +179,7 @@
 #define MAXstring 128		/* max len of "string" types */
 
 #define MAGICNO		0xF11E041C
-#define VERSIONNO	20
+#define VERSIONNO	21
 #define FILE_MAGICSIZE	432
 
 #define FILE_GUID_SIZE	sizeof("XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX")
@@ -202,6 +202,10 @@ struct buffer {
 };
 
 union VALUETYPE {
+	int8_t sb;
+	int16_t sh;
+	int32_t sl;
+	int64_t sq;
 	uint8_t b;
 	uint16_t h;
 	uint32_t l;
@@ -288,17 +292,19 @@ struct magic {
 #define				FILE_CLEAR		47
 #define				FILE_DER		48
 #define				FILE_GUID		49
-#define				FILE_OFFSET		50
-#define				FILE_BEVARINT		51
-#define				FILE_LEVARINT		52
-#define				FILE_MSDOSDATE		53
-#define				FILE_LEMSDOSDATE	54
-#define				FILE_BEMSDOSDATE	55
-#define				FILE_MSDOSTIME		56
-#define				FILE_LEMSDOSTIME	57
-#define				FILE_BEMSDOSTIME	58
-#define				FILE_OCTAL		59
-#define				FILE_NAMES_SIZE		60 /* size of array to contain all names */
+#define				FILE_LEGUID		50
+#define				FILE_BEGUID		51
+#define				FILE_OFFSET		52
+#define				FILE_BEVARINT		53
+#define				FILE_LEVARINT		54
+#define				FILE_MSDOSDATE		55
+#define				FILE_LEMSDOSDATE	56
+#define				FILE_BEMSDOSDATE	57
+#define				FILE_MSDOSTIME		58
+#define				FILE_LEMSDOSTIME	59
+#define				FILE_BEMSDOSTIME	60
+#define				FILE_OCTAL		61
+#define				FILE_NAMES_SIZE		62 /* size of array to contain all names */
 
 #define IS_STRING(t) \
 	((t) == FILE_STRING || \
@@ -423,6 +429,7 @@ struct magic {
 #define CHAR_PSTRING_4_LE			'l'
 #define CHAR_PSTRING_LENGTH_INCLUDES_ITSELF     'J'
 #define STRING_IGNORE_CASE		(STRING_IGNORE_LOWERCASE|STRING_IGNORE_UPPERCASE)
+#define	REGEX_ICASE(m) (((m)->str_flags & STRING_IGNORE_CASE) ? REG_ICASE : 0)
 #define STRING_DEFAULT_RANGE		100
 
 #define	INDIRECT_RELATIVE			BIT(0)
@@ -513,7 +520,7 @@ struct magic_set {
 #define	FILE_ELF_SHNUM_MAX		32768
 #define	FILE_ELF_SHSIZE_MAX		(128 * 1024 * 1024)
 #define	FILE_INDIR_MAX			50
-#define	FILE_NAME_MAX			100
+#define	FILE_NAME_MAX			150
 #define	FILE_REGEX_MAX			8192
 #define	FILE_ENCODING_MAX		(64 * 1024)
 #define	FILE_MAGWARN_MAX		64
@@ -553,7 +560,8 @@ file_protected int file_separator(struct magic_set *);
 file_protected char *file_copystr(char *, size_t, size_t, const char *);
 file_protected int file_checkfmt(char *, size_t, const char *);
 file_protected size_t file_printedlen(const struct magic_set *);
-file_protected int file_print_guid(char *, size_t, const uint64_t *);
+file_protected int file_print_leguid(char *, size_t, const uint64_t *);
+file_protected int file_print_beguid(char *, size_t, const uint64_t *);
 file_protected int file_parse_guid(const char *, uint64_t *);
 file_protected int file_replace(struct magic_set *, const char *, const char *);
 file_protected int file_printf(struct magic_set *, const char *, ...)
@@ -589,6 +597,7 @@ file_protected uint64_t file_signextend(struct magic_set *, struct magic *,
 file_protected uintmax_t file_varint2uintmax_t(const unsigned char *, int,
     size_t *);
 
+file_protected int file_bigendian(void);
 file_protected void file_badread(struct magic_set *);
 file_protected void file_badseek(struct magic_set *);
 file_protected void file_oomem(struct magic_set *, size_t);
@@ -616,7 +625,7 @@ file_protected char * file_printable(struct magic_set *, char *, size_t,
     const char *, size_t);
 #ifdef __EMX__
 file_protected int file_os2_apptype(struct magic_set *, const char *,
-    const void *, size_t);
+    const struct buffer *);
 #endif /* __EMX__ */
 file_protected int file_pipe_closexec(int *);
 file_protected int file_clear_closexec(int);
@@ -693,7 +702,11 @@ const char *fmtcheck(const char *, const char *)
 #endif
 
 #ifdef HAVE_LIBSECCOMP
-int enable_sandbox(void);
+int enable_sandbox(int, int);
+#endif
+
+#ifdef HAVE_LINUX_LANDLOCK_H
+int enable_landlock(int, int);
 #endif
 
 file_protected const char *file_getprogname(void);
@@ -734,5 +747,8 @@ static const char *rcsid(const char *p) { \
 #ifndef __RCSID
 #define __RCSID(a)
 #endif
+
+#define file_no_overflow \
+    __attribute__((__no_sanitize__("signed-integer-overflow")))
 
 #endif /* __file_h__ */

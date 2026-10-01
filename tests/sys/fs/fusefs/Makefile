@@ -5,6 +5,7 @@ PACKAGE=	tests
 TESTSDIR=	${TESTSBASE}/sys/fs/fusefs
 
 ATF_TESTS_SH+=	ctl
+ATF_TESTS_SH+=	ext2-misc
 
 # We could simply link all of these files into a single executable.  But since
 # Kyua treats googletest programs as plain tests, it's better to separate them
@@ -34,6 +35,7 @@ GTESTS+=	link
 GTESTS+=	locks
 GTESTS+=	lookup
 GTESTS+=	lseek
+GTESTS+=	misc
 GTESTS+=	mkdir
 GTESTS+=	mknod
 GTESTS+=	mount
@@ -95,6 +97,13 @@ CXXWARNFLAGS+=	-Wno-vla-cxx-extension
 .endif
 CXXFLAGS+=	-I${SRCTOP}/tests
 CXXFLAGS+=	-I${FUSEFS}
+
+.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 160000
+# gcc 16's aggressive inlining hits max-inline-insns-* limits and
+# fails on these sources. Use a lower optimization setting to
+# fix the build.
+CXXFLAGS+= -O1
+.endif
 
 LIBADD+=	pthread
 LIBADD+=	gmock gtest

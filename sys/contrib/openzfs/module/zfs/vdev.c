@@ -31,6 +31,8 @@
  * Copyright (c) 2019, Datto Inc. All rights reserved.
  * Copyright (c) 2021, 2025, Klara, Inc.
  * Copyright (c) 2021, 2023 Hewlett Packard Enterprise Development LP.
+ * Copyright (c) 2026, Seagate Technology, LLC.
+ * Copyright (c) 2026, TrueNAS.
  */
 
 #include <sys/zfs_context.h>
@@ -459,6 +461,7 @@ vdev_prop_get_objid(vdev_t *vd, uint64_t *objid)
 	} else if (vd->vdev_leaf_zap != 0) {
 		*objid = vd->vdev_leaf_zap;
 	} else {
+		*objid = 0;
 		return (EINVAL);
 	}
 
@@ -1713,11 +1716,12 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 		/*
 		 * The metaslab was marked as dirty at the end of
 		 * metaslab_init(). Remove it from the dirty list so that we
-		 * can uninitialize and reinitialize it to the new class.
+		 * can uninitialize and reinitialize it to the new class. It
+		 * may be dirty in any txg slot, so clear them all.
 		 */
-		if (txg != 0) {
+		for (int t = 0; t < TXG_SIZE; t++) {
 			(void) txg_list_remove_this(&vd->vdev_ms_list,
-			    slog_ms, txg);
+			    slog_ms, t);
 		}
 		uint64_t sm_obj = space_map_object(slog_ms->ms_sm);
 		metaslab_fini(slog_ms);
@@ -1970,14 +1974,23 @@ vdev_load_child(void *arg)
 	vd->vdev_load_error = vdev_load(vd);
 }
 
+typedef struct {
+	vdev_t	*voc_vdev;
+	cred_t	*voc_cred;
+} vdev_open_child_t;
+
 static void
 vdev_open_child(void *arg)
 {
-	vdev_t *vd = arg;
+	vdev_open_child_t *voc = arg;
+	vdev_t *vd = voc->voc_vdev;
 
 	vd->vdev_open_thread = curthread;
-	vd->vdev_open_error = vdev_open(vd);
+	vd->vdev_open_error = vdev_open(vd, voc->voc_cred);
 	vd->vdev_open_thread = NULL;
+
+	crfree(voc->voc_cred);
+	kmem_free(voc, sizeof (vdev_open_child_t));
 }
 
 static boolean_t
@@ -2011,7 +2024,8 @@ vdev_default_open_children_func(vdev_t *vd)
  * deadlock when the current thread is holding the spa_namespace_lock.
  */
 static void
-vdev_open_children_impl(vdev_t *vd, vdev_open_children_func_t *open_func)
+vdev_open_children_impl(vdev_t *vd, cred_t *cred,
+    vdev_open_children_func_t *open_func)
 {
 	int children = vd->vdev_children;
 
@@ -2026,10 +2040,15 @@ vdev_open_children_impl(vdev_t *vd, vdev_open_children_func_t *open_func)
 			continue;
 
 		if (tq == NULL || vdev_uses_zvols(vd)) {
-			cvd->vdev_open_error = vdev_open(cvd);
+			cvd->vdev_open_error = vdev_open(cvd, cred);
 		} else {
+			vdev_open_child_t *voc =
+			    kmem_alloc(sizeof (vdev_open_child_t), KM_SLEEP);
+			voc->voc_vdev = cvd;
+			voc->voc_cred = cred;
+			crhold(cred);
 			VERIFY(taskq_dispatch(tq, vdev_open_child,
-			    cvd, TQ_SLEEP) != TASKQID_INVALID);
+			    voc, TQ_SLEEP) != TASKQID_INVALID);
 		}
 	}
 
@@ -2052,18 +2071,19 @@ vdev_open_children_impl(vdev_t *vd, vdev_open_children_func_t *open_func)
  * Open all child vdevs.
  */
 void
-vdev_open_children(vdev_t *vd)
+vdev_open_children(vdev_t *vd, cred_t *cred)
 {
-	vdev_open_children_impl(vd, vdev_default_open_children_func);
+	vdev_open_children_impl(vd, cred, vdev_default_open_children_func);
 }
 
 /*
  * Conditionally open a subset of child vdevs.
  */
 void
-vdev_open_children_subset(vdev_t *vd, vdev_open_children_func_t *open_func)
+vdev_open_children_subset(vdev_t *vd, cred_t *cred,
+    vdev_open_children_func_t *open_func)
 {
-	vdev_open_children_impl(vd, open_func);
+	vdev_open_children_impl(vd, cred, open_func);
 }
 
 /*
@@ -2139,7 +2159,7 @@ vdev_ashift_optimize(vdev_t *vd)
  * Prepare a virtual device for access.
  */
 int
-vdev_open(vdev_t *vd)
+vdev_open(vdev_t *vd, cred_t *cred)
 {
 	spa_t *spa = vd->vdev_spa;
 	int error;
@@ -2180,7 +2200,7 @@ vdev_open(vdev_t *vd)
 	}
 
 	error = vd->vdev_ops->vdev_op_open(vd, &osize, &max_osize,
-	    &logical_ashift, &physical_ashift);
+	    &logical_ashift, &physical_ashift, cred);
 
 	/* Keep the device in removed state if unplugged */
 	if (error == ENOENT && vd->vdev_removed) {
@@ -2872,7 +2892,7 @@ vdev_reopen(vdev_t *vd)
 	/* set the reopening flag unless we're taking the vdev offline */
 	vd->vdev_reopening = !vd->vdev_offline;
 	vdev_close(vd);
-	(void) vdev_open(vd);
+	(void) vdev_open(vd, CRED());
 
 	/*
 	 * Call vdev_validate() here to make sure we have the same device.
@@ -2927,7 +2947,7 @@ vdev_create(vdev_t *vd, uint64_t txg, boolean_t isreplacing)
 	 * For a create, however, we want to fail the request if
 	 * there are any components we can't open.
 	 */
-	error = vdev_open(vd);
+	error = vdev_open(vd, CRED());
 
 	if (error || vd->vdev_state != VDEV_STATE_HEALTHY) {
 		vdev_close(vd);
@@ -3094,8 +3114,11 @@ vdev_dtl_dirty(vdev_t *vd, vdev_dtl_type_t t, uint64_t txg, uint64_t size)
 	ASSERT(spa_writeable(vd->vdev_spa));
 
 	mutex_enter(&vd->vdev_dtl_lock);
-	if (!zfs_range_tree_contains(rt, txg, size))
+	if (!zfs_range_tree_contains(rt, txg, size)) {
+		/* Clear whatever is there already. */
+		zfs_range_tree_clear(rt, txg, size);
 		zfs_range_tree_add(rt, txg, size);
+	}
 	mutex_exit(&vd->vdev_dtl_lock);
 }
 
@@ -5212,11 +5235,13 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 	if (type == ZIO_TYPE_WRITE && txg != 0 &&
 	    (!(flags & ZIO_FLAG_IO_REPAIR) ||
 	    (flags & ZIO_FLAG_SCAN_THREAD) ||
+	    zio->io_priority == ZIO_PRIORITY_REBUILD ||
 	    spa->spa_claiming)) {
 		/*
 		 * This is either a normal write (not a repair), or it's
 		 * a repair induced by the scrub thread, or it's a repair
-		 * made by zil_claim() during spa_load() in the first txg.
+		 * made by zil_claim() during spa_load() in the first txg,
+		 * or its repair induced by rebuild (sequential resilver).
 		 * In the normal case, we commit the DTL change in the same
 		 * txg as the block was born.  In the scrub-induced repair
 		 * case, we know that scrubs run in first-pass syncing context,
@@ -5227,27 +5252,38 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 		 * self-healing writes triggered by normal (non-scrubbing)
 		 * reads, because we have no transactional context in which to
 		 * do so -- and it's not clear that it'd be desirable anyway.
+		 *
+		 * For rebuild, since we don't have any information about BPs
+		 * and txgs that are being rebuilt, we need to add all known
+		 * txgs (starting from TXG_INITIAL) to DTL so that during
+		 * healing resilver we would be able to check all txgs at
+		 * vdev_draid_need_resilver().
 		 */
+		uint64_t size = 1;
 		if (vd->vdev_ops->vdev_op_leaf) {
 			uint64_t commit_txg = txg;
 			if (flags & ZIO_FLAG_SCAN_THREAD) {
 				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
 				ASSERT(spa_sync_pass(spa) == 1);
-				vdev_dtl_dirty(vd, DTL_SCRUB, txg, 1);
+				vdev_dtl_dirty(vd, DTL_SCRUB, txg, size);
 				commit_txg = spa_syncing_txg(spa);
 			} else if (spa->spa_claiming) {
 				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
 				commit_txg = spa_first_txg(spa);
+			} else if (zio->io_priority == ZIO_PRIORITY_REBUILD) {
+				ASSERT(flags & ZIO_FLAG_IO_REPAIR);
+				vdev_rebuild_txgs(vd->vdev_top, &txg, &size);
+				commit_txg = spa_open_txg(spa);
 			}
 			ASSERT(commit_txg >= spa_syncing_txg(spa));
-			if (vdev_dtl_contains(vd, DTL_MISSING, txg, 1))
+			if (vdev_dtl_contains(vd, DTL_MISSING, txg, size))
 				return;
 			for (pvd = vd; pvd != rvd; pvd = pvd->vdev_parent)
-				vdev_dtl_dirty(pvd, DTL_PARTIAL, txg, 1);
+				vdev_dtl_dirty(pvd, DTL_PARTIAL, txg, size);
 			vdev_dirty(vd->vdev_top, VDD_DTL, vd, commit_txg);
 		}
 		if (vd != rvd)
-			vdev_dtl_dirty(vd, DTL_MISSING, txg, 1);
+			vdev_dtl_dirty(vd, DTL_MISSING, txg, size);
 	}
 }
 
@@ -6281,7 +6317,7 @@ vdev_prop_get(vdev_t *vd, nvlist_t *innvl, nvlist_t *outnvl)
 	spa_t *spa = vd->vdev_spa;
 	objset_t *mos = spa->spa_meta_objset;
 	int err = 0;
-	uint64_t objid;
+	uint64_t objid = 0;
 	uint64_t vdev_guid;
 	nvpair_t *elem = NULL;
 	nvlist_t *nvprops = NULL;

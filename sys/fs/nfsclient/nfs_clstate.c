@@ -467,8 +467,11 @@ nfscl_deleg(mount_t mp, struct nfsclclient *clp, u_int8_t *nfhp,
 	} else {
 		/*
 		 * A delegation already exists.  If the new one is a Write
-		 * delegation and the old one a Read delegation, return the
-		 * Read delegation.  Otherwise, return the new delegation.
+		 * delegation and the old one a Read delegation, upgrade
+		 * if possible.  The upgrade can be done if either:
+		 * - The stateid is the same (true for the FreeBSD nfs server).
+		 * - The current delegation is not locked.
+		 * Otherwise, return the new delegation.
 		 */
 		if (dp != NULL) {
 			if (NFSBCMP(dp->nfsdl_stateid.other,
@@ -476,13 +479,37 @@ nfscl_deleg(mount_t mp, struct nfsclclient *clp, u_int8_t *nfhp,
 				trydelegret = true;
 			if ((dp->nfsdl_flags & NFSCLDL_WRITE) != 0 &&
 			    (tdp->nfsdl_flags & NFSCLDL_READ) != 0) {
-				TAILQ_REMOVE(&clp->nfsc_deleg, tdp, nfsdl_list);
-				LIST_REMOVE(tdp, nfsdl_hash);
-				TAILQ_INSERT_HEAD(&clp->nfsc_deleg, dp,
-				    nfsdl_list);
-				LIST_INSERT_HEAD(NFSCLDELEGHASH(clp, nfhp,
-				    fhlen), dp, nfsdl_hash);
-				dp->nfsdl_timestamp = NFSD_MONOSEC + 120;
+				if (tdp->nfsdl_rwlock.nfslock_usecnt == 0 &&
+				    tdp->nfsdl_rwlock.nfslock_lock == 0) {
+					TAILQ_REMOVE(&clp->nfsc_deleg, tdp,
+					    nfsdl_list);
+					LIST_REMOVE(tdp, nfsdl_hash);
+					TAILQ_INSERT_HEAD(&clp->nfsc_deleg, dp,
+					    nfsdl_list);
+					LIST_INSERT_HEAD(NFSCLDELEGHASH(clp,
+					    nfhp, fhlen), dp, nfsdl_hash);
+					dp->nfsdl_timestamp = NFSD_MONOSEC +
+					    120;
+				} else if (!trydelegret) {
+					/*
+					 * For this case, the fields in
+					 * struct nfscldeleg that change for a
+					 * write delegation must be copied.
+					 * This way, the delegation structure
+					 * does not get free'd prematurely.
+					 */
+					memcpy(&tdp->nfsdl_startcopy,
+					    &dp->nfsdl_startcopy,
+					    __rangeof(struct nfscldeleg,
+					    nfsdl_startcopy, nfsdl_endcopy));
+					TAILQ_REMOVE(&clp->nfsc_deleg, tdp,
+					    nfsdl_list);
+					TAILQ_INSERT_HEAD(&clp->nfsc_deleg, tdp,
+					    nfsdl_list);
+					tdp->nfsdl_timestamp = NFSD_MONOSEC +
+					    120;
+					tdp = dp;   /* Free the new one. */
+				}
 			} else {
 				tdp = dp;	/* Return this one. */
 			}
@@ -3585,7 +3612,7 @@ nfscl_docb(struct nfsrv_descript *nd, NFSPROC_T *p)
 	mount_t mp;
 	nfsattrbit_t attrbits, rattrbits;
 	nfsv4stateid_t stateid;
-	uint32_t seqid, slotid = 0, highslot, cachethis __unused;
+	uint32_t seqid, slotid = 0, highslot, cachethis;
 	uint8_t sessionid[NFSX_V4SESSIONID];
 	struct mbuf *rep;
 	struct nfscllayout *lyp;
@@ -3596,6 +3623,7 @@ nfscl_docb(struct nfsrv_descript *nd, NFSPROC_T *p)
 	struct nfsclsession *tsep;
 
 	gotseq_ok = 0;
+	cachethis = 0;
 	nfsrvd_rephead(nd);
 	NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 	taglen = fxdr_unsigned(int, *tl);
@@ -3922,6 +3950,9 @@ nfscl_docb(struct nfsrv_descript *nd, NFSPROC_T *p)
 				error = nfsv4_seqsession(seqid, slotid,
 				    highslot, tsep->nfsess_cbslots, &rep,
 				    tsep->nfsess_backslots);
+				/* For callbacks, do not reply NFSERR_DELAY. */
+				if (error == NFSERR_DELAY)
+					error = 0;
 			}
 			NFSUNLOCKCLSTATE();
 			if (error == 0 || error == NFSERR_REPLYFROMCACHE) {
@@ -4065,8 +4096,9 @@ nfsmout:
 	}
 	*nd->nd_errp = nfscl_errmap(nd, minorvers);
 out:
-	if (gotseq_ok != 0) {
+	if (gotseq_ok != 0 && cachethis != 0) {
 		rep = m_copym(nd->nd_mreq, 0, M_COPYALL, M_WAITOK);
+		NFSCL_DEBUG(4, "Got reply for cbcache=%p\n", rep);
 		NFSLOCKCLSTATE();
 		clp = nfscl_getclntsess(sessionid);
 		if (clp != NULL) {
@@ -5283,6 +5315,8 @@ nfscl_errmap(struct nfsrv_descript *nd, u_int32_t minorvers)
 	while (*++errp)
 		if (*errp == (short)nd->nd_repstat)
 			return (txdr_unsigned(nd->nd_repstat));
+	if (minorvers > NFSV4_MINORVERSION && *defaulterrp == NFSERR_RESOURCE)
+		return (txdr_unsigned(NFSERR_SERVERFAULT));
 	return (txdr_unsigned(*defaulterrp));
 }
 

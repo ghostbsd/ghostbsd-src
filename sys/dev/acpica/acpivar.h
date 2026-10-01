@@ -275,11 +275,13 @@ extern int	acpi_override_isa_irq_polarity;
  * interface compatibility with ISA drivers which can also
  * attach to ACPI.
  */
-#define ACPI_IVAR_HANDLE	0x100
-#define ACPI_IVAR_UNUSED	0x101	/* Unused/reserved. */
-#define ACPI_IVAR_PRIVATE	0x102
-#define ACPI_IVAR_FLAGS		0x103
-#define	ACPI_IVAR_DOMAIN	0x104
+enum {
+	ACPI_IVAR_HANDLE = BUS_IVARS_ACPI,
+	ACPI_IVAR_UNUSED,		/* Unused/reserved. */
+	ACPI_IVAR_PRIVATE,
+	ACPI_IVAR_FLAGS,
+	ACPI_IVAR_DOMAIN
+};
 
 /*
  * ad_domain NUMA domain special value.
@@ -380,9 +382,9 @@ typedef void acpi_subtable_handler(ACPI_SUBTABLE_HEADER *, void *);
 
 BOOLEAN		acpi_DeviceIsPresent(device_t dev);
 BOOLEAN		acpi_BatteryIsPresent(device_t dev);
-ACPI_STATUS	acpi_GetHandleInScope(ACPI_HANDLE parent, char *path,
+ACPI_STATUS	acpi_GetHandleInScope(ACPI_HANDLE parent, const char *path,
 		    ACPI_HANDLE *result);
-ACPI_STATUS	acpi_GetProperty(device_t dev, ACPI_STRING propname,
+ACPI_STATUS	acpi_GetProperty(device_t dev, const char *propname,
 		    const ACPI_OBJECT **value);
 ACPI_BUFFER	*acpi_AllocBuffer(int size);
 ACPI_STATUS	acpi_ConvertBufferToInteger(ACPI_BUFFER *bufp,
@@ -431,7 +433,7 @@ int		acpi_MatchHid(ACPI_HANDLE h, const char *hid);
 #define ACPI_MATCHHID_CID 2
 
 static __inline bool
-acpi_HasProperty(device_t dev, ACPI_STRING propname)
+acpi_HasProperty(device_t dev, const char *propname)
 {
 
 	return ACPI_SUCCESS(acpi_GetProperty(dev, propname, NULL));
@@ -612,6 +614,9 @@ void		acpi_pxm_set_mem_locality(void);
 void		acpi_pxm_set_cpu_locality(void);
 int		acpi_pxm_get_cpu_locality(int apic_id);
 int		acpi_pxm_parse(device_t dev);
+int		acpi_get_cpus_for_domain(device_t dev, device_t child,
+		    int domain, enum cpu_sets op, size_t setsize,
+		    cpuset_t *cpuset);
 
 /*
  * Map a PXM to a VM domain.

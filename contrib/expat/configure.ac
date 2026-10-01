@@ -74,7 +74,21 @@ AC_CONFIG_SRCDIR([Makefile.in])
 AC_CONFIG_AUX_DIR([conftools])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CANONICAL_HOST
-AM_INIT_AUTOMAKE
+
+dnl NOTE: Macro `AM_OPTIONAL_AUTOMAKE` is available with Automake >=1.19
+dnl       and serves as a proxy for robust Automake >=1.19 detection here.
+dnl       `dist-bzip3` was introduced with Automake 1.18 already but there
+dnl       is no robust way of checking precisely for Automake >=1.18.
+dnl       Automake >=1.13 is needed for (1) our use of LOG_DRIVER and
+dnl       (2) making it work without asking for parallel tests, explicitly.
+m4_ifdef([AM_OPTIONAL_AUTOMAKE], [
+  AM_INIT_AUTOMAKE([1.19 dist-bzip2 dist-bzip3 dist-lzip dist-xz foreign subdir-objects])
+
+  dnl NOTE: Without this dummy call in the file the `m4_ifdef` above never hits true.
+  AM_OPTIONAL_AUTOMAKE([])
+], [
+  AM_INIT_AUTOMAKE([1.13 dist-bzip2            dist-lzip dist-xz foreign subdir-objects])
+])
 AM_MAINTAINER_MODE([enable])  # to allow argument --disable-maintainer-mode
 
 
@@ -90,7 +104,7 @@ dnl If the API changes incompatibly set LIBAGE back to 0
 dnl
 
 LIBCURRENT=13  # sync
-LIBREVISION=0  # with
+LIBREVISION=5  # with
 LIBAGE=12      # CMakeLists.txt!
 
 AC_CONFIG_HEADERS([expat_config.h])
@@ -395,8 +409,23 @@ AC_DEFINE([XML_GE], 1,
           [Define as 1/0 to enable/disable support for general entities.])
 AC_DEFINE([XML_DTD], 1,
           [Define to make parameter entity parsing functionality available.])
-AC_DEFINE([XML_DEV_URANDOM], 1,
-          [Define to include code reading entropy from `/dev/urandom'.])
+
+
+have_dev_urandom=false
+
+AC_ARG_WITH([dev-urandom],
+  [AS_HELP_STRING([--with-dev-urandom],
+                  [enforce the use of /dev/urandom in the system @<:@default=no@:>@])
+AS_HELP_STRING([--without-dev-urandom],
+               [enforce not using /dev/urandom in the system @<:@default=no@:>@])],
+  [with_dev_urandom=${withval}],
+  [])
+
+AS_IF([test "x${with_dev_urandom}" = "xyes"],
+  [have_dev_urandom=true
+   AC_DEFINE([XML_DEV_URANDOM], 1,
+             [Define to include code reading entropy from `/dev/urandom'.])])
+
 
 AC_ARG_ENABLE([xml-attr-info],
   [AS_HELP_STRING([--enable-xml-attr-info],
@@ -580,7 +609,7 @@ Entropy sources:
              getentropy: ${have_getentropy}
               getrandom: ${have_getrandom_function}
   syscall SYS_getrandom: ${have_getrandom_syscall}
-           /dev/urandom: true
+           /dev/urandom: ${have_dev_urandom}
 
 Continue with e.g.:
   make -j2

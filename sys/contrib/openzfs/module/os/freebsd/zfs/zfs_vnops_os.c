@@ -3524,7 +3524,7 @@ zfs_do_rename_impl(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 				    ZRENAMING, NULL));
 			}
 		}
-		if (error == 0) {
+		if (error == 0 && zfsvfs->z_use_namecache) {
 			cache_vop_rename(sdvp, *svpp, tdvp, *tvpp, scnp, tcnp);
 		}
 	}
@@ -5770,7 +5770,8 @@ zfs_freebsd_pathconf(struct vop_pathconf_args *ap)
 {
 	ulong_t val;
 	int error;
-#if defined(_PC_CLONE_BLKSIZE) || defined(_PC_CASE_INSENSITIVE)
+#if defined(_PC_CLONE_BLKSIZE) || defined(_PC_CASE_INSENSITIVE) || \
+	defined(_PC_HAS_HIDDENSYSTEM)
 	zfsvfs_t *zfsvfs;
 #endif
 
@@ -5816,7 +5817,11 @@ zfs_freebsd_pathconf(struct vop_pathconf_args *ap)
 #endif
 #ifdef _PC_HAS_HIDDENSYSTEM
 	case _PC_HAS_HIDDENSYSTEM:
-		*ap->a_retval = 1;
+		zfsvfs = (zfsvfs_t *)ap->a_vp->v_mount->mnt_data;
+		if (zfsvfs->z_use_fuids == B_TRUE)
+			*ap->a_retval = 1;
+		else
+			*ap->a_retval = 0;
 		return (0);
 #endif
 #ifdef _PC_CLONE_BLKSIZE
@@ -6767,10 +6772,12 @@ zfs_freebsd_advise(struct vop_advise_args *ap)
 		dmu_prefetch(os, zp->z_id, 0, start, len,
 		    ZIO_PRIORITY_ASYNC_READ);
 		break;
+	case POSIX_FADV_DONTNEED:
+		dmu_evict_range(os, zp->z_id, start, len);
+		break;
 	case POSIX_FADV_NORMAL:
 	case POSIX_FADV_RANDOM:
 	case POSIX_FADV_SEQUENTIAL:
-	case POSIX_FADV_DONTNEED:
 	case POSIX_FADV_NOREUSE:
 		/* ignored for now */
 		break;

@@ -265,16 +265,6 @@ fuse_extattr_check_cred(struct vnode *vp, int ns, struct ucred *cred,
 	}
 }
 
-/* Get a filehandle for a directory */
-static int
-fuse_filehandle_get_dir(struct vnode *vp, struct fuse_filehandle **fufhp,
-	struct ucred *cred, pid_t pid)
-{
-	if (fuse_filehandle_get(vp, FREAD, fufhp, cred, pid) == 0)
-		return 0;
-	return fuse_filehandle_get(vp, FEXEC, fufhp, cred, pid);
-}
-
 /* Send FUSE_FLUSH for this vnode */
 static int
 fuse_flush(struct vnode *vp, struct ucred *cred, pid_t pid, int fflag)
@@ -810,8 +800,10 @@ fuse_vnop_close(struct vop_close_args *ap)
 	int fflag = ap->a_fflag;
 	struct thread *td;
 	struct fuse_vnode_data *fvdat = VTOFUD(vp);
+	struct timespec va_atime;
 	pid_t pid;
 	int err = 0;
+	bool atime_change, size_change;
 
 	/* NB: a_td will be NULL from some async kernel contexts */
 	td = ap->a_td ? ap->a_td : curthread;
@@ -828,8 +820,14 @@ fuse_vnop_close(struct vop_close_args *ap)
 		cred = td->td_ucred;
 
 	err = fuse_flush(vp, cred, pid, fflag);
-	ASSERT_CACHED_ATTRS_LOCKED(vp);	/* For fvdat->flag */
-	if (err == 0 && (fvdat->flag & FN_ATIMECHANGE) && !vfs_isrdonly(mp)) {
+
+	CACHED_ATTR_LOCK(vp);
+	atime_change = fvdat->flag & FN_ATIMECHANGE;
+	size_change = fvdat->flag & FN_SIZECHANGE;
+	va_atime = fvdat->cached_attrs.va_atime;
+	CACHED_ATTR_UNLOCK(vp);
+
+	if (err == 0 && atime_change && !vfs_isrdonly(mp)) {
 		struct vattr vap;
 		struct fuse_data *data;
 		int dataflags;
@@ -846,19 +844,28 @@ fuse_vnop_close(struct vop_close_args *ap)
 		}
 		if (access_e == 0) {
 			VATTR_NULL(&vap);
-			ASSERT_CACHED_ATTRS_LOCKED(vp);
-			vap.va_atime = fvdat->cached_attrs.va_atime;
+			vap.va_atime = va_atime;
 			/*
 			 * Ignore errors setting when setting atime.  That
 			 * should not cause close(2) to fail.
 			 */
+			CACHED_ATTR_LOCK(vp);
 			fuse_internal_setattr(vp, &vap, td, NULL);
+			CACHED_ATTR_UNLOCK(vp);
 		}
 	}
 	/* TODO: close the file handle, if we're sure it's no longer used */
-	if ((fvdat->flag & FN_SIZECHANGE) != 0) {
+	if (size_change != 0) {
+		/* 
+		 * NB: this may panic if MNTK_SHARED_WRITES is ever enabled.
+		 * For now it cannot, because it is illegal to use fexecve to
+		 * execute a file descriptor open for writing, there's no way
+		 * to dirty a file's size without writing to it, and we don't
+		 * set MNTK_SHARED_WRITES.
+		 */
 		fuse_vnode_savesize(vp, cred, pid);
 	}
+
 	return err;
 }
 
@@ -1670,14 +1677,16 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 				 * Need to figure out the vnode locking to make
 				 * this work.
 				 */
-				fuse_internal_getattr(dvp, &dvattr, cred, td);
-				if ((dvattr.va_mode & S_ISTXT) &&
+				err = fuse_internal_getattr(dvp, &dvattr, cred,
+						td);
+				if (err == 0 &&
+					(dvattr.va_mode & S_ISTXT) &&
 					fuse_internal_access(dvp, VADMIN, td,
 						cred) &&
 					fuse_internal_access(*vpp, VADMIN, td,
-						cred)) {
+						cred))
+				{
 					err = EPERM;
-					goto out;
 				}
 			}
 		}
@@ -1980,7 +1989,7 @@ fuse_vnop_readdir(struct vop_readdir_args *ap)
 		return (EXTERROR(EINVAL, "Buffer is too small"));
 
 	tresid = uio->uio_resid;
-	err = fuse_filehandle_get_dir(vp, &fufh, cred, pid);
+	err = fuse_filehandle_get(vp, FREAD, &fufh, cred, pid);
 	if (err == EBADF && mp->mnt_flag & MNT_EXPORTED) {
 		KASSERT(!fsess_is_impl(mp, FUSE_OPENDIR),
 			("FUSE file systems that implement "
@@ -2895,8 +2904,8 @@ out:
  * bsd_list, bsd_list_len - output list compatible with bsd vfs
  */
 static int
-fuse_xattrlist_convert(char *prefix, const char *list, int list_len,
-    char *bsd_list, int *bsd_list_len)
+fuse_xattrlist_convert(struct fuse_data *data, char *prefix, const char *list,
+    int list_len, char *bsd_list, int *bsd_list_len)
 {
 	int len, pos, dist_to_next, prefix_len;
 
@@ -2905,7 +2914,14 @@ fuse_xattrlist_convert(char *prefix, const char *list, int list_len,
 	prefix_len = strlen(prefix);
 
 	while (pos < list_len && list[pos] != '\0') {
-		dist_to_next = strlen(&list[pos]) + 1;
+		dist_to_next = strnlen(&list[pos], list_len - pos - 1) + 1;
+		if (list[pos + dist_to_next - 1] != '\0') {
+			fuse_warn(data, FSESS_WARN_LSEXTATTR_NUL,
+				"The FUSE server returned a non nul-terminated "
+				"LISTXATTR response.");
+			return (EXTERROR(EIO,
+				"The FUSE server returned a malformed list"));
+		}
 		if (bcmp(&list[pos], prefix, prefix_len) == 0 &&
 		    list[pos + prefix_len] == extattr_namespace_separator) {
 			len = dist_to_next -
@@ -2961,6 +2977,7 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	struct fuse_listxattr_in *list_xattr_in;
 	struct fuse_listxattr_out *list_xattr_out;
 	struct mount *mp = vnode_mount(vp);
+	struct fuse_data *data = fuse_get_mpdata(mp);
 	struct thread *td = ap->a_td;
 	struct ucred *cred = ap->a_cred;
 	char *prefix;
@@ -3041,8 +3058,6 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	linux_list = fdi.answ;
 	/* FUSE doesn't allow the server to return more data than requested */
 	if (fdi.iosize > linux_list_len) {
-		struct fuse_data *data = fuse_get_mpdata(mp);
-
 		fuse_warn(data, FSESS_WARN_LSEXTATTR_LONG,
 			"server returned "
 			"more extended attribute data than requested; "
@@ -3059,7 +3074,7 @@ fuse_vnop_listextattr(struct vop_listextattr_args *ap)
 	 * FreeBSD's format before giving it to the user.
 	 */
 	bsd_list = malloc(linux_list_len, M_TEMP, M_WAITOK);
-	err = fuse_xattrlist_convert(prefix, linux_list, linux_list_len,
+	err = fuse_xattrlist_convert(data, prefix, linux_list, linux_list_len,
 	    bsd_list, &bsd_list_len);
 	if (err != 0)
 		goto out;

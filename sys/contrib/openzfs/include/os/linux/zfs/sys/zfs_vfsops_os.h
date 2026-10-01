@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2026, TrueNAS.
  */
 
 #ifndef	_SYS_FS_ZFS_VFSOPS_H
@@ -73,11 +74,6 @@ typedef struct vfs {
 	kmutex_t	vfs_mntpt_lock;
 } vfs_t;
 
-typedef struct zfs_mnt {
-	const char	*mnt_osname;	/* Objset name */
-	char		*mnt_data;	/* Raw mount options */
-} zfs_mnt_t;
-
 struct zfsvfs {
 	vfs_t		*z_vfs;		/* generic fs struct */
 	struct super_block *z_sb;	/* generic super_block */
@@ -104,6 +100,7 @@ struct zfsvfs {
 	int		z_norm;		/* normalization flags */
 	boolean_t	z_relatime;	/* enable relatime mount option */
 	boolean_t	z_unmounted;	/* unmounted */
+	boolean_t	z_use_hold;	/* held via dmu_objset_hold */
 	rrmlock_t	z_teardown_lock;
 	krwlock_t	z_teardown_inactive_lock;
 	list_t		z_all_znodes;	/* all znodes in the fs */
@@ -241,15 +238,20 @@ extern int zfs_end_fs(zfsvfs_t *zfsvfs, struct dsl_dataset *ds);
 extern void zfs_exit_fs(zfsvfs_t *zfsvfs);
 extern int zfs_set_version(zfsvfs_t *zfsvfs, uint64_t newvers);
 extern int zfsvfs_create(const char *name, boolean_t readony, zfsvfs_t **zfvp);
+extern int zfsvfs_create_hold(const char *name, zfsvfs_t **zfvp);
 extern int zfsvfs_create_impl(zfsvfs_t **zfvp, zfsvfs_t *zfsvfs, objset_t *os);
 extern void zfsvfs_free(zfsvfs_t *zfsvfs);
 extern int zfs_check_global_label(const char *dsname, const char *hexsl);
 
+extern vfs_t *zfsvfs_vfs_alloc(void);
+extern void zfsvfs_vfs_free(vfs_t *vfsp);
+
 extern boolean_t zfs_is_readonly(zfsvfs_t *zfsvfs);
-extern int zfs_domount(struct super_block *sb, zfs_mnt_t *zm, int silent);
+extern int zfs_domount(struct super_block *sb, const char *osname,
+    vfs_t *mntopts, int silent);
 extern void zfs_preumount(struct super_block *sb);
 extern int zfs_umount(struct super_block *sb);
-extern int zfs_remount(struct super_block *sb, int *flags, zfs_mnt_t *zm);
+extern int zfs_remount(struct super_block *sb, vfs_t *mntopts, int flags);
 extern int zfs_statvfs(struct inode *ip, struct kstatfs *statp);
 extern int zfs_vget(struct super_block *sb, struct inode **ipp, fid_t *fidp);
 extern int zfs_prune(struct super_block *sb, unsigned long nr_to_scan,

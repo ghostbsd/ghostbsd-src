@@ -12,6 +12,60 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20260925:
+	less(1) has been updated to version 710, which removes the obsolete
+	lesskey(1) utility.  It is no longer built or installed, and the
+	manual page describing the lesskey file format has moved from
+	lesskey(1) to lesskey(5).
+
+	No separate compilation step is needed any more: less(1) has been
+	able to read plain-text lesskey files directly since version 590,
+	imported into FreeBSD in 2021.  Keep your key bindings in the
+	plain-text ~/.lesskey (or the file named by $LESSKEYIN) rather than
+	compiling them into the binary ~/.less; system-wide bindings belong
+	in /etc/syslesskey (or $LESSKEYIN_SYSTEM) rather than /etc/sysless.
+	If both forms are present, the plain-text one is used and the binary
+	one is ignored.
+
+	Existing binary lesskey files are still read, so nothing stops
+	working immediately, but they can no longer be generated or
+	regenerated.  Binary files produced by lesskey from less 240 or
+	older are no longer supported at all and must be rewritten in the
+	plain-text format.
+
+20260919:
+	The size of multiple embedded structs have changed and may lead to
+	problems (pci_error_handlers in pci_driver, dev_pm_info in struct device).
+	Bump __FreeBSD_version to 1501503 to allow these LinuxKPI changes to
+	be detcted.
+
+20260919:
+	bhyve(8) users who explicitly set the eui64 option for an NVMe
+	device may need to update their configuration.  Due to an incorrect
+	byte-order conversion, bhyve previously presented manually
+	configured EUI-64 values to the guest with their bytes reversed.
+	To preserve the identifier previously visible to the guest,
+	byte-reverse the value in the eui64 option.  Automatically
+	generated EUI-64 values, used when the option is omitted,
+	are unaffected.
+
+20260727:
+	The wait_for_pids() function in rc.subr, used by rc scripts
+	when stopping or restarting a service, has been modified to
+	use pwait(1)'s new -r option, which requires kernel support.
+	When upgrading across this change, you should install a new
+	kernel first, then reboot, then install a new world, run
+	etcupdate, and reboot again.  Otherwise, you may find that
+	rc.subr is unable to stop services because the running kernel
+	does not provide the support that the updated pwait(1) needs.
+	Alternatively, if you deem it safe, you may use fastboot(8) to
+	reboot without shutting down services first.
+
+20260512:
+	"bsdinstall script" will now do a pkgbase installation by default.  To
+	revert to the legacy distset installation, set "DISTRIBUTIONS" in
+	your installerconfig.
+
 20260422:
 	Bump __FreeBSD_version to 1500508 for LinuxKPI after merges of
 	changes to eventfd and changes for DRM 6.11, as well as
@@ -207,10 +261,12 @@ and/or ports.
 	require libmilter, you can now remove it.
 
 20250815:
-	The [gs]etgroups(2)syscalls have changed. To maintain backwards
-	compatibility with existing programs, you need COMPAT_FREEBSD14 in
-	your kernel config until all applications which use this are
-	rebuild/reinstalled.
+	The behavior of the getgroups(2), setgroups(2), and initgroups(3)
+	interfaces has changed, and their version numbers have been incremented.
+	To keep existing binaries and libraries working, ensure that
+	COMPAT_FREEBSD14 is included in your kernel configuration.
+	Alternatively, rebuild and reinstall applications that use these
+	interfaces.
 
 20250815:
 	jemalloc 5.3.0 has been committed to the tree.

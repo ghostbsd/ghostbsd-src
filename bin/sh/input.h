@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -52,7 +54,7 @@ void pungetc(void);
 void pushstring(const char *, int, struct alias *);
 void setinputfile(const char *, int, int);
 void setinputfd(int, int);
-void setinputstring(const char *, int);
+void setinputstring(const char *);
 void popfile(void);
 struct parsefile *getcurrentfile(void);
 void popfilesupto(struct parsefile *);

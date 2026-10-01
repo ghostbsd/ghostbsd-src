@@ -163,7 +163,7 @@ static void	acpi_probe_children(device_t bus);
 static void	acpi_probe_order(ACPI_HANDLE handle, int *order);
 static ACPI_STATUS acpi_probe_child(ACPI_HANDLE handle, UINT32 level,
 		    void *context, void **status);
-static void	acpi_sleep_enable(void *arg);
+static void	acpi_sleep_enable_locked(void *arg);
 static ACPI_STATUS acpi_sleep_disable(struct acpi_softc *sc);
 static ACPI_STATUS acpi_EnterSleepState(struct acpi_softc *sc, int state);
 static void	acpi_shutdown_final(void *arg, int howto);
@@ -742,7 +742,7 @@ acpi_attach(device_t dev)
     /* Allow sleep request after a while. */
     callout_init_mtx(&acpi_sleep_timer, &acpi_mutex, 0);
     callout_reset(&acpi_sleep_timer, hz * ACPI_MINIMUM_AWAKETIME,
-	acpi_sleep_enable, sc);
+	acpi_sleep_enable_locked, sc);
 
     error = 0;
 
@@ -1287,20 +1287,19 @@ acpi_pxm_parse(device_t dev)
 }
 
 int
-acpi_get_cpus(device_t dev, device_t child, enum cpu_sets op, size_t setsize,
-    cpuset_t *cpuset)
+acpi_get_cpus_for_domain(device_t dev, device_t child, int domain,
+    enum cpu_sets op, size_t setsize, cpuset_t *cpuset)
 {
-	int d, error;
+	int error;
 
-	d = acpi_pxm_parse(child);
-	if (d < 0)
+	if (domain < 0)
 		return (bus_generic_get_cpus(dev, child, op, setsize, cpuset));
 
 	switch (op) {
 	case LOCAL_CPUS:
 		if (setsize != sizeof(cpuset_t))
 			return (EINVAL);
-		*cpuset = cpuset_domain[d];
+		*cpuset = cpuset_domain[domain];
 		return (0);
 	case INTR_CPUS:
 		error = bus_generic_get_cpus(dev, child, op, setsize, cpuset);
@@ -1308,11 +1307,20 @@ acpi_get_cpus(device_t dev, device_t child, enum cpu_sets op, size_t setsize,
 			return (error);
 		if (setsize != sizeof(cpuset_t))
 			return (EINVAL);
-		CPU_AND(cpuset, cpuset, &cpuset_domain[d]);
+		CPU_AND(cpuset, cpuset, &cpuset_domain[domain]);
 		return (0);
 	default:
 		return (bus_generic_get_cpus(dev, child, op, setsize, cpuset));
 	}
+}
+
+int
+acpi_get_cpus(device_t dev, device_t child, enum cpu_sets op, size_t setsize,
+    cpuset_t *cpuset)
+{
+
+	return (acpi_get_cpus_for_domain(dev, child, acpi_pxm_parse(child), op,
+	    setsize, cpuset));
 }
 
 static int
@@ -1830,7 +1838,7 @@ acpi_device_id_probe(device_t bus, device_t dev, char **ids, char **match)
 }
 
 static ACPI_STATUS
-acpi_device_eval_obj(device_t bus, device_t dev, ACPI_STRING pathname,
+acpi_device_eval_obj(device_t bus, device_t dev, const char *pathname,
     ACPI_OBJECT_LIST *parameters, ACPI_BUFFER *ret)
 {
     ACPI_HANDLE h;
@@ -1839,11 +1847,12 @@ acpi_device_eval_obj(device_t bus, device_t dev, ACPI_STRING pathname,
 	h = ACPI_ROOT_OBJECT;
     else if ((h = acpi_get_handle(dev)) == NULL)
 	return (AE_BAD_PARAMETER);
-    return (AcpiEvaluateObject(h, pathname, parameters, ret));
+    return (AcpiEvaluateObject(h, __DECONST(char *, pathname), parameters,
+	ret));
 }
 
 static ACPI_STATUS
-acpi_device_get_prop(device_t bus, device_t dev, ACPI_STRING propname,
+acpi_device_get_prop(device_t bus, device_t dev, const char *propname,
     const ACPI_OBJECT **value)
 {
 	const ACPI_OBJECT *pkg, *name, *val;
@@ -1952,8 +1961,7 @@ acpi_bus_get_prop(device_t bus, device_t child, const char *propname,
 	ACPI_STATUS status;
 	const ACPI_OBJECT *obj;
 
-	status = acpi_device_get_prop(bus, child, __DECONST(char *, propname),
-		&obj);
+	status = acpi_device_get_prop(bus, child, propname, &obj);
 	if (ACPI_FAILURE(status))
 		return (-1);
 
@@ -1998,8 +2006,7 @@ acpi_bus_get_prop(device_t bus, device_t child, const char *propname,
 
 	case ACPI_TYPE_PACKAGE:
 		if (propvalue != NULL && size >= sizeof(ACPI_OBJECT *)) {
-			*((ACPI_OBJECT **) propvalue) =
-			    __DECONST(ACPI_OBJECT *, obj);
+			*((const ACPI_OBJECT **) propvalue) = obj;
 		}
 		return (sizeof(ACPI_OBJECT *));
 
@@ -2682,7 +2689,7 @@ acpi_MatchHid(ACPI_HANDLE h, const char *hid)
  * or one if its parents.
  */
 ACPI_STATUS
-acpi_GetHandleInScope(ACPI_HANDLE parent, char *path, ACPI_HANDLE *result)
+acpi_GetHandleInScope(ACPI_HANDLE parent, const char *path, ACPI_HANDLE *result)
 {
     ACPI_HANDLE		r;
     ACPI_STATUS		status;
@@ -2704,8 +2711,7 @@ acpi_GetHandleInScope(ACPI_HANDLE parent, char *path, ACPI_HANDLE *result)
 }
 
 ACPI_STATUS
-acpi_GetProperty(device_t dev, ACPI_STRING propname,
-    const ACPI_OBJECT **value)
+acpi_GetProperty(device_t dev, const char *propname, const ACPI_OBJECT **value)
 {
 	device_t bus = device_get_parent(dev);
 
@@ -3309,7 +3315,7 @@ acpi_AckSleepState(struct apm_clone_data *clone, int error)
 }
 
 static void
-acpi_sleep_enable(void *arg)
+acpi_sleep_enable_locked(void *arg)
 {
     struct acpi_softc	*sc = (struct acpi_softc *)arg;
 
@@ -4076,14 +4082,10 @@ acpi_lookup(void *arg, const char *name, device_t *dev)
      * starts with '\'.  We could restrict this to \_SB and friends,
      * but see acpi_probe_children() for notes on why we scan the entire
      * namespace for devices.
-     *
-     * XXX: The pathname argument to AcpiGetHandle() should be fixed to
-     * be const.
      */
     if (name[0] != '\\')
 	return;
-    if (ACPI_FAILURE(AcpiGetHandle(ACPI_ROOT_OBJECT, __DECONST(char *, name),
-	&handle)))
+    if (ACPI_FAILURE(AcpiGetHandle(ACPI_ROOT_OBJECT, name, &handle)))
 	return;
     *dev = acpi_get_device(handle);
 }
@@ -4742,7 +4744,7 @@ acpi_pm_func(u_long cmd, void *arg, ...)
 			goto out;
 		}
 
-		if (ACPI_FAILURE(acpi_EnterSleepState(sc, acpi_state)))
+		if (ACPI_FAILURE(acpi_ReqSleepState(sc, acpi_state)))
 			error = ENXIO;
 		break;
 	default:

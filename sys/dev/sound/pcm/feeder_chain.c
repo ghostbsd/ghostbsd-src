@@ -714,8 +714,8 @@ feeder_chain(struct pcm_channel *c)
 			cdesc.dummy = 1;
 
 		if ((softfmt & AFMT_CONVERTIBLE) &&
-		    (((d->flags & SD_F_VPC) && !(c->flags & CHN_F_HAS_VCHAN)) ||
-		    (!(d->flags & SD_F_VPC) && (d->flags & SD_F_SOFTPCMVOL) &&
+		    (!(c->flags & CHN_F_HAS_VCHAN) ||
+		    ((d->flags & SD_F_SOFTPCMVOL) &&
 		    !(c->flags & CHN_F_VIRTUAL))))
 			cdesc.use_volume = 1;
 
@@ -725,10 +725,8 @@ feeder_chain(struct pcm_channel *c)
 
 		/* Soft EQ only applicable for PLAY. */
 		if (cdesc.dummy == 0 &&
-		    c->direction == PCMDIR_PLAY && (d->flags & SD_F_EQ) &&
-		    (((d->flags & SD_F_EQ_PC) &&
-		    !(c->flags & CHN_F_HAS_VCHAN)) ||
-		    (!(d->flags & SD_F_EQ_PC) && !(c->flags & CHN_F_VIRTUAL))))
+		    c->direction == PCMDIR_PLAY &&
+		    (d->flags & SD_F_EQ) && !(c->flags & CHN_F_VIRTUAL))
 			cdesc.use_eq = 1;
 
 		if (FEEDFORMAT_NE_REQUIRED(&cdesc)) {

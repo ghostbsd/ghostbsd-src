@@ -29,19 +29,19 @@ public unsigned less_acp = CP_ACP;
 
 public char *   every_first_cmd = NULL;
 public lbool    new_file;
-public int      is_tty;
+public lbool    is_tty;
 public IFILE    curr_ifile = NULL_IFILE;
 public IFILE    old_ifile = NULL_IFILE;
 public struct scrpos initial_scrpos;
 public POSITION start_attnpos = NULL_POSITION;
 public POSITION end_attnpos = NULL_POSITION;
 public int      wscroll;
-public constant char *progname;
+static constant char *progname;
 public lbool    quitting = FALSE;
-public int      dohelp;
+public lbool    dohelp = FALSE;
 public char *   init_header = NULL;
-public char *   no_config = NULL;
-static int      secure_allow_features;
+public constant char * no_config = NULL;
+static unsigned int secure_allow_features;
 
 #if LOGFILE
 public int      logfile = -1;
@@ -68,8 +68,8 @@ public time_type less_start_time;
 static wchar_t consoleTitle[256];
 #endif
 
-public int      one_screen;
-extern int      less_is_more;
+public lbool    one_screen;
+extern lbool    less_is_more;
 extern lbool    missing_cap;
 extern int      know_dumb;
 extern int      quit_if_one_screen;
@@ -149,7 +149,7 @@ static void try_utf8_locale(int *pargc, constant char ***pargv)
 	goto cleanup;
 
 bad_args:
-	error("WARNING: cannot use unicode arguments", NULL_PARG);
+	error(LM(cannot_use_unicode_arguments), NULL_PARG);
 	setlocale(LC_ALL, locale_orig);
 
 cleanup:
@@ -158,26 +158,16 @@ cleanup:
 }
 #endif
 
-#if !SECURE
-static int security_feature_error(constant char *type, size_t len, constant char *name)
-{
-	PARG parg;
-	size_t msglen = len + strlen(type) + 64;
-	char *msg = ecalloc(msglen, sizeof(char));
-	SNPRINTF3(msg, msglen, "LESSSECURE_ALLOW: %s feature name \"%.*s\"", type, (int) len, name);
-	parg.p_string = msg;
-	error("%s", &parg);
-	free(msg);
-	return 0;
-}
-
 /*
- * Return the SF_xxx value of a secure feature given the name of the feature.
+ * Set the secure_allow_features bitmask, which controls
+ * whether certain secure features are allowed.
  */
-static int security_feature(constant char *name, size_t len)
+static void init_secure(void)
 {
-	struct secure_feature { constant char *name; int sf_value; };
-	static struct secure_feature features[] = {
+#if SECURE
+	secure_allow_features = 0;
+#else
+	static struct csl_bitmap_def security_features[] = {
 		{ "edit",     SF_EDIT },
 		{ "examine",  SF_EXAMINE },
 		{ "glob",     SF_GLOB },
@@ -191,39 +181,6 @@ static int security_feature(constant char *name, size_t len)
 		{ "stop",     SF_STOP },
 		{ "tags",     SF_TAGS },
 	};
-	int i;
-	int match = -1;
-
-	for (i = 0;  i < countof(features);  i++)
-	{
-		if (strncmp(features[i].name, name, len) == 0)
-		{
-			if (match >= 0) /* name is ambiguous */
-				return security_feature_error("ambiguous", len, name);
-			match = i;
-		}
-	}
-	if (match < 0)
-		return security_feature_error("invalid", len, name);
-	return features[match].sf_value;
-}
-
-static lbool set_security_feature(constant char *word, size_t wlen, void *arg)
-{
-	secure_allow_features |= security_feature(word, wlen);
-	return TRUE;
-}
-#endif /* !SECURE */
-
-/*
- * Set the secure_allow_features bitmask, which controls
- * whether certain secure features are allowed.
- */
-static void init_secure(void)
-{
-#if SECURE
-	secure_allow_features = 0;
-#else
 	constant char *str = lgetenv("LESSSECURE");
 	if (isnullenv(str))
 		secure_allow_features = ~0; /* allow everything */
@@ -232,7 +189,13 @@ static void init_secure(void)
 
 	str = lgetenv("LESSSECURE_ALLOW");
 	if (!isnullenv(str))
-		parse_csl(set_security_feature, str, NULL);
+		secure_allow_features = parse_csl_bitmap(str,
+		    security_features, countof(security_features), "LESSSECURE_ALLOW");
+
+	str = lgetenv("LESSSECURE_DISALLOW");
+	if (!isnullenv(str))
+		secure_allow_features &=~ parse_csl_bitmap(str,
+		    security_features, countof(security_features), "LESSSECURE_DISALLOW");
 #endif
 }
 
@@ -251,7 +214,8 @@ int main(int argc, constant char *argv[])
 	lbool end_opts = FALSE;
 	lbool posixly_correct;
 
-	no_config = getenv("LESSNOCONFIG");
+	no_config = lgetenv("LESSNOCONFIG");
+	lmsg_init(lgetenv("LESSMSG"));
 
 #if MSDOS_COMPILER==WIN32C && (defined(__MINGW32__) || defined(_MSC_VER))
 	if (GetACP() != CP_UTF8)  /* not using a UTF-8 manifest */
@@ -268,14 +232,14 @@ int main(int argc, constant char *argv[])
 	init_secure();
 
 #ifdef WIN32
-	if (getenv("HOME") == NULL)
+	if (lgetenv("HOME") == NULL)
 	{
 		/*
 		 * If there is no HOME environment variable,
 		 * try the concatenation of HOMEDRIVE + HOMEPATH.
 		 */
-		char *drive = getenv("HOMEDRIVE");
-		char *path  = getenv("HOMEPATH");
+		constant char *drive = lgetenv("HOMEDRIVE");
+		constant char *path  = lgetenv("HOMEPATH");
 		if (drive != NULL && path != NULL)
 		{
 			char *env = (char *) ecalloc(strlen(drive) + 
@@ -294,7 +258,7 @@ int main(int argc, constant char *argv[])
 	 * Process command line arguments and LESS environment arguments.
 	 * Command line arguments override environment arguments.
 	 */
-	is_tty = isatty(1);
+	is_tty = (isatty(1) != 0);
 	init_mark();
 	init_cmds();
 	init_poll();
@@ -310,7 +274,7 @@ int main(int argc, constant char *argv[])
 	 */
 	if (strcmp(last_component(progname), "more") == 0 &&
 			isnullenv(lgetenv("LESS_IS_MORE"))) {
-		less_is_more = 1;
+		less_is_more = TRUE;
 		scan_option("-fG", FALSE);
 	}
 
@@ -324,7 +288,9 @@ int main(int argc, constant char *argv[])
 #define isoptstring(s)  less_is_more ? (((s)[0] == '-') && (s)[1] != '\0') : \
 			(((s)[0] == '-' || (s)[0] == '+') && (s)[1] != '\0')
 	xbuf_init(&xfiles);
-	posixly_correct = (lgetenv("POSIXLY_CORRECT") != NULL);
+	/* Don't use lgetenv because POSIXLY_CORRECT is considered to be true
+	 * if it is set to an empty string. */
+	posixly_correct = (getenv("POSIXLY_CORRECT") != NULL);
 	for (i = 0;  i < argc;  i++)
 	{
 		if (strcmp(argv[i], "--") == 0)
@@ -347,13 +313,14 @@ int main(int argc, constant char *argv[])
 		 * following string, but there was no following string.
 		 */
 		nopendopt();
-		quit(QUIT_OK);
+		quit(QUIT_ERROR);
 	}
 
 	if (less_is_more)
 		no_init = TRUE;
 
-	get_term();
+	if (is_tty)
+		get_term();
 	expand_cmd_tables();
 
 #if EDITOR
@@ -419,22 +386,23 @@ int main(int argc, constant char *argv[])
 		 * Output is not a tty.
 		 * Just copy the input file(s) to output.
 		 */
-		set_output(1, TRUE); /* write to stdout */
 		SET_BINARY(1);
-		if (edit_first() == 0)
-		{
-			do {
-				cat_file();
-			} while (edit_next(1) == 0);
-		}
+
+		if (edit_first())
+			quit(QUIT_ERROR);
+
+		set_output(1, TRUE); /* write to stdout */
+		do {
+			cat_file();
+		} while (edit_next(1) == 0);
+
 		quit(QUIT_OK);
 	}
 
 	if (missing_cap && !know_dumb && !less_is_more)
-		error("WARNING: terminal is not fully functional", NULL_PARG);
+		error(LM(terminal_is_not_fully_functional), NULL_PARG);
 	open_getchr();
-	raw_mode(1);
-	init_signals(1);
+	init_signals(TRUE);
 #if HAVE_TIME
 	less_start_time = get_time();
 #endif
@@ -453,7 +421,7 @@ int main(int argc, constant char *argv[])
 		 */
 		if (nifile() > 0)
 		{
-			error("No filenames allowed with -t option", NULL_PARG);
+			error(LM(No_filenames_allowed_with_t_option), NULL_PARG);
 			quit(QUIT_ERROR);
 		}
 		findtag(tagoption);
@@ -499,12 +467,15 @@ int main(int argc, constant char *argv[])
 		 * (file descriptor 2; see flush()).
 		 * Before erasing the screen contents, wait for a keystroke.
 		 */
-		less_printf("Press RETURN to continue ", NULL_PARG);
+		PARG parg;
+		parg.p_string = LM(Press_RETURN_to_continue);
+		less_printf("%s", &parg);
 		get_return();
 		putchr('\n');
 	}
 	set_output(1, FALSE);
 #if MSDOS_COMPILER
+	raw_mode(TRUE);
 	term_init();
 #endif
 	commands();
@@ -532,7 +503,7 @@ public char * save(constant char *s)
 
 public void out_of_memory(void)
 {
-	error("Cannot allocate memory", NULL_PARG);
+	error(LM(Cannot_allocate_memory), NULL_PARG);
 	quit(QUIT_ERROR);
 }
 
@@ -633,7 +604,7 @@ public void quit(int status)
 	}
 	edit((char*)NULL);
 	save_cmdhist();
-	raw_mode(0);
+	raw_mode(FALSE);
 #if MSDOS_COMPILER && MSDOS_COMPILER != DJGPPC
 	/* 
 	 * If we don't close 2, we get some garbage from
@@ -653,7 +624,7 @@ public void quit(int status)
 /*
  * Are all the features in the features mask allowed by security?
  */
-public int secure_allow(int features)
+public lbool secure_allow(unsigned int features)
 {
 	return ((secure_allow_features & features) == features);
 }

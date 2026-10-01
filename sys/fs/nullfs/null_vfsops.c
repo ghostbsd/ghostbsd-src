@@ -152,6 +152,14 @@ nullfs_mount(struct mount *mp)
 	lowerrootvp = ndp->ni_vp;
 
 	/*
+	 * Do not allow to mount a vnode over itself.
+	 */
+	if (mp->mnt_vnodecovered == lowerrootvp) {
+		vput(lowerrootvp);
+		return (EDEADLK);
+	}
+
+	/*
 	 * Check multi null mount to avoid `lock against myself' panic.
 	 */
 	if (null_is_nullfs_vnode(mp->mnt_vnodecovered)) {
@@ -167,7 +175,7 @@ nullfs_mount(struct mount *mp)
 	 * Lower vnode must be the same type as the covered vnode - we
 	 * don't allow mounting directories to files or vice versa.
 	 */
-	if ((lowerrootvp->v_type != VDIR && lowerrootvp->v_type != VREG) ||
+	if ((lowerrootvp->v_type != VDIR && lowerrootvp->v_type != VREG && lowerrootvp->v_type != VSOCK) ||
 	    lowerrootvp->v_type != mp->mnt_vnodecovered->v_type) {
 		NULLFSDEBUG("nullfs_mount: target must be same type as fspath");
 		vput(lowerrootvp);

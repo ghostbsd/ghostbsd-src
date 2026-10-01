@@ -31,6 +31,7 @@ ATF_TESTS_SH=	arp \
 ATF_TESTS_PYTEST+=	carp.py
 ATF_TESTS_PYTEST+=	igmp.py
 ATF_TESTS_PYTEST+=	ip_mroute.py
+ATF_TESTS_PYTEST+=	fib_bind.py
 
 LIBADD.so_reuseport_lb_test=	pthread
 LIBADD.udp_bindings=		pthread
@@ -38,6 +39,8 @@ LIBADD.udp_bindings=		pthread
 # Some of the arp tests look for log messages in the dmesg buffer, so run them
 # serially to avoid problems with interleaved output.
 TEST_METADATA.arp+=	is_exclusive="true"
+TEST_METADATA.carp+=	execenv="jail"			\
+			execenv_jail_params="vnet allow.raw_sockets"
 TEST_METADATA.divert+=	required_programs="python"	\
 			execenv="jail"			\
 			execenv_jail_params="vnet allow.raw_sockets"

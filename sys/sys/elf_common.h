@@ -448,6 +448,7 @@ typedef struct {
 #define	SHT_GROUP		17	/* Section group. */
 #define	SHT_SYMTAB_SHNDX	18	/* Section indexes (see SHN_XINDEX). */
 #define	SHT_LOOS		0x60000000	/* First of OS specific semantics */
+#define	SHT_LLVM_ADDRSIG	0x6fff4c03	/* Address significance table */
 #define	SHT_LOSUNW		0x6ffffff4
 #define	SHT_SUNW_dof		0x6ffffff4
 #define	SHT_SUNW_cap		0x6ffffff5
@@ -862,6 +863,9 @@ typedef struct {
 #define	NT_ARM_SVE	0x405	/* ARM SVE registers */
 #define	NT_ARM_ADDR_MASK	0x406	/* arm64 address mask (e.g. for TBI) */
 
+/* FDO (freedesktop.org) note types. */
+#define	NT_FDO_PACKAGING_METADATA		0xcafe1a7e
+
 /* GNU note types. */
 #define	NT_GNU_ABI_TAG		1
 #define	NT_GNU_HWCAP		2
@@ -1145,6 +1149,7 @@ typedef struct {
 #define	R_ARM_THM_JUMP19	51
 #define	R_ARM_GNU_VTENTRY	100
 #define	R_ARM_GNU_VTINHERIT	101
+#define	R_ARM_IRELATIVE		160
 #define	R_ARM_RSBREL32		250
 #define	R_ARM_THM_RPC22		251
 #define	R_ARM_RREL32		252

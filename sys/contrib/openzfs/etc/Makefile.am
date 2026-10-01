@@ -1,9 +1,4 @@
-sudoersddir = $(sysconfdir)/sudoers.d
-sudoersd_DATA = \
-	%D%/sudoers.d/zfs
-
-dist_noinst_DATA += $(sudoersd_DATA)
-
+# SPDX-License-Identifier: CDDL-1.0
 
 sysconf_zfsdir = $(sysconfdir)/zfs
 

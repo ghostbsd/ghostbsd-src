@@ -63,6 +63,7 @@ enum _which
 
 #define _DEF_DIRMODE	(S_IRWXU | S_IRWXG | S_IRWXO)
 #define _PW_CONF	"pw.conf"
+#define _PWDASH		(-2) /* pseudo-fd returned by pw_checkfd for '-' */
 #define _UC_MAXLINE	1024
 #define _UC_MAXSHELLS	32
 
@@ -80,9 +81,6 @@ int pw_group_del(int argc, char **argv, char *name);
 int pw_group_mod(int argc, char **argv, char *name);
 int pw_group_next(int argc, char **argv, char *name);
 int pw_group_show(int argc, char **argv, char *name);
-int pw_user_add(int argc, char **argv, char *name);
-int pw_user_add(int argc, char **argv, char *name);
-int pw_user_add(int argc, char **argv, char *name);
 int pw_user_add(int argc, char **argv, char *name);
 int pw_user_del(int argc, char **argv, char *name);
 int pw_user_lock(int argc, char **argv, char *name);

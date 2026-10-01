@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 if CONFIG_KERNEL
 kernel_linuxdir = $(kerneldir)/linux
 kernel_linux_HEADERS = \
@@ -16,6 +17,7 @@ kernel_linux_HEADERS = \
 	%D%/kernel/linux/simd_x86.h \
 	%D%/kernel/linux/utsname_compat.h \
 	%D%/kernel/linux/vfs_compat.h \
+	%D%/kernel/linux/workqueue_compat.h \
 	%D%/kernel/linux/xattr_compat.h
 
 kernel_sysdir = $(kerneldir)/sys

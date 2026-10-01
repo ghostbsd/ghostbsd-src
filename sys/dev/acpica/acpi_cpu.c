@@ -139,9 +139,6 @@ struct acpi_cpu_device {
 
 #define	CPUDEV_DEVICE_ID	"ACPI0007"
 
-/* Knob to disable acpi_cpu devices */
-bool acpi_cpu_disabled = false;
-
 /* Platform hardware resource information. */
 static uint32_t		 cpu_smi_cmd;	/* Value to write to SMI_CMD. */
 static uint8_t		 cpu_cst_cnt;	/* Indicate we are _CST aware. */
@@ -237,7 +234,7 @@ acpi_cpu_probe(device_t dev)
     ACPI_STATUS		   status;
     ACPI_OBJECT_TYPE	   type;
 
-    if (acpi_disabled("cpu") || acpi_cpu_disabled)
+    if (acpi_disabled("cpu"))
 	return (ENXIO);
     type = acpi_get_type(dev);
     if (type != ACPI_TYPE_PROCESSOR && type != ACPI_TYPE_DEVICE)
@@ -314,7 +311,6 @@ acpi_cpu_attach(device_t dev)
     struct acpi_cpu_softc *sc;
     struct acpi_softc	  *acpi_sc;
     ACPI_STATUS		   status;
-    u_int		   features;
     int			   cpu_id, drv_count, i;
     driver_t 		  **drivers;
     uint32_t		   cap_set[3];
@@ -418,6 +414,8 @@ acpi_cpu_attach(device_t dev)
     if (devclass_get_drivers(device_get_devclass(dev), &drivers,
 	&drv_count) == 0) {
 	for (i = 0; i < drv_count; i++) {
+	    u_int features = 0;
+
 	    if (ACPI_GET_FEATURES(drivers[i], &features) == 0)
 		sc->cpu_features |= features;
 	}

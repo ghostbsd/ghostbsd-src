@@ -31,8 +31,12 @@
 #ifndef _DEV_HWPMC_AMD_H_
 #define	_DEV_HWPMC_AMD_H_ 1
 
-/* AMD K8 PMCs */
+/* CPUIDs */
+#define	CPUID_EXTPERFMON	0x80000022
+#define	EXTPERFMON_CORE_PMCS(x)	((x) & 0x0F)
+#define	EXTPERFMON_DF_PMCS(x)	(((x) >> 10) & 0x3F)
 
+/* AMD K8 PMCs */
 #define	AMD_PMC_EVSEL_0		0xC0010000
 #define	AMD_PMC_EVSEL_1		0xC0010001
 #define	AMD_PMC_EVSEL_2		0xC0010002
@@ -42,42 +46,26 @@
 #define	AMD_PMC_PERFCTR_1	0xC0010005
 #define	AMD_PMC_PERFCTR_2	0xC0010006
 #define	AMD_PMC_PERFCTR_3	0xC0010007
+
+/*
+ * For older AMD processors we have hard coded the original four core counters.
+ * For newer processors we use the cpuid bits to setup the counter table.  The
+ * counts below are the default number of registers assuming that you do not
+ * have CPUID leaf 0x80000022.  The maximum number of counters is computed
+ * based on the available bits in the CPUID leaf and reserved MSR space.
+ *
+ * Refer to the PPRs for AMD Family 1Ah.
+ */
+
 /* CORE */
-#define	AMD_PMC_EVSEL_4		0xC0010208
-#define	AMD_PMC_EVSEL_5		0xC001020A
-
-#define	AMD_PMC_PERFCTR_4	0xC0010209
-#define	AMD_PMC_PERFCTR_5	0xC001020B
-/* L3 */
-#define	AMD_PMC_EVSEL_EP_L3_0	0xC0010230
-#define	AMD_PMC_EVSEL_EP_L3_1	0xC0010232
-#define	AMD_PMC_EVSEL_EP_L3_2	0xC0010234
-#define	AMD_PMC_EVSEL_EP_L3_3	0xC0010236
-#define	AMD_PMC_EVSEL_EP_L3_4	0xC0010238
-#define	AMD_PMC_EVSEL_EP_L3_5	0xC001023A
-
-#define	AMD_PMC_PERFCTR_EP_L3_0	0xC0010231
-#define	AMD_PMC_PERFCTR_EP_L3_1	0xC0010233
-#define	AMD_PMC_PERFCTR_EP_L3_2	0xC0010235
-#define	AMD_PMC_PERFCTR_EP_L3_3	0xC0010237
-#define	AMD_PMC_PERFCTR_EP_L3_4	0xC0010239
-#define	AMD_PMC_PERFCTR_EP_L3_5	0xC001023B
-/* DF */
-#define	AMD_PMC_EVSEL_EP_DF_0	0xC0010240
-#define	AMD_PMC_EVSEL_EP_DF_1	0xC0010242
-#define	AMD_PMC_EVSEL_EP_DF_2	0xC0010244
-#define	AMD_PMC_EVSEL_EP_DF_3	0xC0010246
-
-#define	AMD_PMC_PERFCTR_EP_DF_0	0xC0010241
-#define	AMD_PMC_PERFCTR_EP_DF_1	0xC0010243
-#define	AMD_PMC_PERFCTR_EP_DF_2	0xC0010245
-#define	AMD_PMC_PERFCTR_EP_DF_3	0xC0010247
-
-#define	AMD_NPMCS		16
-#define	AMD_CORE_NPMCS		6
-
+#define	AMD_PMC_CORE_BASE	0xC0010200
+#define	AMD_PMC_CORE_DEFAULT	6
+#define	AMD_PMC_CORE_MAX	16
 
 #define	AMD_PMC_COUNTERMASK	0xFF000000
+#define AMD_PMC_PRECISERETIRE	(1ULL << 43) /* Only valid for PERF_CTL2 */
+#define	AMD_PMC_HOST		(1ULL << 41)
+#define	AMD_PMC_GUEST		(1ULL << 40)
 #define	AMD_PMC_TO_COUNTER(x)	(((x) << 24) & AMD_PMC_COUNTERMASK)
 #define	AMD_PMC_INVERT		(1 << 23)
 #define	AMD_PMC_ENABLE		(1 << 22)
@@ -86,24 +74,13 @@
 #define	AMD_PMC_EDGE		(1 << 18)
 #define	AMD_PMC_OS		(1 << 17)
 #define	AMD_PMC_USR		(1 << 16)
-#define	AMD_PMC_L3SLICEMASK	(0x000F000000000000)
-#define	AMD_PMC_L3COREMASK	(0xFF00000000000000)
-#define	AMD_PMC_TO_L3SLICE(x)	(((x) << 48) & AMD_PMC_L3SLICEMASK)
-#define	AMD_PMC_TO_L3CORE(x)	(((x) << 56) & AMD_PMC_L3COREMASK)
-
-#define	AMD_PMC_UNITMASK_M	0x10
-#define	AMD_PMC_UNITMASK_O	0x08
-#define	AMD_PMC_UNITMASK_E	0x04
-#define	AMD_PMC_UNITMASK_S	0x02
-#define	AMD_PMC_UNITMASK_I	0x01
-#define	AMD_PMC_UNITMASK_MOESI	0x1F
 
 #define	AMD_PMC_UNITMASK	0xFF00
 #define	AMD_PMC_EVENTMASK 	0xF000000FF
 
 #define	AMD_PMC_TO_UNITMASK(x)	(((x) << 8) & AMD_PMC_UNITMASK)
 #define	AMD_PMC_TO_EVENTMASK(x)	(((x) & 0xFF) | (((uint64_t)(x) & 0xF00) << 24))
-#define	AMD_PMC_TO_EVENTMASK_DF(x)	(((x) & 0xFF) | (((uint64_t)(x) & 0x0F00) << 24)) | (((uint64_t)(x) & 0x3000) << 47)
+
 #define	AMD_VALID_BITS		(AMD_PMC_COUNTERMASK | AMD_PMC_INVERT |	\
 	AMD_PMC_ENABLE | AMD_PMC_INT | AMD_PMC_PC | AMD_PMC_EDGE | 	\
 	AMD_PMC_OS | AMD_PMC_USR | AMD_PMC_UNITMASK | AMD_PMC_EVENTMASK)
@@ -112,13 +89,76 @@
 	PMC_CAP_SYSTEM | PMC_CAP_EDGE | PMC_CAP_THRESHOLD | 		\
 	PMC_CAP_READ | PMC_CAP_WRITE | PMC_CAP_INVERT | PMC_CAP_QUALIFIER)
 
+/* L3 */
+#define	AMD_PMC_L3_BASE		0xC0010230
+#define	AMD_PMC_L3_DEFAULT	6
+#define	AMD_PMC_L3_MAX		6
+
+/*
+ * L3 counters change their encoding slightly between Family 17h and Family 19h
+ * processors.
+ *
+ * Refer to the following documents for the L3 fields:
+ * PPR for AMD Family 17h Model 20h A1 55772-A1 Rev. 3.08 April 14, 2021
+ * PPR for AMD Family 19h Model 51h A1 56569-A1 Rev. 3.03 September 21, 2021
+ * PPR for AMD Family 1Ah Model 02h C1 57238 Rev. 0.24 September 29, 2024
+ */
+#define	AMD_PMC_L31_SLICEMASK	(0x000F000000000000ULL)
+#define	AMD_PMC_L31_COREMASK	(0xFF00000000000000ULL)
+
+#define	AMD_PMC_L31_TO_SLICE(x)	(((uint64_t)(x) << 48) & AMD_PMC_L31_SLICEMASK)
+#define	AMD_PMC_L31_TO_CORE(x)	(((uint64_t)(x) << 56) & AMD_PMC_L31_COREMASK)
+
+#define	AMD_PMC_L32_THREADMASK	(0x0F00000000000000ULL)
+#define	AMD_PMC_L32_SOURCEMASK	(0x0007000000000000ULL)
+#define	AMD_PMC_L32_ALLCORES	(1ULL << 47)
+#define	AMD_PMC_L32_ALLSOURCES	(1ULL << 46)
+#define	AMD_PMC_L32_COREMASK	(0x00001C0000000000ULL)
+
+#define	AMD_PMC_L32_TO_THREAD(x) (((uint64_t)(x) << 56) & AMD_PMC_L32_THREADMASK)
+#define	AMD_PMC_L32_TO_SOURCEID(x) (((uint64_t)(x) << 48) & AMD_PMC_L32_SOURCEMASK)
+#define	AMD_PMC_L32_TO_COREID(x) (((uint64_t)(x) << 42) & AMD_PMC_L32_COREMASK)
+
+#define	AMD_PMC_L3_TO_UNITMASK(x)	(((x) << 8) & AMD_PMC_UNITMASK)
+#define	AMD_PMC_L3_TO_EVENTMASK(x)	((x) & 0xFF)
+
+#define AMD_PMC_L3_CAPS		(PMC_CAP_READ | PMC_CAP_WRITE | \
+	PMC_CAP_QUALIFIER | PMC_CAP_DOMWIDE)
+
+/* DF */
+#define	AMD_PMC_DF_BASE		0xC0010240
+#define	AMD_PMC_DF_DEFAULT	4
+#define	AMD_PMC_DF_MAX		64
+
+#define AMD_PMC_DF_CAPS		(PMC_CAP_READ | PMC_CAP_WRITE | \
+	PMC_CAP_QUALIFIER | PMC_CAP_DOMWIDE)
+
+/*
+ * DF counters change their encoding between Family 19h and Family 1Ah
+ * processors.
+ *
+ * Refer to the same documents as the L3 counters.
+ */
+#define	AMD_PMC_DF1_TO_EVENTMASK(x)	(((x) & 0xFF) | \
+	(((uint64_t)(x) & 0x0F00) << 24) | (((uint64_t)(x) & 0x3000) << 47))
+#define AMD_PMC_DF1_TO_UNITMASK(x)	(((x) & 0xFF) << 8)
+
+#define	AMD_PMC_DF2_TO_EVENTMASK(x)	(((x) & 0xFF) | \
+	(((uint64_t)(x) & 0x7F00) << 24))
+#define AMD_PMC_DF2_TO_UNITMASK(x)	((((x) & 0xFF) << 8) | \
+	(((uint64_t)(x) & 0x0F00) << 16))
+
+#define	AMD_NPMCS_K8		4
+#define AMD_NPMCS_MAX		(AMD_PMC_CORE_MAX + AMD_PMC_L3_MAX + \
+				 AMD_PMC_DF_MAX)
+
 #define AMD_PMC_IS_STOPPED(evsel) ((rdmsr((evsel)) & AMD_PMC_ENABLE) == 0)
 #define AMD_PMC_HAS_OVERFLOWED(pmc) ((rdpmc(pmc) & (1ULL << 47)) == 0)
 
 #define	AMD_RELOAD_COUNT_TO_PERFCTR_VALUE(V)	(-(V))
 #define	AMD_PERFCTR_VALUE_TO_RELOAD_COUNT(P)	(-(P))
 
-enum sub_class{
+enum sub_class {
 	PMC_AMD_SUB_CLASS_CORE,
 	PMC_AMD_SUB_CLASS_L3_CACHE,
 	PMC_AMD_SUB_CLASS_DATA_FABRIC

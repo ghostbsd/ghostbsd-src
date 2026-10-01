@@ -27,12 +27,12 @@ extern int hshift;
 extern int sc_width;
 extern int sc_height;
 extern int jump_sline;
-extern int less_is_more;
+extern lbool less_is_more;
 extern int header_lines;
 extern int utf_mode;
 extern IFILE curr_ifile;
 #if OSC8_LINK
-extern char *osc8_path;
+extern POSITION osc8_linepos;
 #endif
 #if EDITOR
 extern constant char *editor;
@@ -59,6 +59,7 @@ static constant char more_proto[] =
   "--More--(?eEND ?x- Next\\: %x.:?pB%pB\\%:byte %bB?s/%s...%t)";
 
 public char *prproto[3];
+public char *eprproto[3];
 public char constant *eqproto = e_proto;
 public char constant *hproto = h_proto;
 public char constant *wproto = w_proto;
@@ -75,6 +76,7 @@ public void init_prompt(void)
 	prproto[0] = save(s_proto);
 	prproto[1] = save(less_is_more ? more_proto : m_proto);
 	prproto[2] = save(M_proto);
+	eprproto[0] = eprproto[1] = eprproto[2] = NULL;
 	eqproto = save(e_proto);
 	hproto = save(h_proto);
 	wproto = save(w_proto);
@@ -241,6 +243,12 @@ static lbool cond(char c, int where)
 #else
 		return (new_file ? TRUE : FALSE);
 #endif
+	case 'O': /* OSC 8 link selected? */
+#if OSC8_LINK
+		return (osc8_linepos != NULL_POSITION);
+#else
+		return FALSE;
+#endif
 	case 'p': /* Percent into file (bytes) known? */
 		return (curr_byte(where) != NULL_POSITION && ch_length() > 0);
 	case 'P': /* Percent into file (lines) known? */
@@ -333,8 +341,23 @@ static void protochar(char c, int where)
 		break;
 	case 'g': /* Shell-escaped file name */
 		s = shell_quote(get_filename(curr_ifile));
-		ap_str(s);
-		free(s);
+		if (s == NULL)
+			ap_quest();
+		else
+		{
+			ap_str(s);
+			free(s);
+		}
+		break;
+	case 'G': /* Shell-escaped last component of file name */
+		s = shell_quote(last_component(get_filename(curr_ifile)));
+		if (s == NULL)
+			ap_quest();
+		else
+		{
+			ap_str(s);
+			free(s);
+		}
 		break;
 	case 'i': /* Index into list of files */
 #if TAGS
@@ -368,14 +391,6 @@ static void protochar(char c, int where)
 #endif
 			ap_int(nifile());
 		break; }
-	case 'o': /* path (URI without protocol) of selected OSC8 link */
-#if OSC8_LINK
-		if (osc8_path != NULL)
-			ap_str(osc8_path);
-		else
-#endif
-			ap_quest();
-		break;
 	case 'p': /* Percent into file (bytes) */
 		pos = curr_byte(where);
 		len = ch_length();
@@ -426,6 +441,24 @@ static void protochar(char c, int where)
 			ap_str(get_filename(h));
 		else
 			ap_quest();
+		break;
+	case 'y': /* Shell-escaped name of next file */
+		h = next_ifile(curr_ifile);
+		if (h != NULL_IFILE)
+		{
+			s = shell_quote(get_filename(h));
+			if (s == NULL)
+				ap_quest();
+			else
+			{
+				ap_str(s);
+				free(s);
+			}
+		} else
+			ap_quest();
+		break;
+	case '%': /* Literal percent sign */
+		ap_char('%');
 		break;
 	}
 }
@@ -596,6 +629,21 @@ public constant char * pr_string(void)
 				hproto : prproto[type]);
 	new_file = FALSE;
 	return (prompt);
+}
+
+/*
+ * Return the end prompt string.
+ */
+public constant char * end_pr_string(void)
+{
+	int type;
+
+	if (ch_getflags() & CH_HELPFILE)
+		return NULL;
+	type = (!less_is_more) ? pr_type : pr_type ? 0 : 1;
+	if (eprproto[type] == NULL)
+		return NULL;
+	return pr_expand(eprproto[type]);
 }
 
 /*

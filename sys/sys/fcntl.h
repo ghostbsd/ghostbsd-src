@@ -142,6 +142,13 @@ typedef	__pid_t		pid_t;
 #define	O_EMPTY_PATH	0x02000000
 #define	O_NAMEDATTR	0x04000000	/* NFSv4 named attributes */
 #define	O_XATTR		O_NAMEDATTR	/* Solaris compatibility */
+
+/*
+ * Emulate MacOSX compatibility flag without consuming a flags bit.
+ * It is not fully correct since reads over regular files opened with
+ * this definition fail.
+ */
+#define	O_SYMLINK	(O_PATH | O_NOFOLLOW)
 #endif
 
 #if __POSIX_VISIBLE >= 202405
@@ -253,7 +260,9 @@ typedef	__pid_t		pid_t;
 #define	AT_EMPTY_PATH		0x4000	/* Operate on dirfd if path is empty */
 
 #define	AT_RENAME_NOREPLACE	0x0001	/* Fail rename if target exists */
+#define	AT_RENAME_EXCHANGE	0x0002	/* Atomically exchange 'from' and 'to' */
 #define	RENAME_NOREPLACE	AT_RENAME_NOREPLACE
+#define	RENAME_EXCHANGE		AT_RENAME_EXCHANGE
 #endif	/* __BSD_VISIBLE */
 
 /*

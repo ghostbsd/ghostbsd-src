@@ -671,8 +671,7 @@ dnode_level_is_l2cacheable(blkptr_t *bp, dnode_t *dn, int64_t level)
 {
 	if (dn->dn_objset->os_secondary_cache == ZFS_CACHE_ALL ||
 	    (dn->dn_objset->os_secondary_cache == ZFS_CACHE_METADATA &&
-	    (level > 0 ||
-	    DMU_OT_IS_METADATA(dn->dn_handle->dnh_dnode->dn_type)))) {
+	    (level > 0 || DMU_OT_IS_METADATA(dn->dn_type)))) {
 		if (l2arc_exclude_special == 0)
 			return (B_TRUE);
 
@@ -1477,13 +1476,25 @@ dbuf_read_hole(dmu_buf_impl_t *db, dnode_t *dn, blkptr_t *bp)
 
 	int is_hole = bp == NULL || BP_IS_HOLE(bp);
 	/*
-	 * For level 0 blocks only, if the above check fails:
-	 * Recheck BP_IS_HOLE() after dnode_block_freed() in case dnode_sync()
-	 * processes the delete record and clears the bp while we are waiting
-	 * for the dn_mtx (resulting in a "no" from block_freed).
+	 * For level 0 blocks only, if the above check didn't find a hole,
+	 * consult dnode_block_freed() to check for pending frees.
+	 *
+	 * If the block has been overridden by a block clone or direct I/O
+	 * write, we can't use dnode_block_freed() directly because it would
+	 * find frees from TXGs before the override, which should not make
+	 * the block appear freed.  Instead, check only free ranges from
+	 * TXGs after the override.
 	 */
-	if (!is_hole && db->db_level == 0)
-		is_hole = dnode_block_freed(dn, db->db_blkid) || BP_IS_HOLE(bp);
+	if (!is_hole && db->db_level == 0) {
+		dbuf_dirty_record_t *dr = list_head(&db->db_dirty_records);
+		if (dr != NULL &&
+		    (dr->dt.dl.dr_brtwrite || dr->dt.dl.dr_diowrite)) {
+			is_hole = dnode_block_freed_after(dn,
+			    db->db_blkid, dr->dr_txg);
+		} else {
+			is_hole = dnode_block_freed(dn, db->db_blkid);
+		}
+	}
 
 	if (is_hole) {
 		db_data = dbuf_alloc_arcbuf(db);
@@ -2078,6 +2089,65 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 	kmem_free(db_search, sizeof (dmu_buf_impl_t));
 }
 
+/*
+ * Advisory eviction of level-0 dbufs in [start_blkid, end_blkid] for
+ * the given dnode.  Dirty dbufs carry a reference, so they will be
+ * evicted once their sync is completed.
+ */
+void
+dbuf_evict_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid)
+{
+	dmu_buf_impl_t *db_marker;
+	dmu_buf_impl_t *db, *db_next;
+	avl_index_t where;
+
+	db_marker = kmem_alloc(sizeof (dmu_buf_impl_t), KM_SLEEP);
+	db_marker->db_level = 0;
+	db_marker->db_blkid = start_blkid;
+	db_marker->db_state = DB_SEARCH;
+
+	mutex_enter(&dn->dn_dbufs_mtx);
+	db = avl_find(&dn->dn_dbufs, db_marker, &where);
+	ASSERT0P(db);
+	db = avl_nearest(&dn->dn_dbufs, where, AVL_AFTER);
+
+	for (; db != NULL; db = db_next) {
+		if (db->db_level != 0 || db->db_blkid > end_blkid)
+			break;
+
+		mutex_enter(&db->db_mtx);
+		if (db->db_state != DB_EVICTING &&
+		    zfs_refcount_is_zero(&db->db_holds)) {
+			/*
+			 * Clean and unreferenced: evict immediately.
+			 * Use the marker pattern from dnode_evict_dbufs()
+			 * because dbuf_destroy() may recursively remove
+			 * the parent indirect dbuf from dn_dbufs, which
+			 * could be the node db_next would point to.
+			 */
+			db_marker->db_level = db->db_level;
+			db_marker->db_blkid = db->db_blkid;
+			db_marker->db_state = DB_MARKER;
+			db_marker->db_parent =
+			    (void *)((uintptr_t)db - 1);
+			avl_insert_here(&dn->dn_dbufs, db_marker,
+			    db, AVL_BEFORE);
+			dbuf_destroy(db);
+			db_next = AVL_NEXT(&dn->dn_dbufs, db_marker);
+			avl_remove(&dn->dn_dbufs, db_marker);
+		} else {
+			/* Referenced (possibly dirty): evict when released. */
+			db->db_pending_evict = TRUE;
+			db->db_partial_read = FALSE;
+			mutex_exit(&db->db_mtx);
+			db_next = AVL_NEXT(&dn->dn_dbufs, db);
+		}
+	}
+	mutex_exit(&dn->dn_dbufs_mtx);
+
+	kmem_free(db_marker, sizeof (dmu_buf_impl_t));
+}
+
 void
 dbuf_new_size(dmu_buf_impl_t *db, int size, dmu_tx_t *tx)
 {
@@ -2202,6 +2272,17 @@ dbuf_dirty_lightweight(dnode_t *dn, uint64_t blkid, dmu_tx_t *tx)
 
 	mutex_enter(&dn->dn_mtx);
 	int txgoff = tx->tx_txg & TXG_MASK;
+
+	/*
+	 * Assert that we are not modifying the range tree for the syncing
+	 * TXG from a non-syncing thread. We verify that the tx's
+	 * transaction group is strictly newer than the one currently
+	 * syncing (meaning we are in open context). If this triggers,
+	 * it indicates a race where syncing dn_free_range tree is
+	 * being modified while dnode_sync() may be iterating over it.
+	 */
+	ASSERT(tx->tx_txg > spa_syncing_txg(dn->dn_objset->os_spa));
+
 	if (dn->dn_free_ranges[txgoff] != NULL) {
 		zfs_range_tree_clear(dn->dn_free_ranges[txgoff], blkid, 1);
 	}
@@ -2389,6 +2470,7 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	    db->db_blkid != DMU_SPILL_BLKID) {
 		mutex_enter(&dn->dn_mtx);
 		if (dn->dn_free_ranges[txgoff] != NULL) {
+			FREE_RANGE_VERIFY(tx, dn);
 			zfs_range_tree_clear(dn->dn_free_ranges[txgoff],
 			    db->db_blkid, 1);
 		}
@@ -3554,7 +3636,6 @@ typedef struct dbuf_prefetch_arg {
 	int dpa_curlevel; /* The current level that we're reading */
 	dnode_t *dpa_dnode; /* The dnode associated with the prefetch */
 	zio_priority_t dpa_prio; /* The priority I/Os should be issued at. */
-	zio_t *dpa_zio; /* The parent zio_t for all prefetches. */
 	arc_flags_t dpa_aflags; /* Flags to pass to the final prefetch. */
 	dbuf_prefetch_fn dpa_cb; /* prefetch completion callback */
 	void *dpa_arg; /* prefetch completion arg */
@@ -3606,8 +3687,7 @@ dbuf_issue_final_prefetch(dbuf_prefetch_arg_t *dpa, blkptr_t *bp)
 
 	ASSERT3U(dpa->dpa_curlevel, ==, BP_GET_LEVEL(bp));
 	ASSERT3U(dpa->dpa_curlevel, ==, dpa->dpa_zb.zb_level);
-	ASSERT(dpa->dpa_zio != NULL);
-	(void) arc_read(dpa->dpa_zio, dpa->dpa_spa, bp,
+	(void) arc_read(NULL, dpa->dpa_spa, bp,
 	    dbuf_issue_final_prefetch_done, dpa,
 	    dpa->dpa_prio, zio_flags, &aflags, &dpa->dpa_zb);
 }
@@ -3707,7 +3787,7 @@ dbuf_prefetch_indirect_done(zio_t *zio, const zbookmark_phys_t *zb,
 		SET_BOOKMARK(&zb, dpa->dpa_zb.zb_objset,
 		    dpa->dpa_zb.zb_object, dpa->dpa_curlevel, nextblkid);
 
-		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
+		(void) arc_read(NULL, dpa->dpa_spa,
 		    bp, dbuf_prefetch_indirect_done, dpa,
 		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
@@ -3802,9 +3882,6 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 
 	ASSERT3U(curlevel, ==, BP_GET_LEVEL(&bp));
 
-	zio_t *pio = zio_root(dmu_objset_spa(dn->dn_objset), NULL, NULL,
-	    ZIO_FLAG_CANFAIL);
-
 	dbuf_prefetch_arg_t *dpa = kmem_zalloc(sizeof (*dpa), KM_SLEEP);
 	dsl_dataset_t *ds = dn->dn_objset->os_dsl_dataset;
 	SET_BOOKMARK(&dpa->dpa_zb, ds != NULL ? ds->ds_object : DMU_META_OBJSET,
@@ -3815,7 +3892,6 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 	dpa->dpa_spa = dn->dn_objset->os_spa;
 	dpa->dpa_dnode = dn;
 	dpa->dpa_epbs = epbs;
-	dpa->dpa_zio = pio;
 	dpa->dpa_cb = cb;
 	dpa->dpa_arg = arg;
 
@@ -3844,17 +3920,12 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 
 		SET_BOOKMARK(&zb, ds != NULL ? ds->ds_object : DMU_META_OBJSET,
 		    dn->dn_object, curlevel, curblkid);
-		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
+		(void) arc_read(NULL, dpa->dpa_spa,
 		    &bp, dbuf_prefetch_indirect_done, dpa,
 		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
 		    &iter_aflags, &zb);
 	}
-	/*
-	 * We use pio here instead of dpa_zio since it's possible that
-	 * dpa may have already been freed.
-	 */
-	zio_nowait(pio);
 	return (1);
 no_issue:
 	if (cb != NULL)
@@ -5446,6 +5517,7 @@ EXPORT_SYMBOL(dbuf_whichblock);
 EXPORT_SYMBOL(dbuf_read);
 EXPORT_SYMBOL(dbuf_unoverride);
 EXPORT_SYMBOL(dbuf_free_range);
+EXPORT_SYMBOL(dbuf_evict_range);
 EXPORT_SYMBOL(dbuf_new_size);
 EXPORT_SYMBOL(dbuf_release_bp);
 EXPORT_SYMBOL(dbuf_dirty);

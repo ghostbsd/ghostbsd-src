@@ -617,6 +617,7 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
  */
 #define	EXT_FLAG_EMBREF		0x000001	/* embedded ext_count */
 #define	EXT_FLAG_EXTREF		0x000002	/* external ext_cnt, notyet */
+#define	EXT_FLAG_SFBUF_ANON	0x000004	/* sendfile buffer is mutable */
 
 #define	EXT_FLAG_NOFREE		0x000010	/* don't free mbuf to pool, notyet */
 
@@ -1165,7 +1166,7 @@ m_extrefcnt(struct mbuf *m)
  * XXX: Broken at the moment.  Need some UMA magic to make it work again.
  */
 #define	M_ASSERTVALID(m)						\
-	KASSERT((((struct mbuf *)m)->m_flags & 0) == 0,			\
+	KASSERT((((struct mbuf *)(m))->m_flags & 0) == 0,			\
 	    ("%s: attempted use of a free mbuf %p!", __func__, (m)))
 
 /* Check whether any mbuf in the chain is unmapped. */
@@ -1652,6 +1653,14 @@ mbufq_enqueue(struct mbufq *mq, struct mbuf *m)
 	return (0);
 }
 
+static inline void
+mbufq_remove(struct mbufq *mq, struct mbuf *m)
+{
+
+	STAILQ_REMOVE(&mq->mq_head, m, mbuf, m_stailqpkt);
+	mq->mq_len--;
+}
+
 static inline struct mbuf *
 mbufq_dequeue(struct mbufq *mq)
 {
@@ -1743,6 +1752,13 @@ mc_dec(struct mchain *mc, struct mbuf *m)
 		MPASS(mc->mc_mlen >= m->m_ext.ext_size);
 		mc->mc_mlen -= m->m_ext.ext_size;
 	}
+}
+
+static inline void
+mc_init(struct mchain *mc)
+{
+	STAILQ_INIT(&mc->mc_q);
+	mc->mc_len = mc->mc_mlen = 0;
 }
 
 /*

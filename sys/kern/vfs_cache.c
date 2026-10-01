@@ -3268,7 +3268,7 @@ kern___realpathat(struct thread *td, int fd, const char *path, char *buf,
 	if ((error = namei(&nd)) != 0)
 		return (error);
 
-	if (nd.ni_vp->v_type == VREG && nd.ni_dvp->v_type != VDIR &&
+	if ((nd.ni_vp->v_type == VREG || nd.ni_vp->v_type == VSOCK) && nd.ni_dvp->v_type != VDIR &&
 	    (nd.ni_vp->v_vflag & VV_ROOT) != 0) {
 		struct vnode *covered_vp;
 
@@ -5705,7 +5705,7 @@ cache_fplookup_climb_mount(struct cache_fpl *fpl)
 	vp = fpl->tvp;
 	vp_seqc = fpl->tvp_seqc;
 
-	VNPASS(vp->v_type == VDIR || vp->v_type == VREG || vp->v_type == VBAD, vp);
+	VNPASS(vp->v_type == VDIR || vp->v_type == VREG || vp->v_type == VSOCK || vp->v_type == VBAD, vp);
 	mp = atomic_load_ptr(&vp->v_mountedhere);
 	if (__predict_false(mp == NULL)) {
 		return (0);
@@ -5713,7 +5713,7 @@ cache_fplookup_climb_mount(struct cache_fpl *fpl)
 
 	prev_mp = NULL;
 	for (;;) {
-		if (!vfs_op_thread_enter_crit(mp, mpcpu)) {
+		if (!vfs_op_thread_enter_crit(mp, &mpcpu)) {
 			if (prev_mp != NULL)
 				vfs_op_thread_exit_crit(prev_mp, prev_mpcpu);
 			return (cache_fpl_partial(fpl));
@@ -5762,13 +5762,13 @@ cache_fplookup_cross_mount(struct cache_fpl *fpl)
 	vp = fpl->tvp;
 	vp_seqc = fpl->tvp_seqc;
 
-	VNPASS(vp->v_type == VDIR || vp->v_type == VREG || vp->v_type == VBAD, vp);
+	VNPASS(vp->v_type == VDIR || vp->v_type == VREG || vp->v_type == VSOCK || vp->v_type == VBAD, vp);
 	mp = atomic_load_ptr(&vp->v_mountedhere);
 	if (__predict_false(mp == NULL)) {
 		return (0);
 	}
 
-	if (!vfs_op_thread_enter_crit(mp, mpcpu)) {
+	if (!vfs_op_thread_enter_crit(mp, &mpcpu)) {
 		return (cache_fpl_partial(fpl));
 	}
 	if (!vn_seqc_consistent(vp, vp_seqc)) {

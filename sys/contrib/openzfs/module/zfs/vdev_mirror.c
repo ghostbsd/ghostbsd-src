@@ -386,7 +386,7 @@ vdev_mirror_map_init(zio_t *zio)
 
 static int
 vdev_mirror_open(vdev_t *vd, uint64_t *asize, uint64_t *max_asize,
-    uint64_t *logical_ashift, uint64_t *physical_ashift)
+    uint64_t *logical_ashift, uint64_t *physical_ashift, cred_t *cr)
 {
 	int numerrors = 0;
 	int lasterror = 0;
@@ -396,7 +396,7 @@ vdev_mirror_open(vdev_t *vd, uint64_t *asize, uint64_t *max_asize,
 		return (SET_ERROR(EINVAL));
 	}
 
-	vdev_open_children(vd);
+	vdev_open_children(vd, cr);
 
 	for (int c = 0; c < vd->vdev_children; c++) {
 		vdev_t *cvd = vd->vdev_child[c];
@@ -669,18 +669,19 @@ vdev_mirror_io_start(zio_t *zio)
 	}
 
 	while (children--) {
-		mc = &mm->mm_child[c];
-		c++;
+		mc = &mm->mm_child[c++];
 
 		/*
-		 * When sequentially resilvering only issue write repair
-		 * IOs to the vdev which is being rebuilt since performance
-		 * is limited by the slowest child.  This is an issue for
-		 * faster replacement devices such as distributed spares.
+		 * When sequentially resilvering and the integrity of the data
+		 * is speculative (ZIO_FLAG_SPECULATIVE), issue write repair IOs
+		 * only to the vdev which is being rebuilt. Existing data on
+		 * other children must never be overwritten with unconfirmed
+		 * data to avoid unrecoverable damage to the pool.
 		 */
 		if ((zio->io_priority == ZIO_PRIORITY_REBUILD) &&
 		    (zio->io_flags & ZIO_FLAG_IO_REPAIR) &&
 		    !(zio->io_flags & ZIO_FLAG_SCRUB) &&
+		    (zio->io_flags & ZIO_FLAG_SPECULATIVE) &&
 		    mm->mm_rebuilding && !mc->mc_rebuilding) {
 			continue;
 		}

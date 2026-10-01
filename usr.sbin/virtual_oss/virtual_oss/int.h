@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2012-2022 Hans Petter Selasky
  *
  * Redistribution and use in source and binary forms, with or without
@@ -120,6 +122,8 @@ struct virtual_profile {
 	vclient_head_t head;
 	char oss_name[VMAX_STRING];
 	char wav_name[VMAX_STRING];
+	struct cuse_dev *oss_dev;
+	struct cuse_dev *wav_dev;
 	uint32_t rx_filter_size;
 	uint32_t tx_filter_size;
 	double *rx_filter_data[VMAX_CHAN];
@@ -140,7 +144,6 @@ struct virtual_profile {
 	double rx_compressor_gain[VMAX_CHAN];
 	uint8_t synchronized;
 	uint32_t rec_delay;
-	int fd_sta;
 	struct {
 		const char * host;
 		const char * port;

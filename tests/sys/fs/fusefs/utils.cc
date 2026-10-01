@@ -182,7 +182,7 @@ void FuseTest::SetUp() {
 			_)
 		).Times(AnyNumber())
 		.WillRepeatedly(Invoke(ReturnErrno(ENOSYS)));
-	} catch (std::system_error err) {
+	} catch (std::system_error const& err) {
 		FAIL() << err.what();
 	}
 }
@@ -386,7 +386,8 @@ void FuseTest::expect_read(uint64_t ino, uint64_t offset, uint64_t isize,
 				in.body.read.size == isize &&
 				(flags == -1 ?
 					(in.body.read.flags == O_RDONLY ||
-					 in.body.read.flags == O_RDWR)
+					 in.body.read.flags == O_RDWR ||
+					 in.body.read.flags == O_EXEC)
 				: in.body.read.flags == (uint32_t)flags));
 		}, Eq(true)),
 		_)

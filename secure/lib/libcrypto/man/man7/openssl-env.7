@@ -58,7 +58,7 @@
 .\" ========================================================================
 .\"
 .IX Title "OPENSSL-ENV 7ossl"
-.TH OPENSSL-ENV 7ossl 2026-04-07 3.5.6 OpenSSL
+.TH OPENSSL-ENV 7ossl 2026-08-25 3.5.8 OpenSSL
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -197,6 +197,8 @@ See \fBRAND_load_file\fR\|(3).
 .IP "\fBSSL_CERT_DIR\fR, \fBSSL_CERT_FILE\fR" 4
 .IX Item "SSL_CERT_DIR, SSL_CERT_FILE"
 Specify the default directory or file containing CA certificates.
+\&\fBSSL_CERT_DIR\fR can contain multiple directories separated by colons
+(or semicolons on Windows).
 See \fBSSL_CTX_load_verify_locations\fR\|(3).
 .IP \fBTSGET\fR 4
 .IX Item "TSGET"
@@ -207,8 +209,8 @@ OpenSSL supports a number of different algorithm implementations for
 various machines and, by default, it determines which to use based on the
 processor capabilities and run time feature enquiry.  These environment
 variables can be used to exert more control over this selection process.
-See \fBOPENSSL_ia32cap\fR\|(3), \fBOPENSSL_ppccap\fR\|(3), \fBOPENSSL_riscvcap\fR\|(3),
-and \fBOPENSSL_s390xcap\fR\|(3).
+See \fBOPENSSL_armcap\fR\|(3), \fBOPENSSL_ia32cap\fR\|(3), \fBOPENSSL_ppccap\fR\|(3),
+\&\fBOPENSSL_riscvcap\fR\|(3) and \fBOPENSSL_s390xcap\fR\|(3).
 .IP "\fBNO_PROXY\fR, \fBHTTPS_PROXY\fR, \fBHTTP_PROXY\fR" 4
 .IX Item "NO_PROXY, HTTPS_PROXY, HTTP_PROXY"
 Specify a proxy hostname.

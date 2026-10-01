@@ -348,8 +348,8 @@ BROKEN_OPTIONS+=LOADER_IA32
 BROKEN_OPTIONS+=LOADER_GELI LOADER_LUA
 .endif
 
-# Kernel TLS is enabled by default on amd64, aarch64 and powerpc64*
-.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T:Mpowerpc64*} != ""
+# Kernel TLS is enabled by default on amd64, aarch64, powerpc64*, and riscv64*
+.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T:Mpowerpc64*} != "" || ${__T:Mriscv64*} != ""
 __DEFAULT_YES_OPTIONS+=OPENSSL_KTLS
 .else
 __DEFAULT_NO_OPTIONS+=OPENSSL_KTLS
@@ -431,6 +431,8 @@ MK_KERBEROS_SUPPORT:=	no
 MK_MITKRB5:=	no
 .endif
 
+# MK_DTRACE also gates ctf tools, so we cannot build userland with CTF
+# if it is off.
 .if ${MK_DTRACE} == "no"
 MK_CTF:=	no
 .endif

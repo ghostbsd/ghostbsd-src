@@ -961,8 +961,10 @@ IMAKE=		${TIME_ENV} ${IMAKEENV} ${MAKE} -f Makefile.inc1 \
 		${IMAKE_INSTALL} ${IMAKE_MTREE}
 .if empty(.MAKEFLAGS:M-n)
 IMAKEENV+=	PATH=${STRICTTMPPATH:Q}:${INSTALLTMP:Q} \
-		LD_LIBRARY_PATH=${INSTALLTMP:Q} \
-		PATH_LOCALE=${INSTALLTMP}/locale
+		LD_LIBRARY_PATH=${INSTALLTMP:Q}
+.if ${.MAKE.OS} == "FreeBSD"
+IMAKEENV+=	PATH_LOCALE=${INSTALLTMP}/locale
+.endif
 IMAKE+=		__MAKE_SHELL=${INSTALLTMP}/sh
 .else
 IMAKEENV+=	PATH=${TMPPATH:Q}:${INSTALLTMP:Q}
@@ -1471,7 +1473,12 @@ distributeworld installworld stageworld: _installcheck_world .PHONY
 		    done); \
 	fi; \
 	${INSTALLTMP_COPY_HOST_TOOL} $$libs $$progs ${INSTALLTMP}
+	# On non-FreeBSD systems, there's no point copying locales here
+	# since we aren't going to overwrite them anyway.  This avoids
+	# failing if /usr/share/locale has odd modes (e.g., openSUSE).
+.if ${.MAKE.OS} == "FreeBSD"
 	cp -R $${PATH_LOCALE:-"/usr/share/locale"} ${INSTALLTMP}/locale
+.endif
 .if defined(NO_ROOT)
 	-mkdir -p ${METALOG:H}
 	echo "#${MTREE_MAGIC}" > ${METALOG}
@@ -2057,7 +2064,7 @@ _pkgbootstrap: .PHONY
 	    BATCH=1 WRKDIRPREFIX=/tmp/ports DISTDIR=/tmp/distfiles \
 	    all install clean
 .else
-	@env ASSUME_ALWAYS_YES=YES pkg bootstrap
+	@env ASSUME_ALWAYS_YES=YES ${PKG_CMD} bootstrap
 .endif
 .endif
 
@@ -2116,16 +2123,16 @@ real-packages:	stage-packages create-packages sign-packages .PHONY
 
 real-update-packages: stage-packages .PHONY
 	${_+_}${MAKE} -C ${.CURDIR} PKG_VERSION=${PKG_VERSION} create-packages
-.if defined(PKG_VERSION_FROM_DIR)
+.if defined(PKG_VERSION_FROM_DIR) && ${PKG_VERSION} != ${PKG_VERSION_FROM}
 	@echo "==> Checking for new packages (comparing ${PKG_VERSION} to ${PKG_VERSION_FROM})"
 	@for pkg in ${PKG_VERSION_FROM_DIR}/${PKG_NAME_PREFIX}-*; do \
-	  pkgname=$$(pkg query -F $${pkg} '%n' | sed 's/${PKG_NAME_PREFIX}-\(.*\)/\1/') ; \
+	  pkgname=$$(${PKG_CMD} query -F $${pkg} '%n' | sed 's/${PKG_NAME_PREFIX}-\(.*\)/\1/') ; \
 	  newpkgname=${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION}.${PKG_EXT} ; \
-	  oldsum=$$(pkg query -F $${pkg} '%X') ; \
+	  oldsum=$$(${PKG_CMD} query -F $${pkg} '%X') ; \
 	  if [ ! -f ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} ]; then \
 	    continue; \
 	  fi ; \
-	  newsum=$$(pkg query -F ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} '%X') ; \
+	  newsum=$$(${PKG_CMD} query -F ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} '%X') ; \
 	  if [ "${BRANCH_EXT_FROM}" = "${BRANCH_EXT}" -a "$${oldsum}" = "$${newsum}" ]; then \
 	   echo "==> Keeping old ${PKG_NAME_PREFIX}-$${pkgname}-${PKG_VERSION_FROM}.${PKG_EXT}" ; \
 	   rm ${REPODIR}/${PKG_ABI}/${PKG_VERSION}/$${newpkgname} ; \
@@ -2134,6 +2141,8 @@ real-update-packages: stage-packages .PHONY
 	    echo "==> New package $${newpkgname}" ; \
 	  fi ; \
 	done
+.elif defined(PKG_VERSION_FROM_DIR)
+	@echo "==> Package version ${PKG_VERSION} unchanged, keeping old package set"
 .else
 	@echo "==> Bootstrapping repository, not checking for new packages"
 .endif
@@ -2255,46 +2264,15 @@ create-world-packages:	_pkgbootstrap .PHONY
 	@cd ${WSTAGEDIR} ; \
 		${METALOG_SORT_CMD} ${WSTAGEDIR}/${DISTDIR}/METALOG | \
 		awk -f ${SRCDIR}/release/scripts/mtree-to-plist.awk
-	@for plist in ${WSTAGEDIR}/*.plist; do \
-	  plist=$${plist##*/} ; \
-	  pkgname=$${plist%.plist} ; \
-	  echo "_PKGS+= $${pkgname}" ; \
-	done > ${WSTAGEDIR}/packages.mk
-	${_+_}@cd ${.CURDIR}; \
-		PATH="${TMPPATH}" ${MAKE} -f Makefile.inc1 \
-		create-world-packages-jobs \
-		SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
-		.MAKE.JOB.PREFIX=
-
-.if make(create-world-packages-jobs)
-.include "${WSTAGEDIR}/packages.mk"
-.endif
-
-create-world-packages-jobs: .PHONY
-.for pkgname in ${_PKGS}
-create-world-packages-jobs: create-world-package-${pkgname}
-create-world-package-${pkgname}: .PHONY
-	@sh ${SRCDIR}/release/packages/generate-ucl.sh -o ${pkgname} \
-		-s ${SRCDIR} -u ${WSTAGEDIR}/${pkgname}.ucl
-	@if [ "$$(grep -vc '^@dir' ${WSTAGEDIR}/${pkgname}.plist)" -gt 0 ]; then \
-		awk -F\" ' \
-			/^name/ { printf("===> Creating %s-", $$2); next } \
-			/^version/ { print $$2; next } \
-			' ${WSTAGEDIR}/${pkgname}.ucl && \
-		${PKG_CMD} -o ABI=${PKG_ABI} -o ALLOW_BASE_SHLIBS=yes \
-			-o OSVERSION="${SRCRELDATE}" \
-			create -f ${PKG_FORMAT} ${PKG_CLEVEL} -T${PKG_CTHREADS} \
-			-M ${WSTAGEDIR}/${pkgname}.ucl \
-			-p ${WSTAGEDIR}/${pkgname}.plist \
-			-r ${WSTAGEDIR} \
-			-o ${REPODIR}/${PKG_ABI}/${PKG_OUTPUT_DIR}; \
-	else \
-		awk -F\" ' \
-			/^name/ { printf("===> Skipping %s-", $$2); next } \
-			/^version/ { print $$2; next } \
-			' ${WSTAGEDIR}/${pkgname}.ucl; \
-	fi
-.endfor
+	# bsd.pkg.mk doesn't always know about the dependencies of things
+	# it builds, so for now, always run clean here.
+	${CROSSENV} ${MAKE} -C ${.CURDIR}/packages \
+	    FLUA=${WORLDTMP}/legacy/usr/libexec/flua \
+	    REPODIR=${REPODIR} \
+	    WSTAGEDIR=${WSTAGEDIR} \
+	    PKG_VERSION=${PKG_VERSION} \
+	    MK_AUTO_OBJ=yes \
+	    clean all stagepackages
 
 create-sets-packages-jobs: .PHONY create-sets-packages
 create-sets-packages: .PHONY
@@ -2441,7 +2419,7 @@ real-sign-packages:	_pkgbootstrap .PHONY
 		${REPODIR}/${PKG_ABI}/${PKG_VERSION} \
 		${PKG_REPO_SIGNING_KEY} ; \
 	cd ${REPODIR}/${PKG_ABI}; \
-	ln -hfs ${PKG_OUTPUT_DIR} latest
+	ln -nfs ${PKG_OUTPUT_DIR} latest
 
 #
 #
@@ -3827,6 +3805,15 @@ check-old-libs: .PHONY
 	while read file; do \
 		if [ -f "${DESTDIR}/$${file}" -o -L "${DESTDIR}/$${file}" ]; then \
 			echo "${DESTDIR}/$${file}"; \
+			if packages=$$(${LOCALBASE:Q}/sbin/pkg -r ${DESTDIR:U/} \
+			    shlib -qP $${file##*/} 2>/dev/null) && \
+			    [ -n "$${packages}" ]; then \
+				echo "    also provided by:" $${packages}; \
+			elif packages=$$(${LOCALBASE:Q}/sbin/pkg -r ${DESTDIR:U/} \
+			    shlib -qR $${file##*/} 2>/dev/null) && \
+			    [ -n "$${packages}" ]; then \
+				echo "    required by:" $${packages}; \
+			fi; \
 		fi; \
 		for ext in debug symbols; do \
 		  if [ -f "${DESTDIR}${DEBUGDIR}/$${file}.$${ext}" ]; then \

@@ -502,6 +502,8 @@ main(int argc, char **argv)
 
 	memset(&priv, 0, sizeof(priv));
 	priv.sock = sd;
+	if (ioctl(priv.sock, FIONBIO, &(int){0}) == -1)
+		err(1, "ioctl(FIONBIO)");
 	if (pipe2(priv.wakeup, O_CLOEXEC | O_NONBLOCK) != 0)
 		err(1, "pipe2");
 
@@ -554,16 +556,16 @@ main(int argc, char **argv)
 	priv.slirp = slirp;
 
 	/*
+	 * Drop root privileges if we have them.
+	 */
+	drop_privs();
+
+	/*
 	 * In restricted mode, we can enter a Capsicum sandbox without losing
 	 * functionality.
 	 */
 	if (restricted && caph_enter() != 0)
 		err(1, "caph_enter");
-
-	/*
-	 * Drop root privileges if we have them.
-	 */
-	drop_privs();
 
 	/*
 	 * Enter our main loop.  If bhyve goes away, we should observe a hangup

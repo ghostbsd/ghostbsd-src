@@ -222,10 +222,6 @@ maybe = {
     'cli_root/zpool_destroy/zpool_destroy_001_pos': ['SKIP', 6145],
     'cli_root/zpool_import/import_devices_missing': ['FAIL', 16669],
     'cli_root/zpool_import/zpool_import_missing_003_pos': ['SKIP', 6839],
-    'cli_root/zpool_initialize/zpool_initialize_import_export':
-        ['FAIL', 11948],
-    'cli_root/zpool_initialize/zpool_initialize_suspend_resume':
-        ['FAIL', known_reason],
     'cli_root/zpool_labelclear/zpool_labelclear_removed':
         ['FAIL', known_reason],
     'cli_root/zpool_trim/setup': ['SKIP', trim_reason],
@@ -252,8 +248,6 @@ maybe = {
     'projectquota/setup': ['SKIP', exec_reason],
     'raidz/raidz_002_pos': ['FAIL', known_reason],
     'raidz/raidz_expand_001_pos': ['FAIL', 16421],
-    'redundancy/redundancy_draid_spare1': ['FAIL', known_reason],
-    'redundancy/redundancy_draid_spare3': ['FAIL', known_reason],
     'removal/removal_condense_export': ['FAIL', known_reason],
     'renameat2/setup': ['SKIP', renameat2_reason],
     'reservation/reservation_008_pos': ['FAIL', 7741],
@@ -321,6 +315,7 @@ elif sys.platform.startswith('linux'):
         'bclone/bclone_samefs_data': ['SKIP', cfr_reason],
         'bclone/bclone_samefs_embedded': ['SKIP', cfr_reason],
         'bclone/bclone_samefs_hole': ['SKIP', cfr_reason],
+        'block_cloning/block_cloning_after_trunc': ['SKIP', cfr_reason],
         'block_cloning/block_cloning_clone_mmap_cached': ['SKIP', cfr_reason],
         'block_cloning/block_cloning_clone_mmap_write':
             ['SKIP', cfr_reason],

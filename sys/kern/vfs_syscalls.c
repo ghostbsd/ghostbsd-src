@@ -278,7 +278,7 @@ kern_do_statfs(struct thread *td, struct mount *mp, struct statfs *buf)
 
 	if (mp == NULL)
 		return (EBADF);
-	error = vfs_busy(mp, 0);
+	error = vfs_busy(mp, MBF_PCATCH);
 	vfs_rel(mp);
 	if (error != 0)
 		return (error);
@@ -1882,7 +1882,7 @@ restart:
 	}
 	if ((vn_irflag_read(nd.ni_dvp) & VIRF_NAMEDDIR) != 0) {
 		error = EINVAL;
-		goto out;
+		goto out2;
 	}
 	VATTR_NULL(&vattr);
 	vattr.va_mode = ACCESSPERMS &~ td->td_proc->p_pd->pd_cmask;
@@ -1894,9 +1894,7 @@ restart:
 		goto out2;
 #endif
 	error = VOP_SYMLINK(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &vattr, syspath);
-#ifdef MAC
 out2:
-#endif
 	VOP_VPUT_PAIR(nd.ni_dvp, error == 0 ? &nd.ni_vp : NULL, true);
 	vn_finished_write(mp);
 	NDFREE_PNBUF(&nd);
@@ -1976,16 +1974,17 @@ sys_unlink(struct thread *td, struct unlink_args *uap)
 
 static int
 kern_funlinkat_ex(struct thread *td, int dfd, const char *path, int fd,
-    int flag, enum uio_seg pathseg, ino_t oldinum)
+    int flags, enum uio_seg pathseg, ino_t oldinum)
 {
 
-	if ((flag & ~(AT_REMOVEDIR | AT_RESOLVE_BENEATH)) != 0)
+	if ((flags & ~(AT_REMOVEDIR | AT_RESOLVE_BENEATH)) != 0)
 		return (EINVAL);
 
-	if ((flag & AT_REMOVEDIR) != 0)
-		return (kern_frmdirat(td, dfd, path, fd, UIO_USERSPACE, 0));
+	if ((flags & AT_REMOVEDIR) != 0)
+		return (kern_frmdirat(td, dfd, path, fd, pathseg,
+		    flags & ~AT_REMOVEDIR));
 
-	return (kern_funlinkat(td, dfd, path, fd, UIO_USERSPACE, 0, 0));
+	return (kern_funlinkat(td, dfd, path, fd, pathseg, flags, 0));
 }
 
 #ifndef _SYS_SYSPROTO_H_
@@ -3753,12 +3752,13 @@ sys_renameat2(struct thread *td, struct renameat2_args *uap)
 #ifdef MAC
 static int
 kern_renameat_mac(struct thread *td, int oldfd, const char *old, int newfd,
-    const char *new, enum uio_seg pathseg, struct nameidata *fromnd)
+    const char *new, enum uio_seg pathseg, struct nameidata *fromnd, int op,
+    int ndflags)
 {
 	int error;
 
-	NDINIT_ATRIGHTS(fromnd, DELETE, LOCKPARENT | LOCKLEAF | AUDITVNODE1,
-	    pathseg, old, oldfd, &cap_renameat_source_rights);
+	NDINIT_ATRIGHTS(fromnd, op, LOCKPARENT | LOCKLEAF | AUDITVNODE1 |
+	    ndflags, pathseg, old, oldfd, &cap_renameat_source_rights);
 	if ((error = namei(fromnd)) != 0)
 		return (error);
 	error = mac_vnode_check_rename_from(td->td_ucred, fromnd->ni_dvp,
@@ -3783,23 +3783,35 @@ kern_renameat(struct thread *td, int oldfd, const char *old, int newfd,
 	struct vnode *tvp, *fvp, *tdvp;
 	struct nameidata fromnd, tond;
 	uint64_t tondflags;
-	int error;
+	int error, fndflags, op;
 	short irflag;
+	bool exchange;
 
-	if ((flags & ~(AT_RENAME_NOREPLACE)) != 0)
+	if ((flags & ~(AT_RENAME_NOREPLACE | AT_RENAME_EXCHANGE)) != 0)
 		return (EINVAL);
+	if ((flags & (AT_RENAME_NOREPLACE | AT_RENAME_EXCHANGE)) ==
+	    (AT_RENAME_NOREPLACE | AT_RENAME_EXCHANGE))
+		return (EINVAL);
+	if ((flags & AT_RENAME_EXCHANGE) != 0) {
+		op = RENAME;
+		exchange = true;
+	} else {
+		op = DELETE;
+		exchange = false;
+	}
+	fndflags = 0;
 again:
 	tmp = mp = NULL;
 	bwillwrite();
 #ifdef MAC
 	if (mac_vnode_check_rename_from_enabled()) {
 		error = kern_renameat_mac(td, oldfd, old, newfd, new, pathseg,
-		    &fromnd);
+		    &fromnd, op, fndflags);
 		if (error != 0)
 			return (error);
 	} else {
 #endif
-	NDINIT_ATRIGHTS(&fromnd, DELETE, WANTPARENT | AUDITVNODE1,
+	NDINIT_ATRIGHTS(&fromnd, op, WANTPARENT | AUDITVNODE1 | fndflags,
 	    pathseg, old, oldfd, &cap_renameat_source_rights);
 	if ((error = namei(&fromnd)) != 0)
 		return (error);
@@ -3807,6 +3819,18 @@ again:
 	}
 #endif
 	fvp = fromnd.ni_vp;
+	if (fromnd.ni_dvp->v_type != VDIR) {
+		NDFREE_PNBUF(&fromnd);
+		vrele(fromnd.ni_dvp);
+		if (fvp != NULL)
+			vrele(fromnd.ni_vp);
+		return (EBUSY);
+	}
+	if (exchange && fvp == NULL) {
+		NDFREE_PNBUF(&fromnd);
+		vrele(fromnd.ni_dvp);
+		return (ENOENT);
+	}
 	tondflags = LOCKPARENT | LOCKLEAF | NOCACHE | AUDITVNODE2;
 	if (fromnd.ni_vp->v_type == VDIR)
 		tondflags |= WILLBEDIR;
@@ -3823,6 +3847,15 @@ again:
 	}
 	tdvp = tond.ni_dvp;
 	tvp = tond.ni_vp;
+	if (tdvp->v_type != VDIR) {
+		/*
+		 * Rename of the root vnode of the mounted
+		 * filesystem. It is possible to get there with the
+		 * nullfs mount over the regular file.
+		 */
+		error = EBUSY;
+		goto out;
+	}
 	if (tvp != NULL && (flags & AT_RENAME_NOREPLACE) != 0) {
 		/*
 		 * Often filesystems need to relock the vnodes in
@@ -3835,6 +3868,38 @@ again:
 		 */
 		error = EEXIST;
 		goto out;
+	}
+	if (fvp->v_type == VDIR &&
+	    ((fromnd.ni_resflags | tond.ni_resflags) & NIRES_BENEATH) != 0) {
+		/*
+		 * We must not rename a directory relative to FD_RESOLVE_BENEATH
+		 * descriptors.
+		 */
+		error = ENOTCAPABLE;
+		goto out;
+	}
+	if (exchange) {
+		if (tvp == NULL) {
+			error = ENOENT;
+			goto out;
+		}
+		if (tvp->v_type == VDIR && fndflags == 0) {
+			fndflags = WILLBEDIR;
+again2:
+			NDFREE_PNBUF(&fromnd);
+			vrele(fromnd.ni_dvp);
+			vrele(fvp);
+			NDFREE_PNBUF(&tond);
+			VOP_VPUT_PAIR(tdvp, &tvp, true);
+			error = sig_intr();
+			if (error != 0)
+				goto out1;
+			goto again;
+		}
+		if (tvp->v_type != VDIR && fndflags != 0) {
+			fndflags = 0;
+			goto again2;
+		}
 	}
 	error = vn_start_write(fvp, &mp, V_NOWAIT);
 	if (error != 0) {
@@ -3855,6 +3920,9 @@ again1:
 			vfs_rel(tmp);
 			tmp = NULL;
 		}
+		error = sig_intr();
+		if (error != 0)
+			return (error);
 		error = vn_start_write(NULL, &mp, V_XSLEEP | V_PCATCH);
 		if (error != 0)
 			return (error);
@@ -3875,12 +3943,15 @@ again1:
 		goto out;
 	}
 	if (tvp != NULL) {
-		if (fvp->v_type == VDIR && tvp->v_type != VDIR) {
-			error = ENOTDIR;
-			goto out;
-		} else if (fvp->v_type != VDIR && tvp->v_type == VDIR) {
-			error = EISDIR;
-			goto out;
+		if (!exchange) {
+			if (fvp->v_type == VDIR && tvp->v_type != VDIR) {
+				error = ENOTDIR;
+				goto out;
+			} else if (fvp->v_type != VDIR &&
+			    tvp->v_type == VDIR) {
+				error = EISDIR;
+				goto out;
+			}
 		}
 #ifdef CAPABILITIES
 		if (newfd != AT_FDCWD && (tond.ni_resflags & NIRES_ABS) == 0) {
@@ -3937,8 +4008,11 @@ out:
 out1:
 	if (error == ERESTART)
 		return (0);
-	if (error == ERELOOKUP)
-		goto again;
+	if (error == ERELOOKUP) {
+		error = sig_intr();
+		if (error == 0)
+			goto again;
+	}
 	return (error);
 }
 

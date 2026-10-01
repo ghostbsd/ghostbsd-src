@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2013,2014 Juniper Networks, Inc.
  * All rights reserved.
  *
@@ -43,8 +45,12 @@ enum alias {
 	ALIAS_FREEBSD_VINUM,
 	ALIAS_FREEBSD_ZFS,
 	ALIAS_MBR,
+	ALIAS_MS_BASIC_DATA,
 	ALIAS_NTFS,
 	ALIAS_PPCBOOT,
+	ALIAS_HIFIVE_BBL,
+	ALIAS_XBOOTLDR,
+	ALIAS_HIFIVE_FSBL,
 	/* end */
 	ALIAS_COUNT		/* Keep last! */
 };

@@ -141,6 +141,8 @@ fptr_whitelist_comm_timer(void (*fptr)(void*))
 #ifdef UB_ON_WINDOWS
 	else if(fptr == &wsvc_cron_cb) return 1;
 #endif
+	else if(fptr == &tcp_read_again_cb) return 1;
+	else if(fptr == &tcp_more_read_again_cb) return 1;
 	else if(fptr == &auth_xfer_timer) return 1;
 	else if(fptr == &auth_xfer_probe_timer_callback) return 1;
 	else if(fptr == &auth_xfer_transfer_timer_callback) return 1;
@@ -362,7 +364,7 @@ fptr_whitelist_modenv_send_query(struct outbound_entry* (*fptr)(
 	int nocaps, int check_ratelimit, struct sockaddr_storage* addr,
 	socklen_t addrlen, uint8_t* zone, size_t zonelen, int tcp_upstream,
 	int ssl_upstream, char* tls_auth_name, struct module_qstate* q,
-	int* was_ratelimited))
+	int* was_ratelimited, int* ratelimit_incremented))
 {
 	if(fptr == &worker_send_query) return 1;
 	else if(fptr == &libworker_send_query) return 1;
@@ -380,7 +382,8 @@ fptr_whitelist_modenv_detach_subs(void (*fptr)(
 int 
 fptr_whitelist_modenv_attach_sub(int (*fptr)(
         struct module_qstate* qstate, struct query_info* qinfo,
-        uint16_t qflags, int prime, int valrec, struct module_qstate** newq))
+	struct respip_client_info* cinfo, uint16_t qflags, int prime,
+	int valrec, struct module_qstate** newq))
 {
 	if(fptr == &mesh_attach_sub) return 1;
 	return 0;
@@ -389,8 +392,8 @@ fptr_whitelist_modenv_attach_sub(int (*fptr)(
 int 
 fptr_whitelist_modenv_add_sub(int (*fptr)(
         struct module_qstate* qstate, struct query_info* qinfo,
-        uint16_t qflags, int prime, int valrec, struct module_qstate** newq,
-	struct mesh_state** sub))
+	struct respip_client_info* cinfo, uint16_t qflags, int prime,
+	int valrec, struct module_qstate** newq, struct mesh_state** sub))
 {
 	if(fptr == &mesh_add_sub) return 1;
 	return 0;
@@ -609,6 +612,7 @@ int
 fptr_whitelist_alloc_cleanup(void (*fptr)(void*))
 {
 	if(fptr == &worker_alloc_cleanup) return 1;
+	else if(fptr == &libworker_alloc_cleanup) return 1;
 	return 0;
 }
 

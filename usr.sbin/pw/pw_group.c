@@ -56,7 +56,7 @@ grp_set_passwd(struct group *grp, bool update, int fd, bool precrypted)
 	if (fd == -1)
 		return;
 
-	if (fd == '-') {
+	if (fd == _PWDASH) {
 		grp->gr_passwd = "*";	/* No access */
 		return;
 	}
@@ -88,7 +88,7 @@ grp_set_passwd(struct group *grp, bool update, int fd, bool precrypted)
 		*p = '\0';
 	if (!*line)
 		errx(EX_DATAERR, "empty password read on file descriptor %d",
-		    conf.fd);
+		    fd);
 	if (precrypted) {
 		if (strchr(line, ':') != 0)
 			errx(EX_DATAERR, "wrong encrypted passwrd");
@@ -367,7 +367,7 @@ pw_group_del(int argc, char **argv, char *arg1)
 {
 	struct userconf *cnf = NULL;
 	struct group *grp = NULL;
-	char *name;
+	char *name = NULL;
 	const char *cfg = NULL;
 	intmax_t id = -1;
 	int ch, rc;
@@ -538,7 +538,7 @@ pw_group_add(int argc, char **argv, char *arg1)
 				    "exclusive options");
 			fd = pw_checkfd(optarg);
 			precrypted = true;
-			if (fd == '-')
+			if (fd == _PWDASH)
 				errx(EX_USAGE, "-H expects a file descriptor");
 			break;
 		case 'h':
@@ -636,7 +636,7 @@ pw_group_mod(int argc, char **argv, char *arg1)
 				    "exclusive options");
 			fd = pw_checkfd(optarg);
 			precrypted = true;
-			if (fd == '-')
+			if (fd == _PWDASH)
 				errx(EX_USAGE, "-H expects a file descriptor");
 			break;
 		case 'h':

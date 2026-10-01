@@ -75,7 +75,7 @@
  * void cpu_throw(struct thread *old, struct thread *new)
  */
 ENTRY(cpu_throw)
-	/* Of old == NULL skip disabling stepping */
+	/* If old == NULL skip disabling stepping */
 	cbz	x0, 1f
 
 	/* If we were single stepping, disable it */
@@ -275,6 +275,8 @@ ENTRY(fork_trampoline)
 	ldp	x24, x25, [sp, #TF_X + 24 * 8]
 	ldp	x26, x27, [sp, #TF_X + 26 * 8]
 	ldp	x28, x29, [sp, #TF_X + 28 * 8]
+
+	add	sp, sp, #(TF_SIZE)
 
 	/*
 	 * No need for interrupts reenabling since PSR

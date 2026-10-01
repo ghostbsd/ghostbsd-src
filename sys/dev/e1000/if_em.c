@@ -315,6 +315,10 @@ static const pci_vendor_info_t em_vendor_info_array[] =
 	    "Intel(R) I219-LM PTP(27)"),
 	PVID(0x8086, E1000_DEV_ID_PCH_PTP_I219_V27,
 	    "Intel(R) I219-V PTP(27)"),
+	PVID(0x8086, E1000_DEV_ID_PCH_NVL_I219_LM29,
+	    "Intel(R) I219-LM NVL(29)"),
+	PVID(0x8086, E1000_DEV_ID_PCH_NVL_I219_V29,
+	    "Intel(R) I219-V NVL(29)"),
 	/* required last entry */
 	PVID_END
 };
@@ -423,7 +427,7 @@ static bool	em_if_needs_restart(if_ctx_t, enum iflib_restart_event);
 static void	em_identify_hardware(if_ctx_t);
 static int	em_allocate_pci_resources(if_ctx_t);
 static void	em_free_pci_resources(if_ctx_t);
-static void	em_reset(if_ctx_t);
+static int	em_reset(if_ctx_t);
 static int	em_setup_interface(if_ctx_t);
 static int	em_setup_msix(if_ctx_t);
 
@@ -438,12 +442,22 @@ static int	em_if_rx_queue_intr_enable(if_ctx_t, uint16_t);
 static int	em_if_tx_queue_intr_enable(if_ctx_t, uint16_t);
 static int	igb_if_rx_queue_intr_enable(if_ctx_t, uint16_t);
 static int	igb_if_tx_queue_intr_enable(if_ctx_t, uint16_t);
+static void	em_handle_fatal_error_intr(struct e1000_softc *, u32);
+static bool	em_handle_fatal_error_admin(struct e1000_softc *);
+static void	em_prepare_fatal_error_reset(struct e1000_softc *);
+static void	em_finish_fatal_error_reset(struct e1000_softc *);
+static void	em_configure_peind_memory_errors(struct e1000_softc *);
+static void	em_configure_82575_memory_errors(struct e1000_softc *);
+static void	em_configure_82580_memory_errors(struct e1000_softc *);
+static void	em_update_82580_ecc_stats(struct e1000_softc *, u32, u32,
+		    u32);
 static void	em_if_multi_set(if_ctx_t);
 static void	em_if_update_admin_status(if_ctx_t);
 static void	em_if_debug(if_ctx_t);
 static void	em_update_vf_stats_counters(struct e1000_softc *);
 static void	em_update_stats_counters(struct e1000_softc *);
 static void	em_add_hw_stats(struct e1000_softc *);
+static bool	em_mac_has_eee(enum e1000_mac_type);
 static int	em_if_set_promisc(if_ctx_t, int);
 static bool	em_if_vlan_filter_capable(if_ctx_t);
 static bool	em_if_vlan_filter_used(if_ctx_t);
@@ -462,7 +476,7 @@ static int	em_get_rs(SYSCTL_HANDLER_ARGS);
 static void	em_print_debug_info(struct e1000_softc *);
 static int 	em_is_valid_ether_addr(u8 *);
 static void	em_newitr(struct e1000_softc *, struct em_rx_queue *,
-    struct tx_ring *, struct rx_ring *);
+    struct rx_ring *);
 static bool	em_automask_tso(if_ctx_t);
 static int	em_sysctl_tso_tcp_flags_mask(SYSCTL_HANDLER_ARGS);
 static int	em_sysctl_int_delay(SYSCTL_HANDLER_ARGS);
@@ -480,6 +494,14 @@ static void	em_disable_aspm(struct e1000_softc *);
 
 int		em_intr(void *);
 
+enum em_fatal_error_state {
+	EM_FATAL_ERROR_NONE,
+	EM_FATAL_ERROR_CAPTURING,
+	EM_FATAL_ERROR_DETECTED,
+	EM_FATAL_ERROR_RESET_REQUESTED,
+	EM_FATAL_ERROR_RESET_PREPARED,
+};
+
 /* MSI-X handlers */
 static int	em_if_msix_intr_assign(if_ctx_t, int);
 static int	em_msix_link(void *);
@@ -496,6 +518,7 @@ static int	em_get_regs(SYSCTL_HANDLER_ARGS);
 
 static void	lem_smartspeed(struct e1000_softc *);
 static void	igb_configure_queues(struct e1000_softc *);
+static void	igb_initialize_interrupt_rate(struct e1000_softc *);
 static void	em_flush_desc_rings(struct e1000_softc *);
 
 
@@ -775,6 +798,13 @@ static int em_get_regs(SYSCTL_HANDLER_ARGS)
 	u32 *regs_buff;
 	int rc;
 
+	/*
+	 * This sysctl is registered before iflib allocates the queue arrays,
+	 * and remains registered while iflib tears them down.
+	 */
+	if (sc->rx_queues == NULL || sc->tx_queues == NULL)
+		return (ENXIO);
+
 	regs_buff = malloc(sizeof(u32) * IGB_REGS_LEN, M_DEVBUF, M_WAITOK);
 	memset(regs_buff, 0, IGB_REGS_LEN * sizeof(u32));
 
@@ -967,6 +997,13 @@ em_if_attach_pre(if_ctx_t ctx)
 	INIT_DEBUGOUT("em_if_attach_pre: begin");
 	dev = iflib_get_dev(ctx);
 	sc = iflib_get_softc(ctx);
+
+	if (em_max_interrupt_rate <= 0) {
+		device_printf(dev,
+		    "Invalid max_interrupt_rate %d; using default %d\n",
+		    em_max_interrupt_rate, EM_INTS_DEFAULT);
+		em_max_interrupt_rate = EM_INTS_DEFAULT;
+	}
 
 	sc->ctx = sc->osdep.ctx = ctx;
 	sc->dev = sc->osdep.dev = dev;
@@ -1166,6 +1203,15 @@ em_if_attach_pre(if_ctx_t ctx)
 		error = ENXIO;
 		goto err_pci;
 	}
+	/*
+	 * 82579 can lose a host CSR write while the Management Engine owns
+	 * the PCIm2PCI arbiter.  Enable the OS register write interlock before
+	 * shared code initialization performs any MAC writes.
+	 */
+	if (hw->mac.type == e1000_pch2lan &&
+	    (E1000_READ_REG(hw, E1000_FWSM) &
+	    E1000_ICH_FWSM_FW_VALID) != 0)
+		sc->osdep.pcim2pci_arbiter_wa = true;
 
 	/*
 	** For ICH8 and family we need to
@@ -1217,6 +1263,27 @@ em_if_attach_pre(if_ctx_t ctx)
 
 	em_setup_msix(ctx);
 	e1000_get_bus_info(hw);
+
+	/*
+	 * Some conventional PCI systems hang when e1000 devices use
+	 * DMA addresses above 4 GB.  Keep PCI-mode DMA below that boundary
+	 * by default; PCI-X and PCIe retain 64-bit DMA.
+	 */
+	if (hw->bus.type == e1000_bus_type_pci) {
+		SYSCTL_ADD_BOOL(ctx_list, child, OID_AUTO, "allow_64bit_dma",
+		    CTLFLAG_RDTUN, &sc->allow_64bit_dma, 0,
+		    "Allow 64-bit DMA in conventional PCI mode");
+		if (sc->allow_64bit_dma)
+			device_printf(dev, "64-bit DMA in conventional PCI mode.  "
+			    "Some chipsets are unstable.\n");
+		else {
+			scctx->isc_dma_width = 32;
+			device_printf(dev, "32-bit DMA in conventional PCI mode.  "
+			    "Set dev.%s.%d.allow_64bit_dma=1 at boot to enable "
+			    "64-bit DMA if the chipset is stable with it.\n",
+			    device_get_name(dev), device_get_unit(dev));
+		}
+	}
 
 	/* Set up some sysctls for the tunable interrupt delays */
 	if (hw->mac.type < igb_mac_min) {
@@ -1298,7 +1365,12 @@ em_if_attach_pre(if_ctx_t ctx)
 	** important in reading the nvm and
 	** mac from that.
 	*/
-	e1000_reset_hw(hw);
+	error = e1000_reset_hw(hw);
+	if (!sc->vf_ifp && error != E1000_SUCCESS) {
+		device_printf(dev, "Hardware reset failed: %d\n", error);
+		error = EIO;
+		goto err_late;
+	}
 
 	/* Make sure we have a good EEPROM before we read from it */
 	if (e1000_validate_nvm_checksum(hw) < 0) {
@@ -1376,7 +1448,12 @@ em_if_attach_post(if_ctx_t ctx)
 		goto err_late;
 	}
 
-	em_reset(ctx);
+	if (sc->vf_ifp) {
+		(void)em_reset(ctx);
+	} else if (em_reset(ctx) != E1000_SUCCESS) {
+		error = EIO;
+		goto err_late;
+	}
 
 	/* Initialize statistics */
 	if (sc->vf_ifp)
@@ -1385,6 +1462,7 @@ em_if_attach_post(if_ctx_t ctx)
 		sc->ustats.stats = (struct e1000_hw_stats){};
 
 	em_update_stats_counters(sc);
+	atomic_readandclear_32(&sc->stats_pending);
 	hw->mac.get_link_status = 1;
 	em_if_update_admin_status(ctx);
 	em_add_hw_stats(sc);
@@ -1465,8 +1543,6 @@ em_if_resume(if_ctx_t ctx)
 
 	if (sc->hw.mac.type == e1000_pch2lan)
 		e1000_resume_workarounds_pchlan(&sc->hw);
-	em_if_init(ctx);
-	em_init_manageability(sc);
 
 	return(0);
 }
@@ -1493,6 +1569,7 @@ em_if_mtu_set(if_ctx_t ctx, uint32_t mtu)
 	case e1000_pch_adp:
 	case e1000_pch_mtp:
 	case e1000_pch_ptp:
+	case e1000_pch_nvp:
 	case e1000_82574:
 	case e1000_82583:
 	case e1000_80003es2lan:
@@ -1561,7 +1638,16 @@ em_if_init(if_ctx_t ctx)
 	}
 
 	/* Initialize the hardware */
-	em_reset(ctx);
+	if (sc->vf_ifp) {
+		(void)em_reset(ctx);
+	} else if (em_reset(ctx) != E1000_SUCCESS) {
+		iflib_init_failed(ctx);
+		return;
+	}
+	/* Re-arm a link-up transition deferred for this reset. */
+	if (sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING ||
+	    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING)
+		sc->link_state = EM_LINK_STATE_DOWN;
 	em_if_update_admin_status(ctx);
 
 	for (i = 0, tx_que = sc->tx_queues; i < sc->tx_num_queues;
@@ -1618,6 +1704,8 @@ em_if_init(if_ctx_t ctx)
 		/* Set up queue routing */
 		igb_configure_queues(sc);
 	}
+	if (sc->hw.mac.type >= igb_mac_min)
+		igb_initialize_interrupt_rate(sc);
 
 	/* this clears any pending interrupts */
 	E1000_READ_REG(&sc->hw, E1000_ICR);
@@ -1635,14 +1723,106 @@ em_if_init(if_ctx_t ctx)
 		else
 			e1000_set_eee_i350(&sc->hw, true, true);
 	}
+	em_configure_peind_memory_errors(sc);
+	em_configure_82575_memory_errors(sc);
+	em_configure_82580_memory_errors(sc);
 }
 
-enum itr_latency_target {
-	itr_latency_disabled = 0,
-	itr_latency_lowest = 1,
-	itr_latency_low = 2,
-	itr_latency_bulk = 3
-};
+/*
+ * RX publishes its byte and packet counters as one snapshot when iflib
+ * returns descriptors to hardware.  This also covers watchdog-driven RX
+ * processing, which can run while the interrupt vector is unmasked.
+ */
+static __inline void
+em_aim_rx_delta(struct rx_ring *rxr, u32 *bytes, u32 *packets)
+{
+	uint64_t snapshot;
+	u32 now_bytes, now_packets;
+
+	snapshot = atomic_load_acq_64(&rxr->rx_aim_snapshot);
+	now_bytes = snapshot >> 32;
+	now_packets = (u32)snapshot;
+	*bytes = now_bytes - rxr->rx_bytes_last;
+	*packets = now_packets - rxr->rx_packets_last;
+	rxr->rx_bytes_last = now_bytes;
+	rxr->rx_packets_last = now_packets;
+}
+
+/*
+ * TX publishes its byte and packet counters as one snapshot at the doorbell,
+ * because encapsulation can overlap the interrupt filter.  The two halves
+ * remain independent free running u32 counters, so their deltas are correct
+ * across wrap.
+ */
+static __inline void
+em_aim_tx_delta(struct tx_ring *txr, u32 *bytes, u32 *packets)
+{
+	uint64_t snapshot;
+	u32 now_bytes, now_packets;
+
+	snapshot = atomic_load_acq_64(&txr->tx_aim_snapshot);
+	now_bytes = snapshot >> 32;
+	now_packets = (u32)snapshot;
+	*bytes = now_bytes - txr->tx_bytes_last;
+	*packets = now_packets - txr->tx_packets_last;
+	txr->tx_bytes_last = now_bytes;
+	txr->tx_packets_last = now_packets;
+}
+
+/*********************************************************************
+ *
+ *  Do Adaptive Interrupt Moderation:
+ *    - Calculate based on average size over the last interval
+ *
+ *  Returns interrupts per second rather than a register value, so that the
+ *  caller's EM_INTS_TO_ITR()/IGB_INTS_TO_EITR() conversion applies, or zero
+ *  if the interval carried no packet to measure.
+ *
+ *********************************************************************/
+static u32
+em_ring_itr(struct e1000_softc *sc, u32 rxbytes, u32 rxpackets, u32 txbytes,
+    u32 txpackets)
+{
+	u32 newitr = 0;
+
+	if (txbytes && txpackets)
+		newitr = txbytes / txpackets;
+	if (rxbytes && rxpackets)
+		newitr = max(newitr, rxbytes / rxpackets);
+
+	/*
+	 * No packet was observed, so there is no size to work from.  Report no
+	 * observation and let the caller keep the rate it already has.
+	 */
+	if (newitr == 0)
+		return (0);
+
+	newitr += 24; /* account for hardware frame, crc */
+	/* set an upper boundary */
+	newitr = min(newitr, 3000);
+	/* Be nice to the mid range */
+	if ((newitr > 300) && (newitr < 1200))
+		newitr = (newitr / 3);
+	else
+		newitr = (newitr / 2);
+
+	/* The value above was written straight to EITR; make it a rate */
+	newitr = EM_AIM_DIVIDEND / newitr;
+
+	/*
+	 * Cap the rate: enable_aim=1 is the normal setting, enable_aim=2 opts
+	 * into the low latency end.  The original was unbounded and would ask
+	 * for ~95k ints/s on minimum sized frames.  There is deliberately no
+	 * floor, so jumbo traffic settles near 2.7k ints/s.
+	 */
+	if (sc->enable_aim == 1)
+		newitr = min(newitr, EM_INTS_20K);
+	else
+		newitr = min(newitr, EM_INTS_70K);
+
+	return (newitr);
+}
+
 /*********************************************************************
  *
  *  Helper to calculate next (E)ITR value for AIM
@@ -1650,126 +1830,51 @@ enum itr_latency_target {
  *********************************************************************/
 static void
 em_newitr(struct e1000_softc *sc, struct em_rx_queue *que,
-    struct tx_ring *txr, struct rx_ring *rxr)
+    struct rx_ring *rxr)
 {
 	struct e1000_hw *hw = &sc->hw;
-	unsigned long bytes, bytes_per_packet, packets;
-	unsigned long rxbytes, rxpackets, txbytes, txpackets;
+	struct em_tx_queue *tx_que;
+	u32 ringbytes, ringpackets, rxbytes, rxpackets, txbytes, txpackets;
 	u32 newitr;
-	u8 nextlatency;
+	int i;
 
-	rxbytes = atomic_load_long(&rxr->rx_bytes);
-	txbytes = atomic_load_long(&txr->tx_bytes);
+	em_aim_rx_delta(rxr, &rxbytes, &rxpackets);
+
+	/*
+	 * A vector can service more than one TX ring when iflib is configured
+	 * with unequal RX and TX queue counts.  Sample every ring routed to
+	 * this vector rather than treating the vector as a TX queue index.
+	 */
+	txbytes = txpackets = 0;
+	for (i = 0; i < sc->tx_num_queues; i++) {
+		tx_que = &sc->tx_queues[i];
+		if (tx_que->msix != que->msix)
+			continue;
+		em_aim_tx_delta(&tx_que->txr, &ringbytes, &ringpackets);
+		txbytes += ringbytes;
+		txpackets += ringpackets;
+	}
 
 	/* Idle, do nothing */
 	if (txbytes == 0 && rxbytes == 0)
 		return;
 
-	newitr = 0;
-
-	if (sc->enable_aim) {
-		nextlatency = rxr->rx_nextlatency;
-
-		/* Use half default (4K) ITR if sub-gig */
-		if (sc->link_speed != 1000) {
-			newitr = EM_INTS_4K;
-			goto em_set_next_itr;
-		}
-		/* Want at least enough packet buffer for two frames to AIM */
-		if (sc->shared->isc_max_frame_size * 2 > (sc->pba << 10)) {
-			newitr = em_max_interrupt_rate;
-			sc->enable_aim = 0;
-			goto em_set_next_itr;
-		}
-
-		bytes = bytes_per_packet = 0;
-		/* Get largest values from the associated tx and rx ring */
-		txpackets = atomic_load_long(&txr->tx_packets);
-		if (txpackets != 0) {
-			bytes = txbytes;
-			bytes_per_packet = txbytes / txpackets;
-			packets = txpackets;
-		}
-		rxpackets = atomic_load_long(&rxr->rx_packets);
-		if (rxpackets != 0) {
-			bytes = lmax(bytes, rxbytes);
-			bytes_per_packet =
-			    lmax(bytes_per_packet, rxbytes / rxpackets);
-			packets = lmax(packets, rxpackets);
-		}
-
-		/* Latency state machine */
-		switch (nextlatency) {
-		case itr_latency_disabled: /* Bootstrapping */
-			nextlatency = itr_latency_low;
-			break;
-		case itr_latency_lowest: /* 70k ints/s */
-			/* TSO and jumbo frames */
-			if (bytes_per_packet > 8000)
-				nextlatency = itr_latency_bulk;
-			else if ((packets < 5) && (bytes > 512))
-				nextlatency = itr_latency_low;
-			break;
-		case itr_latency_low: /* 20k ints/s */
-			if (bytes > 10000) {
-				/* Handle TSO */
-				if (bytes_per_packet > 8000)
-					nextlatency = itr_latency_bulk;
-				else if ((packets < 10) ||
-				    (bytes_per_packet > 1200))
-					nextlatency = itr_latency_bulk;
-				else if (packets > 35)
-					nextlatency = itr_latency_lowest;
-			} else if (bytes_per_packet > 2000) {
-				nextlatency = itr_latency_bulk;
-			} else if (packets < 3 && bytes < 512) {
-				nextlatency = itr_latency_lowest;
-			}
-			break;
-		case itr_latency_bulk: /* 4k ints/s */
-			if (bytes > 25000) {
-				if (packets > 35)
-					nextlatency = itr_latency_low;
-			} else if (bytes < 1500)
-				nextlatency = itr_latency_low;
-			break;
-		default:
-			nextlatency = itr_latency_low;
-			device_printf(sc->dev,
-			    "Unexpected newitr transition %d\n", nextlatency);
-			break;
-		}
-
-		/* Trim itr_latency_lowest for default AIM setting */
-		if (sc->enable_aim == 1 && nextlatency == itr_latency_lowest)
-			nextlatency = itr_latency_low;
-
-		/* Request new latency */
-		rxr->rx_nextlatency = nextlatency;
-	} else {
-		/* We may have toggled to AIM disabled */
-		nextlatency = itr_latency_disabled;
-		rxr->rx_nextlatency = nextlatency;
-	}
-
-	/* ITR state machine */
-	switch(nextlatency) {
-	case itr_latency_lowest:
-		newitr = EM_INTS_70K;
-		break;
-	case itr_latency_low:
-		newitr = EM_INTS_20K;
-		break;
-	case itr_latency_bulk:
-		newitr = EM_INTS_4K;
-		break;
-	case itr_latency_disabled:
-	default:
+	if (sc->enable_aim == 0) {
 		newitr = em_max_interrupt_rate;
-		break;
+	} else if (sc->link_speed < SPEED_1000) {
+		/* Use half default (4K) ITR if sub-gig */
+		newitr = EM_INTS_4K;
+	} else if (sc->shared->isc_max_frame_size * 2 > (sc->pba << 10)) {
+		/* Want at least enough packet buffer for two frames to AIM */
+		newitr = em_max_interrupt_rate;
+	} else {
+		newitr = em_ring_itr(sc, rxbytes, rxpackets, txbytes,
+		    txpackets);
+		/* No usable observation; leave the rate where it is */
+		if (newitr == 0)
+			return;
 	}
 
-em_set_next_itr:
 	if (hw->mac.type >= igb_mac_min) {
 		newitr = IGB_INTS_TO_EITR(newitr);
 
@@ -1788,7 +1893,8 @@ em_set_next_itr:
 
 		if (newitr != que->itr_setting) {
 			que->itr_setting = newitr;
-			if (hw->mac.type == e1000_82574 && que->msix) {
+			if (hw->mac.type == e1000_82574 &&
+			    sc->intr_type == IFLIB_INTR_MSIX) {
 				E1000_WRITE_REG(hw,
 				    E1000_EITR_82574(que->msix),
 				    que->itr_setting);
@@ -1798,6 +1904,866 @@ em_set_next_itr:
 			}
 		}
 	}
+}
+
+static bool
+em_has_pch_ecc(const struct e1000_hw *hw)
+{
+
+	return (hw->mac.type >= e1000_pch_lpt &&
+	    hw->mac.type < e1000_82575);
+}
+
+static bool
+em_has_82571_ecc_stats(const struct e1000_hw *hw)
+{
+
+	return (hw->mac.type == e1000_82571);
+}
+
+static bool
+em_has_82575_memory_errors(const struct e1000_hw *hw)
+{
+
+	return (hw->mac.type == e1000_82575);
+}
+
+static void
+em_configure_82575_memory_errors(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 ctrl_ext;
+
+	hw = &sc->hw;
+	if (!em_has_82575_memory_errors(hw))
+		return;
+
+	/* Discard pre-driver status before enabling the hardware reaction. */
+	(void)E1000_READ_REG(hw, E1000_PBECCSTS_82575);
+	(void)E1000_READ_REG(hw, E1000_RDHESTS_82575);
+	(void)E1000_READ_REG(hw, E1000_TDHESTS_82575);
+	E1000_WRITE_REG(hw, E1000_PBECCSTS_82575,
+	    E1000_ECC_82575_ENABLE);
+	E1000_WRITE_REG(hw, E1000_RDHESTS_82575,
+	    E1000_ECC_82575_ENABLE);
+	E1000_WRITE_REG(hw, E1000_TDHESTS_82575,
+	    E1000_ECC_82575_ENABLE);
+
+	ctrl_ext = E1000_READ_REG(hw, E1000_CTRL_EXT);
+	E1000_WRITE_REG(hw, E1000_CTRL_EXT,
+	    ctrl_ext | E1000_CTRL_EXT_MEHE);
+	E1000_WRITE_FLUSH(hw);
+}
+
+static bool
+em_has_82576_memory_errors(const struct e1000_hw *hw)
+{
+
+	return (hw->mac.type == e1000_82576);
+}
+
+static bool
+em_82576_has_ipsec(const struct e1000_hw *hw)
+{
+
+	return (hw->device_id != E1000_DEV_ID_82576_NS &&
+	    hw->device_id != E1000_DEV_ID_82576_NS_SERDES);
+}
+
+static void
+em_configure_82576_memory_errors(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 peindm, reactions;
+
+	hw = &sc->hw;
+	if (!em_has_82576_memory_errors(hw))
+		return;
+
+	reactions = E1000_PEIND_82576_NONFATAL_MASK |
+	    E1000_PEIND_82576_FATAL_MASK |
+	    E1000_PEINDM_82576_PARITY_ENABLE;
+	if (!em_82576_has_ipsec(hw))
+		reactions &= ~E1000_PEIND_82576_IPSEC_MASK;
+
+	/* Discard indications left by firmware before enabling reactions. */
+	(void)E1000_READ_REG(hw, E1000_PEIND);
+	peindm = E1000_READ_REG(hw, E1000_PEINDM);
+	E1000_WRITE_REG(hw, E1000_PEINDM, peindm | reactions);
+	E1000_WRITE_FLUSH(hw);
+}
+
+static bool
+em_has_82580_memory_errors(const struct e1000_hw *hw)
+{
+
+	return (hw->mac.type == e1000_82580);
+}
+
+static void
+em_clear_82580_memory_error_status(struct e1000_hw *hw, u32 reg)
+{
+	u32 status;
+
+	status = E1000_READ_REG(hw, reg);
+	if (status != 0)
+		E1000_WRITE_REG(hw, reg, status);
+}
+
+static void
+em_configure_82580_memory_errors(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 reg;
+
+	hw = &sc->hw;
+	if (!em_has_82580_memory_errors(hw))
+		return;
+
+	/* Clear status left before the driver completed its memory tables. */
+	(void)E1000_READ_REG(hw, E1000_PEIND);
+	em_clear_82580_memory_error_status(hw, E1000_DTPARS_82580);
+	em_clear_82580_memory_error_status(hw, E1000_DRPARS_82580);
+	em_clear_82580_memory_error_status(hw, E1000_DDPARS_82580);
+	em_clear_82580_memory_error_status(hw, E1000_PCIEERRSTS);
+	(void)E1000_READ_REG(hw, E1000_LANPERRSTS);
+	em_update_82580_ecc_stats(sc,
+	    E1000_READ_REG(hw, E1000_RPBECCSTS),
+	    E1000_READ_REG(hw, E1000_TPBECCSTS),
+	    E1000_READ_REG(hw, E1000_PCIEECCSTS));
+	E1000_WRITE_REG(hw, E1000_RPBECCSTS,
+	    E1000_PBECCSTS_82580_ECC_ENABLE);
+	E1000_WRITE_REG(hw, E1000_TPBECCSTS,
+	    E1000_PBECCSTS_82580_ECC_ENABLE);
+
+	reg = E1000_READ_REG(hw, E1000_DTPARC_82580);
+	E1000_WRITE_REG(hw, E1000_DTPARC_82580,
+	    reg | E1000_DTPARC_82580_ENABLE_MASK);
+	reg = E1000_READ_REG(hw, E1000_DRPARC_82580);
+	E1000_WRITE_REG(hw, E1000_DRPARC_82580,
+	    reg | E1000_DRPARC_82580_ENABLE_MASK);
+	reg = E1000_READ_REG(hw, E1000_DDPARC_82580);
+	E1000_WRITE_REG(hw, E1000_DDPARC_82580,
+	    reg | E1000_DDPARC_82580_ENABLE_MASK);
+	reg = E1000_READ_REG(hw, E1000_PCIEERRCTL_82580);
+	E1000_WRITE_REG(hw, E1000_PCIEERRCTL_82580,
+	    reg | E1000_PCIEERRCTL_82580_ENABLE_MASK);
+	reg = E1000_READ_REG(hw, E1000_PCIEECCCTL_82580);
+	E1000_WRITE_REG(hw, E1000_PCIEECCCTL_82580,
+	    reg | E1000_PCIEECCCTL_82580_ENABLE_MASK);
+	reg = E1000_READ_REG(hw, E1000_LANPERRCTL_82580);
+	reg |= E1000_LANPERRCTL_82580_HOST_MASK;
+	/* The RSS memory is initialized only for a multiqueue layout. */
+	if (sc->rx_num_queues <= 1)
+		reg &= ~E1000_LANPERRCTL_82580_RSS_ENABLE;
+	E1000_WRITE_REG(hw, E1000_LANPERRCTL_82580, reg);
+	reg = E1000_READ_REG(hw, E1000_PEINDM);
+	E1000_WRITE_REG(hw, E1000_PEINDM,
+	    reg | E1000_PEIND_FATAL_MASK);
+	E1000_WRITE_FLUSH(hw);
+}
+
+static bool
+em_has_i210_memory_errors(const struct e1000_hw *hw)
+{
+
+	return (hw->mac.type == e1000_i210 ||
+	    hw->mac.type == e1000_i211);
+}
+
+static bool
+em_has_i350_i354_memory_errors(const struct e1000_hw *hw)
+{
+
+	return (hw->mac.type == e1000_i350 ||
+	    hw->mac.type == e1000_i354);
+}
+
+static void
+em_configure_peind_memory_errors(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 peindm;
+
+	hw = &sc->hw;
+	if (!em_has_i350_i354_memory_errors(hw) &&
+	    !em_has_i210_memory_errors(hw))
+		return;
+
+	/* Discard indications left by firmware before enabling reactions. */
+	(void)E1000_READ_REG(hw, E1000_PEIND);
+	/* Do not depend on firmware preserving the datasheet defaults. */
+	peindm = E1000_READ_REG(hw, E1000_PEINDM);
+	E1000_WRITE_REG(hw, E1000_PEINDM,
+	    peindm | E1000_PEIND_FATAL_MASK);
+	E1000_WRITE_FLUSH(hw);
+}
+
+static bool
+em_has_peind_memory_errors(const struct e1000_hw *hw)
+{
+
+	return (em_has_82580_memory_errors(hw) ||
+	    em_has_i350_i354_memory_errors(hw) ||
+	    em_has_i210_memory_errors(hw));
+}
+
+static u32
+em_pcie_fatal_error_mask(const struct e1000_hw *hw)
+{
+
+	if (em_has_82580_memory_errors(hw))
+		return (~0U);
+	if (em_has_i350_i354_memory_errors(hw))
+		return (E1000_PCIEERRSTS_I350_I354_FATAL_MASK);
+	if (em_has_i210_memory_errors(hw))
+		return (E1000_PCIEERRSTS_I210_FATAL_MASK);
+	return (0);
+}
+
+static u32
+em_memory_error_intr_mask(const struct e1000_hw *hw)
+{
+
+	if (em_has_82575_memory_errors(hw))
+		return (E1000_IMS_82575_MEMORY_ERROR_MASK);
+	if (em_has_82576_memory_errors(hw))
+		return (E1000_IMS_FER | E1000_IMS_NFER);
+	if (em_has_pch_ecc(hw) || em_has_peind_memory_errors(hw))
+		return (E1000_IMS_FER);
+	return (0);
+}
+
+static bool
+em_has_memory_errors(const struct e1000_hw *hw)
+{
+
+	return (em_memory_error_intr_mask(hw) != 0);
+}
+
+static bool
+em_has_memory_error_stats(const struct e1000_hw *hw)
+{
+
+	return (em_has_82571_ecc_stats(hw) || em_has_memory_errors(hw));
+}
+
+static u32
+em_fatal_error_intr_mask(struct e1000_softc *sc)
+{
+	if (!em_has_memory_errors(&sc->hw))
+		return (0);
+	if (atomic_load_acq_32(&sc->fatal_error_state) !=
+	    EM_FATAL_ERROR_NONE)
+		return (0);
+	return (em_memory_error_intr_mask(&sc->hw));
+}
+
+static void
+em_update_82580_ecc_stats(struct e1000_softc *sc, u32 rpbeccsts,
+    u32 tpbeccsts, u32 pcieeccsts)
+{
+	u32 status;
+
+	sc->corrected_error_packet_buffer_count +=
+	    (rpbeccsts & E1000_PBECCSTS_82580_CORR_CNT_MASK) +
+	    (tpbeccsts & E1000_PBECCSTS_82580_CORR_CNT_MASK);
+	status = pcieeccsts & E1000_PCIEECCSTS_82580_ERROR_MASK;
+	sc->uncorrected_error_pcie_count += bitcount32(status);
+	if (status != 0)
+		E1000_WRITE_REG(&sc->hw, E1000_PCIEECCSTS, status);
+}
+
+static void
+em_update_82575_ecc_stats(struct e1000_softc *sc, u32 pbeccsts,
+    u32 rdhests, u32 tdhests)
+{
+
+	sc->corrected_error_packet_buffer_count +=
+	    pbeccsts & E1000_ECC_82575_CORR_CNT_MASK;
+	sc->uncorrected_error_packet_buffer_count +=
+	    (pbeccsts & E1000_ECC_82575_UNCORR_CNT_MASK) >>
+	    E1000_ECC_82575_UNCORR_CNT_SHIFT;
+	sc->corrected_error_dma_count +=
+	    (rdhests & E1000_ECC_82575_CORR_CNT_MASK) +
+	    (tdhests & E1000_ECC_82575_CORR_CNT_MASK);
+	sc->uncorrected_error_dma_count +=
+	    ((rdhests & E1000_ECC_82575_UNCORR_CNT_MASK) >>
+	    E1000_ECC_82575_UNCORR_CNT_SHIFT) +
+	    ((tdhests & E1000_ECC_82575_UNCORR_CNT_MASK) >>
+	    E1000_ECC_82575_UNCORR_CNT_SHIFT);
+}
+
+static void
+em_update_82576_ecc_counter(struct e1000_softc *sc, u32 reg,
+    u64 *corrected, u64 *uncorrected)
+{
+	u32 status;
+
+	status = E1000_READ_REG(&sc->hw, reg);
+	*corrected += status & E1000_ECC_82576_CORR_CNT_MASK;
+	if (uncorrected != NULL)
+		*uncorrected +=
+		    (status & E1000_ECC_82576_UNCORR_CNT_MASK) >>
+		    E1000_ECC_82576_UNCORR_CNT_SHIFT;
+}
+
+static void
+em_update_82576_ecc_stats(struct e1000_softc *sc)
+{
+
+	/*
+	 * These counters are clear-on-read.  PRBESTS and PMSIXESTS are
+	 * controller-shared, so whichever LAN port samples them first owns
+	 * the software count.
+	 */
+	em_update_82576_ecc_counter(sc, E1000_RPBECCSTS,
+	    &sc->corrected_error_packet_buffer_count,
+	    &sc->uncorrected_error_packet_buffer_count);
+	em_update_82576_ecc_counter(sc, E1000_TPBECCSTS,
+	    &sc->corrected_error_packet_buffer_count,
+	    &sc->uncorrected_error_packet_buffer_count);
+	em_update_82576_ecc_counter(sc, E1000_SWPBECCSTS_82576,
+	    &sc->corrected_error_packet_buffer_count,
+	    &sc->uncorrected_error_packet_buffer_count);
+	if (em_82576_has_ipsec(&sc->hw))
+		em_update_82576_ecc_counter(sc, E1000_IPPBECCSTS_82576,
+		    &sc->corrected_error_packet_buffer_count,
+		    &sc->uncorrected_error_packet_buffer_count);
+
+	em_update_82576_ecc_counter(sc, E1000_RDHESTS_82576,
+	    &sc->corrected_error_dma_count,
+	    &sc->uncorrected_error_dma_count);
+	em_update_82576_ecc_counter(sc, E1000_TDHESTS_82576,
+	    &sc->corrected_error_dma_count,
+	    &sc->uncorrected_error_dma_count);
+
+	em_update_82576_ecc_counter(sc, E1000_PRBESTS_82576,
+	    &sc->corrected_error_pcie_retry_count, NULL);
+	em_update_82576_ecc_counter(sc, E1000_PWBESTS_82576,
+	    &sc->corrected_error_pcie_tx_data_count, NULL);
+	em_update_82576_ecc_counter(sc, E1000_PMSIXESTS_82576,
+	    &sc->corrected_error_pcie_other_count, NULL);
+}
+
+static void
+em_update_pch_ecc_stats(struct e1000_softc *sc, u32 pbeccsts)
+{
+
+	sc->corrected_error_packet_buffer_count +=
+	    pbeccsts & E1000_PBECCSTS_CORR_ERR_CNT_MASK;
+	sc->uncorrected_error_packet_buffer_count +=
+	    (pbeccsts & E1000_PBECCSTS_UNCORR_ERR_CNT_MASK) >>
+	    E1000_PBECCSTS_UNCORR_ERR_CNT_SHIFT;
+}
+
+static void
+em_update_82571_ecc_stats(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 count, pba_ecc;
+
+	hw = &sc->hw;
+	pba_ecc = E1000_READ_REG(hw, E1000_PBA_ECC);
+	count = (pba_ecc & E1000_PBA_ECC_COUNTER_MASK) >>
+	    E1000_PBA_ECC_COUNTER_SHIFT;
+	if (count == 0)
+		return;
+	sc->corrected_error_packet_buffer_count += count;
+	/* Preserve correction and reserved state while clearing statistics. */
+	E1000_WRITE_REG(hw, E1000_PBA_ECC,
+	    pba_ecc | E1000_PBA_ECC_STAT_CLR);
+}
+
+static void
+em_update_i210_ecc_stats(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 pbeccsts, pcieeccsts;
+
+	hw = &sc->hw;
+	pbeccsts = E1000_READ_REG(hw, E1000_PBECCSTS_I210);
+	if (pbeccsts & E1000_PBECCSTS_I210_CORR_ERR) {
+		sc->corrected_error_dma_count++;
+		/* Preserve the enable bit while clearing the RW1C status. */
+		E1000_WRITE_REG(hw, E1000_PBECCSTS_I210,
+		    pbeccsts & (E1000_PBECCSTS_I210_ECC_ENABLE |
+		    E1000_PBECCSTS_I210_CORR_ERR));
+	}
+
+	pcieeccsts = E1000_READ_REG(hw, E1000_PCIEECCSTS) &
+	    E1000_PCIEECCSTS_I210_CORR_MASK;
+	if (pcieeccsts & E1000_PCIEECCSTS_TX_WR_DATA)
+		sc->corrected_error_pcie_tx_data_count++;
+	if (pcieeccsts & E1000_PCIEECCSTS_RETRY_BUF)
+		sc->corrected_error_pcie_retry_count++;
+	if (pcieeccsts != 0)
+		E1000_WRITE_REG(hw, E1000_PCIEECCSTS, pcieeccsts);
+}
+
+static void
+em_update_i350_i354_ecc_stats(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 pbeccsts, pcieecc_mask, status;
+
+	hw = &sc->hw;
+	status = E1000_READ_REG(hw, E1000_DTPARS) &
+	    E1000_DTPARS_CORR_MASK;
+	if (status != 0) {
+		sc->corrected_error_dma_count += bitcount32(status);
+		E1000_WRITE_REG(hw, E1000_DTPARS, status);
+	}
+	status = E1000_READ_REG(hw, E1000_DRPARS) &
+	    E1000_DRPARS_CORR_MASK;
+	if (status != 0) {
+		sc->corrected_error_dma_count += bitcount32(status);
+		E1000_WRITE_REG(hw, E1000_DRPARS, status);
+	}
+	status = E1000_READ_REG(hw, E1000_DDECCS) &
+	    E1000_DDECCS_CORR_MASK;
+	if (status != 0) {
+		sc->corrected_error_dma_count += bitcount32(status);
+		E1000_WRITE_REG(hw, E1000_DDECCS, status);
+	}
+	status = E1000_READ_REG(hw, E1000_LANPERRSTS) &
+	    E1000_LANPERRSTS_MNG_FIFO_CORR;
+	if (status != 0) {
+		sc->corrected_error_lan_mng_fifo_count++;
+		E1000_WRITE_REG(hw, E1000_LANPERRSTS, status);
+	}
+
+	pbeccsts = E1000_READ_REG(hw, E1000_RPBECCSTS);
+	status = pbeccsts & E1000_PBECCSTS_I350_I354_CORR_MASK;
+	if (status != 0) {
+		sc->corrected_error_packet_buffer_count += bitcount32(status);
+		/* Preserve the enable bits while clearing RW1C status. */
+		E1000_WRITE_REG(hw, E1000_RPBECCSTS,
+		    pbeccsts & (E1000_PBECCSTS_I350_I354_ENABLE_MASK |
+		    E1000_PBECCSTS_I350_I354_CORR_MASK));
+	}
+	pbeccsts = E1000_READ_REG(hw, E1000_TPBECCSTS);
+	status = pbeccsts & E1000_PBECCSTS_I350_I354_CORR_MASK;
+	if (status != 0) {
+		sc->corrected_error_packet_buffer_count += bitcount32(status);
+		E1000_WRITE_REG(hw, E1000_TPBECCSTS,
+		    pbeccsts & (E1000_PBECCSTS_I350_I354_ENABLE_MASK |
+		    E1000_PBECCSTS_I350_I354_CORR_MASK));
+	}
+
+	pcieecc_mask = hw->mac.type == e1000_i354 ?
+	    E1000_PCIEECCSTS_I354_CORR_MASK :
+	    E1000_PCIEECCSTS_I350_CORR_MASK;
+	status = E1000_READ_REG(hw, E1000_PCIEECCSTS) & pcieecc_mask;
+	if (status & E1000_PCIEECCSTS_TX_WR_DATA)
+		sc->corrected_error_pcie_tx_data_count++;
+	if (status & E1000_PCIEECCSTS_RETRY_BUF)
+		sc->corrected_error_pcie_retry_count++;
+	sc->corrected_error_pcie_other_count += bitcount32(status &
+	    E1000_PCIEECCSTS_I350_I354_OTHER_MASK);
+	if (status != 0)
+		E1000_WRITE_REG(hw, E1000_PCIEECCSTS, status);
+}
+
+/*
+ * Internal-memory error causes are read-clear.  Capture them before handing
+ * fatal recovery or non-fatal acknowledgement to the iflib admin task.
+ */
+static void
+em_handle_fatal_error_intr(struct e1000_softc *sc, u32 icr)
+{
+	struct e1000_hw *hw;
+	u32 dma_host, dma_rx, dma_tx, error_mask, lanerr, pcieerr, peind;
+
+	error_mask = em_memory_error_intr_mask(&sc->hw);
+	if (!em_has_memory_errors(&sc->hw) ||
+	    (icr & error_mask) == 0)
+		return;
+
+	hw = &sc->hw;
+	E1000_WRITE_REG(hw, E1000_IMC, error_mask);
+	if (!atomic_cmpset_32(&sc->fatal_error_state,
+	    EM_FATAL_ERROR_NONE, EM_FATAL_ERROR_CAPTURING))
+		return;
+
+	sc->fatal_error_icr = icr & error_mask;
+	if (em_has_pch_ecc(hw)) {
+		sc->fatal_error_pbeccsts =
+		    E1000_READ_REG(hw, E1000_PBECCSTS);
+	} else if (em_has_82575_memory_errors(hw)) {
+		sc->fatal_error_pbeccsts =
+		    E1000_READ_REG(hw, E1000_PBECCSTS_82575);
+		sc->fatal_error_dma_rx =
+		    E1000_READ_REG(hw, E1000_RDHESTS_82575);
+		sc->fatal_error_dma_tx =
+		    E1000_READ_REG(hw, E1000_TDHESTS_82575);
+	} else if (em_has_82576_memory_errors(hw)) {
+		sc->fatal_error_peind = E1000_READ_REG(hw, E1000_PEIND);
+	} else {
+		peind = E1000_READ_REG(hw, E1000_PEIND) &
+		    E1000_PEIND_FATAL_MASK;
+		pcieerr = E1000_READ_REG(hw, E1000_PCIEERRSTS) &
+		    em_pcie_fatal_error_mask(hw);
+		dma_host = 0;
+		if (em_has_82580_memory_errors(hw)) {
+			/*
+			 * PEIND is visible through every function.  Retain the
+			 * management indication, which has no subordinate status,
+			 * but attribute host-owned regions from this function's
+			 * status registers.
+			 */
+			peind &= E1000_PEIND_MNG_PARITY_FATAL;
+			dma_tx = E1000_READ_REG(hw, E1000_DTPARS_82580);
+			dma_rx = E1000_READ_REG(hw, E1000_DRPARS_82580);
+			dma_host = E1000_READ_REG(hw,
+			    E1000_DDPARS_82580);
+			lanerr = E1000_READ_REG(hw, E1000_LANPERRSTS) &
+			    E1000_LANPERRSTS_82580_ERROR_MASK;
+		} else if (em_has_i350_i354_memory_errors(hw)) {
+			dma_tx = E1000_READ_REG(hw, E1000_DTPARS) &
+			    E1000_DTPARS_FATAL_MASK;
+			dma_rx = E1000_READ_REG(hw, E1000_DRPARS) &
+			    E1000_DRPARS_FATAL_MASK;
+			lanerr = E1000_READ_REG(hw, E1000_LANPERRSTS) &
+			    E1000_LANPERRSTS_I350_I354_FATAL_MASK;
+		} else {
+			dma_tx = 0;
+			dma_rx = 0;
+			lanerr = E1000_READ_REG(hw, E1000_LANPERRSTS) &
+			    E1000_LANPERRSTS_RETX_BUF;
+		}
+		if (pcieerr != 0)
+			peind |= E1000_PEIND_PCIE_PARITY_FATAL;
+		if (lanerr != 0)
+			peind |= E1000_PEIND_LANPORT_PARITY_FATAL;
+		if (dma_tx != 0 || dma_rx != 0 || dma_host != 0)
+			peind |= E1000_PEIND_DMA_PARITY_FATAL;
+		sc->fatal_error_peind = peind;
+		sc->fatal_error_pcie = pcieerr;
+		sc->fatal_error_lan = lanerr;
+		sc->fatal_error_dma_tx = dma_tx;
+		sc->fatal_error_dma_rx = dma_rx;
+		sc->fatal_error_dma_host = dma_host;
+	}
+	atomic_store_rel_32(&sc->fatal_error_state,
+	    EM_FATAL_ERROR_DETECTED);
+	iflib_admin_intr_deferred(sc->ctx);
+}
+
+static bool
+em_handle_fatal_error_admin(struct e1000_softc *sc)
+{
+	u32 error_mask, pcieecc, peind;
+	bool reset_required;
+
+	if (!atomic_cmpset_acq_32(&sc->fatal_error_state,
+	    EM_FATAL_ERROR_DETECTED, EM_FATAL_ERROR_RESET_REQUESTED))
+		return (atomic_load_acq_32(&sc->fatal_error_state) !=
+		    EM_FATAL_ERROR_NONE);
+
+	if (em_has_pch_ecc(&sc->hw)) {
+		em_update_pch_ecc_stats(sc, sc->fatal_error_pbeccsts);
+		device_printf(sc->dev,
+		    "uncorrectable packet-buffer ECC error: "
+		    "PBECCSTS %#x; requesting reset\n",
+		    sc->fatal_error_pbeccsts);
+	} else if (em_has_82575_memory_errors(&sc->hw)) {
+		em_update_82575_ecc_stats(sc, sc->fatal_error_pbeccsts,
+		    sc->fatal_error_dma_rx, sc->fatal_error_dma_tx);
+		device_printf(sc->dev,
+		    "unrecoverable internal memory ECC error: ICR %#x, "
+		    "PBECCSTS %#x, RDHESTS %#x, TDHESTS %#x; "
+		    "requesting reset\n", sc->fatal_error_icr,
+		    sc->fatal_error_pbeccsts, sc->fatal_error_dma_rx,
+		    sc->fatal_error_dma_tx);
+	} else if (em_has_82576_memory_errors(&sc->hw)) {
+		peind = sc->fatal_error_peind;
+		em_update_82576_ecc_stats(sc);
+		reset_required =
+		    (sc->fatal_error_icr & E1000_ICR_FER) != 0 ||
+		    (peind & (E1000_PEIND_82576_FATAL_MASK |
+		    E1000_PEIND_82576_MEMORY_HANG)) != 0;
+		if (!reset_required) {
+			device_printf(sc->dev,
+			    "non-fatal internal memory error: PEIND %#x\n",
+			    peind);
+			sc->fatal_error_icr = 0;
+			sc->fatal_error_peind = 0;
+			atomic_store_rel_32(&sc->fatal_error_state,
+			    EM_FATAL_ERROR_NONE);
+			error_mask = E1000_IMS_FER | E1000_IMS_NFER;
+			E1000_WRITE_REG(&sc->hw, E1000_IMS, error_mask);
+			E1000_WRITE_FLUSH(&sc->hw);
+			return (true);
+		}
+		if ((peind & (E1000_PEIND_82576_FATAL_MASK |
+		    E1000_PEIND_82576_MEMORY_HANG)) == 0)
+			sc->fatal_error_unknown_count++;
+		device_printf(sc->dev,
+		    "fatal internal memory error: PEIND %#x; "
+		    "requesting reset\n", peind);
+	} else {
+		peind = sc->fatal_error_peind;
+		if (em_has_82580_memory_errors(&sc->hw)) {
+			pcieecc = E1000_READ_REG(&sc->hw,
+			    E1000_PCIEECCSTS) &
+			    E1000_PCIEECCSTS_82580_ERROR_MASK;
+			sc->fatal_error_pcie_ecc |= pcieecc;
+			if (pcieecc != 0) {
+				peind |= E1000_PEIND_PCIE_PARITY_FATAL;
+				sc->fatal_error_peind = peind;
+			}
+			em_update_82580_ecc_stats(sc,
+			    E1000_READ_REG(&sc->hw, E1000_RPBECCSTS),
+			    E1000_READ_REG(&sc->hw, E1000_TPBECCSTS),
+			    pcieecc);
+		} else if (em_has_i350_i354_memory_errors(&sc->hw))
+			em_update_i350_i354_ecc_stats(sc);
+		if (peind & E1000_PEIND_LANPORT_PARITY_FATAL)
+			sc->fatal_error_lan_count++;
+		if (peind & E1000_PEIND_MNG_PARITY_FATAL)
+			sc->fatal_error_mng_count++;
+		if (peind & E1000_PEIND_PCIE_PARITY_FATAL)
+			sc->fatal_error_pcie_count++;
+		if (peind & E1000_PEIND_DMA_PARITY_FATAL)
+			sc->fatal_error_dma_count++;
+		if (peind == 0)
+			sc->fatal_error_unknown_count++;
+		if (em_has_82580_memory_errors(&sc->hw)) {
+			device_printf(sc->dev,
+			    "fatal internal memory error: PEIND %#x, "
+			    "PCIEERRSTS %#x, PCIEECCSTS %#x, "
+			    "DTPARS %#x, DRPARS %#x, DDPARS %#x, "
+			    "LANPERRSTS %#x\n", peind,
+			    sc->fatal_error_pcie,
+			    sc->fatal_error_pcie_ecc,
+			    sc->fatal_error_dma_tx,
+			    sc->fatal_error_dma_rx,
+			    sc->fatal_error_dma_host,
+			    sc->fatal_error_lan);
+		} else {
+			device_printf(sc->dev,
+			    "fatal internal memory error: PEIND %#x, "
+			    "PCIEERRSTS %#x, DTPARS %#x, DRPARS %#x, "
+			    "LANPERRSTS %#x\n", peind,
+			    sc->fatal_error_pcie,
+			    sc->fatal_error_dma_tx,
+			    sc->fatal_error_dma_rx,
+			    sc->fatal_error_lan);
+		}
+
+		reset_required = (peind &
+		    (E1000_PEIND_PCIE_PARITY_FATAL |
+		    E1000_PEIND_DMA_PARITY_FATAL)) != 0;
+		if (peind == 0)
+			reset_required = true;
+		if (peind & E1000_PEIND_LANPORT_PARITY_FATAL) {
+			if (!em_has_i350_i354_memory_errors(&sc->hw) ||
+			    sc->fatal_error_lan == 0 ||
+			    (sc->fatal_error_lan &
+			    E1000_LANPERRSTS_I350_I354_RESET_MASK) != 0)
+				reset_required = true;
+		}
+		/* Management-memory recovery belongs to management firmware. */
+		if (!reset_required) {
+			if (em_has_i350_i354_memory_errors(&sc->hw) &&
+			    sc->fatal_error_lan != 0)
+				E1000_WRITE_REG(&sc->hw, E1000_LANPERRSTS,
+				    sc->fatal_error_lan &
+				    E1000_LANPERRSTS_I350_I354_NO_RESET_MASK);
+			sc->fatal_error_peind = 0;
+			sc->fatal_error_pcie = 0;
+			sc->fatal_error_pcie_ecc = 0;
+			sc->fatal_error_lan = 0;
+			sc->fatal_error_dma_tx = 0;
+			sc->fatal_error_dma_rx = 0;
+			sc->fatal_error_dma_host = 0;
+			atomic_store_rel_32(&sc->fatal_error_state,
+			    EM_FATAL_ERROR_NONE);
+			E1000_WRITE_REG(&sc->hw, E1000_IMS,
+			    E1000_IMS_FER);
+			E1000_WRITE_FLUSH(&sc->hw);
+			return (true);
+		}
+		device_printf(sc->dev,
+		    "requesting reset after memory error\n");
+	}
+	sc->fatal_error_reset_count++;
+	iflib_request_reset(sc->ctx);
+	/* Re-enter the admin task so it observes the reset request. */
+	iflib_admin_intr_deferred(sc->ctx);
+	return (true);
+}
+
+/*
+ * A PCIe-region parity failure stops PCIe and DMA traffic.  I350, I354,
+ * I210, and I211 require a port reset before master disable in this case.
+ * 82580 stops PCIe traffic for a fatal error in any host-owned region, so use
+ * the same order for every 82580 recovery.  This differs from the normal
+ * reset path, which disables the bus master first.
+ *
+ * Indications that relatch after admin accounting are discarded during
+ * reset; sticky bits cannot distinguish them from the saved event.
+ */
+static void
+em_prepare_fatal_error_reset(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	s32 error;
+	u32 ctrl, pcieecc, pcieerr;
+	int i;
+
+	if (!em_has_peind_memory_errors(&sc->hw) ||
+	    atomic_load_acq_32(&sc->fatal_error_state) !=
+	    EM_FATAL_ERROR_RESET_REQUESTED)
+		return;
+
+	pcieerr = sc->fatal_error_pcie |
+	    (E1000_READ_REG(&sc->hw, E1000_PCIEERRSTS) &
+	    em_pcie_fatal_error_mask(&sc->hw));
+	pcieecc = sc->fatal_error_pcie_ecc;
+	if (!em_has_82580_memory_errors(&sc->hw) &&
+	    (sc->fatal_error_peind & E1000_PEIND_PCIE_PARITY_FATAL) == 0 &&
+	    pcieerr == 0)
+		return;
+
+	hw = &sc->hw;
+	ctrl = E1000_READ_REG(hw, E1000_CTRL);
+	E1000_WRITE_REG(hw, E1000_CTRL, ctrl | E1000_CTRL_RST);
+	/* Do not access device registers for at least 3 ms after RST. */
+	msec_delay(3);
+	for (i = 0; i < AUTO_READ_DONE_TIMEOUT; i++) {
+		if ((E1000_READ_REG(hw, E1000_EECD) &
+		    E1000_EECD_AUTO_RD) != 0 &&
+		    (em_has_82580_memory_errors(hw) ||
+		    (E1000_READ_REG(hw, E1000_STATUS) &
+		    E1000_STATUS_RST_DONE) != 0))
+			break;
+		msec_delay(1);
+	}
+	if (i == AUTO_READ_DONE_TIMEOUT)
+		device_printf(sc->dev,
+		    "port reset did not complete during parity recovery\n");
+	error = e1000_disable_pcie_master_generic(hw);
+	if (error != E1000_SUCCESS)
+		device_printf(sc->dev,
+		    "PCIe master disable failed during parity recovery: %d\n",
+		    error);
+	pcieerr |= E1000_READ_REG(hw, E1000_PCIEERRSTS) &
+	    em_pcie_fatal_error_mask(hw);
+	if (pcieerr != 0)
+		E1000_WRITE_REG(hw, E1000_PCIEERRSTS, pcieerr);
+	if (em_has_82580_memory_errors(hw)) {
+		pcieecc |= E1000_READ_REG(hw, E1000_PCIEECCSTS) &
+		    E1000_PCIEECCSTS_82580_ERROR_MASK;
+		if (pcieecc != 0)
+			E1000_WRITE_REG(hw, E1000_PCIEECCSTS, pcieecc);
+	}
+	atomic_store_rel_32(&sc->fatal_error_state,
+	    EM_FATAL_ERROR_RESET_PREPARED);
+}
+
+static void
+em_finish_fatal_error_reset(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw;
+	u32 dma_host, dma_rx, dma_tx, lanerr, pcieecc, pcieerr;
+	u32 state;
+
+	state = atomic_load_acq_32(&sc->fatal_error_state);
+	if (state != EM_FATAL_ERROR_RESET_REQUESTED &&
+	    state != EM_FATAL_ERROR_RESET_PREPARED)
+		return;
+
+	hw = &sc->hw;
+	if (em_has_82575_memory_errors(hw)) {
+		sc->fatal_error_dma_tx = 0;
+		sc->fatal_error_dma_rx = 0;
+	} else if (em_has_82576_memory_errors(hw)) {
+		/* Drain any indication relatched while the port was resetting. */
+		(void)E1000_READ_REG(hw, E1000_PEIND);
+		sc->fatal_error_peind = 0;
+	} else if (em_has_82580_memory_errors(hw)) {
+		pcieerr = sc->fatal_error_pcie |
+		    E1000_READ_REG(hw, E1000_PCIEERRSTS);
+		if (pcieerr != 0)
+			E1000_WRITE_REG(hw, E1000_PCIEERRSTS, pcieerr);
+		pcieecc = sc->fatal_error_pcie_ecc |
+		    (E1000_READ_REG(hw, E1000_PCIEECCSTS) &
+		    E1000_PCIEECCSTS_82580_ERROR_MASK);
+		if (pcieecc != 0)
+			E1000_WRITE_REG(hw, E1000_PCIEECCSTS, pcieecc);
+		dma_tx = sc->fatal_error_dma_tx |
+		    E1000_READ_REG(hw, E1000_DTPARS_82580);
+		if (dma_tx != 0)
+			E1000_WRITE_REG(hw, E1000_DTPARS_82580, dma_tx);
+		dma_rx = sc->fatal_error_dma_rx |
+		    E1000_READ_REG(hw, E1000_DRPARS_82580);
+		if (dma_rx != 0)
+			E1000_WRITE_REG(hw, E1000_DRPARS_82580, dma_rx);
+		dma_host = sc->fatal_error_dma_host |
+		    E1000_READ_REG(hw, E1000_DDPARS_82580);
+		if (dma_host != 0)
+			E1000_WRITE_REG(hw, E1000_DDPARS_82580, dma_host);
+		/* LANPERRSTS is read-only and is cleared by the port reset. */
+		lanerr = E1000_READ_REG(hw, E1000_LANPERRSTS) &
+		    E1000_LANPERRSTS_82580_ERROR_MASK;
+		if (lanerr != 0)
+			device_printf(sc->dev,
+			    "LAN parity status remained set after reset: %#x\n",
+			    lanerr);
+		(void)E1000_READ_REG(hw, E1000_PEIND);
+		sc->fatal_error_peind = 0;
+		sc->fatal_error_pcie = 0;
+		sc->fatal_error_pcie_ecc = 0;
+		sc->fatal_error_lan = 0;
+		sc->fatal_error_dma_tx = 0;
+		sc->fatal_error_dma_rx = 0;
+		sc->fatal_error_dma_host = 0;
+	} else if (em_has_peind_memory_errors(hw)) {
+		pcieerr = sc->fatal_error_pcie |
+		    (E1000_READ_REG(hw, E1000_PCIEERRSTS) &
+		    em_pcie_fatal_error_mask(hw));
+		if (pcieerr != 0)
+			E1000_WRITE_REG(hw, E1000_PCIEERRSTS, pcieerr);
+		if (em_has_i350_i354_memory_errors(hw)) {
+			dma_tx = sc->fatal_error_dma_tx |
+			    (E1000_READ_REG(hw, E1000_DTPARS) &
+			    E1000_DTPARS_FATAL_MASK);
+			if (dma_tx != 0)
+				E1000_WRITE_REG(hw, E1000_DTPARS, dma_tx);
+			dma_rx = sc->fatal_error_dma_rx |
+			    (E1000_READ_REG(hw, E1000_DRPARS) &
+			    E1000_DRPARS_FATAL_MASK);
+			if (dma_rx != 0)
+				E1000_WRITE_REG(hw, E1000_DRPARS, dma_rx);
+			lanerr = sc->fatal_error_lan |
+			    (E1000_READ_REG(hw, E1000_LANPERRSTS) &
+			    E1000_LANPERRSTS_I350_I354_FATAL_MASK);
+		} else {
+			lanerr = sc->fatal_error_lan |
+			    (E1000_READ_REG(hw, E1000_LANPERRSTS) &
+			    E1000_LANPERRSTS_RETX_BUF);
+		}
+		if (lanerr != 0)
+			E1000_WRITE_REG(hw, E1000_LANPERRSTS, lanerr);
+		/*
+		 * RST can relatch PEIND from a subordinate status register
+		 * before that register is cleared.  Drain the recovered
+		 * indication before unmasking FER.
+		 */
+		(void)E1000_READ_REG(hw, E1000_PEIND);
+		sc->fatal_error_peind = 0;
+		sc->fatal_error_pcie = 0;
+		sc->fatal_error_pcie_ecc = 0;
+		sc->fatal_error_lan = 0;
+		sc->fatal_error_dma_tx = 0;
+		sc->fatal_error_dma_rx = 0;
+		sc->fatal_error_dma_host = 0;
+	}
+	sc->fatal_error_icr = 0;
+	sc->fatal_error_pbeccsts = 0;
+	atomic_store_rel_32(&sc->fatal_error_state, EM_FATAL_ERROR_NONE);
 }
 
 /*********************************************************************
@@ -1811,7 +2777,6 @@ em_intr(void *arg)
 	struct e1000_softc *sc = arg;
 	struct e1000_hw *hw = &sc->hw;
 	struct em_rx_queue *que = &sc->rx_queues[0];
-	struct tx_ring *txr = &sc->tx_queues[0].txr;
 	struct rx_ring *rxr = &que->rxr;
 	if_ctx_t ctx = sc->ctx;
 	u32 reg_icr;
@@ -1849,14 +2814,10 @@ em_intr(void *arg)
 	if (reg_icr & E1000_ICR_RXO)
 		sc->rx_overruns++;
 
-	if (hw->mac.type >= e1000_82540)
-		em_newitr(sc, que, txr, rxr);
+	em_handle_fatal_error_intr(sc, reg_icr);
 
-	/* Reset state */
-	txr->tx_bytes = 0;
-	txr->tx_packets = 0;
-	rxr->rx_bytes = 0;
-	rxr->rx_packets = 0;
+	if (hw->mac.type >= e1000_82540)
+		em_newitr(sc, que, rxr);
 
 	return (FILTER_SCHEDULE_THREAD);
 }
@@ -1911,18 +2872,11 @@ em_msix_que(void *arg)
 {
 	struct em_rx_queue *que = arg;
 	struct e1000_softc *sc = que->sc;
-	struct tx_ring *txr = &sc->tx_queues[que->msix].txr;
 	struct rx_ring *rxr = &que->rxr;
 
 	++que->irqs;
 
-	em_newitr(sc, que, txr, rxr);
-
-	/* Reset state */
-	txr->tx_bytes = 0;
-	txr->tx_packets = 0;
-	rxr->rx_bytes = 0;
-	rxr->rx_packets = 0;
+	em_newitr(sc, que, rxr);
 
 	return (FILTER_SCHEDULE_THREAD);
 }
@@ -1947,10 +2901,12 @@ em_msix_link(void *arg)
 
 	if (reg_icr & (E1000_ICR_RXSEQ | E1000_ICR_LSC))
 		em_handle_link(sc->ctx);
+	em_handle_fatal_error_intr(sc, reg_icr);
 
 	/* Re-arm unconditionally */
 	if (sc->hw.mac.type >= igb_mac_min) {
-		E1000_WRITE_REG(&sc->hw, E1000_IMS, E1000_IMS_LSC);
+		E1000_WRITE_REG(&sc->hw, E1000_IMS,
+		    E1000_IMS_LSC | em_fatal_error_intr_mask(sc));
 		E1000_WRITE_REG(&sc->hw, E1000_EIMS, sc->link_mask);
 	} else if (sc->hw.mac.type == e1000_82574) {
 		E1000_WRITE_REG(&sc->hw, E1000_IMS,
@@ -1963,7 +2919,8 @@ em_msix_link(void *arg)
 		if (reg_icr)
 			E1000_WRITE_REG(&sc->hw, E1000_ICS, sc->ims);
 	} else
-		E1000_WRITE_REG(&sc->hw, E1000_IMS, E1000_IMS_LSC);
+		E1000_WRITE_REG(&sc->hw, E1000_IMS,
+		    E1000_IMS_LSC | em_fatal_error_intr_mask(sc));
 
 	return (FILTER_HANDLED);
 }
@@ -1999,7 +2956,8 @@ em_if_media_status(if_ctx_t ctx, struct ifmediareq *ifmr)
 	ifmr->ifm_status = IFM_AVALID;
 	ifmr->ifm_active = IFM_ETHER;
 
-	if (!sc->link_active) {
+	if (sc->link_state == EM_LINK_STATE_DOWN ||
+	    sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING) {
 		return;
 	}
 
@@ -2078,8 +3036,6 @@ em_if_media_change(if_ctx_t ctx)
 	default:
 		device_printf(sc->dev, "Unsupported media type\n");
 	}
-
-	em_if_init(ctx);
 
 	return (0);
 }
@@ -2206,9 +3162,13 @@ em_if_multi_set(if_ctx_t ctx)
 static void
 em_if_timer(if_ctx_t ctx, uint16_t qid)
 {
+	struct e1000_softc *sc;
+
 	if (qid != 0)
 		return;
 
+	sc = iflib_get_softc(ctx);
+	atomic_set_32(&sc->stats_pending, 1);
 	iflib_admin_intr_deferred(ctx);
 }
 
@@ -2219,8 +3179,10 @@ em_if_update_admin_status(if_ctx_t ctx)
 	struct e1000_hw *hw = &sc->hw;
 	device_t dev = iflib_get_dev(ctx);
 	u32 link_check, thstat, ctrl;
-	bool automasked = false;
+	bool reset_requested = false;
 
+	if (em_handle_fatal_error_admin(sc))
+		return;
 	link_check = thstat = ctrl = 0;
 	/* Get the cached link value or read phy for real */
 	switch (hw->phy.media_type) {
@@ -2262,7 +3224,13 @@ em_if_update_admin_status(if_ctx_t ctx)
 	}
 
 	/* Now check for a transition */
-	if (link_check && (sc->link_active == 0)) {
+	if (link_check &&
+	    (sc->link_state == EM_LINK_STATE_DOWN ||
+	    sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING)) {
+		bool reset_pending;
+
+		reset_pending =
+		    sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING;
 		e1000_get_speed_and_duplex(hw, &sc->link_speed,
 		    &sc->link_duplex);
 		/* Check if we must disable SPEED_MODE bit on PCI-E */
@@ -2279,7 +3247,7 @@ em_if_update_admin_status(if_ctx_t ctx)
 			    sc->link_speed,
 			    ((sc->link_duplex == FULL_DUPLEX) ?
 			    "Full Duplex" : "Half Duplex"));
-		sc->link_active = 1;
+		sc->link_state = EM_LINK_STATE_UP;
 		sc->smartspeed = 0;
 		if ((ctrl & E1000_CTRL_EXT_LINK_MODE_MASK) ==
 		    E1000_CTRL_EXT_LINK_MODE_GMII &&
@@ -2295,23 +3263,71 @@ em_if_update_admin_status(if_ctx_t ctx)
 		    hw->mac.type >= igb_mac_min) {
 			hw->dev_spec._82575.media_changed = false;
 			sc->flags |= IGB_MEDIA_RESET;
-			em_reset(ctx);
+			iflib_request_reset(ctx);
+			iflib_admin_intr_deferred(ctx);
+			reset_requested = true;
 		}
 		/* Only do TSO on gigabit for older chips due to errata */
 		if (hw->mac.type < igb_mac_min)
-			automasked = em_automask_tso(ctx);
+			reset_requested = em_automask_tso(ctx);
 
-		/* Automasking resets the interface so don't mark it up yet */
-		if (!automasked)
+		if (reset_pending || reset_requested) {
+			/*
+			 * The PHY is up, but publish it only after the TSO
+			 * capability-change reset.
+			 */
+			sc->link_state = EM_LINK_STATE_UP_RESET_PENDING;
+		} else {
 			iflib_link_state_change(ctx, LINK_STATE_UP,
 			    IF_Mbps(sc->link_speed));
-	} else if (!link_check && (sc->link_active == 1)) {
+		}
+	} else if (!link_check &&
+	    (sc->link_state == EM_LINK_STATE_UP ||
+	    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING)) {
+		bool link_was_published;
+		bool reset_pending;
+
+		link_was_published = sc->link_state == EM_LINK_STATE_UP;
+		reset_pending =
+		    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING;
 		sc->link_speed = 0;
 		sc->link_duplex = 0;
-		sc->link_active = 0;
-		iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
+		sc->link_state = reset_pending ?
+		    EM_LINK_STATE_DOWN_RESET_PENDING : EM_LINK_STATE_DOWN;
+		if (link_was_published)
+			iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
 	}
-	em_update_stats_counters(sc);
+	/*
+	 * Mailbox, link, and timer events share this admin task.  The PF
+	 * statistics sweep performs 66 MMIO reads, so run it only when the
+	 * ordinary iflib timer requests a sample rather than once per mailbox
+	 * message.  Exported counters can consequently trail hardware by the
+	 * timer interval (normally 500 ms).
+	 */
+	if (atomic_readandclear_32(&sc->stats_pending) != 0) {
+		em_update_stats_counters(sc);
+		/*
+		 * The 82574 PHY can enter a state in which both its receive
+		 * error and idle error counters saturate.  Require two
+		 * consecutive timer samples before resetting, matching Intel's
+		 * e1000e recovery policy and avoiding a reset on a transient
+		 * register sample.
+		 */
+		if (hw->mac.type == e1000_82574) {
+			if (e1000_check_phy_82574(hw))
+				sc->phy_hang_count++;
+			else
+				sc->phy_hang_count = 0;
+			if (sc->phy_hang_count > 1) {
+				sc->phy_hang_count = 0;
+				device_printf(dev,
+				    "PHY appears hung; requesting reset\n");
+				iflib_request_reset(ctx);
+				iflib_admin_intr_deferred(ctx);
+				return;
+			}
+		}
+	}
 
 	/* Reset LAA into RAR[0] on 82571 */
 	if (hw->mac.type == e1000_82571 && e1000_get_laa_state_82571(hw))
@@ -2343,6 +3359,7 @@ static void
 em_if_stop(if_ctx_t ctx)
 {
 	struct e1000_softc *sc = iflib_get_softc(ctx);
+	s32 error;
 
 	INIT_DEBUGOUT("em_if_stop: begin");
 
@@ -2350,7 +3367,13 @@ em_if_stop(if_ctx_t ctx)
 	if (sc->hw.mac.type >= e1000_pch_spt && sc->hw.mac.type < igb_mac_min)
 		em_flush_desc_rings(sc);
 
-	e1000_reset_hw(&sc->hw);
+	em_prepare_fatal_error_reset(sc);
+	error = e1000_reset_hw(&sc->hw);
+	if (!sc->vf_ifp && error != E1000_SUCCESS) {
+		device_printf(sc->dev, "Hardware reset failed while "
+		    "stopping: %d\n", error);
+		return;
+	}
 	if (sc->hw.mac.type >= e1000_82544 && !sc->vf_ifp)
 		E1000_WRITE_REG(&sc->hw, E1000_WUFC, 0);
 
@@ -2558,7 +3581,7 @@ igb_configure_queues(struct e1000_softc *sc)
 	struct e1000_hw *hw = &sc->hw;
 	struct em_rx_queue *rx_que;
 	struct em_tx_queue *tx_que;
-	u32 tmp, ivar = 0, newitr = 0;
+	u32 tmp, ivar = 0;
 
 	/* First turn on RSS capability */
 	if (hw->mac.type != e1000_82575)
@@ -2682,22 +3705,28 @@ igb_configure_queues(struct e1000_softc *sc)
 		break;
 	}
 
-	/* Set the igb starting interrupt rate */
-	if (em_max_interrupt_rate > 0) {
-		newitr = IGB_INTS_TO_EITR(em_max_interrupt_rate);
-
-		if (hw->mac.type == e1000_82575)
-			newitr |= newitr << 16;
-		else
-			newitr |= E1000_EITR_CNT_IGNR;
-
-		for (int i = 0; i < sc->rx_num_queues; i++) {
-			rx_que = &sc->rx_queues[i];
-			E1000_WRITE_REG(hw, E1000_EITR(rx_que->msix), newitr);
-		}
-	}
-
 	return;
+}
+
+static void
+igb_initialize_interrupt_rate(struct e1000_softc *sc)
+{
+	struct e1000_hw *hw = &sc->hw;
+	struct em_rx_queue *rx_que;
+	u32 newitr;
+
+	newitr = IGB_INTS_TO_EITR(em_max_interrupt_rate);
+	if (hw->mac.type == e1000_82575)
+		newitr |= newitr << 16;
+	else
+		newitr |= E1000_EITR_CNT_IGNR;
+
+	for (int i = 0; i < sc->rx_num_queues; i++) {
+		rx_que = &sc->rx_queues[i];
+		rx_que->itr_setting = newitr;
+		E1000_WRITE_REG(hw, E1000_EITR(rx_que->msix),
+		    rx_que->itr_setting);
+	}
 }
 
 static void
@@ -2758,7 +3787,9 @@ lem_smartspeed(struct e1000_softc *sc)
 {
 	u16 phy_tmp;
 
-	if (sc->link_active || (sc->hw.phy.type != e1000_phy_igp) ||
+	if (sc->link_state == EM_LINK_STATE_UP ||
+	    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING ||
+	    (sc->hw.phy.type != e1000_phy_igp) ||
 	    sc->hw.mac.autoneg == 0 ||
 	    (sc->hw.phy.autoneg_advertised & ADVERTISE_1000_FULL) == 0)
 		return;
@@ -3031,7 +4062,7 @@ em_flush_desc_rings(struct e1000_softc *sc)
  *  sc structure.
  *
  **********************************************************************/
-static void
+static int
 em_reset(if_ctx_t ctx)
 {
 	device_t dev = iflib_get_dev(ctx);
@@ -3040,6 +4071,7 @@ em_reset(if_ctx_t ctx)
 	struct e1000_hw *hw = &sc->hw;
 	u32 rx_buffer_size;
 	u32 pba;
+	s32 error;
 
 	INIT_DEBUGOUT("em_reset: begin");
 	/* Let the firmware know the OS is in control */
@@ -3108,6 +4140,7 @@ em_reset(if_ctx_t ctx)
 	case e1000_pch_adp:
 	case e1000_pch_mtp:
 	case e1000_pch_ptp:
+	case e1000_pch_nvp:
 		pba = E1000_PBA_26K;
 		break;
 	case e1000_82575:
@@ -3223,15 +4256,17 @@ em_reset(if_ctx_t ctx)
 	case e1000_pch_adp:
 	case e1000_pch_mtp:
 	case e1000_pch_ptp:
+	case e1000_pch_nvp:
 		hw->fc.high_water = 0x5C20;
 		hw->fc.low_water = 0x5048;
 		hw->fc.pause_time = 0xFFFF;
 		hw->fc.refresh_time = 0xFFFF;
 		/* Jumbos need adjusted PBA */
 		if (if_getmtu(ifp) > ETHERMTU)
-			E1000_WRITE_REG(hw, E1000_PBA, 12);
+			pba = E1000_PBA_12K;
 		else
-			E1000_WRITE_REG(hw, E1000_PBA, 26);
+			pba = E1000_PBA_26K;
+		E1000_WRITE_REG(hw, E1000_PBA, pba);
 		break;
 	case e1000_82575:
 	case e1000_82576:
@@ -3267,7 +4302,13 @@ em_reset(if_ctx_t ctx)
 		em_flush_desc_rings(sc);
 
 	/* Issue a global reset */
-	e1000_reset_hw(hw);
+	em_prepare_fatal_error_reset(sc);
+	error = e1000_reset_hw(hw);
+	if (error != E1000_SUCCESS) {
+		if (!sc->vf_ifp)
+			device_printf(dev, "Hardware reset failed: %d\n", error);
+		return (error);
+	}
 	if (!sc->vf_ifp) {
 		if (hw->mac.type >= igb_mac_min) {
 			E1000_WRITE_REG(hw, E1000_WUC, 0);
@@ -3282,10 +4323,14 @@ em_reset(if_ctx_t ctx)
 		sc->flags &= ~IGB_MEDIA_RESET;
 	}
 	/* and a re-init */
-	if (e1000_init_hw(hw) < 0) {
-		device_printf(dev, "Hardware Initialization Failed\n");
-		return;
+	error = e1000_init_hw(hw);
+	if (error != E1000_SUCCESS) {
+		device_printf(dev, "Hardware initialization failed: %d\n",
+		    error);
+		return (error);
 	}
+	em_configure_82576_memory_errors(sc);
+	em_finish_fatal_error_reset(sc);
 	if (hw->mac.type >= igb_mac_min)
 		igb_init_dmac(sc, pba);
 
@@ -3295,6 +4340,9 @@ em_reset(if_ctx_t ctx)
 	E1000_WRITE_REG(hw, E1000_VET, ETHERTYPE_VLAN);
 	e1000_get_phy_info(hw);
 	e1000_check_for_link(hw);
+	sc->phy_hang_count = 0;
+
+	return (E1000_SUCCESS);
 }
 
 /*
@@ -3517,6 +4565,9 @@ em_if_tx_queues_alloc(if_ctx_t ctx, caddr_t *vaddrs, uint64_t *paddrs,
 		/* Set up some basics */
 
 		struct tx_ring *txr = &que->txr;
+		KASSERT(__is_aligned(&txr->tx_aim_snapshot, sizeof(uint64_t)),
+		    ("%s: misaligned TX AIM snapshot %p", __func__,
+		    &txr->tx_aim_snapshot));
 		txr->sc = que->sc = sc;
 		que->me = txr->me =  i;
 
@@ -3570,6 +4621,9 @@ em_if_rx_queues_alloc(if_ctx_t ctx, caddr_t *vaddrs, uint64_t *paddrs,
 	for (i = 0, que = sc->rx_queues; i < nrxqsets; i++, que++) {
 		/* Set up some basics */
 		struct rx_ring *rxr = &que->rxr;
+		KASSERT(__is_aligned(&rxr->rx_aim_snapshot, sizeof(uint64_t)),
+		    ("%s: misaligned RX AIM snapshot %p", __func__,
+		    &rxr->rx_aim_snapshot));
 		rxr->sc = que->sc = sc;
 		rxr->que = que;
 		que->me = rxr->me =  i;
@@ -3616,6 +4670,105 @@ em_if_queues_free(if_ctx_t ctx)
 	}
 }
 
+static u32
+em_legacy_txdctl(struct e1000_hw *hw)
+{
+	u32 txdctl;
+
+	/*
+	 * Start with the established full-descriptor writeback policy.
+	 * Several generations have descriptor-queue errata for which it is
+	 * a documented workaround.  The unsafe early controllers are
+	 * overridden below.
+	 */
+	txdctl = EM_TX_PTHRESH | (EM_TX_HTHRESH << 8) |
+	    (EM_TX_WTHRESH << 16) | E1000_TXDCTL_GRAN;
+
+	switch (hw->mac.type) {
+	case e1000_82571:
+	case e1000_82572:
+	case e1000_82573:
+	case e1000_82574:
+	case e1000_82583:
+	case e1000_80003es2lan:
+		/* Match the Intel shared-code policy for these families. */
+		txdctl |= E1000_TXDCTL_COUNT_DESC;
+		break;
+	case e1000_ich8lan:
+	case e1000_ich9lan:
+	case e1000_ich10lan:
+	case e1000_pchlan:
+	case e1000_pch2lan:
+	case e1000_pch_lpt:
+	case e1000_pch_spt:
+	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+	case e1000_pch_adp:
+	case e1000_pch_mtp:
+	case e1000_pch_ptp:
+	case e1000_pch_nvp:
+		/* Preserve the required bit set by the integrated shared code. */
+		txdctl |= (1U << 22);
+		break;
+	case e1000_82542:
+	case e1000_82543:
+	case e1000_82544:
+		/*
+		 * 82543 erratum 35 and 82544 erratum 20 require
+		 * WTHRESH=0.  Leave all descriptor-control thresholds at
+		 * their reset values on these early controllers.
+		 */
+		txdctl = 0;
+		break;
+	case e1000_82540:
+	case e1000_82545:
+	case e1000_82545_rev_3:
+	case e1000_82546:
+	case e1000_82546_rev_3:
+	case e1000_82541:
+	case e1000_82541_rev_2:
+	case e1000_82547:
+	case e1000_82547_rev_2:
+		break;
+	default:
+		KASSERT(0, ("%s: unsupported MAC type %d", __func__,
+		    hw->mac.type));
+		break;
+	}
+
+	return (txdctl);
+}
+
+static u32
+igb_txdctl(struct e1000_hw *hw)
+{
+	u32 pthresh;
+
+	switch (hw->mac.type) {
+	case e1000_i354:
+		pthresh = I354_TX_PTHRESH;
+		break;
+	case e1000_82575:
+	case e1000_82576:
+	case e1000_82580:
+	case e1000_i350:
+	case e1000_i210:
+	case e1000_i211:
+	case e1000_vfadapt:
+	case e1000_vfadapt_i350:
+		pthresh = IGB_TX_PTHRESH;
+		break;
+	default:
+		KASSERT(0, ("%s: unsupported MAC type %d", __func__,
+		    hw->mac.type));
+		pthresh = IGB_TX_PTHRESH;
+		break;
+	}
+
+	return (pthresh | (IGB_TX_HTHRESH << 8) |
+	    E1000_TXDCTL_QUEUE_ENABLE);
+}
+
 /*********************************************************************
  *
  *  Enable transmit unit.
@@ -3644,7 +4797,14 @@ em_initialize_transmit_unit(if_ctx_t ctx)
 		/* Clear checksum offload context. */
 		offp = (caddr_t)&txr->csum_flags;
 		endp = (caddr_t)(txr + 1);
-		bzero(offp, endp - offp);
+		memset(offp, 0, endp - offp);
+
+		if (hw->mac.type >= igb_mac_min) {
+			txdctl = E1000_READ_REG(hw, E1000_TXDCTL(i));
+			E1000_WRITE_REG(hw, E1000_TXDCTL(i),
+			    txdctl & ~E1000_TXDCTL_QUEUE_ENABLE);
+			E1000_WRITE_FLUSH(hw);
+		}
 
 		/* Base and Len of TX Ring */
 		E1000_WRITE_REG(hw, E1000_TDLEN(i),
@@ -3659,13 +4819,10 @@ em_initialize_transmit_unit(if_ctx_t ctx)
 		    E1000_READ_REG(hw, E1000_TDBAL(i)),
 		    E1000_READ_REG(hw, E1000_TDLEN(i)));
 
-		txdctl = 0; /* clear txdctl */
-		txdctl |= 0x1f; /* PTHRESH */
-		txdctl |= 1 << 8; /* HTHRESH */
-		txdctl |= 1 << 16;/* WTHRESH */
-		txdctl |= 1 << 22; /* Reserved bit 22 must always be 1 */
-		txdctl |= E1000_TXDCTL_GRAN;
-		txdctl |= 1 << 25; /* LWTHRESH */
+		if (hw->mac.type < igb_mac_min)
+			txdctl = em_legacy_txdctl(hw);
+		else
+			txdctl = igb_txdctl(hw);
 
 		E1000_WRITE_REG(hw, E1000_TXDCTL(i), txdctl);
 	}
@@ -3700,7 +4857,7 @@ em_initialize_transmit_unit(if_ctx_t ctx)
 			sc->txd_cmd |= E1000_TXD_CMD_IDE;
 	}
 
-	if (hw->mac.type >= e1000_82540)
+	if (hw->mac.type >= e1000_82540 && hw->mac.type < igb_mac_min)
 		E1000_WRITE_REG(hw, E1000_TADV, sc->tx_abs_int_delay.value);
 
 	if (hw->mac.type == e1000_82571 || hw->mac.type == e1000_82572) {
@@ -3759,6 +4916,78 @@ em_initialize_transmit_unit(if_ctx_t ctx)
  **********************************************************************/
 #define BSIZEPKT_ROUNDUP ((1<<E1000_SRRCTL_BSIZEPKT_SHIFT)-1)
 
+static u32
+igb_rxdctl(struct e1000_softc *sc, u32 rxdctl)
+{
+	struct e1000_hw *hw;
+	u32 mask, pthresh, wthresh;
+
+	hw = &sc->hw;
+	mask = IGB_RXDCTL_THRESH_MASK;
+	switch (hw->mac.type) {
+	case e1000_82575:
+		mask = IGB_82575_RXDCTL_THRESH_MASK;
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	case e1000_82576:
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = sc->intr_type == IFLIB_INTR_MSIX ?
+		    IGB_82576_RX_WTHRESH : IGB_RX_WTHRESH;
+		break;
+	case e1000_vfadapt:
+		/* 82576 VFs always need the MSI-X writeback workaround. */
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_82576_RX_WTHRESH;
+		break;
+	case e1000_i354:
+		pthresh = I354_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	case e1000_82580:
+	case e1000_i350:
+	case e1000_i210:
+	case e1000_i211:
+	case e1000_vfadapt_i350:
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	default:
+		KASSERT(0, ("%s: unsupported MAC type %d", __func__,
+		    hw->mac.type));
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	}
+
+	rxdctl &= ~mask;
+	rxdctl |= pthresh | (IGB_RX_HTHRESH << 8) |
+	    (wthresh << 16) | E1000_RXDCTL_QUEUE_ENABLE;
+	return (rxdctl);
+}
+
+static bool
+em_integrated_jumbo_rx(struct e1000_hw *hw)
+{
+	switch (hw->mac.type) {
+	case e1000_ich9lan:
+	case e1000_ich10lan:
+	case e1000_pchlan:
+	case e1000_pch2lan:
+	case e1000_pch_lpt:
+	case e1000_pch_spt:
+	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+	case e1000_pch_adp:
+	case e1000_pch_mtp:
+	case e1000_pch_ptp:
+	case e1000_pch_nvp:
+		return (true);
+	default:
+		return (false);
+	}
+}
+
 static void
 em_initialize_receive_unit(if_ctx_t ctx)
 {
@@ -3809,6 +5038,19 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			/* Set the default interrupt throttling rate */
 			E1000_WRITE_REG(hw, E1000_ITR,
 			    EM_INTS_TO_ITR(em_max_interrupt_rate));
+
+			/*
+			 * The 82574 MSI-X EITR registers are programmed
+			 * with the same value further below.  Either way
+			 * the hardware now holds the default rate, so seed
+			 * the software copy to match; otherwise a stale
+			 * itr_setting left over from AIM makes em_newitr()
+			 * skip the write that would restore it.
+			 */
+			for (i = 0, que = sc->rx_queues; i < sc->rx_num_queues;
+			    i++, que++)
+				que->itr_setting =
+				    EM_INTS_TO_ITR(em_max_interrupt_rate);
 		}
 
 		/* XXX TEMPORARY WORKAROUND: on some systems with 82573
@@ -3895,24 +5137,25 @@ em_initialize_receive_unit(if_ctx_t ctx)
 		E1000_WRITE_REG(hw, E1000_RDT(i), 0);
 	}
 
-	/*
-	 * Set PTHRESH for improved jumbo performance
-	 * According to 10.2.5.11 of Intel 82574 Datasheet,
-	 * RXDCTL(1) is written whenever RXDCTL(0) is written.
-	 * Only write to RXDCTL(1) if there is a need for different
-	 * settings.
-	 */
-	if ((hw->mac.type == e1000_ich9lan || hw->mac.type == e1000_pch2lan ||
-	    hw->mac.type == e1000_ich10lan) && if_getmtu(ifp) > ETHERMTU) {
+	/* Increase receive-descriptor prefetching for integrated jumbo MACs. */
+	if (em_integrated_jumbo_rx(hw) && if_getmtu(ifp) > ETHERMTU) {
 		u32 rxdctl = E1000_READ_REG(hw, E1000_RXDCTL(0));
-		E1000_WRITE_REG(hw, E1000_RXDCTL(0), rxdctl | 3);
+
+		rxdctl &= ~(EM_RXDCTL_PTHRESH_MASK |
+		    EM_RXDCTL_HTHRESH_MASK);
+		rxdctl |= EM_JUMBO_RX_PTHRESH |
+		    (EM_JUMBO_RX_HTHRESH << 8);
+		E1000_WRITE_REG(hw, E1000_RXDCTL(0), rxdctl);
 	} else if (hw->mac.type == e1000_82574) {
+		/* RXDCTL(0) writes are mirrored to RXDCTL(1) on 82574. */
 		for (int i = 0; i < sc->rx_num_queues; i++) {
 			u32 rxdctl = E1000_READ_REG(hw, E1000_RXDCTL(i));
-			rxdctl |= 0x20; /* PTHRESH */
-			rxdctl |= 4 << 8; /* HTHRESH */
-			rxdctl |= 4 << 16;/* WTHRESH */
-			rxdctl |= 1 << 24; /* Switch to granularity */
+
+			rxdctl &= ~EM_RXDCTL_THRESH_MASK;
+			rxdctl |= EM_82574_RX_PTHRESH |
+			    (EM_82574_RX_HTHRESH << 8) |
+			    (EM_82574_RX_WTHRESH << 16) |
+			    E1000_RXDCTL_THRESH_UNIT_DESC;
 			E1000_WRITE_REG(hw, E1000_RXDCTL(i), rxdctl);
 		}
 	} else if (hw->mac.type >= igb_mac_min) {
@@ -3960,6 +5203,11 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			srrctl |= E1000_SRRCTL_DESCTYPE_ADV_ONEBUF;
 #endif
 
+			rxdctl = E1000_READ_REG(hw, E1000_RXDCTL(i));
+			E1000_WRITE_REG(hw, E1000_RXDCTL(i),
+			    rxdctl & ~E1000_RXDCTL_QUEUE_ENABLE);
+			E1000_WRITE_FLUSH(hw);
+
 			E1000_WRITE_REG(hw, E1000_RDLEN(i),
 			    scctx->isc_nrxd[0] *
 			    sizeof(struct e1000_rx_desc));
@@ -3967,14 +5215,10 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			    (uint32_t)(bus_addr >> 32));
 			E1000_WRITE_REG(hw, E1000_RDBAL(i),
 			    (uint32_t)bus_addr);
+			E1000_WRITE_REG(hw, E1000_RDH(i), 0);
+			E1000_WRITE_REG(hw, E1000_RDT(i), 0);
 			E1000_WRITE_REG(hw, E1000_SRRCTL(i), srrctl);
-			/* Enable this Queue */
-			rxdctl = E1000_READ_REG(hw, E1000_RXDCTL(i));
-			rxdctl |= E1000_RXDCTL_QUEUE_ENABLE;
-			rxdctl &= 0xFFF00000;
-			rxdctl |= IGB_RX_PTHRESH;
-			rxdctl |= IGB_RX_HTHRESH << 8;
-			rxdctl |= IGB_RX_WTHRESH << 16;
+			rxdctl = igb_rxdctl(sc, rxdctl);
 			E1000_WRITE_REG(hw, E1000_RXDCTL(i), rxdctl);
 		}		
 	} else if (hw->mac.type >= e1000_pch2lan) {
@@ -4174,7 +5418,7 @@ em_if_intr_enable(if_ctx_t ctx)
 {
 	struct e1000_softc *sc = iflib_get_softc(ctx);
 	struct e1000_hw *hw = &sc->hw;
-	u32 ims_mask = IMS_ENABLE_MASK;
+	u32 ims_mask = IMS_ENABLE_MASK | em_fatal_error_intr_mask(sc);
 
 	if (sc->intr_type == IFLIB_INTR_MSIX) {
 		E1000_WRITE_REG(hw, EM_EIAC, sc->ims);
@@ -4209,9 +5453,11 @@ igb_if_intr_enable(if_ctx_t ctx)
 		E1000_WRITE_REG(hw, E1000_EIAC, mask);
 		E1000_WRITE_REG(hw, E1000_EIAM, mask);
 		E1000_WRITE_REG(hw, E1000_EIMS, mask);
-		E1000_WRITE_REG(hw, E1000_IMS, E1000_IMS_LSC);
+		E1000_WRITE_REG(hw, E1000_IMS,
+		    E1000_IMS_LSC | em_fatal_error_intr_mask(sc));
 	} else
-		E1000_WRITE_REG(hw, E1000_IMS, IMS_ENABLE_MASK);
+		E1000_WRITE_REG(hw, E1000_IMS,
+		    IMS_ENABLE_MASK | em_fatal_error_intr_mask(sc));
 	E1000_WRITE_FLUSH(hw);
 }
 
@@ -4346,6 +5592,8 @@ em_automask_tso(if_ctx_t ctx)
 	struct e1000_softc *sc = iflib_get_softc(ctx);
 	if_softc_ctx_t scctx = iflib_get_softc_ctx(ctx);
 	if_t ifp = iflib_get_ifp(ctx);
+	bool reset_needed;
+	int drvflags;
 
 	if (!em_unsupported_tso && sc->link_speed &&
 	    sc->link_speed != SPEED_1000 &&
@@ -4355,20 +5603,32 @@ em_automask_tso(if_ctx_t ctx)
 		sc->tso_automasked = scctx->isc_capenable & IFCAP_TSO;
 		scctx->isc_capenable &= ~IFCAP_TSO;
 		if_setcapenablebit(ifp, 0, IFCAP_TSO);
-		/* iflib_init_locked handles ifnet hwassistbits */
-		iflib_request_reset(ctx);
-		return true;
 	} else if (sc->link_speed == SPEED_1000 && sc->tso_automasked) {
 		device_printf(sc->dev, "Re-enabling TSO for GbE.\n");
 		scctx->isc_capenable |= sc->tso_automasked;
 		if_setcapenablebit(ifp, sc->tso_automasked, 0);
 		sc->tso_automasked = 0;
-		/* iflib_init_locked handles ifnet hwassistbits */
-		iflib_request_reset(ctx);
-		return true;
+	} else {
+		return (false);
 	}
 
-	return false;
+	/*
+	 * Reset a running interface, or one being initialized while
+	 * administratively up.  OACTIVE remains set after iflib_stop(), so
+	 * it alone cannot distinguish initialization from an interface that
+	 * is down.  In other states, the next initialization will apply the
+	 * updated capabilities.
+	 */
+	drvflags = if_getdrvflags(ifp);
+	reset_needed = (drvflags & IFF_DRV_RUNNING) != 0 ||
+	    ((drvflags & IFF_DRV_OACTIVE) != 0 &&
+	    (if_getflags(ifp) & IFF_UP) != 0);
+	if (!reset_needed)
+		return (false);
+
+	/* iflib_init_locked handles ifnet hwassistbits */
+	iflib_request_reset(ctx);
+	return (true);
 }
 
 /*
@@ -4650,7 +5910,10 @@ em_if_led_func(if_ctx_t ctx, int onoff)
 
 	if (onoff) {
 		e1000_setup_led(&sc->hw);
-		e1000_led_on(&sc->hw);
+		if (sc->hw.phy.media_type == e1000_media_type_internal_serdes)
+			e1000_blink_led(&sc->hw);
+		else
+			e1000_led_on(&sc->hw);
 	} else {
 		e1000_led_off(&sc->hw);
 		e1000_cleanup_led(&sc->hw);
@@ -4776,6 +6039,12 @@ em_update_stats_counters(struct e1000_softc *sc)
 	stats->mptc += E1000_READ_REG(&sc->hw, E1000_MPTC);
 	stats->bptc += E1000_READ_REG(&sc->hw, E1000_BPTC);
 
+	/* TLPIC and RLPIC are clear-on-read. */
+	if (em_mac_has_eee(sc->hw.mac.type)) {
+		stats->tlpic += E1000_READ_REG(&sc->hw, E1000_TLPIC);
+		stats->rlpic += E1000_READ_REG(&sc->hw, E1000_RLPIC);
+	}
+
 	/* Interrupt Counts */
 
 	stats->iac += E1000_READ_REG(&sc->hw, E1000_IAC);
@@ -4802,6 +6071,36 @@ em_update_stats_counters(struct e1000_softc *sc)
 		stats->tsctfc +=
 		E1000_READ_REG(&sc->hw, E1000_TSCTFC);
 	}
+
+	if (em_has_82571_ecc_stats(&sc->hw))
+		em_update_82571_ecc_stats(sc);
+	else if (em_has_pch_ecc(&sc->hw))
+		em_update_pch_ecc_stats(sc,
+		    E1000_READ_REG(&sc->hw, E1000_PBECCSTS));
+	else if (em_has_82575_memory_errors(&sc->hw))
+		em_update_82575_ecc_stats(sc,
+		    E1000_READ_REG(&sc->hw, E1000_PBECCSTS_82575),
+		    E1000_READ_REG(&sc->hw, E1000_RDHESTS_82575),
+		    E1000_READ_REG(&sc->hw, E1000_TDHESTS_82575));
+	else if (em_has_82576_memory_errors(&sc->hw))
+		em_update_82576_ecc_stats(sc);
+	else if (em_has_82580_memory_errors(&sc->hw))
+		em_update_82580_ecc_stats(sc,
+		    E1000_READ_REG(&sc->hw, E1000_RPBECCSTS),
+		    E1000_READ_REG(&sc->hw, E1000_TPBECCSTS),
+		    E1000_READ_REG(&sc->hw, E1000_PCIEECCSTS));
+	else if (em_has_i350_i354_memory_errors(&sc->hw))
+		em_update_i350_i354_ecc_stats(sc);
+	else if (em_has_i210_memory_errors(&sc->hw))
+		em_update_i210_ecc_stats(sc);
+}
+
+static bool
+em_mac_has_eee(enum e1000_mac_type type)
+{
+
+	return ((type >= e1000_pch2lan && type < e1000_82575) ||
+	    (type >= e1000_i350 && type <= e1000_i211));
 }
 
 static void
@@ -4916,9 +6215,10 @@ em_sysctl_interrupt_rate_handler(SYSCTL_HANDLER_ARGS)
 		tque = oidp->oid_arg1;
 		hw = &tque->sc->hw;
 		if (hw->mac.type >= igb_mac_min)
-			reg = E1000_READ_REG(hw, E1000_EITR(tque->me));
-		else if (hw->mac.type == e1000_82574 && tque->msix)
-			reg = E1000_READ_REG(hw, E1000_EITR_82574(tque->me));
+			reg = E1000_READ_REG(hw, E1000_EITR(tque->msix));
+		else if (hw->mac.type == e1000_82574 &&
+		    tque->sc->intr_type == IFLIB_INTR_MSIX)
+			reg = E1000_READ_REG(hw, E1000_EITR_82574(tque->msix));
 		else
 			reg = E1000_READ_REG(hw, E1000_ITR);
 	} else {
@@ -4926,7 +6226,8 @@ em_sysctl_interrupt_rate_handler(SYSCTL_HANDLER_ARGS)
 		hw = &rque->sc->hw;
 		if (hw->mac.type >= igb_mac_min)
 			reg = E1000_READ_REG(hw, E1000_EITR(rque->msix));
-		else if (hw->mac.type == e1000_82574 && rque->msix)
+		else if (hw->mac.type == e1000_82574 &&
+		    rque->sc->intr_type == IFLIB_INTR_MSIX)
 			reg = E1000_READ_REG(hw,
 			    E1000_EITR_82574(rque->msix));
 		else
@@ -4941,7 +6242,7 @@ em_sysctl_interrupt_rate_handler(SYSCTL_HANDLER_ARGS)
 	} else {
 		usec = (reg & IGB_QVECTOR_MASK);
 		if (usec > 0)
-			rate = IGB_INTS_TO_EITR(usec);
+			rate = IGB_EITR_TO_INTS(usec);
 		else
 			rate = 0;
 	}
@@ -5082,6 +6383,170 @@ em_add_hw_stats(struct e1000_softc *sc)
 	}
 
 	stats = &sc->ustats.stats;
+	if (em_mac_has_eee(sc->hw.mac.type)) {
+		struct sysctl_oid *eee_node;
+		struct sysctl_oid_list *eee_list;
+
+		eee_node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, "eee",
+		    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
+		    "Energy Efficient Ethernet statistics");
+		eee_list = SYSCTL_CHILDREN(eee_node);
+		SYSCTL_ADD_UQUAD(ctx, eee_list, OID_AUTO, "tx_lpi_count",
+		    CTLFLAG_RD, &stats->tlpic, "TX LPI event count");
+		SYSCTL_ADD_UQUAD(ctx, eee_list, OID_AUTO, "rx_lpi_count",
+		    CTLFLAG_RD, &stats->rlpic, "RX LPI event count");
+	}
+	if (em_has_memory_error_stats(&sc->hw)) {
+		struct sysctl_oid *memerr_node;
+		struct sysctl_oid_list *memerr_list;
+
+		memerr_node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO,
+		    "memory_errors", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
+		    "Internal memory error indications");
+		memerr_list = SYSCTL_CHILDREN(memerr_node);
+		if (em_has_memory_errors(&sc->hw))
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "fatal_resets", CTLFLAG_RD,
+			    &sc->fatal_error_reset_count,
+			    "Resets requested for fatal internal memory errors");
+		if (em_has_82571_ecc_stats(&sc->hw)) {
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "detected_packet_buffer", CTLFLAG_RD,
+			    &sc->corrected_error_packet_buffer_count,
+			    "Detected packet-buffer ECC errors");
+		} else if (em_has_pch_ecc(&sc->hw)) {
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_packet_buffer", CTLFLAG_RD,
+			    &sc->corrected_error_packet_buffer_count,
+			    "Corrected packet-buffer ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "uncorrected_packet_buffer", CTLFLAG_RD,
+			    &sc->uncorrected_error_packet_buffer_count,
+			    "Uncorrected packet-buffer ECC errors");
+		} else if (em_has_82575_memory_errors(&sc->hw)) {
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_packet_buffer", CTLFLAG_RD,
+			    &sc->corrected_error_packet_buffer_count,
+			    "Corrected packet-buffer ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "uncorrected_packet_buffer", CTLFLAG_RD,
+			    &sc->uncorrected_error_packet_buffer_count,
+			    "Uncorrected packet-buffer ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_descriptor_handler", CTLFLAG_RD,
+			    &sc->corrected_error_dma_count,
+			    "Corrected descriptor-handler ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "uncorrected_descriptor_handler", CTLFLAG_RD,
+			    &sc->uncorrected_error_dma_count,
+			    "Uncorrected descriptor-handler ECC errors");
+		} else if (em_has_82576_memory_errors(&sc->hw)) {
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "fatal_unknown", CTLFLAG_RD,
+			    &sc->fatal_error_unknown_count,
+			    "Fatal memory errors without a reported source");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_packet_buffer", CTLFLAG_RD,
+			    &sc->corrected_error_packet_buffer_count,
+			    "Corrected packet and switch-buffer ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "uncorrected_packet_buffer", CTLFLAG_RD,
+			    &sc->uncorrected_error_packet_buffer_count,
+			    "Uncorrected packet and switch-buffer ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_descriptor_handler", CTLFLAG_RD,
+			    &sc->corrected_error_dma_count,
+			    "Corrected descriptor-handler ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "uncorrected_descriptor_handler", CTLFLAG_RD,
+			    &sc->uncorrected_error_dma_count,
+			    "Uncorrected descriptor-handler ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_pcie_write_buffer", CTLFLAG_RD,
+			    &sc->corrected_error_pcie_tx_data_count,
+			    "Corrected PCIe write-buffer ECC errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_pcie_retry_buffer", CTLFLAG_RD,
+			    &sc->corrected_error_pcie_retry_count,
+			    "Corrected controller-shared PCIe retry-buffer errors");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "corrected_pcie_msix", CTLFLAG_RD,
+			    &sc->corrected_error_pcie_other_count,
+			    "Corrected controller-shared PCIe MSI-X errors");
+		} else {
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "fatal_lan", CTLFLAG_RD,
+			    &sc->fatal_error_lan_count,
+			    "Fatal LAN-port memory error indications");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "fatal_management", CTLFLAG_RD,
+			    &sc->fatal_error_mng_count,
+			    "Fatal management-memory error indications");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "fatal_pcie", CTLFLAG_RD,
+			    &sc->fatal_error_pcie_count,
+			    "Fatal PCIe memory error indications");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "fatal_dma", CTLFLAG_RD,
+			    &sc->fatal_error_dma_count,
+			    "Fatal DMA memory error indications");
+			SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+			    "fatal_unknown", CTLFLAG_RD,
+			    &sc->fatal_error_unknown_count,
+			    "Fatal memory errors without a reported region");
+			if (em_has_82580_memory_errors(&sc->hw)) {
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_packet_buffer", CTLFLAG_RD,
+				    &sc->corrected_error_packet_buffer_count,
+				    "Corrected packet-buffer ECC errors");
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "uncorrected_pcie", CTLFLAG_RD,
+				    &sc->uncorrected_error_pcie_count,
+				    "Uncorrected PCIe command-memory ECC indications");
+			} else if (em_has_i210_memory_errors(&sc->hw)) {
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_dma", CTLFLAG_RD,
+				    &sc->corrected_error_dma_count,
+				    "Corrected DMA memory error indications");
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_pcie_tx_data", CTLFLAG_RD,
+				    &sc->corrected_error_pcie_tx_data_count,
+				    "Corrected PCIe transmit-data memory indications");
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_pcie_retry", CTLFLAG_RD,
+				    &sc->corrected_error_pcie_retry_count,
+				    "Corrected PCIe retry-buffer memory indications");
+			} else {
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_dma", CTLFLAG_RD,
+				    &sc->corrected_error_dma_count,
+				    "Corrected DMA memory indications");
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_packet_buffer", CTLFLAG_RD,
+				    &sc->corrected_error_packet_buffer_count,
+				    "Corrected packet-buffer memory indications");
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_lan_mng_fifo", CTLFLAG_RD,
+				    &sc->corrected_error_lan_mng_fifo_count,
+				    "Corrected LAN management transmit-FIFO ECC "
+				    "indications");
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_pcie_tx_data", CTLFLAG_RD,
+				    &sc->corrected_error_pcie_tx_data_count,
+				    "Corrected PCIe transmit-data memory indications");
+				if (sc->hw.mac.type == e1000_i350)
+					SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+					    "corrected_pcie_retry", CTLFLAG_RD,
+					    &sc->corrected_error_pcie_retry_count,
+					    "Corrected PCIe retry-buffer memory "
+					    "indications");
+				SYSCTL_ADD_UQUAD(ctx, memerr_list, OID_AUTO,
+				    "corrected_pcie_other", CTLFLAG_RD,
+				    &sc->corrected_error_pcie_other_count,
+				    "Other corrected PCIe memory indications");
+			}
+		}
+	}
 
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "excess_coll",
 	    CTLFLAG_RD, &stats->ecol,
@@ -5590,6 +7055,16 @@ em_set_flowcntl(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
+static void
+em_sysctl_request_reinit(struct e1000_softc *sc)
+{
+	if ((if_getflags(iflib_get_ifp(sc->ctx)) & IFF_UP) == 0)
+		return;
+
+	iflib_request_reset(sc->ctx);
+	iflib_admin_intr_deferred(sc->ctx);
+}
+
 /*
  * Manage DMA Coalesce:
  * Control values:
@@ -5635,7 +7110,7 @@ igb_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 			return (EINVAL);
 	}
 	/* Reinit the interface */
-	em_if_init(sc->ctx);
+	em_sysctl_request_reinit(sc);
 	return (error);
 }
 
@@ -5661,7 +7136,7 @@ em_sysctl_eee(SYSCTL_HANDLER_ARGS)
 		sc->hw.dev_spec.ich8lan.eee_disable = (value != 0);
 	else
 		sc->hw.dev_spec._82575.eee_disable = (value != 0);
-	em_if_init(sc->ctx);
+	em_sysctl_request_reinit(sc);
 
 	return (0);
 }
@@ -5719,9 +7194,11 @@ em_print_debug_info(struct e1000_softc *sc)
 {
 	device_t dev = iflib_get_dev(sc->ctx);
 	if_t ifp = iflib_get_ifp(sc->ctx);
-	struct tx_ring *txr = &sc->tx_queues->txr;
-	struct rx_ring *rxr = &sc->rx_queues->rxr;
 
+	if (sc->tx_queues == NULL || sc->rx_queues == NULL) {
+		device_printf(dev, "queue state is unavailable\n");
+		return;
+	}
 	if (if_getdrvflags(ifp) & IFF_DRV_RUNNING)
 		printf("Interface is RUNNING ");
 	else
@@ -5732,14 +7209,14 @@ em_print_debug_info(struct e1000_softc *sc)
 	else
 		printf("and ACTIVE\n");
 
-	for (int i = 0; i < sc->tx_num_queues; i++, txr++) {
+	for (int i = 0; i < sc->tx_num_queues; i++) {
 		device_printf(dev, "TX Queue %d ------\n", i);
 		device_printf(dev, "hw tdh = %d, hw tdt = %d\n",
 		    E1000_READ_REG(&sc->hw, E1000_TDH(i)),
 		    E1000_READ_REG(&sc->hw, E1000_TDT(i)));
 
 	}
-	for (int j=0; j < sc->rx_num_queues; j++, rxr++) {
+	for (int j = 0; j < sc->rx_num_queues; j++) {
 		device_printf(dev, "RX Queue %d ------\n", j);
 		device_printf(dev, "hw rdh = %d, hw rdt = %d\n",
 		    E1000_READ_REG(&sc->hw, E1000_RDH(j)),

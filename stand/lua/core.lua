@@ -269,7 +269,7 @@ function core.kernelList()
 		end
 
 		if ftype then
-			if ftype ~= lfs.DT_DIR then
+			if ftype ~= lfs.DT_DIR and ftype ~= (lfs.DT_LNK or 10) then
 				goto continue
 			end
 		elseif lfs.attributes(fname, "mode") ~= "directory" then
@@ -326,6 +326,21 @@ function core.bootenvFilter(func)
 	-- should be hidden.
 	core.bootenv_filter = func
 	return oldf
+end
+
+function core.bootenvIter()
+	local envs = core.bootenvList()
+
+	if #envs ~= 0 then
+		local root = "zfs:" .. loader.getenv("zfs_be_root") .. "/"
+
+		for idx, bespec in ipairs(envs) do
+			bespec = bespec:gsub("^" .. root, "")
+			envs[idx] = bespec
+		end
+	end
+
+	return next, envs, nil
 end
 
 function core.bootenvList()
@@ -579,6 +594,34 @@ function core.nextConsoleChoice()
 			loader.setenv("boot_multicons", "YES")
 			loader.setenv("boot_serial", "YES")
 		end
+	end
+end
+
+function core.switchBE(env)
+	-- This branch will most likely be taken by the switch-be CLI command,
+	-- not by the menu.  We could do some more validation that it's a valid
+	-- BE and let the user fully specify a zfs:be/dataset to avoid the
+	-- validation, but this isn't done at the moment.
+	if not env:match("^zfs:") then
+		local root = loader.getenv("zfs_be_root")
+
+		if not root then
+			print("ZFS BE root not available -- no action taken")
+			return
+		end
+
+		if not env:match("^" .. root) then
+			env = "zfs:" .. root .. "/" .. env
+		else
+			env = "zfs:" .. env
+		end
+	end
+
+	loader.setenv("vfs.root.mountfrom", env)
+	loader.setenv("currdev", env .. ":")
+	config.reload()
+	if loader.getenv("kernelname") ~= nil then
+		loader.perform("unload")
 	end
 end
 

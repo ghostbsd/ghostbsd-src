@@ -26,6 +26,9 @@
 /* Define if you have [rt] */
 #define HAVE_AIO_H 1
 
+/* Define if your assembler supports .cfi_negate_ra_state. */
+/* #undef HAVE_AS_CFI_PSEUDO_OP */
+
 #ifdef __amd64__
 #ifndef RESCUE
 /* Define if host toolchain supports AVX */
@@ -195,6 +198,9 @@
 /* backing_dev_info is available through queue gendisk */
 /* #undef HAVE_BLK_QUEUE_DISK_BDI */
 
+/* blk_queue_rot() is available */
+/* #undef HAVE_BLK_QUEUE_ROT */
+
 /* blk_queue_secure_erase() is available */
 /* #undef HAVE_BLK_QUEUE_SECURE_ERASE */
 
@@ -238,6 +244,9 @@
 /* DECLARE_EVENT_CLASS() is available */
 /* #undef HAVE_DECLARE_EVENT_CLASS */
 
+/* dentry aliases are in d_u member */
+/* #undef HAVE_DENTRY_D_U_ALIASES */
+
 /* 3-arg dequeue_signal() takes a type argument */
 /* #undef HAVE_DEQUEUE_SIGNAL_3ARG_TYPE */
 
@@ -271,17 +280,35 @@
 /* fault_in_iov_iter_readable() is available */
 /* #undef HAVE_FAULT_IN_IOV_ITER_READABLE */
 
+/* linux/filelock.h exists */
+/* #undef HAVE_FILELOCK_HEADER */
+
 /* file->f_version exists */
 /* #undef HAVE_FILE_F_VERSION */
 
 /* flush_dcache_page() is GPL-only */
 /* #undef HAVE_FLUSH_DCACHE_PAGE_GPL_ONLY */
 
+/* use __flush_workqueue() to flush delay workqueue */
+/* #undef HAVE_FLUSH_DELAY_WORKQUEUE_INTERNAL */
+
+/* use system_delay_wq for delay workqueue */
+/* #undef HAVE_FLUSH_DELAY_WORKQUEUE_PERCPU */
+
+/* follow_down() takes a flags parameter */
+/* #undef HAVE_FOLLOW_DOWN_FLAGS */
+
 /* Define if compiler supports -Wformat-overflow */
 /* #undef HAVE_FORMAT_OVERFLOW */
 
 /* fsync_bdev() is declared in include/blkdev.h */
 /* #undef HAVE_FSYNC_BDEV */
+
+/* fs_context exists */
+/* #undef HAVE_FS_CONTEXT */
+
+/* fs_parse() takes fs_parameter_spec directly */
+/* #undef HAVE_FS_PARSE_TAKES_SPEC */
 
 /* yes */
 /* #undef HAVE_GENERIC_FADVISE */
@@ -331,11 +358,17 @@
 /* iops->setattr() takes struct mnt_idmap* */
 /* #undef HAVE_IDMAP_IOPS_SETATTR */
 
+/* id mapping mechanism is mnt_idmap */
+/* #undef HAVE_IDMAP_MNTIDMAP */
+
 /* APIs for idmapped mount are present */
 /* #undef HAVE_IDMAP_MNT_API */
 
 /* mnt_idmap does not have user_namespace */
 /* #undef HAVE_IDMAP_NO_USERNS */
+
+/* id mapping mechanism is user_namespace */
+/* #undef HAVE_IDMAP_USERNS */
 
 /* Define if compiler supports -Wimplicit-fallthrough */
 /* #undef HAVE_IMPLICIT_FALLTHROUGH */
@@ -523,6 +556,9 @@
 /* page_size() is available */
 /* #undef HAVE_MM_PAGE_SIZE */
 
+/* mount_setattr() and struct mount_attr are available */
+/* #undef HAVE_MOUNT_SETATTR */
+
 /* Define if host toolchain supports MOVBE */
 #define HAVE_MOVBE 1
 
@@ -547,6 +583,9 @@
 /* pin_user_pages_unlocked() is available */
 /* #undef HAVE_PIN_USER_PAGES_UNLOCKED */
 
+/* posix_acl_to_xattr() allocates its result */
+/* #undef HAVE_POSIX_ACL_TO_XATTR_ALLOC */
+
 /* proc_handler ctl_table arg is const */
 /* #undef HAVE_PROC_HANDLER_CTL_TABLE_CONST */
 
@@ -570,9 +609,6 @@
 
 /* register_sysctl_table exists */
 /* #undef HAVE_REGISTER_SYSCTL_TABLE */
-
-/* iops->rename() wants flags */
-/* #undef HAVE_RENAME_WANTS_FLAGS */
 
 /* revalidate_disk() is available */
 /* #undef HAVE_REVALIDATE_DISK */
@@ -749,6 +785,12 @@
 /* migrate_folio exists */
 /* #undef HAVE_VFS_MIGRATE_FOLIO */
 
+/* vfs_parse_fs_string() takes 3 args */
+/* #undef HAVE_VFS_PARSE_FS_STRING_3ARGS */
+
+/* vfs_path_lookup() is exported */
+/* #undef HAVE_VFS_PATH_LOOKUP_EXPORTED */
+
 /* address_space_operations->readpages exists */
 /* #undef HAVE_VFS_READPAGES */
 
@@ -865,7 +907,7 @@
 /* #undef ZFS_DEVICE_MINOR */
 
 /* Define the project alias string. */
-#define ZFS_META_ALIAS "zfs-2.4.1-1-FreeBSD_g1c702dda3"
+#define ZFS_META_ALIAS "zfs-2.4.4-1-FreeBSD_g71a9f9578"
 
 /* Define the project author. */
 #define ZFS_META_AUTHOR "OpenZFS"
@@ -874,7 +916,7 @@
 /* #undef ZFS_META_DATA */
 
 /* Define the maximum compatible kernel version. */
-#define ZFS_META_KVER_MAX "6.19"
+#define ZFS_META_KVER_MAX "7.2"
 
 /* Define the minimum compatible kernel version. */
 #define ZFS_META_KVER_MIN "4.18"
@@ -895,10 +937,10 @@
 #define ZFS_META_NAME "zfs"
 
 /* Define the project release. */
-#define ZFS_META_RELEASE "1-FreeBSD_g1c702dda3"
+#define ZFS_META_RELEASE "1-FreeBSD_g71a9f9578"
 
 /* Define the project version. */
-#define ZFS_META_VERSION "2.4.1"
+#define ZFS_META_VERSION "2.4.4"
 
 /* count is located in percpu_ref.data */
 /* #undef ZFS_PERCPU_REF_COUNT_IN_DATA */

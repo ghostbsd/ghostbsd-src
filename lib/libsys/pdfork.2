@@ -36,9 +36,11 @@
 .Sh NAME
 .Nm pdfork ,
 .Nm pdrfork ,
+.Nm pdopenpid ,
 .Nm pdgetpid ,
 .Nm pdkill ,
-.Nm pdwait
+.Nm pdwait ,
+.Nm pddupfd
 .Nd System calls to manage process descriptors
 .Sh LIBRARY
 .Lb libc
@@ -48,6 +50,8 @@
 .Fn pdfork "int *fdp" "int pdflags"
 .Ft pid_t
 .Fn pdrfork "int *fdp" "int pdflags" "int rfflags"
+.Ft int
+.Fn pdopenpid "pid_t pid" "int pdflags"
 .Ft int
 .Fn pdgetpid "int fd" "pid_t *pidp"
 .Ft int
@@ -59,6 +63,16 @@
 .Fa "int options"
 .Fa "struct __wrusage *wrusage"
 .Fa "struct __siginfo *info"
+.Fc
+.Ft int
+.Fn pddupfd "int fd" "int remotefd" "int flags"
+.Ft int
+.Fo pdptrace
+.Fa "int req"
+.Fa "int fd"
+.Fa "int lwpid"
+.Fa "void *addr"
+.Fa "int data"
 .Fc
 .Sh DESCRIPTION
 Process descriptors are special file descriptors that represent processes,
@@ -77,7 +91,7 @@ on termination.
 .Fn pdfork
 can accept the
 .Fa pdflags:
-.Bl -tag -width PD_CLOEXEC
+.Bl -tag -width PD_PTRACE_CAP
 .It Dv PD_DAEMON
 Instead of the default terminate-on-close behaviour, allow the process to
 live until it is explicitly killed with
@@ -87,10 +101,40 @@ This option is not permitted in
 .Xr capsicum 4
 capability mode (see
 .Xr cap_enter 2 ) .
-.El
-.Bl -tag -width ".Dv PD_DAEMON"
+.Pp
+Note: the option changes the behavior of
+.Xr close 2
+for the process descriptor returned by the operation.
+If there is another process descriptor for the same process, created without
+specifying the
+.Dv PD_DAEMON
+flag, closing that descriptor kills the process.
 .It Dv PD_CLOEXEC
 Set close-on-exec on process descriptor.
+.It Dv PD_NOWAITPID
+The parent cannot obtain the child's status with
+.Xr waitpid 2 .
+.Pp
+A consequence of not setting the flag is that the child' zombie is
+not reaped until the
+.Xr waitpid 2
+call is performed on the child' PID.
+Setting the
+.Dv
+kern.pdfork_implicit_nowaitpid
+sysctl MIB to
+.Dv true
+makes the system behave as if the flag is always passed.
+.It Dv PD_PTRACE_CAP
+Enable
+.Xr pdptrace 2
+requests on the resulting file descriptor.
+Otherwise the descriptor cannot be used to debug the child process.
+See
+.Xr rights 4
+for the description of the
+.Dv CAP_PTRACE
+capability.
 .El
 .Pp
 The
@@ -122,6 +166,39 @@ flags, or
 .Va RFSPAWN
 flag are specified.
 .Pp
+The
+.Fn pdopenpid
+function opens the process descriptor for the process
+specified by the argument
+.Fa pid .
+It takes the same flags in the
+.Fa pdflags
+argument as
+.Fn pdfork .
+The caller must have permission to debug the target process in order for
+.Fn pdopenpid
+to succeed.
+Zombie processes cannot be opened.
+.Pp
+There might be more that one file descriptor referencing the process.
+After the zombie is reaped, calls to
+.Fn pdwait
+specifying any file descriptors for the same process fail with the
+.Er ESRCH
+error.
+.Pp
+The
+.Fn pdopenpid
+system call is allowed in the capability mode
+.Pq see Xr capsicum 4
+when the target process is the child of the calling process, or
+when the calling process is the debugger of the target process.
+The debugger is attached to its target by
+.Xr ptrace 2 ,
+.Xr pdptrace 2 ,
+or by other means, e.g., by debugging the target process' parent with
+the follow-on-fork mode enabled.
+.Pp
 .Fn pdgetpid
 queries the process ID (PID) in the process descriptor
 .Fa fd .
@@ -140,8 +217,106 @@ the status information on the process referenced by the
 .Fa fd
 process descriptor.
 See the description of the
-.Xr wait6
+.Xr wait6 2
 system call for the behavior specification.
+.Pp
+The
+.Fn pddupfd
+function allows the caller to duplicate a file descriptor
+across the process boundaries.
+The function returns the new file descriptor that points to the same file
+as the file descriptor
+.Fa remotefd
+in the process specified by the
+.Fa fd
+process descriptor.
+The returned file descriptor has the
+.Va O_CLOEXEC
+flag set.
+The
+.Fa flags
+argument is reserved and must be zero.
+Certain file descriptor types cannot be copied this way, namely
+kqueues.
+.Pp
+The
+.Fn pdptrace
+function enables execution of
+.Xr ptrace 2
+requests on the process specified by the process descriptor
+.Fa fd .
+.Pp
+In addition to the arguments taken by the
+.Xr ptrace 2 ,
+system call, the
+.Fa lwpid
+thread identifier can designate the thread on which the request
+must operate.
+The
+.Fa lwpid
+argument can be specified as \-1 if the call is not thread-specific,
+or kernel is allowed to select some thread on its own.
+.Pp
+Unlike the
+.Xr ptrace 2
+implementation,
+.Fn pdptrace
+does not clear the
+.Dv errno
+variable before executing the system call.
+.Sh INTERACTION OF PROCESS DESCRIPTORS AND Xr WAITPID 2
+.Pp
+The
+.Fn pdwait
+system call may be called on a process descriptor
+an unlimited number of times.
+In particular, it does not reap the target process,
+even if that process has exited.
+Each time, it returns the same status.
+.Bl -dash
+.It
+If the process was forked with
+.Fn pdfork ,
+and the
+.Dv PD_NOWAITPID
+flag was specified, then the process is automatically reaped after the
+last process descriptor referencing that process is closed.
+No
+.Xr waitpid 2
+call
+.Pq or a call from the same family of the wait functions which operate on PIDs
+are needed to reap the zombie process.
+.It
+If the process was created by
+.Fn pdfork ,
+and the
+.Dv PD_NOWAITPID
+flag was not specified, then after exiting,
+the process will not be reaped until the parent or reaper has called
+.Xr waitpid 2
+and all process descriptors referencing the process are closed.
+.It
+If the process was created by the
+.Xr fork 2
+system call
+.Pq which does not allocate a process descriptor for the child ,
+and later the process was opened by
+.Fn pdopenpid ,
+then a
+.Xr waitpid 2
+call from the parent is needed to reap the exited child.
+.El
+.Pp
+In any case, the PID of the process is not reused until its zombie
+is reaped, and all its process descriptors are closed.
+.Pp
+A debugger attached by
+.Xr ptrace 2
+can execute the
+.Fn waitpid
+calls against the alive target regardless of the way
+the target process was forked.
+.Sh INTERACTION OF PROCESS DESCRIPTORS WITH OTHER SYSTEM CALLS
 .Pp
 The following system calls also have effects specific to process descriptors:
 .Pp
@@ -192,10 +367,12 @@ return a PID, 0 or -1, as
 .Xr fork 2
 does.
 .Pp
+.Fn pdopenpid ,
 .Fn pdgetpid ,
 .Fn pdkill ,
+.Fn pdwait ,
 and
-.Fn pdwait
+.Fn pddupfd
 return 0 on success and -1 on failure.
 .Sh ERRORS
 These functions may return the same error numbers as their PID-based equivalents
@@ -232,7 +409,95 @@ The process descriptor being operated on has insufficient rights (e.g.
 .Dv CAP_PDKILL
 for
 .Fn pdkill ) .
+.It Bq Er EINVAL
+The
+.Fn pdwait
+function is called with reserved bits set in
+.Fa options .
 .El
+.Pp
+The
+.Fn pdopenpid
+might return the same errors as
+.Xr open 2 ,
+related to the file descriptor allocation problems, as well as the
+following specific errors:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The
+.Fa flags
+argument has reserved bits set.
+.It Bq Er ECAPMODE
+.Fn pdopenpid
+is called by the process in capability mode.
+.It Bq Er EBUSY
+The process specified by the
+.Fa pid
+argument already terminated.
+.It Bq Er ESRCH
+The process specified by the
+.Fa pid
+argument does not exist, or the caller does not have enough privileges
+to open the process.
+.It Bq Er EMFILE
+The calling process already reached its limit for open file descriptors.
+.Pp
+Current implementation installs the opened process descriptor into the
+calling process's file descriptors table.
+If the descriptor cannot be installed, the process descriptor is closed,
+which executes all actions performed by
+.Xr close 2
+on it.
+.El
+.Pp
+The
+.Fn pddupfd
+returns the following errors:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The
+.Fa flags
+argument is not zero.
+.It Bq Er EINVAL
+The file descriptor
+.Fa fd
+is not a process file descriptor.
+.It Bq Er ESRCH
+The process specified by the file descriptor
+.Fa fd
+exited.
+.It Bq Er EBADF
+The file descriptor
+.Fa remotefd
+is not a valid file descriptor in the specified process.
+.It Bq Er ENOENT
+The specified process does not have a file descriptor table.
+.It Bq Er EOPNOTSUPP
+.Fa remotefd
+refers to a file that cannot be duplicated across a process boundary,
+such as a kqueue.
+.El
+.Pp
+The
+.Fn pdptrace
+system call returns the same errors as
+.Xr ptrace 2 ,
+as well as the following specific errors:
+.Bl -tag -width Er
+.It Bq Er ECAPMODE
+The process issuing the
+.Fn pdptrace
+call is in capability mode,
+and the
+.Dv security.bsd.allow_ptrace_in_cap_mode
+tunable is set to
+.Dv false .
+.It Bq Er ENOTCAPABLE
+The process called
+.Fn pdptrace
+on the process descriptor that does not have the
+.Dv CAP_PTRACE
+capability enabled.
 .Sh SEE ALSO
 .Xr close 2 ,
 .Xr fork 2 ,
@@ -257,6 +522,12 @@ and
 .Fn pdwait
 system calls first appeared in
 .Fx 15.1 .
+The
+.Fn pdopenpid
+and
+.Fn pddupfd
+system calls first appeared in
+.Fx 16.0 .
 .Pp
 Support for process descriptors mode was developed as part of the
 .Tn TrustedBSD
@@ -277,3 +548,10 @@ functions were developed by
 .An Konstantin Belousov Aq Mt kib@FreeBSD.org
 with input from
 .An Alan Somers Aq Mt asomers@FreeBSD.org .
+The
+.Fn pdopenpid ,
+.Fn pddupfd ,
+and
+.Fn pdptrace
+functions were developed by
+.An Konstantin Belousov Aq Mt kib@FreeBSD.org .

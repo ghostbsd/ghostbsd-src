@@ -46,6 +46,8 @@ extern int	hw_ssb_disable;
 extern int	nmi_flush_l1d_sw;
 extern int	syscall_ret_l1d_flush_mode;
 extern int	lass_enabled;
+extern int	ia32_splitlock;
+extern int	ia32_splitlock_force;
 
 extern vm_paddr_t intel_graphics_stolen_base;
 extern vm_paddr_t intel_graphics_stolen_size;
@@ -65,7 +67,10 @@ struct	sysentvec;
 struct trapframe;
 
 void	amd64_conf_fast_syscall(void);
+void	amd64_cpu_init_fred(void);
+void	amd64_cpu_init_msr_memctl(void);
 void	amd64_db_resume_dbreg(void);
+void	amd64_init_splitlock(void);
 vm_paddr_t amd64_loadaddr(void);
 void	amd64_lower_shared_page(struct sysentvec *);
 void	amd64_bsp_pcpu_init1(struct pcpu *pc);
@@ -102,10 +107,21 @@ void	get_fpcontext(struct thread *td, struct __mcontext *mcp,
 	    char **xfpusave, size_t *xfpusave_len);
 int	set_fpcontext(struct thread *td, struct __mcontext *mcp,
 	    char *xfpustate, size_t xfpustate_len);
+void	enable_splitlock_ac(void);
+void	enable_splitlock(struct thread *td);
+void	disable_splitlock_ac(void);
+void	disable_splitlock(struct thread *td);
+void	exec_splitlock(struct thread *td);
 
 void	wrmsr_early_safe_start(void);
 void	wrmsr_early_safe_end(void);
 int	wrmsr_early_safe(u_int msr, uint64_t data);
+
+enum uiomove_mem_req {
+	UIO_MEM_KMEM = 101,
+	UIO_MEM_MEM,
+};
+int uiomove_mem(enum uiomove_mem_req req, struct uio *uio);
 
 #endif /* !_MACHINE_MD_VAR_H_ */
 

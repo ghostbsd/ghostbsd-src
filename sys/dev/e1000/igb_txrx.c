@@ -291,10 +291,27 @@ igb_isc_txd_encap(void *arg, if_pkt_info_t pi)
 	txd->read.cmd_type_len |= htole32(E1000_TXD_CMD_EOP | txd_flags);
 	pi->ipi_new_pidx = i;
 
-	/* Sent data accounting for AIM */
+	/*
+	 * Sent data accounting for AIM.  For TSO, ipi_len is the whole
+	 * unsegmented payload, which is not a size the moderation calculation
+	 * can use.  Count the segments the hardware will put on the wire and
+	 * the header each of them carries, so that the average it sees is a
+	 * wire packet.
+	 */
+	if ((pi->ipi_csum_flags & CSUM_TSO) && pi->ipi_tso_segsz != 0) {
+		u32 hdrlen, segs;
+
+		hdrlen = pi->ipi_ehdrlen + pi->ipi_ip_hlen + pi->ipi_tcp_hlen;
+		if (pi->ipi_len > hdrlen) {
+			segs = howmany(pi->ipi_len - hdrlen, pi->ipi_tso_segsz);
+			txr->tx_bytes += pi->ipi_len + (segs - 1) * hdrlen;
+			txr->tx_packets += segs;
+			return (0);
+		}
+	}
+
 	txr->tx_bytes += pi->ipi_len;
 	++txr->tx_packets;
-
 	return (0);
 }
 
@@ -306,6 +323,7 @@ igb_isc_txd_flush(void *arg, uint16_t txqid, qidx_t pidx)
 	struct tx_ring *txr = &que->txr;
 
 	E1000_WRITE_REG(&sc->hw, E1000_TDT(txr->me), pidx);
+	em_aim_publish(txr);
 }
 
 static int
@@ -397,6 +415,7 @@ igb_isc_rxd_flush(void *arg, uint16_t rxqid, uint8_t flid __unused,
 	struct rx_ring *rxr = &que->rxr;
 
 	E1000_WRITE_REG(&sc->hw, E1000_RDT(rxr->me), pidx);
+	em_aim_publish_rx(rxr);
 }
 
 static int
@@ -460,7 +479,6 @@ igb_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 		    le32toh(rxd->wb.lower.lo_dword.data) &  IGB_PKTTYPE_MASK;
 
 		ri->iri_len += len;
-		rxr->rx_bytes += ri->iri_len;
 
 		rxd->wb.upper.status_error = 0;
 		eop = ((staterr & E1000_RXD_STAT_EOP) == E1000_RXD_STAT_EOP);
@@ -489,6 +507,7 @@ igb_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 		i++;
 	} while (!eop);
 
+	rxr->rx_bytes += ri->iri_len;
 	rxr->rx_packets++;
 
 	if ((scctx->isc_capenable & IFCAP_RXCSUM) != 0)
@@ -496,7 +515,8 @@ igb_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 
 	if (staterr & E1000_RXD_STAT_VP) {
 		if (((sc->hw.mac.type == e1000_i350) ||
-		    (sc->hw.mac.type == e1000_i354)) &&
+		    (sc->hw.mac.type == e1000_i354) ||
+		    (sc->hw.mac.type == e1000_vfadapt_i350)) &&
 		    (staterr & E1000_RXDEXT_STATERR_LB))
 			ri->iri_vtag = be16toh(rxd->wb.upper.vlan);
 		else
@@ -574,6 +594,12 @@ igb_determine_rsstype(uint16_t pkt_info)
 		return M_HASHTYPE_RSS_IPV6;
 	case E1000_RXDADV_RSSTYPE_IPV6_TCP_EX:
 		return M_HASHTYPE_RSS_TCP_IPV6_EX;
+	case E1000_RXDADV_RSSTYPE_IPV4_UDP:
+		return M_HASHTYPE_RSS_UDP_IPV4;
+	case E1000_RXDADV_RSSTYPE_IPV6_UDP:
+		return M_HASHTYPE_RSS_UDP_IPV6;
+	case E1000_RXDADV_RSSTYPE_IPV6_UDP_EX:
+		return M_HASHTYPE_RSS_UDP_IPV6_EX;
 	default:
 		return M_HASHTYPE_OPAQUE;
 	}

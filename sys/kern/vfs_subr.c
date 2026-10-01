@@ -875,11 +875,12 @@ int
 vfs_busy(struct mount *mp, int flags)
 {
 	struct mount_pcpu *mpcpu;
+	int error;
 
 	MPASS((flags & ~MBF_MASK) == 0);
 	CTR3(KTR_VFS, "%s: mp %p with flags %d", __func__, mp, flags);
 
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		MPASS((mp->mnt_kern_flag & MNTK_DRAINING) == 0);
 		MPASS((mp->mnt_kern_flag & MNTK_UNMOUNT) == 0);
 		MPASS((mp->mnt_kern_flag & MNTK_REFEXPIRE) == 0);
@@ -919,10 +920,24 @@ vfs_busy(struct mount *mp, int flags)
 		if (flags & MBF_MNTLSTLOCK)
 			mtx_unlock(&mountlist_mtx);
 		mp->mnt_kern_flag |= MNTK_MWAIT;
-		msleep(mp, MNT_MTX(mp), PVFS | PDROP, "vfs_busy", 0);
+		error = msleep(mp, MNT_MTX(mp), ((flags & MBF_PCATCH) != 0 ?
+		    PCATCH : 0) | PVFS | PDROP, "vfs_busy", 0);
 		if (flags & MBF_MNTLSTLOCK)
 			mtx_lock(&mountlist_mtx);
 		MNT_ILOCK(mp);
+		if (error != 0) {
+			MNT_REL(mp);
+
+			/*
+			 * Clearing MNTK_MWAIT might cause spurious
+			 * wakeups, but better clear our flag there
+			 * then leak it.
+			 */
+			mp->mnt_kern_flag &= ~MNTK_MWAIT;
+			wakeup(mp);
+			MNT_IUNLOCK(mp);
+			return (error);
+		}
 	}
 	if (flags & MBF_MNTLSTLOCK)
 		mtx_unlock(&mountlist_mtx);
@@ -942,7 +957,7 @@ vfs_unbusy(struct mount *mp)
 
 	CTR2(KTR_VFS, "%s: mp %p", __func__, mp);
 
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		MPASS((mp->mnt_kern_flag & MNTK_DRAINING) == 0);
 		vfs_mp_count_sub_pcpu(mpcpu, lockref, 1);
 		vfs_mp_count_sub_pcpu(mpcpu, ref, 1);
@@ -1931,9 +1946,14 @@ vtryrecycle(struct vnode *vp, bool isvnlru)
 	 * anyone picked up this vnode from another list.  If not, we will
 	 * mark it with DOOMED via vgonel() so that anyone who does find it
 	 * will skip over it.
+	 *
+	 * We cannot check only for v_usecount > 0 there, since
+	 * v_usecount increment is lockless.  Instead check for
+	 * v_holdcnt > 1, with the side effect that a parallel vhold()
+	 * also aborts freeing this vnode.
 	 */
 	VI_LOCK(vp);
-	if (vp->v_usecount) {
+	if (vp->v_holdcnt > 1) {
 		VOP_UNLOCK(vp);
 		vdropl_recycle(vp);
 		vn_finished_write(vnmp);
@@ -6078,7 +6098,7 @@ vop_create_post(void *ap, int rc)
 	a = ap;
 	dvp = a->a_dvp;
 	vn_seqc_write_end(dvp);
-	if (!rc) {
+	if (rc == 0) {
 		VFS_KNOTE_LOCKED(dvp, NOTE_WRITE);
 		INOTIFY_NAME(*a->a_vpp, dvp, a->a_cnp, IN_CREATE);
 	}
@@ -6232,7 +6252,7 @@ vop_mknod_post(void *ap, int rc)
 	a = ap;
 	dvp = a->a_dvp;
 	vn_seqc_write_end(dvp);
-	if (!rc) {
+	if (rc == 0) {
 		VFS_KNOTE_LOCKED(dvp, NOTE_WRITE);
 		INOTIFY_NAME(*a->a_vpp, dvp, a->a_cnp, IN_CREATE);
 	}
@@ -6500,8 +6520,10 @@ vop_read_pgcache_post(void *ap, int rc)
 {
 	struct vop_read_pgcache_args *a = ap;
 
-	if (!rc)
+	if (rc == 0) {
 		VFS_KNOTE_UNLOCKED(a->a_vp, NOTE_READ);
+		INOTIFY(a->a_vp, IN_ACCESS);
+	}
 }
 
 static struct knlist fs_knlist;
@@ -6647,6 +6669,8 @@ vfs_knlunlock(void *arg)
 {
 	struct vnode *vp = arg;
 
+	if (KNLIST_EMPTY(&vp->v_pollinfo->vpi_selinfo.si_note))
+		vp->v_v2flag &= ~V2_KNOTE;
 	VOP_UNLOCK(vp);
 }
 
@@ -6694,7 +6718,10 @@ vfs_kqfilter(struct vop_kqfilter_args *ap)
 		return (ENOMEM);
 	knl = &vp->v_pollinfo->vpi_selinfo.si_note;
 	vhold(vp);
-	knlist_add(knl, kn, 0);
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	knlist_add(knl, kn, 1);
+	vp->v_v2flag |= V2_KNOTE;
+	VOP_UNLOCK(vp);
 
 	return (0);
 }
@@ -6973,7 +7000,7 @@ vfs_cache_root(struct mount *mp, int flags, struct vnode **vpp)
 	struct vnode *vp;
 	int error;
 
-	if (!vfs_op_thread_enter(mp, mpcpu))
+	if (!vfs_op_thread_enter(mp, &mpcpu))
 		return (vfs_cache_root_fallback(mp, flags, vpp));
 	vp = atomic_load_ptr(&mp->mnt_rootvnode);
 	if (vp == NULL || VN_IS_DOOMED(vp)) {

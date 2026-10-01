@@ -446,8 +446,8 @@ add_iscsi_port(struct kports &kports, struct conf *conf,
     const struct cctl_port &port, std::string &name)
 {
 	if (port.cfiscsi_target.empty()) {
-		log_debugx("CTL port %u \"%s\" wasn't managed by ctld; ",
-		    port.port_id, name.c_str());
+		log_debugx("CTL iSCSI port %u \"%s\" is not managed by ctld; "
+		    "ignoring", port.port_id, name.c_str());
 		if (!kports.has_port(name)) {
 			if (!kports.add_port(name, port.port_id)) {
 				log_warnx("kports::add_port failed");
@@ -483,6 +483,8 @@ add_iscsi_port(struct kports &kports, struct conf *conf,
 			log_warnx("Failed to add portal-group \"%s\"", pg_name);
 			return;
 		}
+
+		pg->set_kernel();
 	}
 	pg->set_tag(port.cfiscsi_portal_group_tag);
 	if (!conf->add_port(targ, pg, port.port_id)) {
@@ -496,8 +498,8 @@ add_nvmf_port(struct conf *conf, const struct cctl_port &port,
     std::string &name)
 {
 	if (port.nqn.empty() || port.ctld_transport_group_name.empty()) {
-		log_debugx("CTL port %u \"%s\" wasn't managed by ctld; ",
-		    port.port_id, name.c_str());
+		log_debugx("CTL NVMeoF port %u \"%s\" is not managed by ctld; "
+		    "ignoring", port.port_id, name.c_str());
 		return;
 	}
 
@@ -520,6 +522,8 @@ add_nvmf_port(struct conf *conf, const struct cctl_port &port,
 			    tg_name);
 			return;
 		}
+
+		pg->set_kernel();
 	}
 	pg->set_tag(port.portid);
 	if (!conf->add_port(targ, pg, port.port_id)) {
@@ -545,7 +549,10 @@ conf_new_from_kernel(struct kports &kports)
 			continue;
 
 		std::string name = port.port_name;
-		if (port.pp != 0) {
+		if (port.port_frontend == "ioctl")
+			name += "/" + std::to_string(port.pp) + "/" +
+			    std::to_string(port.vp);
+		else if (port.pp != 0 || port.vp != 0) {
 			name += "/" + std::to_string(port.pp);
 			if (port.vp != 0)
 				name += "/" + std::to_string(port.vp);
@@ -563,7 +570,7 @@ conf_new_from_kernel(struct kports &kports)
 
 	for (const auto &lun : devlist.lun_list) {
 		if (lun.ctld_name.empty()) {
-			log_debugx("CTL lun %ju wasn't managed by ctld; "
+			log_debugx("CTL lun %ju is not managed by ctld; "
 			    "ignoring", (uintmax_t)lun.lun_id);
 			continue;
 		}

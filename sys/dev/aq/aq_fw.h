@@ -1,0 +1,110 @@
+/**
+ * aQuantia Corporation Network Driver
+ * Copyright (C) 2014-2017 aQuantia Corporation. All rights reserved
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *   (1) Redistributions of source code must retain the above
+ *   copyright notice, this list of conditions and the following
+ *   disclaimer.
+ *
+ *   (2) Redistributions in binary form must reproduce the above
+ *   copyright notice, this list of conditions and the following
+ *   disclaimer in the documentation and/or other materials provided
+ *   with the distribution.
+ *
+ *   (3) The name of the author may not be used to endorse or promote
+ *   products derived from this software without specific prior
+ *   written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS
+ * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+#ifndef AQ_FW_H
+#define AQ_FW_H
+
+struct aq_hw;
+
+enum aq_fw_link_speed
+{
+	aq_fw_none  = 0,
+	aq_fw_10M   = (1 << 0),	/* Atlantic 2 only */
+	aq_fw_100M  = (1 << 1),
+	aq_fw_1G    = (1 << 2),
+	aq_fw_2G5   = (1 << 3),
+	aq_fw_5G    = (1 << 4),
+	aq_fw_10G   = (1 << 5),
+};
+
+enum aq_fw_link_fc
+{
+	aq_fw_fc_none  = 0,
+	aq_fw_fc_ENABLE_RX = BIT(0),
+	aq_fw_fc_ENABLE_TX = BIT(1),
+	aq_fw_fc_ENABLE_ALL = aq_fw_fc_ENABLE_RX | aq_fw_fc_ENABLE_TX,
+};
+
+#define aq_fw_speed_auto \
+    (aq_fw_10M | aq_fw_100M | aq_fw_1G | aq_fw_2G5 | aq_fw_5G | aq_fw_10G)
+
+struct aq_firmware_ops
+{
+	int (*reset)(struct aq_hw* hw);
+
+	int (*set_mode)(struct aq_hw* hw, enum aq_hw_fw_mpi_state mode, enum aq_fw_link_speed speed);
+	int (*get_mode)(struct aq_hw* hw, enum aq_hw_fw_mpi_state* mode, enum aq_fw_link_speed* speed, enum aq_fw_link_fc* fc);
+
+	/* Reports duplex, EEE and the firmware link state beyond the rate. */
+	int (*get_link_info)(struct aq_hw* hw, struct aq_hw_link_info* info);
+
+	int (*get_mac_addr)(struct aq_hw* hw, uint8_t* mac_addr);
+	int (*get_stats)(struct aq_hw* hw, struct aq_hw_stats* stats);
+
+	/* Reports the firmware's own link transition counters. */
+	int (*get_link_counters)(struct aq_hw* hw, uint32_t* up, uint32_t* down);
+
+	/* Reports millidegrees Celsius. */
+	int (*get_temp)(struct aq_hw* hw, int* temp_mc);
+
+	/* Reports the PHY global fault code; zero means no fault. */
+	int (*get_phy_fault)(struct aq_hw* hw, uint16_t* fault);
+
+	/* Reports the pre-shutdown PHY over-temperature warning. */
+	int (*get_phy_hot_warning)(struct aq_hw* hw, bool* hot);
+
+	/* Resets the PHY (clears a latched thermal shutdown). */
+	int (*phy_reset)(struct aq_hw* hw);
+
+	/* Arms the firmware autonomous thermal shutdown (A2 ships armed). */
+	int (*thermal_arm)(struct aq_hw* hw);
+
+	/* Reports the PHY high-temperature shutdown threshold (millidegrees C). */
+	int (*get_thermal_limit)(struct aq_hw* hw, int* limit_mc);
+
+	int (*led_control)(struct aq_hw* hw, uint32_t mode);
+};
+
+/* PHY global fault codes, register 1E.C850. */
+#define	AQ_PHY_FAULT_THERMAL_SHUTDOWN	0x8007
+
+/* aq_fw1x/aq_fw2x: Atlantic 1 firmware ABIs; aq2_fw: Atlantic 2 (AQC11x). */
+extern const struct aq_firmware_ops aq_fw1x_ops;
+extern const struct aq_firmware_ops aq_fw2x_ops;
+extern const struct aq_firmware_ops aq2_fw_ops;
+
+int aq_fw_reset(struct aq_hw* hw);
+int aq_fw_ops_init(struct aq_hw* hw);
+int aq2_fw_reboot(struct aq_hw* hw);
+
+#endif // AQ_FW_H

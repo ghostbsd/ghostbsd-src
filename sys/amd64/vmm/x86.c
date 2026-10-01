@@ -446,10 +446,19 @@ x86_emulate_cpuid(struct vcpu *vcpu, uint64_t *rax, uint64_t *rbx,
 				    CPUID_STDEXT_AVX512ER |
 				    CPUID_STDEXT_AVX512CD | CPUID_STDEXT_SHA |
 				    CPUID_STDEXT_AVX512BW |
-				    CPUID_STDEXT_AVX512VL;
+				    CPUID_STDEXT_AVX512VL |
+				    CPUID_STDEXT_AVX512IFMA;
 				regs[2] &= CPUID_STDEXT2_VAES |
-				    CPUID_STDEXT2_VPCLMULQDQ;
-				regs[3] &= CPUID_STDEXT3_MD_CLEAR;
+				    CPUID_STDEXT2_VPCLMULQDQ |
+				    CPUID_STDEXT2_AVX512VBMI |
+				    CPUID_STDEXT2_AVX512VBMI2 |
+				    CPUID_STDEXT2_AVX512VNNI |
+				    CPUID_STDEXT2_AVX512BITALG |
+				    CPUID_STDEXT2_AVX512VPOPCNTDQ;
+				regs[3] &= CPUID_STDEXT3_MD_CLEAR |
+				    CPUID_STDEXT3_AVX5124VNNIW |
+				    CPUID_STDEXT3_AVX5124FMAPS |
+				    CPUID_STDEXT3_AVX512VP2INTERSECT;
 
 				/* Advertise RDPID if it is enabled. */
 				error = vm_get_capability(vcpu, VM_CAP_RDPID,
@@ -484,8 +493,11 @@ x86_emulate_cpuid(struct vcpu *vcpu, uint64_t *rax, uint64_t *rbx,
 			break;
 
 		case CPUID_0000_000B:
+		case CPUID_0000_001F:
 			/*
-			 * Intel processor topology enumeration
+			 * Intel processor topology enumeration.  Leaf 1Fh
+			 * is the V2 form of leaf 0Bh and uses the same
+			 * encoding for the SMT and core levels.
 			 */
 			if (vmm_is_intel()) {
 				vm_get_topology(vm, &sockets, &cores, &threads,

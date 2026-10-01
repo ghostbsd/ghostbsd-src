@@ -117,6 +117,7 @@ u_int	cpu_stdext_feature2;	/* %ecx */
 u_int	cpu_stdext_feature3;	/* %edx */
 /* leaf 7 %ecx = 1 */
 u_int	cpu_stdext_feature4;	/* %eax */
+u_int	cpu_stdext_feature5;	/* %ecx */
 uint64_t cpu_ia32_arch_caps;
 u_int	cpu_max_ext_state_size;
 u_int	cpu_mon_mwait_flags;	/* MONITOR/MWAIT flags (CPUID.05H.ECX) */
@@ -1051,12 +1052,23 @@ printcpuinfo(void)
 				printf("\n  Structured Extended Features4=0x%b",
 				    cpu_stdext_feature4,
 				       "\020"
+				       "\001SHA512"
+				       "\002SM3"
+				       "\003SM4"
 				       "\007LASS"
 				       "\022FRED"
 				       "\023LKGS"
 				       "\024WRMSRNS"
 				       "\025NMISRC"
 				       "\033LAM"
+				       );
+			}
+
+			if (cpu_stdext_feature5 != 0) {
+				printf("\n  Structured Extended Features5=0x%b",
+				    cpu_stdext_feature5,
+				       "\020"
+				       "\006MSR_IMM"
 				       );
 			}
 
@@ -1612,6 +1624,7 @@ identify_cpu2(void)
 		if (max_eax_l7 >= 1) {
 			cpuid_count(7, 1, regs);
 			cpu_stdext_feature4 = regs[0];
+			cpu_stdext_feature5 = regs[2];
 		}
 	}
 }

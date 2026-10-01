@@ -19,7 +19,10 @@
 #include "testutil.h"
 #include "testutil/output.h"
 #include "../ssl/ssl_local.h"
+#include "../ssl/quic/quic_channel_local.h"
 #include "internal/quic_error.h"
+#include "internal/quic_ssl.h"
+#include "internal/quic_port.h"
 
 static OSSL_LIB_CTX *libctx = NULL;
 static OSSL_PROVIDER *defctxnull = NULL;
@@ -2689,6 +2692,84 @@ err:
     return testresult;
 }
 
+/*
+ * Verify that the SSL* received in the info callback after SSL_new_from_listener
+ * is the outer QUIC connection object, not the inner TLS SSL.
+ */
+static SSL *new_from_listener_info_cb_ssl = NULL;
+
+static void new_from_listener_info_cb(const SSL *ssl, int type, int val)
+{
+    if (type == SSL_CB_HANDSHAKE_DONE)
+        new_from_listener_info_cb_ssl = (SSL *)ssl;
+}
+
+static int test_ssl_new_from_listener_user_ssl(void)
+{
+    SSL_CTX *lctx = NULL, *sctx = NULL;
+    SSL *qlistener = NULL, *qserver = NULL, *qconn = NULL;
+    BIO *lbio = NULL, *sbio = NULL;
+    BIO_ADDR *addr = NULL;
+    struct in_addr ina;
+    int ret = 0, chk;
+
+    ina.s_addr = htonl(0x1f000001);
+    new_from_listener_info_cb_ssl = NULL;
+
+    if (!TEST_ptr(lctx = create_server_ctx())
+        || !TEST_ptr(sctx = create_server_ctx())
+        || !TEST_true(BIO_new_bio_dgram_pair(&lbio, 0, &sbio, 0)))
+        goto err;
+
+    /*
+     * Register an info callback on the listener CTX. The inner TLS connection
+     * created by ossl_quic_new_from_listener inherits this CTX, so when the TLS
+     * handshake completes it invokes the callback with user_ssl. That must be
+     * qconn (the outer QUIC object), not the inner TLS SSL object.
+     */
+    SSL_CTX_set_info_callback(lctx, new_from_listener_info_cb);
+
+    if (!TEST_ptr(addr = create_addr(&ina, 8041))
+        || !TEST_true(bio_addr_bind(lbio, addr)))
+        goto err;
+    addr = NULL;
+
+    if (!TEST_ptr(addr = create_addr(&ina, 4081))
+        || !TEST_true(bio_addr_bind(sbio, addr)))
+        goto err;
+    addr = NULL;
+
+    qlistener = ql_create(lctx, lbio);
+    lbio = NULL;
+    qserver = ql_create(sctx, sbio);
+    sbio = NULL;
+    if (!TEST_ptr(qlistener) || !TEST_ptr(qserver)
+        || !TEST_ptr(qconn = SSL_new_from_listener(qlistener, 0))
+        || !TEST_ptr(addr = create_addr(&ina, 4081))
+        || !TEST_true(qc_init(qconn, addr)))
+        goto err;
+
+    while ((chk = SSL_do_handshake(qconn)) == -1) {
+        SSL_handle_events(qserver);
+        SSL_handle_events(qlistener);
+    }
+
+    ret = TEST_int_gt(chk, 0)
+        && TEST_ptr(new_from_listener_info_cb_ssl)
+        && TEST_ptr_eq(new_from_listener_info_cb_ssl, qconn);
+
+err:
+    SSL_free(qconn);
+    SSL_free(qlistener);
+    SSL_free(qserver);
+    BIO_free(lbio);
+    BIO_free(sbio);
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(lctx);
+    BIO_ADDR_free(addr);
+    return ret;
+}
+
 static int test_server_method_with_ssl_new(void)
 {
     SSL_CTX *ctx = NULL;
@@ -2941,6 +3022,197 @@ err:
     return TEST_skip("EC(X) keys are not supported in this build");
 #endif
 }
+
+static int test_quic_resize_txe(void)
+{
+    SSL_CTX *cctx = NULL;
+    SSL *clientquic = NULL;
+    QUIC_TSERVER *qtserv = NULL;
+    QUIC_CHANNEL *ch = NULL;
+    unsigned char msg[] = "resize test";
+    unsigned char buf[sizeof(msg)];
+    size_t numbytes = 0;
+    int ret = 0;
+
+    if (!TEST_ptr(cctx = SSL_CTX_new_ex(libctx, NULL, OSSL_QUIC_client_method())))
+        goto end;
+
+    if (!TEST_true(qtest_create_quic_objects(libctx, cctx, NULL,
+            cert, privkey, 0,
+            &qtserv, &clientquic,
+            NULL, NULL)))
+        goto end;
+
+    if (!TEST_true(qtest_create_quic_connection(qtserv, clientquic)))
+        goto end;
+
+    /*
+     * Client writes first to open stream 0 (client-initiated bidirectional).
+     * The server must see the stream before it can write back on it.
+     */
+    if (!TEST_true(SSL_write_ex(clientquic, msg, sizeof(msg), &numbytes))
+        || !TEST_size_t_eq(numbytes, sizeof(msg)))
+        goto end;
+
+    ossl_quic_tserver_tick(qtserv);
+    if (!TEST_true(ossl_quic_tserver_read(qtserv, 0, buf, sizeof(buf),
+            &numbytes)))
+        goto end;
+
+    /*
+     * Increase the server's QTX MDPL above the initial allocation size
+     * (QUIC_MIN_INITIAL_DGRAM_LEN = 1200). All TXEs in the free list have
+     * alloc_len = 1200, so the next write will trigger qtx_resize_txe.
+     */
+    ch = ossl_quic_tserver_get_channel(qtserv);
+    if (!TEST_true(ossl_qtx_set_mdpl(ch->qtx,
+            QUIC_MIN_INITIAL_DGRAM_LEN + 250)))
+        goto end;
+
+    /* Trigger a server write: exercises qtx_resize_txe via qtx_reserve_txe */
+    if (!TEST_true(ossl_quic_tserver_write(qtserv, 0,
+            msg, sizeof(msg), &numbytes))
+        || !TEST_size_t_eq(numbytes, sizeof(msg)))
+        goto end;
+
+    ossl_quic_tserver_tick(qtserv);
+    SSL_handle_events(clientquic);
+
+    if (!TEST_true(SSL_read_ex(clientquic, buf, sizeof(buf), &numbytes))
+        || !TEST_mem_eq(buf, numbytes, msg, sizeof(msg)))
+        goto end;
+
+    ret = 1;
+end:
+    ossl_quic_tserver_free(qtserv);
+    SSL_free(clientquic);
+    SSL_CTX_free(cctx);
+    return ret;
+}
+
+#define PENDING_LIMIT 5
+#define HANDSHAKE_STEPS 10
+static int test_pending_limit(void)
+{
+    SSL_CTX *cctx = NULL, *sctx = NULL;
+    SSL *clientssl = NULL, *serverssl_listener = NULL, *serverssl = NULL;
+    SSL *extra_clients[PENDING_LIMIT * 2] = { NULL };
+    BIO *bio;
+    unsigned int i, handshake_step;
+    int done;
+    int testresult = 0;
+    int ok;
+    QUIC_PORT *port;
+    size_t pending_connections = 0;
+
+    if (!TEST_true(create_quic_ctx_pair(libctx, &cctx, &sctx, cert, privkey)))
+        return 0;
+
+    if (!TEST_true(create_quic_conn_objects(cctx, sctx, &clientssl, &serverssl_listener)))
+        goto end;
+
+    ok = SSL_set_generic_value_uint(serverssl_listener,
+        SSL_VALUE_QUIC_MAX_PENDING_CONNS, PENDING_LIMIT);
+    if (!TEST_true(ok)) {
+        TEST_info("%s call to SSL_set_generic_request_uint"
+                  "(SSL_VALUE_QUIC_MAX_PENDING_CONNS failed",
+            OPENSSL_FUNC);
+        goto end;
+    }
+
+    if (!TEST_true(SSL_listen(serverssl_listener))) {
+        TEST_info("%s SSL_listen() failed", OPENSSL_FUNC);
+        goto end;
+    }
+
+    port = ossl_quic_listener_get_port(serverssl_listener);
+    if (!TEST_ptr(port))
+        goto end;
+
+    bio = SSL_get_rbio(clientssl);
+    if (!TEST_ptr(bio))
+        goto end;
+
+    if (!TEST_ptr_eq(bio, SSL_get_wbio(clientssl)))
+        goto end;
+
+    for (i = 0; i < OSSL_NELEM(extra_clients); i++) {
+        extra_clients[i] = create_quic_client(cctx, bio);
+        if (!TEST_ptr(extra_clients[i]))
+            goto end;
+    }
+
+    for (i = 0; i < PENDING_LIMIT; i++) {
+        handshake_step = 0;
+        done = 0;
+        while (!done && handshake_step++ < HANDSHAKE_STEPS) {
+            /*
+             * connections are never accepted by the server. The SSL_connect()
+             * for non-blocking client returns -1 to keep connect retrying
+             */
+            if (!TEST_int_lt(SSL_connect(extra_clients[i]), 0))
+                goto end;
+            SSL_handle_events(serverssl_listener);
+            pending_connections = ossl_quic_port_get_num_incoming_channels(port);
+            done = (pending_connections == (i + 1));
+        }
+    }
+
+    if (!TEST_size_t_eq(pending_connections, PENDING_LIMIT))
+        goto end;
+
+    /*
+     * initiate yet another connection. The connection must not be inserted
+     * to pending queue. The pending_connections must be 5.
+     */
+    for (i = PENDING_LIMIT; i < OSSL_NELEM(extra_clients); i++) {
+        handshake_step = 0;
+        done = 0;
+        while (!done && handshake_step++ < HANDSHAKE_STEPS) {
+            /*
+             * connections are never accepted by the server. The SSL_connect()
+             * for non-blocking client returns -1 to keep connect retrying
+             */
+            if (!TEST_int_le(SSL_connect(extra_clients[i]), 0))
+                goto end;
+            SSL_handle_events(serverssl_listener);
+            pending_connections = ossl_quic_port_get_num_incoming_channels(port);
+            done = (pending_connections == (i + 1));
+        }
+    }
+    pending_connections = ossl_quic_port_get_num_incoming_channels(port);
+    if (!TEST_size_t_eq(pending_connections, PENDING_LIMIT))
+        goto end;
+
+    /*
+     * accept one connection and check the length of the queue dropped to 4.
+     */
+    done = 0;
+    handshake_step = 0;
+    while (!done && handshake_step++ < HANDSHAKE_STEPS) {
+        if (!TEST_int_lt(SSL_connect(extra_clients[0]), 0))
+            goto end;
+        SSL_handle_events(serverssl_listener);
+        serverssl = SSL_accept_connection(serverssl_listener, 0);
+        done = (serverssl != NULL);
+    }
+    pending_connections = ossl_quic_port_get_num_incoming_channels(port);
+    if (!TEST_size_t_eq(pending_connections, PENDING_LIMIT - 1))
+        goto end;
+
+    testresult = 1;
+end:
+    for (i = 0; i < OSSL_NELEM(extra_clients); i++)
+        SSL_free(extra_clients[i]);
+    SSL_free(clientssl);
+    SSL_free(serverssl);
+    SSL_free(serverssl_listener);
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(cctx);
+
+    return testresult;
+}
+
 /***********************************************************************************/
 OPT_TEST_DECLARE_USAGE("provider config certsdir datadir\n")
 
@@ -3036,6 +3308,7 @@ int setup_tests(void)
     ADD_TEST(test_domain_flags);
     ADD_TEST(test_early_ticks);
     ADD_TEST(test_ssl_new_from_listener);
+    ADD_TEST(test_ssl_new_from_listener_user_ssl);
 #ifndef OPENSSL_NO_SSL_TRACE
     ADD_TEST(test_new_token);
 #endif
@@ -3043,6 +3316,9 @@ int setup_tests(void)
     ADD_TEST(test_ssl_accept_connection);
     ADD_TEST(test_ssl_set_verify);
     ADD_TEST(test_client_hello_retry);
+    ADD_TEST(test_quic_resize_txe);
+    ADD_TEST(test_pending_limit);
+
     return 1;
 err:
     cleanup_tests();

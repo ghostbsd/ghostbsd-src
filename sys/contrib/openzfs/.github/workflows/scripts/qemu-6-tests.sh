@@ -23,8 +23,14 @@ function prefix() {
   M=$((DIFF/60))
   S=$((DIFF-(M*60)))
 
-  CTR=$(cat /tmp/ctr)
-  echo $LINE| grep -q '^\[.*] Test[: ]' && CTR=$((CTR+1)) && echo $CTR > /tmp/ctr
+  CTR=$(cat /tmp/ctr-vm${ID})
+  # Publish the counter with a rename so it is never momentarily empty: the
+  # other VM's reader reads this file, and a plain redirect truncates before
+  # it writes.  A read landing in that window fails, which under set -e ends
+  # the reader and silently stops prefixing that VM's output.
+  echo $LINE| grep -q '^\[.*] Test[: ]' && CTR=$((CTR+1)) \
+    && echo $CTR > "/tmp/ctr-vm${ID}.new" \
+    && mv "/tmp/ctr-vm${ID}.new" "/tmp/ctr-vm${ID}"
 
   BASE="$HOME/work/zfs/zfs"
   COLOR="$BASE/scripts/zfs-tests-color.sh"
@@ -35,9 +41,17 @@ function prefix() {
   if [ -z "$CLINE" ]; then
     printf "vm${ID}: %s\n" "$LINE"
   else
-    # [vm2: 00:15:54  256] Test: functional/checksum/setup (run as root) [00:00] [PASS]
-    printf "[vm${ID}: %02d:%02d:%02d %4d] %s\n" \
-      "$H" "$M" "$S" "$CTR" "$CLINE"
+    TOTAL=0
+    BREAKDOWN=""
+    TOTAL_VMS="$3"
+    for ((v=1; v<=TOTAL_VMS; v++)); do
+      read -r val < "/tmp/ctr-vm${v}"
+      TOTAL=$((TOTAL + val))
+      BREAKDOWN="${BREAKDOWN}${BREAKDOWN:+|}${val}"
+    done
+    # [vm2: 00:15:54  256(200|56)] Test: functional/checksum/setup (run as root) [00:00] [PASS]
+    printf "[vm${ID}: %02d:%02d:%02d %4d(%s)] %s\n" \
+      "$H" "$M" "$S" "$TOTAL" "$BREAKDOWN" "$CLINE"
   fi
 }
 
@@ -79,6 +93,7 @@ function do_builtin_build() {
 
   cd $HOME/linux-$fullver
   ./scripts/config --enable ZFS
+  ./scripts/config --enable ZFS_DEBUG
   yes "" | make oldconfig
   make -j `nproc`
   ) &> /var/tmp/builtin.txt || rc=$?
@@ -95,10 +110,10 @@ if [ -z ${1:-} ]; then
   source env.txt
   SSH=$(which ssh)
   TESTS='$HOME/zfs/.github/workflows/scripts/qemu-6-tests.sh'
-  echo 0 > /tmp/ctr
   date "+%s" > /tmp/tsstart
 
   for ((i=1; i<=VMs; i++)); do
+    echo 0 > /tmp/ctr-vm${i}
     IP="192.168.122.1$i"
 
     # We do an additional test build of Lustre against ZFS if we're vm2
@@ -120,7 +135,7 @@ if [ -z ${1:-} ]; then
       $SSH zfs@$IP $TESTS $OS $i $VMs $extra $CI_TYPE
     # handly line by line and add info prefix
     stdbuf -oL tail -fq vm${i}log.txt \
-      | while read -r line; do prefix "$i" "$line"; done &
+      | while read -r line; do prefix "$i" "$line" "$VMs"; done &
     echo $! > vm${i}log.pid
     # don't mix up the initial --- Configuration --- part
     sleep 0.13
@@ -131,7 +146,10 @@ if [ -z ${1:-} ]; then
     tail --pid=$(cat vm${i}.pid) -f /dev/null
     pid=$(cat vm${i}log.pid)
     rm -f vm${i}log.pid
-    kill $pid
+    # Tolerate a reader that has already exited.  The ESRCH would otherwise
+    # end this script under set -e and fail a job whose tests all passed.
+    # It stays on stderr: a dead reader means output was lost.
+    kill $pid || true
   done
 
   exit 0
@@ -185,6 +203,17 @@ case "$OS" in
     sudo mount -o noatime /dev/vdb /var/tmp
     sudo chmod 1777 /var/tmp
     sudo mv -f /tmp/*.txt /var/tmp
+
+    # Allow for longer RCU and watchdog timeouts due to the heavily virtualized
+    # and potentially over-subscribed nature of the CI environment.
+    rcu_cpu_stall_timeout="/sys/module/rcupdate/parameters/rcu_cpu_stall_timeout"
+    if test -f $rcu_cpu_stall_timeout; then
+        echo 120 | sudo sh -c "cat > '$rcu_cpu_stall_timeout'"
+    fi
+
+    if test -c /dev/watchdog; then
+        sudo wdctl --settimeout 120 >/dev/null
+    fi
     ;;
 esac
 
@@ -222,9 +251,9 @@ TAGS=$NUM/$DEN
 sudo dmesg -c > dmesg-prerun.txt
 mount > mount.txt
 df -h > df-prerun.txt
-$TDIR/zfs-tests.sh -vKO -s 3GB -T $TAGS
+RV=0
+$TDIR/zfs-tests.sh -vKO -s 3GB -T $TAGS || RV=$?
 
-RV=$?
 df -h > df-postrun.txt
 echo $RV > tests-exitcode.txt
 sync

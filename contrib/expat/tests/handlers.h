@@ -19,6 +19,8 @@
    Copyright (c) 2020      Tim Gates <tim.gates@iress.com>
    Copyright (c) 2021      Donghee Na <donghee.na@python.org>
    Copyright (c) 2023      Sony Corporation / Snild Dolkow <snild@sony.com>
+   Copyright (c) 2026      Berkay Eren Ürün <berkay.ueruen@siemens.com>
+   Copyright (c) 2026      Kartik Kenchi <netliomax25@gmail.com>
    Licensed under the MIT license:
 
    Permission is  hereby granted,  free of charge,  to any  person obtaining
@@ -39,18 +41,16 @@
    DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
    OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
    USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+   SPDX-License-Identifier: MIT
 */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #ifndef XML_HANDLERS_H
-#  define XML_HANDLERS_H
+#define XML_HANDLERS_H
 
-#  include "expat_config.h"
+#include "expat_config.h"
 
-#  include "expat.h"
+#include "expat.h"
 
 /* Variable holding the expected handler userData */
 extern const void *g_handler_data;
@@ -70,8 +70,8 @@ extern void XMLCALL start_element_event_handler(void *userData,
 extern void XMLCALL end_element_event_handler(void *userData,
                                               const XML_Char *name);
 
-#  define STRUCT_START_TAG 0
-#  define STRUCT_END_TAG 1
+#define STRUCT_START_TAG 0
+#define STRUCT_END_TAG 1
 
 extern void XMLCALL start_element_event_handler2(void *userData,
                                                  const XML_Char *name,
@@ -88,6 +88,7 @@ typedef struct attrInfo {
 typedef struct elementInfo {
   const XML_Char *name;
   int attr_count;
+  int default_attr_count;
   const XML_Char *id_name;
   AttrInfo *attributes;
 } ElementInfo;
@@ -511,22 +512,21 @@ extern const struct handler_record_entry *
 _handler_record_get(const struct handler_record_list *storage, int index,
                     const char *file, int line);
 
-#  define handler_record_get(storage, index)                                   \
-    _handler_record_get((storage), (index), __FILE__, __LINE__)
+#define handler_record_get(storage, index)                                     \
+  _handler_record_get((storage), (index), __FILE__, __LINE__)
 
-#  define assert_record_handler_called(storage, index, expected_name,          \
-                                       expected_arg)                           \
-    do {                                                                       \
-      const struct handler_record_entry *e                                     \
-          = handler_record_get(storage, index);                                \
-      assert_true(strcmp(e->name, expected_name) == 0);                        \
-      assert_true(e->arg == (expected_arg));                                   \
-    } while (0)
+#define assert_record_handler_called(storage, index, expected_name,            \
+                                     expected_arg)                             \
+  do {                                                                         \
+    const struct handler_record_entry *e = handler_record_get(storage, index); \
+    assert_true(strcmp(e->name, expected_name) == 0);                          \
+    assert_true(e->arg == (expected_arg));                                     \
+  } while (0)
 
 /* Entity Declaration Handlers */
-#  define ENTITY_MATCH_FAIL (-1)
-#  define ENTITY_MATCH_NOT_FOUND (0)
-#  define ENTITY_MATCH_SUCCESS (1)
+#define ENTITY_MATCH_FAIL (-1)
+#define ENTITY_MATCH_NOT_FOUND (0)
+#define ENTITY_MATCH_SUCCESS (1)
 
 extern void XMLCALL param_entity_match_handler(
     void *userData, const XML_Char *entityName, int is_parameter_entity,
@@ -611,8 +611,17 @@ typedef struct {
 extern void XMLCALL
 accumulate_and_suspend_comment_handler(void *userData, const XML_Char *data);
 
-#endif /* XML_HANDLERS_H */
+extern void XMLCALL forbidden_calls_character_handler(void *userData,
+                                                      const XML_Char *s,
+                                                      int len);
 
-#ifdef __cplusplus
-}
-#endif
+typedef struct {
+  XML_Parser parser;
+  int callCount;
+} ResumeFromHandlerData;
+
+extern void XMLCALL suspend_then_resume_character_handler(void *userData,
+                                                          const XML_Char *s,
+                                                          int len);
+
+#endif /* XML_HANDLERS_H */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -151,7 +153,7 @@ evalstring(const char *s, int flags)
 	flags &= ~EV_EXIT;
 	any = 0;
 	setstackmark(&smark);
-	setinputstring(s, 1);
+	setinputstring(s);
 	while ((n = parsecmd(0)) != NEOF) {
 		if (n != NULL && !nflag) {
 			if (flags_exit && preadateof())

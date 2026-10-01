@@ -281,6 +281,7 @@
 #define DELL_164AID_SUBVENDOR	HDA_MODEL_CONSTRUCT(DELL, 0x164a)
 #define DELL_164BID_SUBVENDOR	HDA_MODEL_CONSTRUCT(DELL, 0x164b)
 #define DELL_I7577_SUBVENDOR	HDA_MODEL_CONSTRUCT(DELL, 0x0802)
+#define DELL_WYSE7040_SUBVENDOR	HDA_MODEL_CONSTRUCT(DELL, 0x0727)
 #define DELL_ALL_SUBVENDOR	HDA_MODEL_CONSTRUCT(DELL, 0xffff)
 
 /* Clevo */
@@ -981,7 +982,7 @@ typedef int nid_t;
  ****************************************************************************/
 
 enum hdac_device_ivars {
-    HDA_IVAR_CODEC_ID,
+    HDA_IVAR_CODEC_ID = BUS_IVARS_PRIVATE,
     HDA_IVAR_NODE_ID,
     HDA_IVAR_VENDOR_ID,
     HDA_IVAR_DEVICE_ID,

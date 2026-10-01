@@ -659,8 +659,7 @@ linprocfs_dopartitions(PFS_FILL_ARGS)
 	int major, minor;
 
 	g_topology_lock();
-	sbuf_printf(sb, "major minor  #blocks  name rio rmerge rsect "
-	    "ruse wio wmerge wsect wuse running use aveq\n");
+	sbuf_printf(sb, "major minor  #blocks  name\n\n");
 
 	LIST_FOREACH(cp, &g_classes, class) {
 		if (strcmp(cp->name, "DISK") == 0 ||
@@ -672,13 +671,10 @@ linprocfs_dopartitions(PFS_FILL_ARGS)
 						major = 0;
 						minor = 0;
 					}
-					sbuf_printf(sb, "%d %d %lld %s "
-					    "%d %d %d %d %d "
-					     "%d %d %d %d %d %d\n",
-					     major, minor,
-					     (long long)pp->mediasize, pp->name,
-					     0, 0, 0, 0, 0,
-					     0, 0, 0, 0, 0, 0);
+					sbuf_printf(sb, "%4d  %7d %10lld %s\n",
+					    major, minor,
+					    B2K((long long)pp->mediasize),
+					    pp->name);
 				}
 			}
 	}
@@ -1315,19 +1311,13 @@ linprocfs_doprocmaps(PFS_FILL_ARGS)
 	struct vattr vat;
 	bool private;
 
-	PROC_LOCK(p);
-	error = p_candebug(td, p);
-	PROC_UNLOCK(p);
-	if (error)
-		return (error);
-
 	if (uio->uio_rw != UIO_READ)
 		return (EOPNOTSUPP);
 
-	error = 0;
-	vm = vmspace_acquire_ref(p);
-	if (vm == NULL)
-		return (ESRCH);
+	error = proc_vmspace_ref(td, p, PRVM_BLOCK_EXEC | PRVM_CHECK_DEBUG,
+	    &vm);
+	if (error != 0)
+		return (error);
 
 	if (SV_CURPROC_FLAG(SV_LP64))
 		l_map_str = l64_map_str;
@@ -1425,7 +1415,7 @@ linprocfs_doprocmaps(PFS_FILL_ARGS)
 		}
 	}
 	vm_map_unlock_read(map);
-	vmspace_free(vm);
+	proc_vmspace_unref(td, p, PRVM_CHECK_DEBUG | PRVM_BLOCK_EXEC, vm);
 
 	return (error);
 }
@@ -2026,23 +2016,26 @@ linprocfs_doauxv(PFS_FILL_ARGS)
 	if (asb == NULL)
 		return (ENOMEM);
 	error = proc_getauxv(td, p, asb);
-	if (error == 0)
-		error = sbuf_finish(asb);
+	if (error != 0)
+		goto out;
+	error = sbuf_finish(asb);
+	if (error != 0)
+		goto out;
 
 	resid = sbuf_len(asb) - uio->uio_offset;
 	if (resid > uio->uio_resid)
 		buflen = uio->uio_resid;
 	else
 		buflen = resid;
-	if (buflen > IOSIZE_MAX)
-		return (EINVAL);
+	if (buflen > IOSIZE_MAX) {
+		error = EINVAL;
+		goto out;
+	}
 	if (buflen > maxphys)
 		buflen = maxphys;
-	if (resid <= 0)
-		return (0);
-
-	if (error == 0)
+	if (resid > 0)
 		error = uiomove(sbuf_data(asb) + uio->uio_offset, buflen, uio);
+out:
 	sbuf_delete(asb);
 	return (error);
 }

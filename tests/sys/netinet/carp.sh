@@ -43,7 +43,7 @@ wait_for_carp()
 
 	while [ -z "$(is_master ${jail1} ${itf1})" ] &&
 	    [ -z "$(is_master ${jail2} ${itf2})" ]; do
-		sleep 1
+		sleep 0.1
 	done
 
 	if [ -n "$(is_master ${jail1} ${itf1})" ] &&
@@ -90,6 +90,7 @@ basic_v4_body()
 	jexec carp_basic_v4_two ifconfig ${epair_one}b 192.0.2.202/29 up
 	jexec carp_basic_v4_two ifconfig ${epair_one}b add vhid 1 192.0.2.1/29
 
+	sleep 0.2
 	jexec carp_basic_v4_three ifconfig ${epair_two}b 192.0.2.203/29 up
 	jexec carp_basic_v4_three ifconfig ${epair_two}b add vhid 1 \
 	    192.0.2.1/29
@@ -137,6 +138,7 @@ vrrp_v4_body()
 	jexec ${j}_two ifconfig ${epair_one}b 192.0.2.202/29 up
 	jexec ${j}_two ifconfig ${epair_one}b add vhid 1 carpver 3 192.0.2.1/29
 
+	sleep 0.2
 	jexec ${j}_three ifconfig ${epair_two}b 192.0.2.203/29 up
 	jexec ${j}_three ifconfig ${epair_two}b add vhid 1 carpver 3 \
 	    192.0.2.1/29
@@ -167,50 +169,62 @@ unicast_v4_body()
 	epair_one=$(vnet_mkepair)
 	epair_two=$(vnet_mkepair)
 
-	vnet_mkjail carp_uni_v4_one ${epair_one}a ${epair_two}a
-	vnet_mkjail carp_uni_v4_two ${epair_one}b
-	vnet_mkjail carp_uni_v4_three ${epair_two}b
+	j="carp_uni_v4_"
 
-	jexec carp_uni_v4_one sysctl net.inet.ip.forwarding=1
-	jexec carp_uni_v4_one ifconfig ${epair_one}a inet 198.51.100.1/25
-	jexec carp_uni_v4_one ifconfig ${epair_two}a inet 198.51.100.129/25
+	# The router
+	vnet_mkjail ${j}one ${epair_one}a ${epair_two}a
+	# The hosts
+	vnet_mkjail ${j}two ${epair_one}b
+	vnet_mkjail ${j}three ${epair_two}b
 
-	jexec carp_uni_v4_two sysctl net.inet.ip.forwarding=1
-	jexec carp_uni_v4_two ifconfig ${epair_one}b 198.51.100.2/25 up
-	jexec carp_uni_v4_two route add 198.51.100.224 198.51.100.1
-	# A peer address x.x.x.224 to catch PR 284872
-	jexec carp_uni_v4_two ifconfig ${epair_one}b add vhid 1 \
-	    peer 198.51.100.224 192.0.2.1/32
+	atf_check -o ignore sysctl -j ${j}one net.inet.ip.forwarding=1
+	atf_check ifconfig -j ${j}one ${epair_one}a inet 198.51.100.1/25
+	atf_check ifconfig -j ${j}one ${epair_two}a inet 198.51.100.129/25
 
-	jexec carp_uni_v4_three sysctl net.inet.ip.forwarding=1
-	jexec carp_uni_v4_three ifconfig ${epair_two}b 198.51.100.224/25 up
-	jexec carp_uni_v4_three route add 198.51.100.2 198.51.100.129
-	jexec carp_uni_v4_three ifconfig ${epair_two}b add vhid 1 \
-	    peer 198.51.100.2 192.0.2.1/32
+	atf_check ifconfig -j ${j}two ${epair_one}b 198.51.100.2/25 up
+	atf_check -o ignore route -j ${j}two -n add default 198.51.100.1
 
+	atf_check ifconfig -j ${j}three ${epair_two}b 198.51.100.224/25 up
+	atf_check -o ignore route -j ${j}three -n add default 198.51.100.129
+
+	sleep 0.1
 	# Sanity check
-	atf_check -s exit:0 -o ignore jexec carp_uni_v4_two \
+	atf_check -o ignore jexec ${j}one \
+	    ping -c 1 198.51.100.2
+	atf_check -o ignore jexec ${j}one \
+	    ping -c 1 198.51.100.224
+	atf_check -o ignore jexec ${j}two \
 	    ping -c 1 198.51.100.224
 
-	wait_for_carp carp_uni_v4_two ${epair_one}b \
-	    carp_uni_v4_three ${epair_two}b
+	# A peer address x.x.x.224 to catch PR 284872
+	atf_check ifconfig -j ${j}two ${epair_one}b add vhid 1 \
+	    peer 198.51.100.224 192.0.2.1/32
+	sleep 0.2
+	atf_check ifconfig -j ${j}three ${epair_two}b add vhid 1 \
+	    peer 198.51.100.2 192.0.2.1/32
 
-	# Setup RIPv2 route daemon
-	jexec carp_uni_v4_two routed -s -Pripv2
-	jexec carp_uni_v4_three routed -s -Pripv2
-	jexec carp_uni_v4_one routed -Pripv2
+	wait_for_carp ${j}two ${epair_one}b \
+	    ${j}three ${epair_two}b
 
-	# XXX Wait for route propagation
-	sleep 3
+	if is_master ${j}two ${epair_one}b ; then
+		atf_check -o ignore \
+		    route -j ${j}one -n add 192.0.2.1 198.51.100.2
+	fi
 
-	atf_check -s exit:0 -o ignore jexec carp_uni_v4_one \
-	    ping -c 3 192.0.2.1
+	if is_master ${j}three ${epair_two}b ; then
+		atf_check -o ignore \
+		    route -j ${j}one -n add 192.0.2.1 198.51.100.224
+	fi
+
+	# Not necessarily required, but just in case
+	atf_check -o ignore jexec ${j}one \
+	    ping -c 1 192.0.2.1
 
 	# Check that we remain in unicast when tweaking settings
-	atf_check -s exit:0 -o ignore \
-	    jexec carp_uni_v4_two ifconfig ${epair_one}b vhid 1 advskew 2
-	atf_check -s exit:0 -o match:"peer 198.51.100.224" \
-	    jexec carp_uni_v4_two ifconfig ${epair_one}b
+	atf_check -o ignore \
+	    ifconfig -j ${j}two ${epair_one}b vhid 1 advskew 2
+	atf_check -o match:"peer 198.51.100.224" \
+	    ifconfig -j ${j}two ${epair_one}b
 }
 
 unicast_v4_cleanup()
@@ -250,6 +264,7 @@ basic_v6_body()
 	jexec carp_basic_v6_two ifconfig ${epair_one}b inet6 add vhid 1 \
 	    2001:db8::0:1/64
 
+	sleep 0.2
 	jexec carp_basic_v6_three ifconfig ${epair_two}b inet6 2001:db8::1:3/64 up no_dad
 	jexec carp_basic_v6_three ifconfig ${epair_two}b inet6 add vhid 1 \
 	    2001:db8::0:1/64
@@ -300,6 +315,7 @@ vrrp_v6_body()
 	jexec ${j}_two ifconfig ${epair_one}b inet6 add vhid 1 carpver 3 \
 	    2001:db8::0:1/64
 
+	sleep 0.2
 	jexec ${j}_three ifconfig ${epair_two}b inet6 2001:db8::1:3/64 up no_dad
 	jexec ${j}_three ifconfig ${epair_two}b inet6 add vhid 1 carpver 3 \
 	    2001:db8::0:1/64
@@ -355,6 +371,7 @@ unicast_v6_body()
 	    peer6 2001:db8:2::2 \
 	    2001:db8::0:1/64
 
+	sleep 0.2
 	jexec carp_uni_v6_three ifconfig ${epair_two}b inet6 2001:db8:2::2/64 \
 	    no_dad up
 	jexec carp_uni_v6_three route -6 add default 2001:db8:2::1
@@ -420,6 +437,7 @@ unicast_ll_v6_body()
 	jexec ${j}_two ifconfig ${epair_one}b inet6 add vhid 1 \
 	    peer6 ${ll_two} \
 	    2001:db8::0:1/64
+	sleep 0.2
 	jexec ${j}_three ifconfig ${epair_two}b inet6 add vhid 1 \
 	    peer6 ${ll_one} \
 	    2001:db8::0:1/64

@@ -51,6 +51,7 @@ extern	u_int	cpu_stdext_feature;
 extern	u_int	cpu_stdext_feature2;
 extern	u_int	cpu_stdext_feature3;
 extern	u_int	cpu_stdext_feature4;
+extern	u_int	cpu_stdext_feature5;
 extern	uint64_t cpu_ia32_arch_caps;
 extern	u_int	cpu_high;
 extern	u_int	cpu_id;
@@ -97,6 +98,7 @@ extern	int	x86_rngds_mitg_enable;
 extern	int	zenbleed_enable;
 extern	int	cpu_amdc1e_bug;
 extern	char	bootmethod[16];
+extern	int	fred;
 
 struct	pcb;
 struct	thread;
@@ -113,6 +115,8 @@ struct	minidumpstate;
  * approximation.
  */
 typedef void alias_for_inthand_t(void);
+
+extern void (*fred_ipi_handlers[])(struct trapframe *);
 
 bool	acpi_get_fadt_bootflags(uint16_t *flagsp);
 void	*alloc_fpusave(int flags);

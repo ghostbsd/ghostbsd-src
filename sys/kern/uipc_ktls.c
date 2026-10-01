@@ -141,6 +141,11 @@ SYSCTL_BOOL(_kern_ipc_tls, OID_AUTO, enable, CTLFLAG_RWTUN,
     &ktls_offload_enable, 0,
     "Enable support for kernel TLS offload");
 
+static bool ktls_rx_offload_enable = true;
+SYSCTL_BOOL(_kern_ipc_tls, OID_AUTO, rx_enable, CTLFLAG_RWTUN,
+    &ktls_rx_offload_enable, 0,
+    "Enable support for kernel TLS receive offload");
+
 static bool ktls_cbc_enable = true;
 SYSCTL_BOOL(_kern_ipc_tls, OID_AUTO, cbc_enable, CTLFLAG_RWTUN,
     &ktls_cbc_enable, 1,
@@ -1290,7 +1295,7 @@ ktls_enable_rx(struct socket *so, struct tls_enable *en)
 	struct ktls_session *tls;
 	int error;
 
-	if (!ktls_offload_enable)
+	if (!ktls_offload_enable || !ktls_rx_offload_enable)
 		return (ENOTSUP);
 
 	counter_u64_add(ktls_offload_enable_calls, 1);
@@ -2404,14 +2409,14 @@ tls13_find_record_type(struct ktls_session *tls, struct mbuf *m, int tls_len,
 			m_len--;
 		if (m_len > 0) {
 			record_type = cp[m_len - 1];
-			last_offset = offset + m_len;
+			last_offset = offset + m_len - 1;
 		}
 	}
 	if (last_offset < tls->params.tls_hlen)
 		return (EBADMSG);
 
 	*record_typep = record_type;
-	*trailer_len = tls_len - last_offset + 1;
+	*trailer_len = tls_len - last_offset;
 	return (0);
 }
 
@@ -2419,8 +2424,10 @@ tls13_find_record_type(struct ktls_session *tls, struct mbuf *m, int tls_len,
  * Check if a mbuf chain is fully decrypted at the given offset and
  * length. Returns KTLS_MBUF_CRYPTO_ST_DECRYPTED if all data is
  * decrypted. KTLS_MBUF_CRYPTO_ST_MIXED if there is a mix of encrypted
- * and decrypted data. Else KTLS_MBUF_CRYPTO_ST_ENCRYPTED if all data
- * is encrypted.
+ * and decrypted data. KTLS_MBUF_CRYPTO_ST_ENCRYPTED if all data is
+ * encrypted. KTLS_MBUF_CRYPTO_ST_SHAREDMBUF if any mbuf points at
+ * shared data that must not be modified in place (non-anonymous
+ * M_EXTPG or sendfile M_EXT buffers).
  */
 ktls_mbuf_crypto_st_t
 ktls_mbuf_crypto_state(struct mbuf *mb, int offset, int len)
@@ -2436,6 +2443,14 @@ ktls_mbuf_crypto_state(struct mbuf *mb, int offset, int len)
 	offset += len;
 
 	for (; mb != NULL; mb = mb->m_next) {
+		if ((mb->m_flags & M_EXTPG) != 0 &&
+		    (mb->m_epg_flags & EPG_FLAG_ANON) == 0)
+			return (KTLS_MBUF_CRYPTO_ST_SHAREDMBUF);
+		if ((mb->m_flags & M_EXT) != 0 &&
+		    mb->m_ext.ext_type == EXT_SFBUF &&
+		    (mb->m_ext.ext_flags & EXT_FLAG_SFBUF_ANON) == 0)
+			return (KTLS_MBUF_CRYPTO_ST_SHAREDMBUF);
+
 		m_flags_ored |= mb->m_flags;
 		m_flags_anded &= mb->m_flags;
 
@@ -2636,9 +2651,11 @@ ktls_decrypt(struct socket *so)
 				record_type = hdr->tls_type;
 			}
 			break;
-		default:
+		case KTLS_MBUF_CRYPTO_ST_SHAREDMBUF:
 			error = EINVAL;
 			break;
+		default:
+			__assert_unreachable();
 		}
 		if (error) {
 			counter_u64_add(ktls_offload_failed_crypto, 1);

@@ -93,12 +93,10 @@ static struct genl_group {
 static inline struct genl_family *
 genl_family(uint16_t family_id)
 {
-	struct genl_family *gf;
-
-	gf = &families[family_id - GENL_MIN_ID];
 	KASSERT(family_id - GENL_MIN_ID < MAX_FAMILIES &&
-	    gf->family_name != NULL, ("family %u does not exist", family_id));
-	return (gf);
+	    families[family_id - GENL_MIN_ID].family_name != NULL,
+	    ("family %u does not exist", family_id));
+	return (&families[family_id - GENL_MIN_ID]);
 }
 
 static inline uint16_t
@@ -127,13 +125,13 @@ genl_handle_message(struct nlmsghdr *hdr, struct nl_pstate *npt)
 	}
 
 	family_id = hdr->nlmsg_type - GENL_MIN_ID;
-	gf = &families[family_id];
 	if (__predict_false(family_id >= MAX_FAMILIES ||
-	    gf->family_name == NULL)) {
+	    families[family_id].family_name == NULL)) {
 		NLP_LOG(LOG_DEBUG, nlp, "invalid message type: %d",
 		    hdr->nlmsg_type);
 		return (ENOTSUP);
 	}
+	gf = &families[family_id];
 
 	struct genlmsghdr *ghdr = (struct genlmsghdr *)(hdr + 1);
 

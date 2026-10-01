@@ -76,7 +76,7 @@ struct vt9p_softc {
 /* Global channel list, Each channel will correspond to a mount point */
 static STAILQ_HEAD( ,vt9p_softc) global_chan_list =
     STAILQ_HEAD_INITIALIZER(global_chan_list);
-struct mtx global_chan_list_mtx;
+static struct mtx global_chan_list_mtx;
 MTX_SYSINIT(global_chan_list_mtx, &global_chan_list_mtx, "9pglobal", MTX_DEF);
 
 static struct virtio_feature_desc virtio_9p_feature_desc[] = {
@@ -85,13 +85,6 @@ static struct virtio_feature_desc virtio_9p_feature_desc[] = {
 };
 
 VIRTIO_SIMPLE_PNPINFO(virtio_p9fs, VIRTIO_ID_9P, "VirtIO 9P Transport");
-
-/* We don't currently allow canceling of virtio requests */
-static int
-vt9p_cancel(void *handle, struct p9_req_t *req)
-{
-	return (1);
-}
 
 SYSCTL_NODE(_vfs, OID_AUTO, 9p, CTLFLAG_RW, 0, "9P File System Protocol");
 
@@ -278,6 +271,10 @@ vt9p_detach(device_t dev)
 	struct vt9p_softc *sc;
 
 	sc = device_get_softc(dev);
+
+	if (sc->busy)
+		return (EBUSY);
+
 	VT9P_LOCK(sc);
 	vt9p_stop(sc);
 	VT9P_UNLOCK(sc);
@@ -443,7 +440,6 @@ static struct p9_trans_module vt9p_trans = {
 	.create = vt9p_create,
 	.close = vt9p_close,
 	.request = vt9p_request,
-	.cancel = vt9p_cancel,
 };
 
 static device_method_t vt9p_mthds[] = {

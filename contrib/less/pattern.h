@@ -18,14 +18,27 @@
 #if HAVE_POSIX_REGCOMP
 #include <regex.h>
 #ifdef REG_EXTENDED
-extern int less_is_more;
+extern lbool less_is_more;
 #define REGCOMP_FLAG    (less_is_more ? 0 : REG_EXTENDED)
 #else
 #define REGCOMP_FLAG             0
 #endif
 #define PATTERN_TYPE             regex_t *
 #define SET_NULL_PATTERN(name)   name = NULL
-#define re_handles_caseless      TRUE
+#define RE_HANDLES_CASELESS      1
+
+#undef RM_VALID
+#undef RM_PTR
+#undef RM_EPTR
+#ifndef __WATCOMC__
+#define RM_VALID(r)              ((r)->rm_so >= 0)
+#define RM_PTR(r,line)           ((line) + (r)->rm_so)
+#define RM_EPTR(r,line)          ((line) + (r)->rm_eo)
+#else
+#define RM_VALID(r)              ((r)->rm_sp != NULL)
+#define RM_PTR(r,line)           ((r)->rm_sp)
+#define RM_EPTR(r,line)          ((r)->rm_ep)
+#endif
 #endif
 
 /* ---- PCRE ---- */
@@ -33,7 +46,7 @@ extern int less_is_more;
 #include <pcre.h>
 #define PATTERN_TYPE             pcre *
 #define SET_NULL_PATTERN(name)   name = NULL
-#define re_handles_caseless      TRUE
+#define RE_HANDLES_CASELESS      1
 #endif
 
 /* ---- PCRE2 ---- */
@@ -42,7 +55,7 @@ extern int less_is_more;
 #include <pcre2.h>
 #define PATTERN_TYPE             pcre2_code *
 #define SET_NULL_PATTERN(name)   name = NULL
-#define re_handles_caseless      TRUE
+#define RE_HANDLES_CASELESS      1
 #endif
 
 /* ---- RE_COMP  ---- */
@@ -76,6 +89,6 @@ extern int reg_show_error;
 #define SET_NULL_PATTERN(name)   
 #endif
 
-#ifndef re_handles_caseless
-#define re_handles_caseless      FALSE
+#ifndef RE_HANDLES_CASELESS
+#define RE_HANDLES_CASELESS      0
 #endif

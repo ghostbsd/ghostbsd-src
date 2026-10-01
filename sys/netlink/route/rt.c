@@ -447,13 +447,18 @@ nlattr_get_multipath(struct nlattr *nla, struct nl_pstate *npt,
 	max_nhops = data_len / sizeof(struct rtnexthop);
 
 	mp = npt_alloc(npt, (max_nhops + 2) * sizeof(struct rta_mpath_nh));
+	if (mp == NULL) {
+		NLMSG_REPORT_ERR_MSG(npt, "%s: too many RTA_MULTIPATH", __func__);
+		return (ENOMEM);
+	}
 	mp->num_nhops = 0;
 
 	for (rtnh = (struct rtnexthop *)(nla + 1); data_len > 0; ) {
 		struct rta_mpath_nh *mpnh;
 
+		len = NL_ITEM_ALIGN(rtnh->rtnh_len);
 		if (__predict_false(rtnh->rtnh_len <= sizeof(*rtnh) ||
-		    rtnh->rtnh_len > data_len)) {
+		    len < rtnh->rtnh_len || len > data_len)) {
 			NLMSG_REPORT_ERR_MSG(npt, "%s: bad length %u",
 			    __func__, rtnh->rtnh_len);
 			return (EINVAL);
@@ -467,7 +472,6 @@ nlattr_get_multipath(struct nlattr *nla, struct nl_pstate *npt,
 			    mp->num_nhops - 1);
 			return (error);
 		}
-		len = NL_ITEM_ALIGN(rtnh->rtnh_len);
 		data_len -= len;
 		rtnh = (struct rtnexthop *)((char *)rtnh + len);
 	}
@@ -692,7 +696,7 @@ handle_rtm_dump(struct nlpcb *nlp, uint32_t fibnum, int family,
 
 	if (fibnum == RT_TABLE_UNSPEC) {
 		for (int i = 0; i < V_rt_numfibs; i++) {
-			dump_rtable_fib(&wa, fibnum, family);
+			dump_rtable_fib(&wa, i, family);
 			if (wa.error != 0)
 				break;
 		}
@@ -864,6 +868,10 @@ create_nexthop_from_attrs(struct nl_parsed_route *attrs,
 		int num_nhops = attrs->rta_multipath->num_nhops;
 		struct weightened_nhop *wn = npt_alloc(npt, sizeof(*wn) * num_nhops);
 
+		if (wn == NULL) {
+			*perror = ENOMEM;
+			return (NULL);
+		}
 		for (int i = 0; i < num_nhops; i++) {
 			struct rta_mpath_nh *mpnh = &attrs->rta_multipath->nhops[i];
 
@@ -965,7 +973,7 @@ rtnl_handle_newroute(struct nlmsghdr *hdr, struct nlpcb *nlp,
 	/* pre-2.6.19 Linux API compatibility */
 	if (attrs.rtm_table > 0 && attrs.rta_table == 0)
 		attrs.rta_table = attrs.rtm_table;
-	if (attrs.rta_table >= V_rt_numfibs || attrs.rtm_family > AF_MAX) {
+	if (attrs.rta_table >= V_rt_numfibs || attrs.rtm_family >= AF_MAX) {
 		NLMSG_REPORT_ERR_MSG(npt, "invalid fib");
 		return (EINVAL);
 	}
@@ -1028,7 +1036,7 @@ rtnl_handle_delroute(struct nlmsghdr *hdr, struct nlpcb *nlp,
 		return (ESRCH);
 	}
 
-	if (attrs.rta_table >= V_rt_numfibs || attrs.rtm_family > AF_MAX) {
+	if (attrs.rta_table >= V_rt_numfibs || attrs.rtm_family >= AF_MAX) {
 		NLMSG_REPORT_ERR_MSG(npt, "invalid fib");
 		return (EINVAL);
 	}
@@ -1051,7 +1059,7 @@ rtnl_handle_getroute(struct nlmsghdr *hdr, struct nlpcb *nlp, struct nl_pstate *
 	if (error != 0)
 		return (error);
 
-	if (attrs.rta_table >= V_rt_numfibs || attrs.rtm_family > AF_MAX) {
+	if (attrs.rta_table >= V_rt_numfibs || attrs.rtm_family >= AF_MAX) {
 		NLMSG_REPORT_ERR_MSG(npt, "invalid fib");
 		return (EINVAL);
 	}

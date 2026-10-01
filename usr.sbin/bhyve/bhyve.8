@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd January 5, 2026
+.Dd June 5, 2026
 .Dt BHYVE 8
 .Os
 .Sh NAME
@@ -58,7 +58,7 @@
 .Oo
 .Sm off
 .Fl G\~
-.Oo Ar w Oc
+.Oo Cm w Oc
 .Oo Ar bind_address Cm \&: Oc
 .Ar port
 .Sm on
@@ -79,7 +79,7 @@
 .Sm on
 .Oc
 .Op Fl o Ar var Ns Cm = Ns Ar value
-.Op Fl p Ar vcpu Ns Cm \&: Ns Ar hostcpu
+.Oo Fl p Ar vcpuN Ns Oo - Ns Ar vcpuM Oc Ns Cm \&: Ns Ar hostcpuN Ns Oo - Ns Ar hostcpuM Oc Oc
 .Op Fl r Ar file
 .Sm off
 .Oo Fl s\~
@@ -179,7 +179,7 @@ If a
 is specified, bhyve reads the file and adds the file content as fw_cfg data.
 .It Fl G Xo
 .Sm off
-.Oo Ar w Oc
+.Oo Cm w Oc
 .Oo Ar bind_address Cm \&: Oc
 .Ar port
 .Sm on
@@ -193,7 +193,7 @@ and
 to listen for debugger connections.
 Only a single debugger may be attached to the debug server at a time.
 If the option begins with
-.Sq w ,
+.Cm w ,
 .Nm
 will pause execution at the first instruction waiting for a debugger to attach.
 .It Fl H
@@ -333,19 +333,21 @@ for configuration options.
 .It Fl P
 Force the guest virtual CPU to exit when a PAUSE instruction is detected.
 This option applies only to the amd64 platform.
-.It Fl p Ar vcpu Ns Cm \& : Ns Ar hostcpu
-Pin guest's virtual CPU
-.Em vcpu
+.It Fl p Ar vcpuN Ns Oo - Ns Ar vcpuM Oc Ns Cm \&: Ns Ar hostcpuN Ns Op - Ns Ar hostcpuM
+Pin the guest's virtual CPUs starting from
+.Em vcpuN
 to
-.Em hostcpu .
+.Em vcpuM
+to the host CPUs starting from
+.Em hostcpuN
+to
+.Em hostcpuM .
 Host CPUs and guest virtual CPUs are numbered starting from 0.
-A
-.Fl p
-option is required for every guest vCPU to be pinned.
-To map a 4 vCPU guest to host CPUs 12-15:
-.Bd -literal
--p 0:12 -p 1:13 -p 2:14 -p 3:15
-.Ed
+The
+.Em vcpuM
+and
+.Em hostcpuM
+arguments may be omitted.
 .It Fl r Ar file
 Resume a guest from a snapshot.
 The guest memory contents are restored from
@@ -1317,6 +1319,16 @@ bhyve -c 2 -w -H \\
   -n id=0,size=4G,cpus=0-1,domain_policy=prefer:0 \\
    numavm
 .Ed
+To run a virtual machine with a single vCPU pinned to host CPU 12:
+.Bd -literal -offset indent
+bhyve -c 1 -s 0,hostbridge -s 1,lpc -s 2,virtio-blk,/my/image \\
+  -l com1,stdio -H -P -m 1G -p 0:12 vm1
+.Ed
+To run a virtual machine with 4 vCPUs pinned to host CPUs 12-15:
+.Bd -literal -offset indent
+bhyve -c 4 -s 0,hostbridge -s 1,lpc -s 2,virtio-blk,/my/image \\
+  -l com1,stdio -H -P -m 1G -p 0-3:12-15 vm1
+.Ed
 .Sh SEE ALSO
 .Xr bhyve 4 ,
 .Xr netgraph 4 ,
@@ -1339,5 +1351,5 @@ bhyve -c 2 -w -H \\
 first appeared in
 .Fx 10.0 .
 .Sh AUTHORS
-.An Neel Natu Aq Mt neel@freebsd.org
-.An Peter Grehan Aq Mt grehan@freebsd.org
+.An Neel Natu Aq Mt neel@FreeBSD.org
+.An Peter Grehan Aq Mt grehan@FreeBSD.org

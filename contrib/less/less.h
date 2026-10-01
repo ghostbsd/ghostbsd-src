@@ -80,6 +80,7 @@
 #define muldiv(val,num,den) umuldiv((uintmax)(val), (uintmax)(num), (uintmax)(den))
 
 #include "lang.h"
+#include "lmsg.h"
 
 #if defined UINTMAX_MAX
 typedef uintmax_t uintmax;
@@ -142,13 +143,13 @@ void free();
 #if HAVE_UPPER_LOWER
 #define IS_UPPER(c)     (is_ascii_char(c) && isupper((unsigned char) (c)))
 #define IS_LOWER(c)     (is_ascii_char(c) && islower((unsigned char) (c)))
-#define TO_UPPER(c)     (is_ascii_char(c) ? toupper((unsigned char) (c)) : (c))
-#define TO_LOWER(c)     (is_ascii_char(c) ? tolower((unsigned char) (c)) : (c))
+#define TO_UPPER(c)     (is_ascii_char(c) ? (LWCHAR) toupper((unsigned char) (c)) : (LWCHAR) (c))
+#define TO_LOWER(c)     (is_ascii_char(c) ? (LWCHAR) tolower((unsigned char) (c)) : (LWCHAR) (c))
 #else
 #define IS_UPPER(c)     (is_ascii_char(c) && ASCII_IS_UPPER(c))
 #define IS_LOWER(c)     (is_ascii_char(c) && ASCII_IS_LOWER(c))
-#define TO_UPPER(c)     (is_ascii_char(c) ? ASCII_TO_UPPER(c) : (c))
-#define TO_LOWER(c)     (is_ascii_char(c) ? ASCII_TO_LOWER(c) : (c))
+#define TO_UPPER(c)     (is_ascii_char(c) ? (LWCHAR) ASCII_TO_UPPER(c) : (LWCHAR) (c))
+#define TO_LOWER(c)     (is_ascii_char(c) ? (LWCHAR) ASCII_TO_LOWER(c) : (LWCHAR) (c))
 #endif
 #endif
 
@@ -338,6 +339,12 @@ struct wchar_range_table
 	unsigned int count;
 };
 
+struct csl_bitmap_def
+{
+	constant char *bit_name;
+	int bit_value;
+};
+
 #if HAVE_POLL
 typedef short POLL_EVENTS;
 #endif
@@ -407,11 +414,12 @@ typedef enum osc8_state {
 	OSC_INTRO,    /* Waiting for intro char, usually ']' */
 	OSC_TYPENUM,  /* Reading OS command type */
 	OSC_STRING,   /* Reading OS command string */
-	OSC_END_CSI,  /* Waiting for backslash after the final ESC. */
+	OSC_STRING_CSI, /* Waiting for backslash after the final ESC. */
 	OSC_END,      /* At end */
 
 	OSC8_PARAMS,  /* In the OSC8 parameters */
 	OSC8_URI,     /* In the OSC8 URI */
+	OSC8_URI_CSI, /* Waiting for backslash after the final ESC. */
 	OSC8_NOT,     /* This is not an OSC8 link */
 } osc8_state;
 
@@ -440,8 +448,7 @@ typedef enum osc8_state {
 #define AT_PLACEHOLDER  (1 << 7)  /* Placeholder for half of double-wide char */
 
 #define AT_COLOR_SHIFT    8
-#define AT_NUM_COLORS     16
-#define AT_COLOR          ((AT_NUM_COLORS-1) << AT_COLOR_SHIFT)
+#define AT_COLOR          ((~(unsigned)0) << AT_COLOR_SHIFT)
 #define AT_COLOR_ATTN     (1 << AT_COLOR_SHIFT)
 #define AT_COLOR_BIN      (2 << AT_COLOR_SHIFT)
 #define AT_COLOR_CTRL     (3 << AT_COLOR_SHIFT)
@@ -452,8 +459,13 @@ typedef enum osc8_state {
 #define AT_COLOR_RSCROLL  (8 << AT_COLOR_SHIFT)
 #define AT_COLOR_HEADER   (9 << AT_COLOR_SHIFT)
 #define AT_COLOR_SEARCH   (10 << AT_COLOR_SHIFT)
-#define AT_COLOR_SUBSEARCH(i) ((10+(i)) << AT_COLOR_SHIFT)
-#define NUM_SEARCH_COLORS (AT_NUM_COLORS-10-1)
+#define AT_COLOR_TILDE    (11 << AT_COLOR_SHIFT)
+#define AT_COLOR_TARGET   (12 << AT_COLOR_SHIFT)
+#define AT_COLOR_OSC8     (13 << AT_COLOR_SHIFT)
+#define AT_COLOR_SS_OFFSET 14  /* largest AT_COLOR_* value + 1 */
+#define NUM_SEARCH_COLORS  5
+#define AT_NUM_COLORS      (AT_COLOR_SS_OFFSET + NUM_SEARCH_COLORS)
+#define AT_COLOR_SUBSEARCH(i) ((AT_COLOR_SS_OFFSET+(i)-1) << AT_COLOR_SHIFT)
 
 typedef enum { CT_NULL, CT_4BIT, CT_6BIT } COLOR_TYPE;
 
@@ -629,14 +641,25 @@ typedef enum {
 #endif
 
 /* X11 mouse reporting definitions */
-#define X11MOUSE_BUTTON1    0 /* Left button press */
-#define X11MOUSE_BUTTON2    1 /* Middle button press */
-#define X11MOUSE_BUTTON3    2 /* Right button press */
-#define X11MOUSE_BUTTON_REL 3 /* Button release */
-#define X11MOUSE_DRAG       0x20 /* Drag with button down */
-#define X11MOUSE_WHEEL_UP   0x40 /* Wheel scroll up */
-#define X11MOUSE_WHEEL_DOWN 0x41 /* Wheel scroll down */
-#define X11MOUSE_OFFSET     0x20 /* Added to button & pos bytes to create a char */
+#define X11MOUSE_BUTTON1     0 /* Left button press */
+#define X11MOUSE_BUTTON2     1 /* Middle button press */
+#define X11MOUSE_BUTTON3     2 /* Right button press */
+#define X11MOUSE_BUTTON_REL  3 /* Button release */
+#define X11MOUSE_DRAG        0x20 /* Drag with button down */
+#define X11MOUSE_WHEEL_UP    0x40 /* Wheel scroll up */
+#define X11MOUSE_WHEEL_DOWN  0x41 /* Wheel scroll down */
+#define X11MOUSE_WHEEL_LEFT  0x42 /* Wheel scroll left */
+#define X11MOUSE_WHEEL_RIGHT 0x43 /* Wheel scroll right */
+#define X11MOUSE_OFFSET      0x20 /* Added to button & pos bytes to create a char */
+
+/* Mouse features */
+#define EMOUSE_HSCROLL      (1<<0) /* Horizontal scroll */
+#define EMOUSE_VSCROLL      (1<<1) /* Vertical scroll */
+#define EMOUSE_HDRAG        (1<<2) /* Horizontal drag */
+#define EMOUSE_VDRAG        (1<<3) /* Vertical drag */
+#define EMOUSE_LCLICK       (1<<4) /* Left click */
+#define EMOUSE_RCLICK       (1<<5) /* Right click */
+#define EMOUSE_COUNT        6
 
 /* Security features. */
 #define SF_EDIT             (1<<1)  /* Edit file (v) */
@@ -660,6 +683,7 @@ struct mlist;
 struct loption;
 struct hilite_tree;
 struct ansi_state;
+struct lesskey_tables;
 #include "pattern.h"
 #include "xbuf.h"
 #include "funcs.h"

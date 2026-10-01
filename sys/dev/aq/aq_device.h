@@ -1,0 +1,166 @@
+/*
+ * aQuantia Corporation Network Driver
+ * Copyright (C) 2014-2017 aQuantia Corporation. All rights reserved
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *   (1) Redistributions of source code must retain the above
+ *   copyright notice, this list of conditions and the following
+ *   disclaimer.
+ *
+ *   (2) Redistributions in binary form must reproduce the above
+ *   copyright notice, this list of conditions and the following
+ *   disclaimer in the documentation and/or other materials provided
+ *   with the distribution.
+ *
+ *   (3)The name of the author may not be used to endorse or promote
+ *   products derived from this software without specific prior
+ *   written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS
+ * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#ifndef _AQ_DEVICE_H_
+#define _AQ_DEVICE_H_
+
+#include <sys/bitstring.h>
+#include <sys/queue.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+
+#include <net/ethernet.h>
+#include <net/if.h>
+#include <net/if_media.h>
+#include <net/if_var.h>
+#include <net/iflib.h>
+
+#include "aq_hw.h"
+
+enum aq_media_type {
+	AQ_MEDIA_TYPE_UNKNOWN = 0,
+	AQ_MEDIA_TYPE_FIBRE,
+	AQ_MEDIA_TYPE_TP,
+};
+
+#define	AQ_LINK_UNKNOWN	0x00000000
+#define	AQ_LINK_10M	0x00000001
+#define	AQ_LINK_100M	0x00000002
+#define	AQ_LINK_1G	0x00000004
+#define	AQ_LINK_2G5	0x00000008
+#define	AQ_LINK_5G	0x00000010
+#define	AQ_LINK_10G	0x00000020
+
+#define	AQ_LINK_ALL	(AQ_LINK_10M | AQ_LINK_100M | AQ_LINK_1G | \
+			 AQ_LINK_2G5 | AQ_LINK_5G | AQ_LINK_10G)
+
+/* Atlantic 1 has no 10BASE-T PHY. */
+#define	AQ_LINK_ALL_ATLANTIC1	(AQ_LINK_ALL & ~AQ_LINK_10M)
+
+struct aq_stats {
+	uint64_t prc;
+	uint64_t uprc;
+	uint64_t mprc;
+	uint64_t bprc;
+	uint64_t cprc;
+	uint64_t erpr;
+	uint64_t dpc;
+	uint64_t brc;
+	uint64_t ubrc;
+	uint64_t mbrc;
+	uint64_t bbrc;
+
+	uint64_t ptc;
+	uint64_t uptc;
+	uint64_t mptc;
+	uint64_t bptc;
+	uint64_t erpt;
+	uint64_t btc;
+	uint64_t ubtc;
+	uint64_t mbtc;
+	uint64_t bbtc;
+};
+
+struct aq_dev {
+	device_t		dev;
+	if_ctx_t		ctx;
+	if_softc_ctx_t		scctx;
+	if_shared_ctx_t		sctx;
+	struct ifmedia *	media;
+
+	struct aq_hw          hw;
+
+	enum aq_media_type	media_type;
+	uint32_t		link_speeds;
+	uint32_t		chip_features;
+	uint32_t		mbox_addr;
+	uint8_t			mac_addr[ETHER_ADDR_LEN];
+	uint64_t		admin_ticks;
+	struct if_irq	irq;
+	int				msix;
+
+	int			mmio_rid;
+	struct resource *	mmio_res;
+	bus_space_tag_t		mmio_tag;
+	bus_space_handle_t	mmio_handle;
+	bus_size_t		mmio_size;
+
+	struct aq_ring    *tx_rings[HW_ATL_B0_RINGS_MAX];
+	struct aq_ring    *rx_rings[HW_ATL_B0_RINGS_MAX];
+	uint32_t          tx_rings_count;
+	uint32_t          rx_rings_count;
+	bool              linkup;
+	uint32_t          link_speed;	/* Mbit/s last announced to the stack */
+	uint16_t          phy_fault_last;	/* last fault code reported */
+	bool              phy_hot_last;		/* last over-temperature warning */
+	bool              link_read_failed;	/* link state read is failing */
+	enum aq_thermal_state {
+		AQ_THERMAL_NORMAL = 0,	/* no thermal shutdown pending */
+		AQ_THERMAL_COOLING,	/* shut down; waiting to cool */
+		AQ_THERMAL_SETTLING,	/* PHY reset; waiting to re-init */
+	}                 thermal_state;
+	int               thermal_settle;
+	int               thermal_retry_ticks;	/* earliest tick to retry at */
+	int               thermal_temp_mc;	/* temp at the last shutdown/cool */
+	int               thermal_recover_mc;	/* recover once cooled to here */
+	bool              init_failed;		/* aq_hw_init() left the hw down */
+	int               init_retries;
+	bool              reset_pending;	/* a re-init is already queued */
+	int               media_active;
+
+	struct aq_hw_stats  last_stats;
+	struct aq_stats     curr_stats;
+
+	bitstr_t               *vlan_tags;
+	int                     mcnt;
+
+	uint8_t			rss_key[HW_ATL_RSS_HASHKEY_SIZE];
+	uint8_t			rss_table[HW_ATL_RSS_INDIRECTION_TABLE_MAX];
+
+	int			dbg_level;
+	uint32_t		dbg_categories;
+
+	struct sysctl_ctx_list	aq_sysctl_ctx;
+};
+
+int aq_update_hw_stats(struct aq_dev *aq_dev);
+void aq_initmedia(struct aq_dev *aq_dev);
+int aq_linkstat_isr(void *arg);
+int aq_isr_rx(void *arg);
+void aq_mediastatus_update(struct aq_dev *aq_dev, uint32_t link_speed, const struct aq_hw_fc_info *fc_neg);
+void aq_mediastatus(struct ifnet *ifp, struct ifmediareq *ifmr);
+int aq_mediachange(struct ifnet *ifp);
+void aq_if_update_admin_status(if_ctx_t ctx);
+
+#endif // _AQ_DEVICE_H_

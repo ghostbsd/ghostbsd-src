@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2012-2022 Hans Petter Selasky
  *
  * Redistribution and use in source and binary forms, with or without
@@ -781,8 +783,8 @@ virtual_oss_process(void *arg __unused)
 
 			    /* check if compressor should be applied */
 			    voss_compressor(buffer_temp, pvp->rx_compressor_gain,
-				&pvp->rx_compressor_param, samples,
-			        samples * src_chans, (1ULL << (pvp->bits - 1)) - 1ULL);
+				&pvp->rx_compressor_param, samples * src_chans,
+				src_chans, (1ULL << (pvp->bits - 1)) - 1ULL);
 
 			    TAILQ_FOREACH(pvc, &pvp->head, entry) {
 

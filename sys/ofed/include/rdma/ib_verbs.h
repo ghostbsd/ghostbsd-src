@@ -488,7 +488,8 @@ enum ib_port_speed {
 	IB_SPEED_FDR	= 16,
 	IB_SPEED_EDR	= 32,
 	IB_SPEED_HDR	= 64,
-	IB_SPEED_NDR	= 128
+	IB_SPEED_NDR	= 128,
+	IB_SPEED_XDR	= 256,
 };
 
 /**
@@ -609,7 +610,7 @@ struct ib_port_attr {
 	u8			subnet_timeout;
 	u8			init_type_reply;
 	u8			active_width;
-	u8			active_speed;
+	u16			active_speed;
 	u8                      phys_state;
 	bool			grh_required;
 };
