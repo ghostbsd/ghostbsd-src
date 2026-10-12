@@ -934,8 +934,13 @@ scan_done(struct ieee80211_scan_state *ss, int scandone)
 			ic->ic_flags_ext &= ~IEEE80211_FEXT_BGSCAN;
 		}
 
-		/* send 'scan done' event if not interrupted due to traffic. */
+		/*
+		 * Only a background scan resumes after a traffic
+		 * interrupt; any other scan must report done or the
+		 * requester (e.g. wpa_supplicant) waits forever.
+		 */
 		if (!(ss_priv->ss_iflags & ISCAN_INTERRUPT) ||
+		    (ss->ss_flags & IEEE80211_SCAN_BGSCAN) == 0 ||
 		    (ss->ss_next >= ss->ss_last))
 			ieee80211_notify_scan_done(vap);
 	}
