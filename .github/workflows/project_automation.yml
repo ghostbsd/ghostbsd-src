@@ -59,3 +59,16 @@ jobs:
           project_id: 4
           resource_node_id: ${{ github.event.pull_request.node_id }}
           status_value: ${{ env.in_review }}
+
+  pr_assign_author:
+    name: pr_assign_author
+    runs-on: ubuntu-latest
+    # Bots like dependabot can't be assignees; skip them
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened' && github.event.pull_request.user.type != 'Bot'
+    steps:
+      - name: Assign PR to its author
+        run: gh pr edit "$PR_URL" --add-assignee "$AUTHOR"
+        env:
+          GH_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
