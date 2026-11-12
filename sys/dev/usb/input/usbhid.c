@@ -541,13 +541,25 @@ usbhid_get_rdesc(device_t dev, device_t child __unused, void *buf,
     hid_size_t len)
 {
 	struct usbhid_softc* sc = device_get_softc(dev);
-	int error;
+	int error, retry;
 
-	error = usbd_req_get_report_descriptor(sc->sc_udev, NULL,
-	    buf, len, sc->sc_iface_index);
+	/*
+	 * Some devices, like Logitech Unifying receivers, fail this request
+	 * right after resume. A failure makes hms fall back to the boot
+	 * protocol descriptor and lose the wheel, so retry a few times.
+	 */
+	for (retry = 0;; retry++) {
+		error = usbd_req_get_report_descriptor(sc->sc_udev, NULL,
+		    buf, len, sc->sc_iface_index);
+		if (error == 0 || error == USB_ERR_STALLED || retry == 4)
+			break;
+		usb_pause_mtx(NULL, USB_MS_TO_TICKS(100));
+	}
 
 	if (error)
 		DPRINTF("no report descriptor: %s\n", usbd_errstr(error));
+	else if (retry > 0)
+		DPRINTF("got report descriptor after %d retries\n", retry);
 
 	return (error == 0 ? 0 : ENXIO);
 }
