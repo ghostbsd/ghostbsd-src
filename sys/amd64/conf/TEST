@@ -1,0 +1,10 @@
+#
+# TEST -- GENERIC-DEBUG that panics and dumps on a hang
+#
+
+include GENERIC-DEBUG
+
+ident   TEST
+
+options 	SW_WATCHDOG		# Panic when watchdogd stops patting
+options 	KDB_UNATTENDED		# Dump and reboot, no debugger prompt
