@@ -37,13 +37,18 @@
 #include <machine/atomic.h>
 
 #include <net/debugnet.h>
+#include <net/if_vf_status.h>
 #include <netinet/tcp_ratelimit.h>
 #include <netipsec/keydb.h>
 #include <netipsec/ipsec_offload.h>
 
+#include <dev/mlx5/mlx5_core/eswitch.h>
+
 static int mlx5e_get_wqe_sz(struct mlx5e_priv *priv, u32 *wqe_sz, u32 *nsegs);
 static if_snd_tag_query_t mlx5e_ul_snd_tag_query;
 static if_snd_tag_free_t mlx5e_ul_snd_tag_free;
+
+static int mlx5e_vf_status(if_t, struct if_vf_status **);
 
 struct mlx5e_channel_param {
 	struct mlx5e_rq_param rq;
@@ -2966,24 +2971,7 @@ err_modify:
 static void
 mlx5e_get_rss_key(void *key_ptr)
 {
-#ifdef RSS
 	rss_getkey(key_ptr);
-#else
-	static const u32 rsskey[] = {
-	    cpu_to_be32(0xD181C62C),
-	    cpu_to_be32(0xF7F4DB5B),
-	    cpu_to_be32(0x1983A2FC),
-	    cpu_to_be32(0x943E1ADB),
-	    cpu_to_be32(0xD9389E6B),
-	    cpu_to_be32(0xD1039C2C),
-	    cpu_to_be32(0xA74499AD),
-	    cpu_to_be32(0x593D56D9),
-	    cpu_to_be32(0xF3253C06),
-	    cpu_to_be32(0x2ADC1FFC),
-	};
-	CTASSERT(sizeof(rsskey) == MLX5E_RSS_KEY_SIZE);
-	memcpy(key_ptr, rsskey, MLX5E_RSS_KEY_SIZE);
-#endif
 }
 
 static void
@@ -3095,15 +3083,12 @@ mlx5e_build_tir_ctx(struct mlx5e_priv *priv, u32 * tirc, int tt, bool inner_vxla
 
 	CTASSERT(MLX5_FLD_SZ_BYTES(tirc, rx_hash_toeplitz_key) >=
 		 MLX5E_RSS_KEY_SIZE);
-#ifdef RSS
+
 	/*
 	 * The FreeBSD RSS implementation does currently not
 	 * support symmetric Toeplitz hashes:
 	 */
 	MLX5_SET(tirc, tirc, rx_hash_symmetric, 0);
-#else
-	MLX5_SET(tirc, tirc, rx_hash_symmetric, 1);
-#endif
 	mlx5e_get_rss_key(hkey);
 
 	switch (tt) {
@@ -3112,12 +3097,10 @@ mlx5e_build_tir_ctx(struct mlx5e_priv *priv, u32 * tirc, int tt, bool inner_vxla
 		    MLX5_L3_PROT_TYPE_IPV4);
 		MLX5_SET(rx_hash_field_select, hfs, l4_prot_type,
 		    MLX5_L4_PROT_TYPE_TCP);
-#ifdef RSS
 		if (!(rss_gethashconfig() & RSS_HASHTYPE_RSS_TCP_IPV4)) {
 			MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 			    MLX5_HASH_IP);
 		} else
-#endif
 		MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 		    MLX5_HASH_ALL);
 		break;
@@ -3127,12 +3110,10 @@ mlx5e_build_tir_ctx(struct mlx5e_priv *priv, u32 * tirc, int tt, bool inner_vxla
 		    MLX5_L3_PROT_TYPE_IPV6);
 		MLX5_SET(rx_hash_field_select, hfs, l4_prot_type,
 		    MLX5_L4_PROT_TYPE_TCP);
-#ifdef RSS
 		if (!(rss_gethashconfig() & RSS_HASHTYPE_RSS_TCP_IPV6)) {
 			MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 			    MLX5_HASH_IP);
 		} else
-#endif
 		MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 		    MLX5_HASH_ALL);
 		break;
@@ -3142,12 +3123,10 @@ mlx5e_build_tir_ctx(struct mlx5e_priv *priv, u32 * tirc, int tt, bool inner_vxla
 		    MLX5_L3_PROT_TYPE_IPV4);
 		MLX5_SET(rx_hash_field_select, hfs, l4_prot_type,
 		    MLX5_L4_PROT_TYPE_UDP);
-#ifdef RSS
 		if (!(rss_gethashconfig() & RSS_HASHTYPE_RSS_UDP_IPV4)) {
 			MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 			    MLX5_HASH_IP);
 		} else
-#endif
 		MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 		    MLX5_HASH_ALL);
 		break;
@@ -3157,12 +3136,10 @@ mlx5e_build_tir_ctx(struct mlx5e_priv *priv, u32 * tirc, int tt, bool inner_vxla
 		    MLX5_L3_PROT_TYPE_IPV6);
 		MLX5_SET(rx_hash_field_select, hfs, l4_prot_type,
 		    MLX5_L4_PROT_TYPE_UDP);
-#ifdef RSS
 		if (!(rss_gethashconfig() & RSS_HASHTYPE_RSS_UDP_IPV6)) {
 			MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 			    MLX5_HASH_IP);
 		} else
-#endif
 		MLX5_SET(rx_hash_field_select, hfs, selected_fields,
 		    MLX5_HASH_ALL);
 		break;
@@ -3545,6 +3522,127 @@ mlx5e_is_tlsrx_capable(struct mlx5_core_dev *mdev)
 }
 
 static int
+mlx5e_vf_status(if_t ifp, struct if_vf_status **statusp)
+{
+	struct mlx5e_vf_status {
+		u8 mac[ETH_ALEN];
+		u16 vlan;
+		u8 qos;
+		bool cvlan_enabled;
+		u32 vf;
+		u32 linkstate;
+	} *snapshot;
+	struct mlx5_esw_vport_info info;
+	struct mlx5_eswitch *esw;
+	struct mlx5_vport *vport;
+	struct if_vf_info *vf;
+	struct if_vf_status *status;
+	struct mlx5e_priv *priv;
+	int error, i, num_vfs;
+
+	priv = if_getsoftc(ifp);
+	PRIV_LOCK(priv);
+	if (priv->gone != 0) {
+		PRIV_UNLOCK(priv);
+		return (EOPNOTSUPP);
+	}
+	esw = priv->mdev->priv.eswitch;
+	if (!priv->mdev->iov_pf || esw == NULL || esw->total_vports <= 1) {
+		PRIV_UNLOCK(priv);
+		return (EOPNOTSUPP);
+	}
+	snapshot = mallocarray(esw->total_vports - 1, sizeof(*snapshot),
+	    M_DEVBUF, M_WAITOK | M_ZERO);
+	num_vfs = 0;
+	for (i = 1; i < esw->total_vports; i++) {
+		vport = &esw->vports[i];
+		mutex_lock(&vport->state_lock);
+		if (!vport->enabled) {
+			mutex_unlock(&vport->state_lock);
+			continue;
+		}
+		/*
+		 * The eswitch does not cache all effective vport policy.  Query
+		 * firmware while the vport is stable and return errors rather than
+		 * publishing a partial snapshot.
+		 */
+		error = mlx5_eswitch_get_vport_config_cvlan(esw, i, &info,
+		    &snapshot[num_vfs].cvlan_enabled);
+		mutex_unlock(&vport->state_lock);
+		if (error != 0) {
+			PRIV_UNLOCK(priv);
+			free(snapshot, M_DEVBUF);
+			return (-error);
+		}
+		snapshot[num_vfs].vf = info.vf;
+		snapshot[num_vfs].vlan = info.vlan;
+		snapshot[num_vfs].qos = info.qos;
+		snapshot[num_vfs].linkstate = info.linkstate;
+		memcpy(snapshot[num_vfs].mac, info.mac, ETH_ALEN);
+		num_vfs++;
+	}
+	PRIV_UNLOCK(priv);
+	if (num_vfs == 0) {
+		free(snapshot, M_DEVBUF);
+		status = if_vf_status_alloc(0);
+		if (status == NULL)
+			return (ENOMEM);
+		*statusp = status;
+		return (0);
+	}
+
+	status = if_vf_status_alloc(num_vfs);
+	if (status == NULL) {
+		free(snapshot, M_DEVBUF);
+		return (ENOMEM);
+	}
+	for (i = 0; i < num_vfs; i++) {
+		vf = &status->vfs[i];
+		vf->fields = IFVF_F_CONFIGURED | IFVF_F_VLAN_MODE;
+		vf->index = snapshot[i].vf;
+		vf->configured = true;
+		/* An active priority policy may have both VID and PCP zero. */
+		if (snapshot[i].cvlan_enabled) {
+			vf->vlan_pcp = snapshot[i].qos;
+			vf->fields |= IFVF_F_VLAN_PCP;
+		}
+		if (!ETHER_IS_ZERO(snapshot[i].mac)) {
+			memcpy(vf->mac, snapshot[i].mac, sizeof(vf->mac));
+			vf->fields |= IFVF_F_MAC;
+		}
+		/* A priority-only tag does not impose an access VLAN. */
+		if (snapshot[i].vlan == 0)
+			vf->vlan_mode = IFVF_VLAN_TRUNK;
+		else {
+			vf->vlan_mode = IFVF_VLAN_ACCESS;
+			vf->vlan = snapshot[i].vlan;
+			vf->vlan_proto = ETHERTYPE_VLAN;
+			vf->vlan_count = 1;
+			vf->fields |= IFVF_F_VLAN | IFVF_F_VLAN_PROTO |
+			    IFVF_F_VLAN_COUNT;
+		}
+		switch (snapshot[i].linkstate) {
+		case MLX5_ESW_VPORT_ADMIN_STATE_DOWN:
+			vf->link_state_policy = IFVF_LINK_DOWN;
+			break;
+		case MLX5_ESW_VPORT_ADMIN_STATE_UP:
+			vf->link_state_policy = IFVF_LINK_UP;
+			break;
+		case MLX5_ESW_VPORT_ADMIN_STATE_AUTO:
+			vf->link_state_policy = IFVF_LINK_AUTO;
+			break;
+		default:
+			vf->link_state_policy = IFVF_LINK_UNKNOWN;
+			break;
+		}
+		vf->fields |= IFVF_F_LINK_STATE_POLICY;
+	}
+	free(snapshot, M_DEVBUF);
+	*statusp = status;
+	return (0);
+}
+
+static int
 mlx5e_ioctl(if_t ifp, u_long command, caddr_t data)
 {
 	struct mlx5e_priv *priv;
@@ -3802,6 +3900,8 @@ out:
 		break;
 
 	case SIOCGI2C:
+		/* fallthru */
+	case SIOCGI2CPB:
 		ifr = (struct ifreq *)data;
 
 		/*
@@ -3811,6 +3911,9 @@ out:
 		error = copyin(ifr_data_get_ptr(ifr), &i2c, sizeof(i2c));
 		if (error)
 			break;
+		/* ensure page and bank are 0 for legacy SIOCGI2C ioctls */
+		if (command == SIOCGI2C)
+			i2c.page = i2c.bank = 0;
 
 		if (i2c.len > sizeof(i2c.data)) {
 			error = EINVAL;
@@ -3852,8 +3955,17 @@ out:
 			error = EINVAL;
 			goto err_i2c;
 		}
+
+		if (i2c.bank != 0) {
+			mlx5_en_err(ifp,
+			    "Query eeprom failed, Invalid Bank: %X\n",
+			    i2c.bank);
+			error = EINVAL;
+			goto err_i2c;
+		}
+
 		error = mlx5_query_eeprom(priv->mdev,
-		    read_addr, MLX5_EEPROM_LOW_PAGE,
+		    read_addr, i2c.page,
 		    (uint32_t)i2c.offset, (uint32_t)i2c.len, module_num,
 		    (uint32_t *)i2c.data, &size_read);
 		if (error) {
@@ -3865,7 +3977,7 @@ out:
 
 		if (i2c.len > MLX5_EEPROM_MAX_BYTES) {
 			error = mlx5_query_eeprom(priv->mdev,
-			    read_addr, MLX5_EEPROM_LOW_PAGE,
+			    read_addr, i2c.page,
 			    (uint32_t)(i2c.offset + size_read),
 			    (uint32_t)(i2c.len - size_read), module_num,
 			    (uint32_t *)(i2c.data + size_read), &size_read);
@@ -4657,6 +4769,7 @@ mlx5e_create_ifp(struct mlx5_core_dev *mdev)
 	if_setinitfn(ifp, mlx5e_open);
 	if_setflags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
 	if_setioctlfn(ifp, mlx5e_ioctl);
+	if_setvfstatusfn(ifp, mlx5e_vf_status);
 	if_settransmitfn(ifp, mlx5e_xmit);
 	if_setqflushfn(ifp, if_qflush);
 	if_setgetcounterfn(ifp, mlx5e_get_counter);

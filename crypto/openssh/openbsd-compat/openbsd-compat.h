@@ -43,7 +43,7 @@
 #include "vis.h"
 #include "getrrsetbyname.h"
 #include "sha1.h"
-#include "sha2.h"
+#include "bsd-sha2.h"
 #include "md5.h"
 #include "blf.h"
 #include "fnmatch.h"
@@ -88,6 +88,11 @@ int getpagesize(void);
 
 #ifndef HAVE_GETCWD
 char *getcwd(char *pt, size_t size);
+#endif
+
+#ifndef HAVE_GETEXECPATH
+/* XXX this relies on correct fallback behaviour */
+#define getexecpath(a, b) (-1)
 #endif
 
 #ifndef HAVE_KILLPG
@@ -247,7 +252,8 @@ int asprintf(char **, const char *, ...);
 
 #ifndef HAVE_OPENPTY
 # include <sys/ioctl.h>	/* for struct winsize */
-int openpty(int *, int *, char *, struct termios *, struct winsize *);
+int openpty(int *, int *, char *, const struct termios *,
+    const struct winsize *);
 #endif /* HAVE_OPENPTY */
 
 #ifndef HAVE_SNPRINTF

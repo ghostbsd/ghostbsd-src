@@ -33,6 +33,9 @@ SRCS+=	priority_queue.c
 SRCS+=	hashfunc.c
 SRCS+=	siphash.c
 
+# crypto/thread: libssl has its own copy, as upstream does
+SRCS+=	arch.c thread_none.c thread_posix.c thread_win.c
+
 # quic
 SRCS+=	quic_method.c quic_impl.c quic_wire.c quic_ackm.c quic_statm.c
 SRCS+=	cc_newreno.c quic_demux.c quic_record_rx.c
@@ -41,7 +44,7 @@ SRCS+=	quic_rx_depack.c
 SRCS+=	quic_fc.c uint_set.c
 SRCS+=	quic_cfq.c quic_txpim.c quic_fifd.c quic_txp.c
 SRCS+=	quic_stream_map.c
-SRCS+=	quic_sf_list.c quic_rstream.c quic_sstream.c
+SRCS+=	quic_rstream.c quic_sstream.c
 SRCS+=	quic_reactor.c
 SRCS+=	quic_reactor_wait_ctx.c
 SRCS+=	quic_channel.c quic_port.c quic_engine.c
@@ -56,6 +59,10 @@ SRCS+=	qlog_event_helpers.c
 SRCS+=	json_enc.c qlog.c
 SRCS+=	getenv.c ctype.c
 SRCS+=	quic_obj.c
+SRCS+=	quic_strm_reas.c
+
+# rbtree
+SRCS+=	rbtree.c
 
 # record
 SRCS+=	rec_layer_d1.c rec_layer_s3.c
@@ -63,8 +70,8 @@ SRCS+=	rec_layer_d1.c rec_layer_s3.c
 # record/methods
 SRCS+=	tls_common.c ssl3_meth.c tls1_meth.c tls13_meth.c tlsany_meth.c
 SRCS+=	dtls_meth.c tls_multib.c
-SRSC+=	ssl3_cbc.c
-SRSC+=	tls_pad.c
+SRCS+=	ssl3_cbc.c
+SRCS+=	tls_pad.c
 
 # rio
 SRCS+=	poll_immediate.c
@@ -87,7 +94,10 @@ PICFLAG+=	-DOPENSSL_PIC
 
 .PATH:	${LCRYPTO_SRC}/crypto \
 	${LCRYPTO_SRC}/crypto/hashtable \
+	${LCRYPTO_SRC}/crypto/rbtree \
 	${LCRYPTO_SRC}/crypto/siphash \
+	${LCRYPTO_SRC}/crypto/thread \
+	${LCRYPTO_SRC}/crypto/thread/arch \
 	${LCRYPTO_SRC}/ssl \
 	${LCRYPTO_SRC}/ssl/quic \
 	${LCRYPTO_SRC}/ssl/record \

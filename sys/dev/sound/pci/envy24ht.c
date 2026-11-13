@@ -1625,7 +1625,7 @@ envy24htchan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 {
 	struct sc_chinfo *ch = data;
 	/* struct sc_info *sc = ch->parent; */
-	uint32_t size, prev;
+	uint32_t blk, size, prev;
 	unsigned int bcnt, bsize;
 
 #if(0)
@@ -1640,20 +1640,22 @@ envy24htchan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 			break;
 	}
 
-	ch->blk = prev / ch->unit;
+	blk = prev / ch->unit;
 	if (ch->dir == PCMDIR_PLAY)
-		ch->blk *= ENVY24HT_PLAY_BUFUNIT / 4;
+		blk *= ENVY24HT_PLAY_BUFUNIT / 4;
 	else
-		ch->blk *= ENVY24HT_REC_BUFUNIT / 4;
+		blk *= ENVY24HT_REC_BUFUNIT / 4;
         /* set channel buffer information */
         /* ch->size = ch->unit * ENVY24HT_SAMPLE_NUM; */
         if (ch->dir == PCMDIR_PLAY)
-                bsize = ch->blk * 4 / ENVY24HT_PLAY_BUFUNIT;
+                bsize = blk * 4 / ENVY24HT_PLAY_BUFUNIT;
         else
-                bsize = ch->blk * 4 / ENVY24HT_REC_BUFUNIT;
+                bsize = blk * 4 / ENVY24HT_REC_BUFUNIT;
         bsize *= ch->unit;
         bcnt = ch->size / bsize;
-        sndbuf_resize(ch->buffer, bcnt, bsize);
+        if (sndbuf_resize(ch->buffer, bcnt, bsize) != 0)
+		return 0;
+	ch->blk = blk;
 	/* mtx_unlock(&sc->lock); */
 
 #if(0)
@@ -2474,11 +2476,12 @@ envy24ht_pci_attach(device_t dev)
 		goto bad;
 	}
 
+	pcm_init(dev, sc);
+
 	/* set multi track mixer */
 	mixer_init(dev, &envy24htmixer_class, sc);
 
 	/* set channel information */
-	pcm_init(dev, sc);
 	sc->chnum = 0;
 	/* for (i = 0; i < 5; i++) { */
 		pcm_addchan(dev, PCMDIR_PLAY, &envy24htchan_class, sc);

@@ -29,10 +29,8 @@
 
 #include "if_em.h"
 
-#ifdef RSS
 #include <net/rss_config.h>
 #include <netinet/in_rss.h>
-#endif
 
 #ifdef VERBOSE_DEBUG
 #define DPRINTF device_printf
@@ -97,6 +95,11 @@ em_dump_rs(struct e1000_softc *sc)
 	qidx_t i, ntxd, qid, cur;
 	int16_t rs_cidx;
 	uint8_t status;
+
+	if (sc->tx_queues == NULL) {
+		device_printf(sc->dev, "queue state is unavailable\n");
+		return;
+	}
 
 	printf("\n");
 	ntxd = scctx->isc_ntxd[0];
@@ -869,6 +872,6 @@ em_determine_rsstype(uint32_t pkt_info)
 	case E1000_RXDADV_RSSTYPE_IPV6_UDP_EX:
 		return M_HASHTYPE_RSS_UDP_IPV6_EX;
 	default:
-		return M_HASHTYPE_OPAQUE;
+		return M_HASHTYPE_NONE;
 	}
 }

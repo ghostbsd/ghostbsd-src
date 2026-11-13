@@ -1081,8 +1081,11 @@ pmc_allocate(const char *ctrspec, enum pmc_mode mode,
 	r = spec_copy = strdup(ctrspec);
 	ctrname = strsep(&r, ",");
 	if (pmc_pmu_enabled()) {
-		if (pmc_pmu_pmcallocate(ctrname, &pmc_config) == 0)
+		errno = pmc_pmu_pmcallocate(ctrname, &pmc_config);
+		if (errno == 0)
 			goto found;
+		if (errno == EOPNOTSUPP)
+			goto out;
 	}
 	free(spec_copy);
 	spec_copy = NULL;
@@ -1168,17 +1171,16 @@ pmc_attach(pmc_id_t pmc, pid_t pid)
 int
 pmc_capabilities(pmc_id_t pmcid, uint32_t *caps)
 {
-	unsigned int i;
-	enum pmc_class cl;
+	struct pmc_op_caps args;
+	int status;
 
-	cl = PMC_ID_TO_CLASS(pmcid);
-	for (i = 0; i < cpu_info.pm_nclass; i++)
-		if (cpu_info.pm_classes[i].pm_class == cl) {
-			*caps = cpu_info.pm_classes[i].pm_caps;
-			return (0);
-		}
-	errno = EINVAL;
-	return (-1);
+	args.pm_pmcid = pmcid;
+	args.pm_caps = 0;
+
+	status = PMC_CALL(PMC_OP_GETCAPS, &args);
+	*caps = args.pm_caps;
+
+	return (status);
 }
 
 int

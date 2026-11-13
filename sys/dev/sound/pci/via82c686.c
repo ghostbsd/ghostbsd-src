@@ -328,8 +328,9 @@ viachan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 {
 	struct via_chinfo *ch = data;
 
+	if (sndbuf_resize(ch->buffer, SEGS_PER_CHAN, blocksize) != 0)
+		return 0;
 	ch->blksz = blocksize;
-	sndbuf_resize(ch->buffer, SEGS_PER_CHAN, ch->blksz);
 
 	return ch->blksz;
 }
@@ -535,6 +536,7 @@ via_attach(device_t dev)
 	if (!via->codec)
 		goto bad;
 
+	pcm_init(dev, via);
 	if (mixer_init(dev, ac97_getmixerclass(), via->codec))
 		goto bad;
 
@@ -585,7 +587,6 @@ via_attach(device_t dev)
 		 device_get_nameunit(device_get_parent(dev)));
 
 	/* Register */
-	pcm_init(dev, via);
 	pcm_addchan(dev, PCMDIR_PLAY, &viachan_class, via);
 	pcm_addchan(dev, PCMDIR_REC, &viachan_class, via);
 	if (pcm_register(dev, status))

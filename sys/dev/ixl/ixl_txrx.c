@@ -86,23 +86,6 @@ struct if_txrx ixl_txrx_dwb = {
 	NULL
 };
 
-/*
- * @key key is saved into this parameter
- */
-void
-ixl_get_default_rss_key(u32 *key)
-{
-	MPASS(key != NULL);
-
-	u32 rss_seed[IXL_RSS_KEY_SIZE_REG] = {0x41b01687,
-	    0x183cfd8c, 0xce880440, 0x580cbc3c,
-	    0x35897377, 0x328b25e1, 0x4fa98922,
-	    0xb7d90c14, 0xd5bad70d, 0xcd15a2c1,
-	    0x0, 0x0, 0x0};
-
-	bcopy(rss_seed, key, IXL_RSS_KEY_SIZE);
-}
-
 /**
  * i40e_vc_stat_str - convert virtchnl status err code to a string
  * @hw: pointer to the HW structure
@@ -148,7 +131,10 @@ ixl_debug_core(device_t dev, u32 enabled_mask, u32 mask, char *fmt, ...)
 static bool
 ixl_is_tx_desc_done(struct tx_ring *txr, int idx)
 {
-	return (((txr->tx_base[idx].cmd_type_offset_bsz >> I40E_TXD_QW1_DTYPE_SHIFT)
+	u64 descriptor;
+
+	descriptor = le64toh(txr->tx_base[idx].cmd_type_offset_bsz);
+	return (((descriptor >> I40E_TXD_QW1_DTYPE_SHIFT)
 	    & I40E_TXD_QW1_DTYPE_MASK) == I40E_TX_DESC_DTYPE_DESC_DONE);
 }
 
@@ -390,7 +376,7 @@ ixl_isc_txd_encap(void *arg, if_pkt_info_t pi)
 		    | ((u64)cmd  << I40E_TXD_QW1_CMD_SHIFT)
 		    | ((u64)off << I40E_TXD_QW1_OFFSET_SHIFT)
 		    | ((u64)seglen  << I40E_TXD_QW1_TX_BUF_SZ_SHIFT)
-	            | ((u64)htole16(pi->ipi_vtag) << I40E_TXD_QW1_L2TAG1_SHIFT));
+	            | ((u64)pi->ipi_vtag << I40E_TXD_QW1_L2TAG1_SHIFT));
 
 		txr->tx_bytes += seglen;
 		pidx_last = i;
@@ -662,7 +648,7 @@ ixl_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 	struct ixl_rx_queue	*que = &vsi->rx_queues[ri->iri_qsidx];
 	struct rx_ring		*rxr = &que->rxr;
 	union i40e_rx_desc	*cur;
-	u32		status, error;
+	u32		status, error, fltstat;
 	u16		plen;
 	u64		qword;
 	u8		ptype;
@@ -718,8 +704,12 @@ ixl_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 
 	if ((scctx->isc_capenable & IFCAP_RXCSUM) != 0)
 		rxr->csum_errs += ixl_rx_checksum(ri, status, error, ptype);
-	ri->iri_flowid = le32toh(cur->wb.qword0.hi_dword.rss);
-	ri->iri_rsstype = ixl_ptype_to_hash(ptype);
+	fltstat = (status >> I40E_RX_DESC_STATUS_FLTSTAT_SHIFT);
+	if ((fltstat & I40E_RX_DESC_FLTSTAT_RSS_HASH) ==
+		I40E_RX_DESC_FLTSTAT_RSS_HASH) {
+		ri->iri_flowid = le32toh(cur->wb.qword0.hi_dword.rss);
+		ri->iri_rsstype = ixl_ptype_to_hash(ptype);
+	}
 	if (status & (1 << I40E_RX_DESC_STATUS_L2TAG1P_SHIFT)) {
 		ri->iri_vtag = le16toh(cur->wb.qword0.lo_dword.l2tag1);
 		ri->iri_flags |= M_VLANTAG;

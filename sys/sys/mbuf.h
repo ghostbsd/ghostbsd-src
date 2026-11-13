@@ -579,6 +579,23 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
 #define	M_HASHTYPE_TEST(m, v)	(M_HASHTYPE_GET(m) == (v))
 #define	M_HASHTYPE_ISHASH(m)	\
     (((m)->m_pkthdr.rsstype & M_HASHTYPE_HASHPROP) != 0)
+
+static inline int
+m_hashtype_ishash_tcp(const struct mbuf *m)
+{
+
+	/* Hash types are encoded values, not independent bits. */
+	switch (M_HASHTYPE_GET(m)) {
+	case M_HASHTYPE_RSS_TCP_IPV4:
+	case M_HASHTYPE_RSS_TCP_IPV6:
+	case M_HASHTYPE_RSS_TCP_IPV6_EX:
+		return (1);
+	default:
+		return (0);
+	}
+}
+
+#define	M_HASHTYPE_ISHASH_TCP(m)	m_hashtype_ishash_tcp(m)
 #define	M_HASHTYPE_SETINNER(m)	do {			\
 	(m)->m_pkthdr.rsstype |= M_HASHTYPE_INNER;	\
     } while (0)
@@ -1519,8 +1536,6 @@ m_free(struct mbuf *m)
 	struct mbuf *n = m->m_next;
 
 	MBUF_PROBE1(m__free, m);
-	if ((m->m_flags & (M_PKTHDR|M_NOFREE)) == (M_PKTHDR|M_NOFREE))
-		m_tag_delete_chain(m, NULL);
 	if (m->m_flags & M_PKTHDR && m->m_pkthdr.csum_flags & CSUM_SND_TAG)
 		m_snd_tag_rele(m->m_pkthdr.snd_tag);
 	if (m->m_flags & M_EXTPG)

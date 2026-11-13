@@ -38,9 +38,9 @@
 #include <sys/reg.h>
 #include <sys/syscallsubr.h>
 
+#include <machine/ifunc.h>
 #include <machine/md_var.h>
 #include <machine/specialreg.h>
-#include <x86/ifunc.h>
 
 #include <compat/freebsd32/freebsd32_util.h>
 #include <amd64/linux32/linux.h>
@@ -332,6 +332,9 @@ linux_iopl(struct thread *td, struct linux_iopl_args *args)
 		return (error);
 	if ((error = securelevel_gt(td->td_ucred, 0)) != 0)
 		return (error);
+	/* See comment in sys/amd64/amd64/io.c. */
+	if (fred && args->level != 0)
+		return (ENOSYS);
 	td->td_frame->tf_rflags = (td->td_frame->tf_rflags & ~PSL_IOPL) |
 	    (args->level * (PSL_IOPL / 3));
 

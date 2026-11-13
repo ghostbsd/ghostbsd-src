@@ -632,8 +632,9 @@ eschan1371_setspeed(kobj_t obj, void *data, uint32_t speed)
 static int
 eschan_setfragments(kobj_t obj, void *data, uint32_t blksz, uint32_t blkcnt)
 {
-  	struct es_chinfo *ch = data;
-  	struct es_info *es = ch->parent;
+	struct es_chinfo *ch = data;
+	struct es_info *es = ch->parent;
+	int error;
 
 	blksz &= ES_BLK_ALIGN;
 
@@ -657,9 +658,11 @@ eschan_setfragments(kobj_t obj, void *data, uint32_t blksz, uint32_t blkcnt)
 
 	if ((ch->buffer->blksz != blksz ||
 	    ch->buffer->blkcnt != blkcnt) &&
-	    sndbuf_resize(ch->buffer, blkcnt, blksz) != 0)
+	    (error = sndbuf_resize(ch->buffer, blkcnt, blksz)) != 0) {
 		device_printf(es->dev, "%s: failed blksz=%u blkcnt=%u\n",
 		    __func__, blksz, blkcnt);
+		return (error);
+	}
 
 	ch->bufsz = ch->buffer->bufsize;
 	ch->blksz = ch->buffer->blksz;
@@ -674,7 +677,8 @@ eschan_setblocksize(kobj_t obj, void *data, uint32_t blksz)
   	struct es_chinfo *ch = data;
   	struct es_info *es = ch->parent;
 
-	eschan_setfragments(obj, data, blksz, es->blkcnt);
+	if (eschan_setfragments(obj, data, blksz, es->blkcnt) != 0)
+		return (0);
 
 	return (ch->blksz);
 }
@@ -1516,8 +1520,7 @@ sysctl_es137x_single_pcm_mixer(SYSCTL_HANDLER_ARGS)
 
 	dev = oidp->oid_arg1;
 	d = device_get_softc(dev);
-	if (!PCM_REGISTERED(d) || d->mixer_dev == NULL ||
-	    d->mixer_dev->si_drv1 == NULL)
+	if (!PCM_REGISTERED(d) || !MIXER_REGISTERED(d->mixer))
 		return (EINVAL);
 	es = d->devinfo;
 	if (es == NULL)
@@ -1535,7 +1538,7 @@ sysctl_es137x_single_pcm_mixer(SYSCTL_HANDLER_ARGS)
 	if (val == set)
 		return (0);
 	PCM_ACQUIRE_QUICK(d);
-	m = (d->mixer_dev != NULL) ? d->mixer_dev->si_drv1 : NULL;
+	m = d->mixer;
 	if (m == NULL) {
 		PCM_RELEASE_QUICK(d);
 		return (ENODEV);
@@ -1798,6 +1801,7 @@ es_pci_attach(device_t dev)
 	es->escfg = ES_SET_NUMREC(es->escfg, 1);
 
 	devid = pci_get_devid(dev);
+	pcm_init(dev, es);
 	switch (devid) {
 	case ES1371_PCI_ID:
 	case ES1371_PCI_ID2:
@@ -1858,7 +1862,6 @@ es_pci_attach(device_t dev)
 	    rman_get_start(es->reg), rman_get_start(es->irq),
 	    device_get_nameunit(device_get_parent(dev)));
 
-	pcm_init(dev, es);
 	for (i = 0; i < numplay; i++)
 		pcm_addchan(dev, PCMDIR_PLAY, ct, es);
 	pcm_addchan(dev, PCMDIR_REC, ct, es);

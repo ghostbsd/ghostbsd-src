@@ -299,6 +299,7 @@
 #define E1000_TXDMAC		0x03000  /* Tx DMA Control - RW */
 #define E1000_KABGTXD		0x03004  /* AFE Band Gap Transmit Ref Data */
 #define E1000_PSRTYPE(_i)	(0x05480 + ((_i) * 4))
+#define E1000_VFPSRTYPE		0x00F0C
 #define E1000_RAL(_i)		(((_i) <= 15) ? (0x05400 + ((_i) * 8)) : \
 				 (0x054E0 + ((_i - 16) * 8)))
 #define E1000_RAH(_i)		(((_i) <= 15) ? (0x05404 + ((_i) * 8)) : \
@@ -516,7 +517,7 @@
 #define E1000_VFQA1	0x0B200  /* VLAN Filter Queue Array 1 - RW Array */
 #define E1000_WUC	0x05800  /* Wakeup Control - RW */
 #define E1000_WUFC	0x05808  /* Wakeup Filter Control - RW */
-#define E1000_WUS	0x05810  /* Wakeup Status - RO */
+#define E1000_WUS	0x05810  /* Wakeup Status - RW1C */
 /* Management registers */
 #define E1000_MANC	0x05820  /* Management Control - RW */
 #define E1000_IPAV	0x05838  /* IP Address Valid - RW */

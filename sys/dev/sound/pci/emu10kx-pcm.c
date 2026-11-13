@@ -785,7 +785,7 @@ emupchan_setblocksize(kobj_t obj __unused, void *c_devinfo, uint32_t blocksize)
 	blocksize = EMU_PLAY_BUFSZ / blkcnt;
 
 	if (sndbuf_resize(ch->buffer, blkcnt, blocksize) != 0)
-		return (ch->blksz);
+		return (0);
 
 	mtx_lock(&sc->lock);
 	ch->blksz = blocksize;
@@ -1393,6 +1393,7 @@ emu_pcm_attach(device_t dev)
 	sc->emu10k1_volcache[1][1] = 75;
 	BUS_READ_IVAR(device_get_parent(dev), dev, EMU_VAR_ROUTE, &route);
 	sc->route = route;
+	pcm_init(dev, sc);
 	switch (route) {
 	case RT_FRONT:
 		sc->rt.amounts_left[0] = 0xff;
@@ -1474,7 +1475,6 @@ emu_pcm_attach(device_t dev)
 	pcm_setflags(dev, pcm_getflags(dev) | SD_F_MPSAFE);
 
 	/* XXX we should better get number of available channels from parent */
-	pcm_init(dev, sc);
 	sc->pnum = 0;
 	if (route != RT_MCHRECORD)
 		pcm_addchan(dev, PCMDIR_PLAY, &emupchan_class, sc);

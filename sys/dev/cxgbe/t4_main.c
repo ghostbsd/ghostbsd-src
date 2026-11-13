@@ -42,6 +42,7 @@
 #include <sys/eventhandler.h>
 #include <sys/module.h>
 #include <sys/malloc.h>
+#include <sys/nv.h>
 #include <sys/queue.h>
 #include <sys/taskqueue.h>
 #include <dev/pci/pcireg.h>
@@ -57,9 +58,8 @@
 #include <net/if_types.h>
 #include <net/if_dl.h>
 #include <net/if_vlan_var.h>
-#ifdef RSS
+#include <net/if_vf_status.h>
 #include <net/rss_config.h>
-#endif
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #ifdef KERN_TLS
@@ -282,6 +282,7 @@ static driver_t vche_driver = {
 /* ifnet interface */
 static void cxgbe_init(void *);
 static int cxgbe_ioctl(if_t, unsigned long, caddr_t);
+static int cxgbe_vf_status(if_t, struct if_vf_status **);
 static int cxgbe_transmit(if_t, struct mbuf *);
 static void cxgbe_qflush(if_t);
 #if defined(KERN_TLS) || defined(RATELIMIT)
@@ -1250,7 +1251,7 @@ t4_calibration(void *arg)
 
 	sc = (struct adapter *)arg;
 
-	KASSERT(hw_all_ok(sc), ("!hw_all_ok at t4_calibration"));
+	KASSERT(!hw_off_limits(sc), ("hw_off_limits at t4_calibration"));
 	hw = t4_read_reg64(sc, A_SGE_TIMESTAMP_LO);
 	sbt = sbinuptime();
 
@@ -2867,6 +2868,7 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 
 	if_setinitfn(ifp, cxgbe_init);
 	if_setioctlfn(ifp, cxgbe_ioctl);
+	if_setvfstatusfn(ifp, cxgbe_vf_status);
 	if_settransmitfn(ifp, cxgbe_transmit);
 	if_setqflushfn(ifp, cxgbe_qflush);
 	if (vi->pi->nvi > 1 || sc->flags & IS_VF)
@@ -3055,6 +3057,68 @@ cxgbe_init(void *arg)
 		return;
 	cxgbe_init_synchronized(vi);
 	end_synchronized_op(sc, 0);
+}
+
+static int
+cxgbe_vf_status(if_t ifp, struct if_vf_status **statusp)
+{
+	struct port_info *pi;
+	struct adapter *sc;
+	struct t4_vf_info *snapshot;
+	struct if_vf_info *vf;
+	struct if_vf_status *status;
+	struct vi_info *vi;
+	uint16_t num_vfs;
+	int error, i;
+
+	vi = if_getsoftc(ifp);
+	pi = vi->pi;
+	sc = pi->adapter;
+	if ((sc->flags & IS_VF) != 0 || !IS_MAIN_VI(vi))
+		return (EOPNOTSUPP);
+	error = begin_synchronized_op(sc, vi, SLEEP_OK | INTR_OK,
+	    "t4vfstat");
+	if (error != 0)
+		return (error);
+	if (!pi->iov_status_supported) {
+		end_synchronized_op(sc, 0);
+		return (EOPNOTSUPP);
+	}
+	num_vfs = pi->iov_num_vfs;
+	snapshot = NULL;
+	if (num_vfs != 0) {
+		snapshot = mallocarray(num_vfs, sizeof(*snapshot), M_CXGBE,
+		    M_WAITOK);
+		memcpy(snapshot, pi->iov_vfs, num_vfs * sizeof(*snapshot));
+	}
+	end_synchronized_op(sc, 0);
+
+	status = if_vf_status_alloc(num_vfs);
+	for (i = 0; i < num_vfs; i++) {
+		vf = &status->vfs[i];
+		vf->fields = IFVF_F_CONFIGURED;
+		vf->index = i;
+		vf->configured = snapshot[i].configured;
+		if (!vf->configured)
+			continue;
+		vf->fields |= IFVF_F_VLAN_MODE;
+		if (!ETHER_IS_ZERO(snapshot[i].mac)) {
+			memcpy(vf->mac, snapshot[i].mac, sizeof(vf->mac));
+			vf->fields |= IFVF_F_MAC;
+		}
+		if (snapshot[i].access_vlan) {
+			vf->vlan_mode = IFVF_VLAN_ACCESS;
+			vf->vlan = snapshot[i].vlan;
+			vf->vlan_proto = ETHERTYPE_VLAN;
+			vf->vlan_count = 1;
+			vf->fields |= IFVF_F_VLAN | IFVF_F_VLAN_PROTO |
+			    IFVF_F_VLAN_COUNT;
+		} else
+			vf->vlan_mode = IFVF_VLAN_TRUNK;
+	}
+	free(snapshot, M_CXGBE);
+	*statusp = status;
+	return (0);
 }
 
 static int
@@ -7017,7 +7081,6 @@ t4_setup_intr_handlers(struct adapter *sc)
 static void
 write_global_rss_key(struct adapter *sc)
 {
-#ifdef RSS
 	int i;
 	uint32_t raw_rss_key[RSS_KEYSIZE / sizeof(uint32_t)];
 	uint32_t rss_key[RSS_KEYSIZE / sizeof(uint32_t)];
@@ -7029,7 +7092,6 @@ write_global_rss_key(struct adapter *sc)
 		rss_key[i] = htobe32(raw_rss_key[nitems(rss_key) - 1 - i]);
 	}
 	t4_write_rss_key(sc, &rss_key[0], -1, 1);
-#endif
 }
 
 /*
@@ -7109,7 +7171,6 @@ adapter_full_uninit(struct adapter *sc)
 	sc->flags &= ~FULL_INIT_DONE;
 }
 
-#ifdef RSS
 #define SUPPORTED_RSS_HASHTYPES (RSS_HASHTYPE_RSS_IPV4 | \
     RSS_HASHTYPE_RSS_TCP_IPV4 | RSS_HASHTYPE_RSS_IPV6 | \
     RSS_HASHTYPE_RSS_TCP_IPV6 | RSS_HASHTYPE_RSS_UDP_IPV4 | \
@@ -7172,7 +7233,6 @@ hashen_to_hashconfig(int hashen)
 
 	return (hashconfig);
 }
-#endif
 
 /*
  * Idempotent.
@@ -7182,11 +7242,10 @@ vi_full_init(struct vi_info *vi)
 {
 	struct adapter *sc = vi->adapter;
 	struct sge_rxq *rxq;
-	int rc, i, j;
+	int rc, i, j, extra;
+	int hashconfig = rss_gethashconfig();
 #ifdef RSS
 	int nbuckets = rss_getnumbuckets();
-	int hashconfig = rss_gethashconfig();
-	int extra;
 #endif
 
 	ASSERT_SYNCHRONIZED_OP(sc);
@@ -7241,7 +7300,6 @@ vi_full_init(struct vi_info *vi)
 		return (rc);
 	}
 
-#ifdef RSS
 	vi->hashen = hashconfig_to_hashen(hashconfig);
 
 	/*
@@ -7277,12 +7335,7 @@ vi_full_init(struct vi_info *vi)
 		CH_ALERT(vi, "UDP/IPv4 4-tuple hashing forced on.\n");
 	if (extra & RSS_HASHTYPE_RSS_UDP_IPV6)
 		CH_ALERT(vi, "UDP/IPv6 4-tuple hashing forced on.\n");
-#else
-	vi->hashen = F_FW_RSS_VI_CONFIG_CMD_IP6FOURTUPEN |
-	    F_FW_RSS_VI_CONFIG_CMD_IP6TWOTUPEN |
-	    F_FW_RSS_VI_CONFIG_CMD_IP4FOURTUPEN |
-	    F_FW_RSS_VI_CONFIG_CMD_IP4TWOTUPEN | F_FW_RSS_VI_CONFIG_CMD_UDPEN;
-#endif
+
 	rc = -t4_config_vi_rss(sc, sc->mbox, vi->viid, vi->hashen, vi->rss[0],
 	    0, 0);
 	if (rc != 0) {
@@ -8986,7 +9039,7 @@ sysctl_requested_fec(SYSCTL_HANDLER_ARGS)
 	struct adapter *sc = pi->adapter;
 	struct link_config *lc = &pi->link_cfg;
 	int rc;
-	int8_t old;
+	int8_t old = lc->requested_fec;
 
 	if (req->newptr == NULL) {
 		struct sbuf *sb;
@@ -8995,16 +9048,15 @@ sysctl_requested_fec(SYSCTL_HANDLER_ARGS)
 		if (sb == NULL)
 			return (ENOMEM);
 
-		sbuf_printf(sb, "%b", lc->requested_fec, t4_fec_bits);
+		sbuf_printf(sb, "%b", old, t4_fec_bits);
 		rc = sbuf_finish(sb);
 		sbuf_delete(sb);
 	} else {
 		char s[8];
 		int n;
 
-		snprintf(s, sizeof(s), "%d",
-		    lc->requested_fec == FEC_AUTO ? -1 :
-		    lc->requested_fec & (M_FW_PORT_CAP32_FEC | FEC_MODULE));
+		snprintf(s, sizeof(s), "%d", old == FEC_AUTO ? -1 :
+		    old & (M_FW_PORT_CAP32_FEC | FEC_MODULE));
 
 		rc = sysctl_handle_string(oidp, s, sizeof(s), req);
 		if (rc != 0)
@@ -9021,7 +9073,10 @@ sysctl_requested_fec(SYSCTL_HANDLER_ARGS)
 		if (rc)
 			return (rc);
 		PORT_LOCK(pi);
-		old = lc->requested_fec;
+		if (lc->requested_fec != old) {
+			rc = EBUSY;
+			goto done;
+		}
 		if (n == FEC_AUTO)
 			lc->requested_fec = FEC_AUTO;
 		else if (n == 0 || n == FEC_NONE)

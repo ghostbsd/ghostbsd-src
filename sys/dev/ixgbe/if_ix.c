@@ -177,6 +177,7 @@ static void *ixgbe_register(device_t);
 static int  ixgbe_if_attach_pre(if_ctx_t);
 static int  ixgbe_if_attach_post(if_ctx_t);
 static int  ixgbe_if_detach(if_ctx_t);
+static int  ixgbe_if_power_prepare(if_ctx_t, enum iflib_power_event);
 static int  ixgbe_if_shutdown(if_ctx_t);
 static int  ixgbe_if_suspend(if_ctx_t);
 static int  ixgbe_if_resume(if_ctx_t);
@@ -223,7 +224,7 @@ static void ixgbe_enable_queue(struct ixgbe_softc *, u32);
 static void ixgbe_disable_queue(struct ixgbe_softc *, u32);
 static void ixgbe_add_device_sysctls(if_ctx_t);
 static int  ixgbe_allocate_pci_resources(if_ctx_t);
-static int  ixgbe_setup_low_power_mode(if_ctx_t, bool);
+static int  ixgbe_setup_low_power_mode(if_ctx_t);
 
 static void ixgbe_config_dmac(struct ixgbe_softc *);
 static void ixgbe_configure_ivars(struct ixgbe_softc *);
@@ -249,6 +250,8 @@ static void ixgbe_update_stats_counters(struct ixgbe_softc *);
 static void ixgbe_config_link(if_ctx_t);
 static void ixgbe_get_slot_info(struct ixgbe_softc *);
 static void ixgbe_fw_mode_timer(void *);
+static void ixgbe_fw_mode_timer_pause(struct ixgbe_softc *);
+static void ixgbe_fw_mode_timer_resume(struct ixgbe_softc *);
 static void ixgbe_configure_wakeup(if_ctx_t);
 static void ixgbe_configure_wakeup_mta(if_ctx_t);
 static void ixgbe_prepare_wakeup(if_ctx_t, bool);
@@ -352,6 +355,7 @@ static device_method_t ixgbe_if_methods[] = {
 	DEVMETHOD(ifdi_attach_pre, ixgbe_if_attach_pre),
 	DEVMETHOD(ifdi_attach_post, ixgbe_if_attach_post),
 	DEVMETHOD(ifdi_detach, ixgbe_if_detach),
+	DEVMETHOD(ifdi_power_prepare, ixgbe_if_power_prepare),
 	DEVMETHOD(ifdi_shutdown, ixgbe_if_shutdown),
 	DEVMETHOD(ifdi_suspend, ixgbe_if_suspend),
 	DEVMETHOD(ifdi_resume, ixgbe_if_resume),
@@ -385,6 +389,7 @@ static device_method_t ixgbe_if_methods[] = {
 	DEVMETHOD(ifdi_iov_init, ixgbe_if_iov_init),
 	DEVMETHOD(ifdi_iov_uninit, ixgbe_if_iov_uninit),
 	DEVMETHOD(ifdi_iov_vf_add, ixgbe_if_iov_vf_add),
+	DEVMETHOD(ifdi_vf_status, ixgbe_if_vf_status),
 #endif /* PCI_IOV */
 	DEVMETHOD_END
 };
@@ -672,13 +677,7 @@ ixgbe_initialize_rss_mapping(struct ixgbe_softc *sc)
 	u32 pfmrqc;
 #endif
 
-	if (sc->feat_en & IXGBE_FEATURE_RSS) {
-		/* Fetch the configured RSS key */
-		rss_getkey((uint8_t *)&rss_key);
-	} else {
-		/* set up random bits */
-		arc4rand(&rss_key, sizeof(rss_key), 0);
-	}
+	rss_getkey((uint8_t *)rss_key);
 
 	/* Set multiplier for RETA setup and table size based on MAC */
 	index_mult = 0x1;
@@ -1381,7 +1380,7 @@ ixgbe_if_attach_post(if_ctx_t ctx)
 	sc->advertise = ixgbe_get_default_advertise(sc);
 
 	if (sc->feat_cap & IXGBE_FEATURE_SRIOV)
-		ixgbe_define_iov_schemas(dev, &error);
+		ixgbe_define_iov_schemas(sc, &error);
 
 	/* Add sysctls */
 	ixgbe_add_device_sysctls(ctx);
@@ -1392,6 +1391,7 @@ ixgbe_if_attach_post(if_ctx_t ctx)
 
 		/* Set up the timer callout */
 		callout_init(&sc->fw_mode_timer, true);
+		sc->fw_mode_timer_initialized = true;
 
 		/* Start the task */
 		callout_reset(&sc->fw_mode_timer, hz, ixgbe_fw_mode_timer, sc);
@@ -1544,8 +1544,6 @@ ixgbe_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 		return (0);
 	case IFCOUNTER_IQDROPS:
 		return (sc->iqdrops);
-	case IFCOUNTER_OQDROPS:
-		return (0);
 	case IFCOUNTER_IERRORS:
 		return (sc->ierrors);
 	default:
@@ -2235,8 +2233,6 @@ ixgbe_add_hw_stats(struct ixgbe_softc *sc)
 	/* Driver Statistics */
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "dropped",
 	    CTLFLAG_RD, &sc->dropped_pkts, "Driver dropped packets");
-	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "watchdog_events",
-	    CTLFLAG_RD, &sc->watchdog_events, "Watchdog timeouts");
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "link_irq",
 	    CTLFLAG_RD, &sc->link_irq, "Link MSI-X IRQ Handled");
 
@@ -2958,10 +2954,9 @@ ixgbe_msix_que(void *arg)
 {
 	struct ix_rx_queue *que = arg;
 	struct ixgbe_softc *sc = que->sc;
-	if_t ifp = iflib_get_ifp(que->sc->ctx);
 
 	/* Protect against spurious interrupts */
-	if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0)
+	if (!iflib_is_running(sc->ctx))
 		return (FILTER_HANDLED);
 
 	ixgbe_disable_queue(sc, que->msix);
@@ -3904,15 +3899,14 @@ ixgbe_if_detach(if_ctx_t ctx)
 	INIT_DEBUGOUT("ixgbe_detach: begin");
 
 	sc->iov_recovery_stop = true;
+	ixgbe_fw_mode_timer_pause(sc);
 
-	ixgbe_setup_low_power_mode(ctx, false);
+	ixgbe_setup_low_power_mode(ctx);
 
 	/* let hardware know driver is unloading */
 	ctrl_ext = IXGBE_READ_REG(&sc->hw, IXGBE_CTRL_EXT);
 	ctrl_ext &= ~IXGBE_CTRL_EXT_DRV_LOAD;
 	IXGBE_WRITE_REG(&sc->hw, IXGBE_CTRL_EXT, ctrl_ext);
-
-	callout_drain(&sc->fw_mode_timer);
 
 	if (sc->hw.mac.type == ixgbe_mac_E610) {
 		ixgbe_disable_lse(sc);
@@ -3984,12 +3978,28 @@ ixgbe_configure_wakeup_mta(if_ctx_t ctx)
 }
 
 /************************************************************************
- * ixgbe_setup_low_power_mode - LPLU/WoL preparation
+ * ixgbe_if_power_prepare - Establish policy required before a terminal stop
  *
- *   Prepare the adapter/port for LPLU and/or WoL
+ *   Snapshot the requested wake filters before iflib stops the interface.
+ *   X550EM 10GBASE-T must also suppress its PHY reset during that stop.
  ************************************************************************/
 static int
-ixgbe_setup_low_power_mode(if_ctx_t ctx, bool arm_wake)
+ixgbe_if_power_prepare(if_ctx_t ctx, enum iflib_power_event event)
+{
+	struct ixgbe_softc *sc = iflib_get_softc(ctx);
+
+	ixgbe_fw_mode_timer_pause(sc);
+	ixgbe_prepare_wakeup(ctx, event != IFLIB_POWER_DETACH);
+	return (0);
+}
+
+/************************************************************************
+ * ixgbe_setup_low_power_mode - LPLU/WoL preparation
+ *
+ *   Prepare the adapter/port for LPLU and/or WoL after a terminal stop
+ ************************************************************************/
+static int
+ixgbe_setup_low_power_mode(if_ctx_t ctx)
 {
 	struct ixgbe_softc *sc = iflib_get_softc(ctx);
 	struct ixgbe_hw *hw = &sc->hw;
@@ -3997,10 +4007,7 @@ ixgbe_setup_low_power_mode(if_ctx_t ctx, bool arm_wake)
 	u32 fctrl, grc, wufc;
 	s32 error = 0;
 
-	/* Snapshot wake policy before the terminal stop clears hardware state. */
-	ixgbe_prepare_wakeup(ctx, arm_wake);
 	wufc = sc->wol_filters;
-	ixgbe_if_stop(ctx);
 
 	/* Limit power management flow to X550EM baseT */
 	if (hw->device_id == IXGBE_DEV_ID_X550EM_X_10G_T &&
@@ -4076,7 +4083,7 @@ ixgbe_if_shutdown(if_ctx_t ctx)
 
 	INIT_DEBUGOUT("ixgbe_shutdown: begin");
 
-	error = ixgbe_setup_low_power_mode(ctx, true);
+	error = ixgbe_setup_low_power_mode(ctx);
 	if (error != 0)
 		device_printf(iflib_get_dev(ctx),
 		    "Wake configuration failed during shutdown: %d\n", error);
@@ -4095,7 +4102,7 @@ ixgbe_if_suspend(if_ctx_t ctx)
 
 	INIT_DEBUGOUT("ixgbe_suspend: begin");
 
-	error = ixgbe_setup_low_power_mode(ctx, true);
+	error = ixgbe_setup_low_power_mode(ctx);
 
 	return (error);
 } /* ixgbe_if_suspend */
@@ -4110,7 +4117,6 @@ ixgbe_if_resume(if_ctx_t ctx)
 {
 	struct ixgbe_softc *sc = iflib_get_softc(ctx);
 	device_t dev = iflib_get_dev(ctx);
-	if_t ifp = iflib_get_ifp(ctx);
 	struct ixgbe_hw *hw = &sc->hw;
 	u32 wus;
 
@@ -4132,13 +4138,7 @@ ixgbe_if_resume(if_ctx_t ctx)
 	pci_clear_pme(dev);
 	hw->wol_enabled = false;
 	sc->wol_filters = 0;
-
-	/*
-	 * Required after D3->D0 transition;
-	 * will re-advertise all previous advertised speeds
-	 */
-	if (if_getflags(ifp) & IFF_UP)
-		ixgbe_if_init(ctx);
+	ixgbe_fw_mode_timer_resume(sc);
 
 	return (0);
 } /* ixgbe_if_resume */
@@ -4235,6 +4235,7 @@ ixgbe_if_init(if_ctx_t ctx)
 	u32 ctrl_ext;
 
 	int i, j, err;
+	s32 status;
 
 	INIT_DEBUGOUT("ixgbe_if_init: begin");
 	if (atomic_load_acq_int(&sc->recovery_mode)) {
@@ -4263,7 +4264,13 @@ ixgbe_if_init(if_ctx_t ctx)
 	ixgbe_set_rar(hw, 0, hw->mac.addr, sc->pool, 1);
 	hw->addr_ctrl.rar_used_count = 1;
 
-	ixgbe_init_hw(hw);
+	status = ixgbe_init_hw(hw);
+	if (status != IXGBE_SUCCESS) {
+		device_printf(dev, "Hardware initialization failed: %d\n",
+		    status);
+		iflib_init_failed(ctx);
+		return;
+	}
 	sc->iov_mta_valid = false;
 	sc->iov_vfta_valid = false;
 
@@ -4781,6 +4788,9 @@ ixgbe_fw_mode_timer(void *arg)
 	struct ixgbe_softc *sc = arg;
 	struct ixgbe_hw *hw = &sc->hw;
 
+	if (atomic_load_acq_int(&sc->fw_mode_timer_paused) != 0)
+		return;
+
 	if (ixgbe_fw_recovery_mode(hw)) {
 		if (atomic_cmpset_acq_int(&sc->recovery_mode, 0, 1)) {
 			/* Firmware error detected, entering recovery mode */
@@ -4800,10 +4810,30 @@ ixgbe_fw_mode_timer(void *arg)
 		iflib_admin_intr_deferred(sc->ctx);
 	}
 
-
-	callout_reset(&sc->fw_mode_timer, hz,
-	    ixgbe_fw_mode_timer, sc);
+	if (atomic_load_acq_int(&sc->fw_mode_timer_paused) == 0)
+		callout_reset(&sc->fw_mode_timer, hz,
+		    ixgbe_fw_mode_timer, sc);
 } /* ixgbe_fw_mode_timer */
+
+static void
+ixgbe_fw_mode_timer_pause(struct ixgbe_softc *sc)
+{
+
+	if (!sc->fw_mode_timer_initialized ||
+	    atomic_swap_int(&sc->fw_mode_timer_paused, 1) != 0)
+		return;
+	callout_drain(&sc->fw_mode_timer);
+}
+
+static void
+ixgbe_fw_mode_timer_resume(struct ixgbe_softc *sc)
+{
+
+	if (!sc->fw_mode_timer_initialized ||
+	    atomic_swap_int(&sc->fw_mode_timer_paused, 0) == 0)
+		return;
+	callout_reset(&sc->fw_mode_timer, hz, ixgbe_fw_mode_timer, sc);
+}
 
 /************************************************************************
  * ixgbe_sfp_probe
@@ -5183,7 +5213,7 @@ ixgbe_if_update_admin_status(if_ctx_t ctx)
 	 * MOD and firmware events can produce dependent requests.  Fold those
 	 * into the claimed batch so link state is sampled after any link setup.
 	 */
-	if ((if_getdrvflags(iflib_get_ifp(ctx)) & IFF_DRV_RUNNING) != 0 &&
+	if (iflib_is_running(ctx) &&
 	    (sc->iov_mbx_cleanup_pending || ixgbe_mbx_pending(sc)))
 		atomic_set_32(&sc->task_requests, IXGBE_REQUEST_TASK_MBX);
 	for (pass = 0; pass < IXGBE_ADMIN_TASK_BUDGET; pass++) {
@@ -5202,7 +5232,7 @@ ixgbe_if_update_admin_status(if_ctx_t ctx)
 			ixgbe_handle_msf(ctx);
 		/* A reset request can re-enable VF traffic; skip it while stopped. */
 		if ((requests & IXGBE_REQUEST_TASK_MBX) != 0 &&
-		    (if_getdrvflags(iflib_get_ifp(ctx)) & IFF_DRV_RUNNING) != 0)
+		    iflib_is_running(ctx))
 			ixgbe_handle_mbx(ctx);
 		if (requests & IXGBE_REQUEST_TASK_FDIR)
 			ixgbe_reinit_fdir(ctx);
@@ -5637,10 +5667,16 @@ ixgbe_set_flowcntl(struct ixgbe_softc *sc, int fc)
 		return (EINVAL);
 	}
 
+	sc->hw.fc.requested_mode = fc;
+	/* Don't autoneg if forcing a value. */
+	sc->hw.fc.disable_fc_autoneg = true;
+	/* Init replays the policy; closed admission does not prove DMA stopped. */
+	if (!iflib_is_running(sc->ctx))
+		return (0);
+
 	/* Updating SRRCTL on a live queue is itself an MDD violation. */
 	mdd_active = sc->num_rx_queues > 1 &&
-	    (sc->feat_en & IXGBE_FEATURE_SRIOV) != 0 &&
-	    (if_getdrvflags(iflib_get_ifp(sc->ctx)) & IFF_DRV_RUNNING) != 0;
+	    (sc->feat_en & IXGBE_FEATURE_SRIOV) != 0;
 	if (mdd_active)
 		ixgbe_disable_mdd(&sc->hw);
 	if (sc->num_rx_queues > 1) {
@@ -5659,10 +5695,6 @@ ixgbe_set_flowcntl(struct ixgbe_softc *sc, int fc)
 		}
 	}
 
-	sc->hw.fc.requested_mode = fc;
-
-	/* Don't autoneg if forcing a value */
-	sc->hw.fc.disable_fc_autoneg = true;
 	ixgbe_fc_enable(&sc->hw);
 
 	return (0);
@@ -5926,11 +5958,13 @@ static int
 ixgbe_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 {
 	struct ixgbe_softc *sc = (struct ixgbe_softc *)arg1;
-	if_t ifp = iflib_get_ifp(sc->ctx);
+	struct sx *ctx_lock = iflib_ctx_lock_get(sc->ctx);
 	int error;
 	u16 newval;
 
+	sx_xlock(ctx_lock);
 	newval = sc->dmac;
+	sx_xunlock(ctx_lock);
 	error = sysctl_handle_16(oidp, &newval, 0, req);
 	if ((error) || (req->newptr == NULL))
 		return (error);
@@ -5938,11 +5972,10 @@ ixgbe_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 	switch (newval) {
 	case 0:
 		/* Disabled */
-		sc->dmac = 0;
 		break;
 	case 1:
 		/* Enable and use default */
-		sc->dmac = 1000;
+		newval = 1000;
 		break;
 	case 50:
 	case 100:
@@ -5953,18 +5986,24 @@ ixgbe_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 	case 5000:
 	case 10000:
 		/* Legal values - allow */
-		sc->dmac = newval;
 		break;
 	default:
 		/* Do nothing, illegal value */
 		return (EINVAL);
 	}
 
-	/* Re-initialize hardware if it's already running */
-	if (if_getdrvflags(ifp) & IFF_DRV_RUNNING)
-		if_init(ifp, ifp);
+	sx_xlock(ctx_lock);
+	if (iflib_in_detach(sc->ctx)) {
+		error = ENXIO;
+	} else if (sc->dmac != newval) {
+		sc->dmac = newval;
+		/* Apply through init only if still administratively up. */
+		iflib_request_reset_if_up(sc->ctx);
+		iflib_admin_intr_deferred(sc->ctx);
+	}
+	sx_xunlock(ctx_lock);
 
-	return (0);
+	return (error);
 } /* ixgbe_sysctl_dmac */
 
 #ifdef IXGBE_DEBUG

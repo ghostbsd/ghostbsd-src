@@ -158,6 +158,7 @@ device		axidma		# Xilinx AXI DMA Controller
 
 # GPIO
 device		gpio
+device  	gpiopower	# event handler for gpio-based powerdown
 device		fdt_pinctrl
 
 # SPI
@@ -205,6 +206,10 @@ options 	FDT
 # I2C support
 device		iicbus		# Bus support, required for iicoc below.
 device		iicoc		# OpenCores I2C controller support
+
+# random(4)
+device		tpm			# Trusted Platform Module
+options 	RANDOM_ENABLE_TPM	# enable entropy from TPM 2.0
 
 # Include SoC specific configuration
 include		"std.allwinner"

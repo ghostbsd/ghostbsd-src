@@ -40,5 +40,6 @@ tags
 .ccls-cache
 sys/*/compile
 /src.conf
+.tgrep
 .idea
 .vscode

@@ -116,7 +116,11 @@
 #include <machine/clock.h>
 #include <machine/cpu.h>
 #include <machine/cputypes.h>
+#ifdef FDT
+#include <x86/fdt.h>
+#endif
 #include <machine/frame.h>
+#include <machine/ifunc.h>
 #include <machine/intr_machdep.h>
 #include <x86/mca.h>
 #include <machine/md_var.h>
@@ -125,15 +129,11 @@
 #include <machine/pcb.h>
 #include <machine/proc.h>
 #include <machine/sigframe.h>
+#include <machine/smp.h>
 #include <machine/specialreg.h>
 #include <machine/trap.h>
 #include <machine/tss.h>
 #include <x86/ucode.h>
-#include <x86/ifunc.h>
-#include <machine/smp.h>
-#ifdef FDT
-#include <x86/fdt.h>
-#endif
 
 #ifdef DEV_ATPIC
 #include <x86/isa/icu.h>
@@ -211,10 +211,29 @@ int ia32_splitlock = 0;
 SYSCTL_INT(_hw, OID_AUTO, splitlock, CTLFLAG_RD,
     &ia32_splitlock, 0,
     "splitlock prevention supported");
+
 int ia32_splitlock_force = 1;
-SYSCTL_INT(_hw, OID_AUTO, splitlock_force, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
-    &ia32_splitlock_force, 0,
-    "splitlock prevention enabled by default");
+
+static int
+sysctl_hw_splitlock_force_proc(SYSCTL_HANDLER_ARGS)
+{
+	int error, val;
+
+	val = ia32_splitlock_force;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 0 && !ia32_splitlock)
+		error = ENOTSUP;
+	else
+		ia32_splitlock_force = val != 0;
+	return (error);
+}
+
+SYSCTL_PROC(_hw, OID_AUTO, splitlock_force,
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_MPSAFE, 0, 0,
+    sysctl_hw_splitlock_force_proc, "I",
+    "Splitlock prevention enabled on exec");
 
 int __read_frequently fred = 0;
 SYSCTL_INT(_hw, OID_AUTO, fred, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
@@ -1399,6 +1418,8 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	    (cpu_stdext_feature & CPUID_STDEXT_FSGSBASE) != 0 && !pti) {
 		fred = 1;
 		TUNABLE_INT_FETCH("hw.fred", &fred);
+		if (fred != 0)
+			fred = 1;
 	}
 
 	sched_instance_select();

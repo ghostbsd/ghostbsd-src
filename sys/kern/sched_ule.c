@@ -75,8 +75,6 @@
 #include <machine/cpu.h>
 #include <machine/smp.h>
 
-#define	KTR_ULE	0
-
 #define	TS_NAME_LEN (MAXCOMLEN + sizeof(" td ") + sizeof(__XSTRING(UINT_MAX)))
 #define	TDQ_NAME_LEN	(sizeof("sched lock ") + sizeof(__XSTRING(MAXCPU)))
 #define	TDQ_LOADNAME_LEN	(sizeof("CPU ") + sizeof(__XSTRING(MAXCPU)) - 1 + sizeof(" load"))
@@ -89,7 +87,7 @@ struct td_sched {
 	short		ts_flags;	/* TSF_* flags. */
 	int		ts_cpu;		/* CPU we are on, or were last on. */
 	u_int		ts_rltick;	/* Real last tick, for affinity. */
-	u_int		ts_slice;	/* Ticks of slice remaining. */
+	u_int		ts_slice;	/* Ticks of slice passed. */
 	u_int		ts_ftick;	/* %CPU window's first tick */
 	u_int		ts_ltick;	/* %CPU window's last tick */
 	/* All ticks count below are stored shifted by SCHED_TICK_SHIFT. */
@@ -234,6 +232,14 @@ static int __read_mostly tickincr = 8 << SCHED_TICK_SHIFT;
 static int __read_mostly realstathz = 127;	/* reset during boot. */
 static int __read_mostly sched_slice = 10;	/* reset during boot. */
 static int __read_mostly sched_slice_min = 1;	/* reset during boot. */
+
+static inline void
+sched_update_hogticks(void)
+{
+	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
+	    realstathz);
+}
+
 #ifdef PREEMPTION
 #ifdef FULL_PREEMPTION
 static int __read_mostly preempt_thresh = PRI_MAX_IDLE + 1;
@@ -503,19 +509,21 @@ normalize_ts_off(int offset)
 static inline void
 tdq_runq_add(struct tdq *tdq, struct thread *td, int flags)
 {
-	struct td_sched *ts;
 	u_char pri, idx;
 
 	TDQ_LOCK_ASSERT(tdq, MA_OWNED);
 	THREAD_LOCK_BLOCKED_ASSERT(td, MA_OWNED);
 
-	pri = td->td_priority;
-	ts = td_get_sched(td);
 	TD_SET_RUNQ(td);
+
 	if (THREAD_CAN_MIGRATE(td)) {
+		struct td_sched *const ts = td_get_sched(td);
+
 		tdq->tdq_transferable++;
 		ts->ts_flags |= TSF_XFERABLE;
 	}
+
+	pri = td->td_priority;
 	if (PRI_MIN_BATCH <= pri && pri <= PRI_MAX_BATCH) {
 		/*
 		 * The queues allocated to the batch range are not used as
@@ -677,11 +685,9 @@ tdq_slice(struct tdq *tdq)
 	 * cannot be higher priority load in the system.
 	 */
 	load = tdq->tdq_sysload - 1;
-	if (load >= SCHED_SLICE_MIN_DIVISOR)
-		return (sched_slice_min);
 	if (load <= 1)
 		return (sched_slice);
-	return (sched_slice / load);
+	return (imax(sched_slice_min, sched_slice / load));
 }
 
 /*
@@ -880,7 +886,7 @@ cpu_search_highest(const struct cpu_group *cg, const struct cpu_search *s,
 
 /*
  * Find the cpu with the least load via the least loaded path that has a
- * lowpri greater than pri  pri.  A pri of -1 indicates any priority is
+ * lowpri greater than pri.  A pri of -1 indicates any priority is
  * acceptable.
  */
 static inline int
@@ -1099,7 +1105,7 @@ tdq_idled(struct tdq *tdq)
 	struct cpu_group *cg, *parent;
 	struct tdq *steal;
 	cpuset_t mask;
-	int cpu, switchcnt, goup;
+	int cpu, switchcnt, group;
 
 	if (smp_started == 0 || steal_idle == 0 || tdq->tdq_cg == NULL)
 		return (1);
@@ -1107,7 +1113,7 @@ tdq_idled(struct tdq *tdq)
 	CPU_CLR(PCPU_GET(cpuid), &mask);
 restart:
 	switchcnt = TDQ_SWITCHCNT(tdq);
-	for (cg = tdq->tdq_cg, goup = 0; ; ) {
+	for (cg = tdq->tdq_cg, group = 0; ; ) {
 		cpu = sched_highest(cg, &mask, steal_thresh, 1);
 		/*
 		 * We were assigned a thread but not preempted.  Returning
@@ -1123,9 +1129,9 @@ restart:
 		 * the other one specifically and then escalating two levels.
 		 */
 		if (cpu == -1) {
-			if (goup) {
+			if (group) {
 				cg = cg->cg_parent;
-				goup = 0;
+				group = 0;
 			}
 			parent = cg->cg_parent;
 			if (parent == NULL)
@@ -1135,7 +1141,7 @@ restart:
 					cg = &parent->cg_child[1];
 				else
 					cg = &parent->cg_child[0];
-				goup = 1;
+				group = 1;
 			} else
 				cg = parent;
 			continue;
@@ -1236,7 +1242,7 @@ tdq_notify(struct tdq *tdq, int lowpri)
 
 	/*
 	 * Try to figure out if we can signal the idle thread instead of sending
-	 * an IPI.  This check is racy; at worst, we will deliever an IPI
+	 * an IPI.  This check is racy; at worst, we will deliver an IPI
 	 * unnecessarily.
 	 */
 	cpu = TDQ_ID(tdq);
@@ -1614,7 +1620,7 @@ sched_setup_smp(void)
 	int i;
 
 	CPU_FOREACH(i) {
-		tdq = DPCPU_ID_PTR(i, tdq);
+		tdq = TDQ_CPU(i);
 		tdq_setup(tdq, i);
 		tdq->tdq_cg = smp_topo_find(cpu_top, i);
 		if (tdq->tdq_cg == NULL)
@@ -1663,8 +1669,7 @@ sched_ule_initticks(void)
 	realstathz = stathz ? stathz : hz;
 	sched_slice = realstathz / SCHED_SLICE_DEFAULT_DIVISOR;
 	sched_slice_min = sched_slice / SCHED_SLICE_MIN_DIVISOR;
-	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
-	    realstathz);
+	sched_update_hogticks();
 
 	/*
 	 * tickincr is shifted out by 10 to avoid rounding errors due to
@@ -1896,14 +1901,14 @@ sched_ule_init(void)
 }
 
 /*
- * schedinit_ap() is needed prior to calling sched_throw(NULL) to ensure that
+ * sched_init_ap() is needed prior to calling sched_throw(NULL) to ensure that
  * the pcpu requirements are met for any calls in the period between curthread
  * initialization and sched_throw().  One can safely add threads to the queue
  * before sched_throw(), for instance, as long as the thread lock is setup
  * correctly.
  *
  * TDQ_SELF() relies on the below sched pcpu setting; it may be used only
- * after schedinit_ap().
+ * after sched_init_ap().
  */
 static void
 sched_ule_init_ap(void)
@@ -2167,7 +2172,7 @@ tdq_trysteal(struct tdq *tdq)
 	struct cpu_group *cg, *parent;
 	struct tdq *steal;
 	cpuset_t mask;
-	int cpu, i, goup;
+	int cpu, i, group;
 
 	if (smp_started == 0 || steal_idle == 0 || trysteal_limit == 0 ||
 	    tdq->tdq_cg == NULL)
@@ -2177,7 +2182,7 @@ tdq_trysteal(struct tdq *tdq)
 	/* We don't want to be preempted while we're iterating. */
 	spinlock_enter();
 	TDQ_UNLOCK(tdq);
-	for (i = 1, cg = tdq->tdq_cg, goup = 0; ; ) {
+	for (i = 1, cg = tdq->tdq_cg, group = 0; ; ) {
 		cpu = sched_highest(cg, &mask, steal_thresh, 1);
 		/*
 		 * If a thread was added while interrupts were disabled don't
@@ -2195,9 +2200,9 @@ tdq_trysteal(struct tdq *tdq)
 		 * the other one specifically and then escalating two levels.
 		 */
 		if (cpu == -1) {
-			if (goup) {
+			if (group) {
 				cg = cg->cg_parent;
-				goup = 0;
+				group = 0;
 			}
 			if (++i > trysteal_limit) {
 				TDQ_LOCK(tdq);
@@ -2213,7 +2218,7 @@ tdq_trysteal(struct tdq *tdq)
 					cg = &parent->cg_child[1];
 				else
 					cg = &parent->cg_child[0];
-				goup = 1;
+				group = 1;
 			} else
 				cg = parent;
 			continue;
@@ -2317,7 +2322,7 @@ thread_unblock_switch(struct thread *td, struct mtx *mtx)
  * be assigned elsewhere via binding.
  */
 static void
-sched_ule_sswitch(struct thread *td, int flags)
+sched_ule_switch(struct thread *td, int flags)
 {
 	struct thread *newtd;
 	struct tdq *tdq;
@@ -2655,6 +2660,7 @@ sched_ule_preempt(struct thread *td)
 	struct tdq *tdq;
 	int flags;
 
+	MPASS(td == curthread);
 	SDT_PROBE2(sched, , , surrender, td, td->td_proc);
 
 	thread_lock(td);
@@ -3003,17 +3009,19 @@ static void
 sched_ule_affinity(struct thread *td)
 {
 #ifdef SMP
-	struct td_sched *ts;
+	struct td_sched *const ts = td_get_sched(td);
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
-	ts = td_get_sched(td);
+
 	if (THREAD_CAN_SCHED(td, ts->ts_cpu))
 		return;
+
 	if (TD_ON_RUNQ(td)) {
 		sched_rem(td);
 		sched_add(td, SRQ_BORING | SRQ_HOLDTD);
 		return;
 	}
+
 	if (!TD_IS_RUNNING(td))
 		return;
 	/*
@@ -3237,7 +3245,7 @@ sched_ule_ap_entry(void)
 
 	tdq = TDQ_SELF();
 
-	/* This should have been setup in schedinit_ap(). */
+	/* This should have been setup in sched_init_ap(). */
 	THREAD_LOCKPTR_ASSERT(curthread, TDQ_LOCKPTR(tdq));
 
 	TDQ_LOCK(tdq);
@@ -3344,7 +3352,7 @@ sched_ule_clear_tdname(struct thread *td)
 }
 
 static void
-sched_ule_schedcpu(void)
+sched_ule_sysinit(void)
 {
 }
 
@@ -3415,58 +3423,6 @@ sched_ule_find_l2_neighbor(int cpu)
 }
 #endif
 
-struct sched_instance sched_ule_instance = {
-#define	SLOT(name) .name = sched_ule_##name
-	SLOT(load),
-	SLOT(rr_interval),
-	SLOT(runnable),
-	SLOT(exit),
-	SLOT(fork),
-	SLOT(fork_exit),
-	SLOT(class),
-	SLOT(nice),
-	SLOT(ap_entry),
-	SLOT(exit_thread),
-	SLOT(estcpu),
-	SLOT(fork_thread),
-	SLOT(ithread_prio),
-	SLOT(lend_prio),
-	SLOT(lend_user_prio),
-	SLOT(lend_user_prio_cond),
-	SLOT(pctcpu),
-	SLOT(prio),
-	SLOT(sleep),
-	SLOT(sswitch),
-	SLOT(throw),
-	SLOT(unlend_prio),
-	SLOT(user_prio),
-	SLOT(userret_slowpath),
-	SLOT(add),
-	SLOT(choose),
-	SLOT(clock),
-	SLOT(idletd),
-	SLOT(preempt),
-	SLOT(relinquish),
-	SLOT(rem),
-	SLOT(wakeup),
-	SLOT(bind),
-	SLOT(unbind),
-	SLOT(is_bound),
-	SLOT(affinity),
-	SLOT(sizeof_proc),
-	SLOT(sizeof_thread),
-	SLOT(tdname),
-	SLOT(clear_tdname),
-	SLOT(find_l2_neighbor),
-	SLOT(init),
-	SLOT(init_ap),
-	SLOT(setup),
-	SLOT(initticks),
-	SLOT(schedcpu),
-#undef SLOT
-};
-DECLARE_SCHEDULER(ule_sched_selector, "ULE", &sched_ule_instance);
-
 static int
 sysctl_kern_quantum(SYSCTL_HANDLER_ARGS)
 {
@@ -3480,9 +3436,25 @@ sysctl_kern_quantum(SYSCTL_HANDLER_ARGS)
 	if (new_val <= 0)
 		return (EINVAL);
 	sched_slice = imax(1, (new_val + period / 2) / period);
-	sched_slice_min = sched_slice / SCHED_SLICE_MIN_DIVISOR;
-	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
-	    realstathz);
+	sched_slice_min = imax(1, sched_slice / SCHED_SLICE_MIN_DIVISOR);
+	sched_update_hogticks();
+	return (0);
+}
+
+static int
+sysctl_kern_slice(SYSCTL_HANDLER_ARGS)
+{
+	int error, new_val;
+
+	new_val = sched_slice;
+	error = sysctl_handle_int(oidp, &new_val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (new_val <= 0)
+		return (EINVAL);
+	sched_slice = new_val;
+	sched_slice_min = imax(1, sched_slice / SCHED_SLICE_MIN_DIVISOR);
+	sched_update_hogticks();
 	return (0);
 }
 
@@ -3493,7 +3465,9 @@ SYSCTL_PROC(_kern_sched_ule, OID_AUTO, quantum,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
     sysctl_kern_quantum, "I",
     "Quantum for timeshare threads in microseconds");
-SYSCTL_INT(_kern_sched_ule, OID_AUTO, slice, CTLFLAG_RW, &sched_slice, 0,
+SYSCTL_PROC(_kern_sched_ule, OID_AUTO, slice,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_slice, "I",
     "Quantum for timeshare threads in stathz ticks");
 SYSCTL_UINT(_kern_sched_ule, OID_AUTO, interact, CTLFLAG_RWTUN, &sched_interact, 0,
     "Interactivity score threshold");
@@ -3530,3 +3504,5 @@ SYSCTL_INT(_kern_sched_ule, OID_AUTO, always_steal, CTLFLAG_RWTUN,
     &always_steal, 0,
     "Always run the stealer from the idle thread");
 #endif
+
+DECLARE_SCHEDULER(ule, "ULE");

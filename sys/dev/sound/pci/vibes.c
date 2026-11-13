@@ -224,7 +224,8 @@ svchan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 
         /* user has requested interrupts every blocksize bytes */
 	RANGE(blocksize, SV_MIN_BLKSZ, sc->bufsz / SV_INTR_PER_BUFFER);
-	sndbuf_resize(ch->buffer, SV_INTR_PER_BUFFER, blocksize);
+	if (sndbuf_resize(ch->buffer, SV_INTR_PER_BUFFER, blocksize) != 0)
+		return 0;
 	DEB(printf("svchan_setblocksize: %d\n", blocksize));
 	return blocksize;
 }
@@ -785,6 +786,8 @@ sv_attach(device_t dev) {
 	sv_power(sc, 0);
 	sv_init(sc);
 
+	pcm_init(dev, sc);
+
 	if (mixer_init(dev, &sv_mixer_class, sc) != 0) {
 		device_printf(dev, "sv_attach: Mixer failed to initialize\n");
 		goto fail;
@@ -867,7 +870,6 @@ sv_attach(device_t dev) {
 	if (bootverbose)
 		printf("Sonicvibes: revision %d.\n", sc->rev);
 
-	pcm_init(dev, sc);
         pcm_addchan(dev, PCMDIR_PLAY, &svpchan_class, sc);
         pcm_addchan(dev, PCMDIR_REC,  &svrchan_class, sc);
 

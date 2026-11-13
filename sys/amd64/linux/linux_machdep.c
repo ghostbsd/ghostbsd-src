@@ -40,6 +40,7 @@
 #include <sys/ptrace.h>
 #include <sys/syscallsubr.h>
 
+#include <machine/ifunc.h>
 #include <machine/md_var.h>
 #include <machine/pcb.h>
 #include <machine/specialreg.h>
@@ -48,7 +49,6 @@
 #include <vm/vm.h>
 #include <vm/vm_param.h>
 
-#include <x86/ifunc.h>
 #include <x86/reg.h>
 #include <x86/sysarch.h>
 
@@ -88,6 +88,9 @@ linux_iopl(struct thread *td, struct linux_iopl_args *args)
 		return (error);
 	if ((error = securelevel_gt(td->td_ucred, 0)) != 0)
 		return (error);
+	/* See comment in sys/amd64/amd64/io.c. */
+	if (fred && args->level != 0)
+		return (ENOSYS);
 	td->td_frame->tf_rflags = (td->td_frame->tf_rflags & ~PSL_IOPL) |
 	    (args->level * (PSL_IOPL / 3));
 
@@ -279,6 +282,26 @@ linux_to_bsd_regset(struct reg *b_reg, const struct linux_pt_regset *l_regset)
 	b_reg->r_es = l_regset->es;
 	b_reg->r_fs = l_regset->fs;
 	b_reg->r_gs = l_regset->gs;
+}
+
+void
+bsd_to_linux_fpregset(const struct fpreg *b_fpreg,
+    struct linux_pt_fpregset *l_fpregset)
+{
+	l_fpregset->cwd = b_fpreg->fpr_env[0];
+	l_fpregset->swd = b_fpreg->fpr_env[0] >> 16;
+	l_fpregset->twd = b_fpreg->fpr_env[0] >> 32;
+	l_fpregset->fop = b_fpreg->fpr_env[0] >> 48;
+	l_fpregset->rip = b_fpreg->fpr_env[1];
+	l_fpregset->rdp = b_fpreg->fpr_env[2];
+	l_fpregset->mxcsr = b_fpreg->fpr_env[3];
+	l_fpregset->mxcsr_mask = b_fpreg->fpr_env[3] >> 32;
+
+	memcpy(l_fpregset->st_space, b_fpreg->fpr_acc,
+	    sizeof(l_fpregset->st_space));
+	memcpy(l_fpregset->xmm_space, b_fpreg->fpr_xacc,
+	    sizeof(l_fpregset->xmm_space));
+	memset(l_fpregset->padding, 0, sizeof(l_fpregset->padding));
 }
 
 void

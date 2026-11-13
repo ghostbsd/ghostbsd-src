@@ -435,6 +435,9 @@ struct ixgbe_softc {
 	bool			vf_mcast_overflow_warned;
 	u8			vf_link_mbx_failures;
 	u8			vf_link_poll_tick;
+	/* VF-owned RSS programming, protected by the iflib context lock. */
+	u32			vf_rss_key[10];
+	u32			vf_rss_mrqc;
 
 	/* Info about the interface */
 	int			advertise;	/* link speeds */
@@ -494,6 +497,7 @@ struct ixgbe_softc {
 	sbintime_t		iov_recovery_time;
 	bool			iov_recovery_stop;
 	uint8_t			iov_recovery_cursor;
+	bool			iov_attached;
 	uint64_t		iov_dma_abort_events;
 	uint64_t		iov_dma_abort_flr_failures;
 	uint64_t		iov_dma_abort_quarantines;
@@ -504,6 +508,8 @@ struct ixgbe_softc {
 
 	/* Firmware error check */
 	int			recovery_mode;
+	u_int			fw_mode_timer_paused;
+	bool			fw_mode_timer_initialized;
 	bool			overtemp_shutdown_pending;
 	struct callout		fw_mode_timer;
 
@@ -511,7 +517,6 @@ struct ixgbe_softc {
 	unsigned long		dropped_pkts;
 	unsigned long		mbuf_header_failed;
 	unsigned long		mbuf_packet_failed;
-	unsigned long		watchdog_events;
 	unsigned long		link_irq;
 	union {
 		struct ixgbe_hw_stats pf;

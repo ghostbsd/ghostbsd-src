@@ -32,10 +32,9 @@
 #include <sys/sbuf.h>
 #include <machine/_inttypes.h>
 
-#ifdef RSS
 #include <net/rss_config.h>
 #include <netinet/in_rss.h>
-#endif
+
 
 /*********************************************************************
  *  PCI Device ID Table
@@ -111,7 +110,6 @@ static int	igc_if_mtu_set(if_ctx_t, uint32_t);
 static void	igc_if_timer(if_ctx_t, uint16_t);
 static void	igc_if_vlan_register(if_ctx_t, u16);
 static void	igc_if_vlan_unregister(if_ctx_t, u16);
-static void	igc_if_watchdog_reset(if_ctx_t);
 static bool	igc_if_needs_restart(if_ctx_t, enum iflib_restart_event);
 
 static void	igc_identify_hardware(if_ctx_t);
@@ -183,6 +181,7 @@ static int	igc_if_msix_intr_assign(if_ctx_t, int);
 static int	igc_msix_link(void *);
 static void	igc_handle_link(void *context);
 
+static void	igc_sysctl_request_reinit(struct igc_softc *);
 static int	igc_set_flowcntl(SYSCTL_HANDLER_ARGS);
 static int	igc_sysctl_dmac(SYSCTL_HANDLER_ARGS);
 static int	igc_sysctl_eee(SYSCTL_HANDLER_ARGS);
@@ -242,7 +241,6 @@ static device_method_t igc_if_methods[] = {
 	DEVMETHOD(ifdi_mtu_set, igc_if_mtu_set),
 	DEVMETHOD(ifdi_promisc_set, igc_if_set_promisc),
 	DEVMETHOD(ifdi_timer, igc_if_timer),
-	DEVMETHOD(ifdi_watchdog_reset, igc_if_watchdog_reset),
 	DEVMETHOD(ifdi_vlan_register, igc_if_vlan_register),
 	DEVMETHOD(ifdi_vlan_unregister, igc_if_vlan_unregister),
 	DEVMETHOD(ifdi_get_counter, igc_if_get_counter),
@@ -536,6 +534,7 @@ igc_if_attach_pre(if_ctx_t ctx)
 	    OID_AUTO, "debug", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
 	    sc, 0, igc_sysctl_debug_info, "I", "Debug Information");
 
+	sc->fc = igc_fc_full;
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
 	    OID_AUTO, "fc", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT,
@@ -1623,18 +1622,6 @@ igc_if_update_admin_status(if_ctx_t ctx)
 	igc_update_stats_counters(sc);
 }
 
-static void
-igc_if_watchdog_reset(if_ctx_t ctx)
-{
-	struct igc_softc *sc = iflib_get_softc(ctx);
-
-	/*
-	 * Just count the event; iflib(4) will already trigger a
-	 * sufficient reset of the controller.
-	 */
-	sc->watchdog_events++;
-}
-
 /*********************************************************************
  *
  *  This routine disables all traffic on the adapter by issuing a
@@ -2205,10 +2192,7 @@ igc_reset(if_ctx_t ctx)
 	/* 16-byte granularity */
 	hw->fc.low_water = hw->fc.high_water - 16;
 
-	if (sc->fc) /* locally set flow control value? */
-		hw->fc.requested_mode = sc->fc;
-	else
-		hw->fc.requested_mode = igc_fc_full;
+	hw->fc.requested_mode = sc->fc;
 
 	hw->fc.pause_time = IGC_FC_PAUSE_TIME;
 
@@ -2258,6 +2242,7 @@ igc_initialize_rss_mapping(struct igc_softc *sc)
 	int queue_id;
 	u32 reta;
 	u32 rss_key[RSSKEYLEN], mrqc, shift = 0;
+	u32 rss_hash_config;
 
 	/*
 	 * The redirection table controls which destination
@@ -2317,26 +2302,33 @@ igc_initialize_rss_mapping(struct igc_softc *sc)
 	 */
 	mrqc = IGC_MRQC_ENABLE_RSS_4Q;
 
-#ifdef RSS
 	/* XXX ew typecasting */
 	rss_getkey((uint8_t *) &rss_key);
-#else
-	arc4rand(&rss_key, sizeof(rss_key), 0);
-#endif
 	for (i = 0; i < RSSKEYLEN; i++)
 		IGC_WRITE_REG_ARRAY(hw, IGC_RSSRK(0), i, rss_key[i]);
 
 	/*
-	 * Configure the RSS fields to hash upon.
+	 * Configure the RSS fields to hash upon.  Hash exactly what the
+	 * stack hashes, so that hardware and software agree on the hash
+	 * of a flow.
 	 */
-	mrqc |= (IGC_MRQC_RSS_FIELD_IPV4 |
-	    IGC_MRQC_RSS_FIELD_IPV4_TCP);
-	mrqc |= (IGC_MRQC_RSS_FIELD_IPV6 |
-	    IGC_MRQC_RSS_FIELD_IPV6_TCP);
-	mrqc |=( IGC_MRQC_RSS_FIELD_IPV4_UDP |
-	    IGC_MRQC_RSS_FIELD_IPV6_UDP);
-	mrqc |=( IGC_MRQC_RSS_FIELD_IPV6_UDP_EX |
-	    IGC_MRQC_RSS_FIELD_IPV6_TCP_EX);
+	rss_hash_config = rss_gethashconfig();
+	if (rss_hash_config & RSS_HASHTYPE_RSS_IPV4)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV4;
+	if (rss_hash_config & RSS_HASHTYPE_RSS_TCP_IPV4)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV4_TCP;
+	if (rss_hash_config & RSS_HASHTYPE_RSS_IPV6)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV6;
+	if (rss_hash_config & RSS_HASHTYPE_RSS_TCP_IPV6)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV6_TCP;
+	if (rss_hash_config & RSS_HASHTYPE_RSS_TCP_IPV6_EX)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV6_TCP_EX;
+	if (rss_hash_config & RSS_HASHTYPE_RSS_UDP_IPV4)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV4_UDP;
+	if (rss_hash_config & RSS_HASHTYPE_RSS_UDP_IPV6)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV6_UDP;
+	if (rss_hash_config & RSS_HASHTYPE_RSS_UDP_IPV6_EX)
+		mrqc |= IGC_MRQC_RSS_FIELD_IPV6_UDP_EX;
 
 	IGC_WRITE_REG(hw, IGC_MRQC, mrqc);
 }
@@ -3172,8 +3164,8 @@ igc_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 		    sc->stats.ruc + sc->stats.rfc + sc->stats.roc +
 		    sc->stats.mpc);
 	case IFCOUNTER_OERRORS:
-		return (sc->stats.ecol + sc->stats.latecol +
-		    sc->watchdog_events);
+		return (if_get_counter_default(ifp, cnt) +
+		    sc->stats.ecol + sc->stats.latecol);
 	default:
 		return (if_get_counter_default(ifp, cnt));
 	}
@@ -3276,9 +3268,6 @@ igc_add_hw_stats(struct igc_softc *sc)
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "rx_overruns",
 	    CTLFLAG_RD, &sc->rx_overruns,
 	    "RX overruns");
-	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "watchdog_timeouts",
-	    CTLFLAG_RD, &sc->watchdog_events,
-	    "Watchdog timeouts");
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "device_control",
 	    CTLTYPE_UINT | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
 	    sc, IGC_CTRL, igc_sysctl_reg_handler, "IU",
@@ -3746,16 +3735,13 @@ igc_sysctl_tso_tcp_flags_mask(SYSCTL_HANDLER_ARGS)
 static int
 igc_set_flowcntl(SYSCTL_HANDLER_ARGS)
 {
-	int error;
-	static int input = 3; /* default is full */
+	int error, input;
 	struct igc_softc *sc = (struct igc_softc *) arg1;
 
+	input = sc->fc;
 	error = sysctl_handle_int(oidp, &input, 0, req);
 
 	if ((error) || (req->newptr == NULL))
-		return (error);
-
-	if (input == sc->fc) /* no change? */
 		return (error);
 
 	switch (input) {
@@ -3763,17 +3749,21 @@ igc_set_flowcntl(SYSCTL_HANDLER_ARGS)
 	case igc_fc_tx_pause:
 	case igc_fc_full:
 	case igc_fc_none:
-		sc->hw.fc.requested_mode = input;
-		sc->fc = input;
 		break;
 	default:
-		/* Do nothing */
-		return (error);
+		return (EINVAL);
 	}
 
-	sc->hw.fc.current_mode = sc->hw.fc.requested_mode;
-	igc_force_mac_fc(&sc->hw);
-	return (error);
+	if (input == sc->fc) /* no change? */
+		return (0);
+
+	/*
+	 * The mode is advertised to the link partner and also decides the
+	 * pause thresholds and per-queue drop, so it takes a reinit to apply.
+	 */
+	sc->fc = input;
+	igc_sysctl_request_reinit(sc);
+	return (0);
 }
 
 static void
@@ -3909,17 +3899,9 @@ static void
 igc_print_debug_info(struct igc_softc *sc)
 {
 	device_t dev = iflib_get_dev(sc->ctx);
-	if_t ifp = iflib_get_ifp(sc->ctx);
 
-	if (if_getdrvflags(ifp) & IFF_DRV_RUNNING)
-		printf("Interface is RUNNING ");
-	else
-		printf("Interface is NOT RUNNING\n");
-
-	if (if_getdrvflags(ifp) & IFF_DRV_OACTIVE)
-		printf("and INACTIVE\n");
-	else
-		printf("and ACTIVE\n");
+	device_printf(dev, "iflib software admission: %s\n",
+	    iflib_is_running(sc->ctx) ? "open" : "closed");
 
 	for (int i = 0; i < sc->tx_num_queues; i++) {
 		device_printf(dev, "TX Queue %d ------\n", i);
