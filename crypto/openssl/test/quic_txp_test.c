@@ -1,5 +1,5 @@
 /*
- * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2026 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -11,6 +11,8 @@
 #include "internal/quic_statm.h"
 #include "internal/quic_demux.h"
 #include "internal/quic_record_rx.h"
+#include "internal/quic_channel.h"
+#include "../ssl/quic/quic_channel_local.h"
 #include "testutil.h"
 #include "quic_record_test_util.h"
 
@@ -27,22 +29,8 @@ static const QUIC_CONN_ID cid_1 = {
 };
 
 static const unsigned char reset_token_1[16] = {
-    0x99,
-    0x88,
-    0x77,
-    0x66,
-    0x55,
-    0x44,
-    0x33,
-    0x22,
-    0x11,
-    0xaa,
-    0xbb,
-    0xcc,
-    0xdd,
-    0xee,
-    0xff,
-    0x12,
+    0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0xaa,
+    0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x12
 };
 
 static const unsigned char secret_1[32] = {
@@ -1317,8 +1305,16 @@ static int run_script(int script_idx, const struct script_op *script)
     struct helper h;
     const struct script_op *op;
     size_t opn = 0;
+    QUIC_CHANNEL *ch = NULL;
+    QUIC_RSTREAM_QPARM *rsqp = NULL;
 
     if (!helper_init(&h))
+        goto err;
+
+    if (!TEST_ptr(ch = OPENSSL_zalloc(sizeof(QUIC_CHANNEL))))
+        goto err;
+
+    if (!TEST_ptr(rsqp = ossl_quic_rstream_qparm_new(ch)))
         goto err;
 
     have_helper = 1;
@@ -1514,7 +1510,7 @@ static int run_script(int script_idx, const struct script_op *script)
                     16 * 1024 * 1024,
                     fake_now, NULL))
                 || !TEST_ptr(s->rstream = ossl_quic_rstream_new(&s->rxfc,
-                                 NULL, 1024))) {
+                                 NULL, rsqp))) {
                 ossl_quic_sstream_free(s->sstream);
                 ossl_quic_stream_map_release(h.args.qsm, s);
                 goto err;
@@ -1612,6 +1608,8 @@ err:
         TEST_error("script %d failed at op %zu", script_idx + 1, opn + 1);
     if (have_helper)
         helper_cleanup(&h);
+    ossl_quic_rstream_qparm_destroy(rsqp);
+    ossl_quic_channel_free(ch);
     return testresult;
 }
 

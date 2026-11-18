@@ -58,7 +58,7 @@
 .\" ========================================================================
 .\"
 .IX Title "EVP_CIPHER-AES 7ossl"
-.TH EVP_CIPHER-AES 7ossl 2026-04-07 3.5.6 OpenSSL
+.TH EVP_CIPHER-AES 7ossl 2026-09-29 3.5.9 OpenSSL
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -110,12 +110,25 @@ FIPS provider:
 .SS Parameters
 .IX Subsection "Parameters"
 This implementation supports the parameters described in
-"PARAMETERS" in \fBEVP_EncryptInit\fR\|(3).
+"PARAMETERS" in \fBEVP_EncryptInit\fR\|(3).  For implementations in the OpenSSL FIPS
+provider, these include the gettable "fips\-indicator"
+(\fBOSSL_CIPHER_PARAM_FIPS_APPROVED_INDICATOR\fR), which returns 1 if the
+operation is FIPS approved, or 0 otherwise.  See
+"FIPS indicators" in \fBfips_module\fR\|(7) for more information.
+For AES\-GCM encryption, an externally supplied IV makes the operation
+non\-approved, so this indicator returns 0.  See
+"PARAMETERS" in \fBEVP_EncryptInit\fR\|(3) for the related "iv\-generated" parameter.
+AES\-GCM tag lengths are approved only when they are 4, 8, or 12 through 16
+bytes.
 .SH NOTES
 .IX Header "NOTES"
 The AES\-SIV and AES\-WRAP mode implementations do not support streaming. That
 means to obtain correct results there can be only one \fBEVP_EncryptUpdate\fR\|(3)
 or \fBEVP_DecryptUpdate\fR\|(3) call after the initialization of the context.
+.PP
+When wrapping with AES\-WRAP\-PAD ciphers, the output buffer must be at least
+\&\fIinl\fR rounded up to the cipher block size (8 bytes) plus the block size.
+That is, the minimum output buffer size is \f(CW\*(C`((inl + 7) / 8) * 8 + 8\*(C'\fR bytes.
 .PP
 The AES\-XTS implementations allow streaming to be performed, but each
 \&\fBEVP_EncryptUpdate\fR\|(3) or \fBEVP_DecryptUpdate\fR\|(3) call requires each input
@@ -131,7 +144,7 @@ stealing (CTS) is used to fill the block.
 The GCM\-SIV mode ciphers were added in OpenSSL version 3.2.
 .SH COPYRIGHT
 .IX Header "COPYRIGHT"
-Copyright 2021\-2023 The OpenSSL Project Authors. All Rights Reserved.
+Copyright 2021\-2026 The OpenSSL Project Authors. All Rights Reserved.
 .PP
 Licensed under the Apache License 2.0 (the "License").  You may not use
 this file except in compliance with the License.  You can obtain a copy

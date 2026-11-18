@@ -1451,6 +1451,144 @@ end:
     return testresult;
 }
 
+#ifndef OSSL_NO_USABLE_TLS1_3
+/*
+ * Test kTLS with SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER: retry SSL_write() after
+ * SSL_ERROR_WANT_WRITE using a different buffer pointer (same content) and
+ * verify that the data arrives intact.
+ */
+static int test_ktls_moving_write_buffer(void)
+{
+    SSL_CTX *cctx = NULL, *sctx = NULL;
+    SSL *clientssl = NULL, *serverssl = NULL;
+    BIO *bio_retry = NULL, *bio_orig = NULL;
+    int testresult = 0, cfd = -1, sfd = -1;
+    unsigned char *buf_orig = NULL, *buf_retry = NULL;
+    unsigned char outbuf[1024];
+    const size_t bufsz = sizeof(outbuf);
+    size_t written, readbytes, totread = 0, i;
+
+    /* kTLS requires real sockets */
+    if (!TEST_true(create_test_sockets(&cfd, &sfd, SOCK_STREAM, NULL)))
+        goto end;
+
+    /* Skip if the kernel does not support kTLS */
+    if (!ktls_chk_platform(cfd)) {
+        testresult = TEST_skip("Kernel does not support KTLS");
+        goto end;
+    }
+
+    if (!TEST_true(create_ssl_ctx_pair(libctx,
+            TLS_server_method(), TLS_client_method(),
+            TLS1_3_VERSION, TLS1_3_VERSION,
+            &sctx, &cctx, cert, privkey)))
+        goto end;
+
+    if (!TEST_true(SSL_CTX_set_ciphersuites(cctx, "TLS_AES_128_GCM_SHA256"))
+        || !TEST_true(SSL_CTX_set_ciphersuites(sctx, "TLS_AES_128_GCM_SHA256")))
+        goto end;
+
+    if (!TEST_true(create_ssl_objects2(sctx, cctx, &serverssl,
+            &clientssl, sfd, cfd)))
+        goto end;
+
+    /* Enable kTLS on the writing side (client) */
+    if (!TEST_true(SSL_set_options(clientssl, SSL_OP_ENABLE_KTLS)))
+        goto end;
+
+    SSL_set_mode(clientssl, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    SSL_set_mode(clientssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
+
+    if (!TEST_true(create_ssl_connection(serverssl, clientssl, SSL_ERROR_NONE)))
+        goto end;
+
+    /* Get a reference to the original BIO to replace it later. */
+    bio_orig = SSL_get_wbio(clientssl);
+    if (!TEST_ptr(bio_orig) || !TEST_true(BIO_up_ref(bio_orig))) {
+        bio_orig = NULL;
+        goto end;
+    }
+
+    /* Skip if kTLS TX was not activated for this cipher */
+    if (!BIO_get_ktls_send(bio_orig)) {
+        testresult = TEST_skip("kTLS send not supported");
+        goto end;
+    }
+
+    /* Swap write BIO to force WANT_WRITE */
+    bio_retry = BIO_new(bio_s_always_retry());
+    if (!TEST_ptr(bio_retry))
+        goto end;
+
+    SSL_set0_wbio(clientssl, bio_retry);
+    bio_retry = NULL; /* ownership transferred to clientssl */
+
+    /* Allocate two buffers with identical content but different addresses */
+    buf_orig = OPENSSL_malloc(bufsz);
+    buf_retry = OPENSSL_malloc(bufsz);
+    if (!TEST_ptr(buf_orig) || !TEST_ptr(buf_retry))
+        goto end;
+
+    for (i = 0; i < bufsz; i++)
+        buf_orig[i] = buf_retry[i] = (unsigned char)(i & 0xff);
+
+    /* First write attempt - will fail with WANT_WRITE */
+    if (!TEST_false(SSL_write_ex(clientssl, buf_orig, bufsz, &written))
+        || !TEST_int_eq(SSL_get_error(clientssl, 0), SSL_ERROR_WANT_WRITE))
+        goto end;
+
+    /* Restore the real socket BIO so the retry can actually send data */
+    SSL_set0_wbio(clientssl, bio_orig);
+    bio_orig = NULL;
+
+    /* Poison and free the original buffer */
+    memset(buf_orig, 0xDE, bufsz);
+    OPENSSL_free(buf_orig);
+    buf_orig = NULL;
+
+    /* Retry with a different buffer pointer */
+    if (!TEST_true(SSL_write_ex(clientssl, buf_retry, bufsz, &written)))
+        goto end;
+
+    /* Read the data on the server side */
+    totread = 0;
+    while (totread < bufsz) {
+        if (!SSL_read_ex(serverssl, outbuf + totread, bufsz - totread,
+                &readbytes)) {
+            if (!TEST_int_eq(SSL_get_error(serverssl, 0), SSL_ERROR_WANT_READ))
+                goto end;
+        } else {
+            totread += readbytes;
+        }
+    }
+
+    /* Verify data integrity */
+    if (!TEST_mem_eq(buf_retry, bufsz, outbuf, totread))
+        goto end;
+
+    testresult = 1;
+end:
+    OPENSSL_free(buf_orig);
+    OPENSSL_free(buf_retry);
+    if (clientssl != NULL) {
+        SSL_shutdown(clientssl);
+        SSL_free(clientssl);
+    }
+    if (serverssl != NULL) {
+        SSL_shutdown(serverssl);
+        SSL_free(serverssl);
+    }
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(cctx);
+    BIO_free_all(bio_orig);
+    if (cfd != -1)
+        close(cfd);
+    if (sfd != -1)
+        close(sfd);
+    return testresult;
+}
+#endif /* !defined(OSSL_NO_USABLE_TLS1_3) */
+
 static struct ktls_test_cipher {
     int tls_version;
     const char *cipher;
@@ -3136,6 +3274,52 @@ static int test_ssl_bio_change_rbio(void)
 static int test_ssl_bio_change_wbio(void)
 {
     return execute_test_ssl_bio(0, CHANGE_WBIO);
+}
+
+/*
+ * Regression for GH #30458: tls_set1_bio() must BIO_free_all the old chain
+ * when the write BIO is replaced, not only the top BIO.
+ */
+static int test_ssl_set_wbio_chain_no_leak(void)
+{
+    SSL_CTX *ctx = NULL;
+    SSL *ssl = NULL;
+    BIO *bio = NULL, *filter = NULL, *chain1 = NULL;
+    int testresult = 0;
+
+    if (!TEST_ptr(ctx = SSL_CTX_new_ex(libctx, NULL, TLS_method())))
+        goto end;
+    if (!TEST_ptr(ssl = SSL_new(ctx)))
+        goto end;
+
+    if (!TEST_ptr(filter = BIO_new(BIO_f_nbio_test())))
+        goto end;
+    if (!TEST_ptr(bio = BIO_new(BIO_s_mem()))) {
+        BIO_free(filter);
+        filter = NULL;
+        goto end;
+    }
+    if (!TEST_ptr(chain1 = BIO_push(filter, bio))) {
+        BIO_free_all(filter);
+        filter = bio = NULL;
+        goto end;
+    }
+    filter = bio = NULL;
+
+    SSL_set0_wbio(ssl, chain1);
+    chain1 = NULL;
+    SSL_set0_wbio(ssl, NULL);
+
+    testresult = 1;
+
+end:
+    BIO_free(filter);
+    BIO_free(bio);
+    BIO_free(chain1);
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+
+    return testresult;
 }
 
 #if !defined(OPENSSL_NO_TLS1_2) || defined(OSSL_NO_USABLE_TLS1_3)
@@ -8784,6 +8968,106 @@ end:
 }
 
 /*
+ * Callback that always returns ABORT for successfully decrypted tickets.
+ * Used by test_ticket_abort_session_leak to exercise the error path in
+ * tls_parse_ctos_psk() that previously leaked the SSL_SESSION.
+ */
+static SSL_TICKET_RETURN dec_tick_abort_cb(SSL *s, SSL_SESSION *ss,
+    const unsigned char *keyname,
+    size_t keyname_length,
+    SSL_TICKET_STATUS status,
+    void *arg)
+{
+    if (status == SSL_TICKET_SUCCESS || status == SSL_TICKET_SUCCESS_RENEW)
+        return SSL_TICKET_RETURN_ABORT;
+
+    return SSL_TICKET_RETURN_IGNORE_RENEW;
+}
+
+/*
+ * Test that returning SSL_TICKET_RETURN_ABORT from the decrypt ticket callback
+ * during TLS 1.3 resumption does not leak the SSL_SESSION allocated by
+ * tls_decrypt_ticket().  Before the fix, tls_parse_ctos_psk() would execute a
+ * bare "return 0" instead of "goto err", bypassing SSL_SESSION_free(sess).
+ * When run under LeakSanitizer the leaked session will be reported.
+ */
+static int test_ticket_abort_session_leak(void)
+{
+    SSL_CTX *cctx = NULL, *sctx = NULL;
+    SSL *clientssl = NULL, *serverssl = NULL;
+    SSL_SESSION *clntsess = NULL;
+    int testresult = 0;
+
+#ifdef OSSL_NO_USABLE_TLS1_3
+    return 1;
+#endif
+
+    if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(),
+            TLS_client_method(),
+            TLS1_3_VERSION, TLS1_3_VERSION,
+            &sctx, &cctx, cert, privkey)))
+        goto end;
+
+    if (!TEST_true(SSL_CTX_set_session_cache_mode(sctx, SSL_SESS_CACHE_OFF)))
+        goto end;
+
+    /* First handshake: use the normal gen/dec callbacks to get a ticket */
+    if (!TEST_true(SSL_CTX_set_session_ticket_cb(sctx, gen_tick_cb, dec_tick_cb,
+            NULL)))
+        goto end;
+
+    gen_tick_called = dec_tick_called = tick_key_cb_called = 0;
+    tick_dec_ret = SSL_TICKET_RETURN_USE_RENEW;
+
+    if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl,
+            NULL, NULL))
+        || !TEST_true(create_ssl_connection(serverssl, clientssl,
+            SSL_ERROR_NONE)))
+        goto end;
+
+    clntsess = SSL_get1_session(clientssl);
+    if (!TEST_ptr(clntsess))
+        goto end;
+
+    SSL_shutdown(clientssl);
+    SSL_shutdown(serverssl);
+    SSL_free(serverssl);
+    SSL_free(clientssl);
+    serverssl = clientssl = NULL;
+
+    /*
+     * Second handshake (resumption): switch to the abort callback.
+     * The server will decrypt the ticket, allocate an SSL_SESSION, then the
+     * callback returns ABORT.  The handshake must fail, and the session
+     * allocated inside tls_decrypt_ticket() must be freed (not leaked).
+     */
+    if (!TEST_true(SSL_CTX_set_session_ticket_cb(sctx, gen_tick_cb,
+            dec_tick_abort_cb, NULL)))
+        goto end;
+
+    if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl,
+            NULL, NULL))
+        || !TEST_true(SSL_set_session(clientssl, clntsess)))
+        goto end;
+
+    /* Resumption should fail because the callback aborts */
+    if (!TEST_false(create_ssl_connection(serverssl, clientssl,
+            SSL_ERROR_SSL)))
+        goto end;
+
+    testresult = 1;
+
+end:
+    SSL_SESSION_free(clntsess);
+    SSL_free(serverssl);
+    SSL_free(clientssl);
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(cctx);
+
+    return testresult;
+}
+
+/*
  * Test incorrect shutdown.
  * Test 0: client does not shutdown properly,
  *         server does not set SSL_OP_IGNORE_UNEXPECTED_EOF,
@@ -9146,6 +9430,17 @@ static int cert_cb(SSL *s, void *arg)
         int rv;
 
         chain = sk_X509_new_null();
+#ifndef OPENSSL_NO_ML_DSA
+        if (SSL_version(s) >= TLS1_3_VERSION
+            && fips_provider_version_ge(libctx, 3, 5, 0)) {
+            if (!TEST_ptr(chain)
+                || !TEST_true(load_chain("root-ml-dsa-44-cert.pem", NULL, NULL, chain))
+                || !TEST_true(load_chain("server-ml-dsa-44-cert.pem", NULL, &x509, NULL))
+                || !TEST_true(load_chain("server-ml-dsa-44-key.pem", &pkey, NULL, NULL)))
+                goto out;
+            goto check;
+        }
+#endif
         if (!TEST_ptr(chain)
             || !TEST_true(load_chain("ca-cert.pem", NULL, NULL, chain))
             || !TEST_true(load_chain("root-cert.pem", NULL, NULL, chain))
@@ -9154,6 +9449,10 @@ static int cert_cb(SSL *s, void *arg)
             || !TEST_true(load_chain("p256-ee-rsa-ca-key.pem", &pkey,
                 NULL, NULL)))
             goto out;
+
+#ifndef OPENSSL_NO_ML_DSA
+    check:
+#endif
         rv = SSL_check_chain(s, x509, pkey, chain);
         /*
          * If the cert doesn't show as valid here (e.g., because we don't
@@ -9196,7 +9495,7 @@ static int test_cert_cb_int(int prot, int tst)
     int testresult = 0, ret;
 
 #ifdef OPENSSL_NO_EC
-    /* We use an EC cert in these tests, so we skip in a no-ec build */
+    /* We use an EC cert in these tests with TLS 1.2 or absent ML-DSA */
     if (tst >= 3)
         return 1;
 #endif
@@ -9227,21 +9526,34 @@ static int test_cert_cb_int(int prot, int tst)
             NULL, NULL)))
         goto end;
 
-    if (tst == 4) {
+    if (tst == 3) {
+        if (!TEST_true(SSL_set1_sigalgs_list(clientssl,
+                "rsa_pss_rsae_sha256:rsa_pkcs1_sha256:"
+                "?ecdsa_secp256r1_sha256:?mldsa44"))
+            || !TEST_true(SSL_set1_sigalgs_list(serverssl,
+                "rsa_pss_rsae_sha256:rsa_pkcs1_sha256:"
+                "?ecdsa_secp256r1_sha256:?mldsa44")))
+            goto end;
+    } else if (tst == 4) {
         /*
          * We cause SSL_check_chain() to fail by specifying sig_algs that
-         * the chain doesn't meet (the root uses an RSA cert)
+         * the chain doesn't meet (root either RSA or ML-DSA).
          */
         if (!TEST_true(SSL_set1_sigalgs_list(clientssl,
-                "ecdsa_secp256r1_sha256")))
+                "ecdsa_secp256r1_sha256"))
+            || !TEST_true(SSL_set1_sigalgs_list(serverssl,
+                "?ecdsa_secp256r1_sha256:?mldsa44")))
             goto end;
     } else if (tst == 5) {
         /*
          * We cause SSL_check_chain() to fail by specifying sig_algs that
-         * the ee cert doesn't meet (the ee uses an ECDSA cert)
+         * the ee cert doesn't meet (the ee uses an ECDSA or ML-DSA cert)
          */
         if (!TEST_true(SSL_set1_sigalgs_list(clientssl,
-                "rsa_pss_rsae_sha256:rsa_pkcs1_sha256")))
+                "rsa_pss_rsae_sha256:rsa_pkcs1_sha256"))
+            || !TEST_true(SSL_set1_sigalgs_list(serverssl,
+                "rsa_pss_rsae_sha256:rsa_pkcs1_sha256:"
+                "?ecdsa_secp256r1_sha256:?mldsa44")))
             goto end;
     }
 
@@ -10508,13 +10820,439 @@ end:
 }
 #endif
 
+#if !defined(OPENSSL_NO_TLS1_2) || !defined(OSSL_NO_USABLE_TLS1_3)
+/*
+ * Regression tests for CVE-2026-72897: SSL_set_SSL_CTX() must refresh the
+ * connection's signature algorithm state to describe the context it installs.
+ *
+ * |ssl_pkey_num| sizes |s3.tmp.valid_flags| and bounds the loops over
+ * |cert->pkeys|, while a provider sigalg's |sig_idx| is its position in the
+ * list of whichever context a peer codepoint is resolved against, so the two
+ * must describe the same one. The test provider is what makes them differ: a
+ * context created before it is loaded lacks the two slots it adds.
+ */
+
+struct sigalg_ctx_switch_st {
+    SSL_CTX *newctx;
+    int switches; /* Number of times the callback switched context */
+    int err; /* Set if SSL_set_SSL_CTX() itself failed */
+    uint32_t preflags; /* valid_flags[SSL_PKEY_RSA] before the switch */
+    uint32_t postflags; /* ...and after it */
+};
+
+static int sigalg_switch_ctx(SSL *s, struct sigalg_ctx_switch_st *data)
+{
+    SSL_CONNECTION *sc = SSL_CONNECTION_FROM_SSL_ONLY(s);
+
+    if (sc == NULL)
+        return 0;
+
+    if (sc->s3.tmp.valid_flags != NULL)
+        data->preflags = sc->s3.tmp.valid_flags[SSL_PKEY_RSA];
+    if (SSL_set_SSL_CTX(s, data->newctx) == NULL)
+        return 0;
+    if (sc->s3.tmp.valid_flags != NULL)
+        data->postflags = sc->s3.tmp.valid_flags[SSL_PKEY_RSA];
+
+    data->switches++;
+    return 1;
+}
+
+static int sigalg_switch_sni_cb(SSL *s, int *al, void *arg)
+{
+    struct sigalg_ctx_switch_st *data = arg;
+
+    if (SSL_get_SSL_CTX(s) != data->newctx && !sigalg_switch_ctx(s, data)) {
+        data->err = 1;
+        *al = SSL_AD_INTERNAL_ERROR;
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    return SSL_TLSEXT_ERR_OK;
+}
+
+static int sigalg_switch_clienthello_cb(SSL *s, int *al, void *arg)
+{
+    struct sigalg_ctx_switch_st *data = arg;
+
+    if (SSL_get_SSL_CTX(s) != data->newctx && !sigalg_switch_ctx(s, data)) {
+        data->err = 1;
+        *al = SSL_AD_INTERNAL_ERROR;
+        return SSL_CLIENT_HELLO_ERROR;
+    }
+    return SSL_CLIENT_HELLO_SUCCESS;
+}
+
+static int sigalg_switch_cert_cb(SSL *s, void *arg)
+{
+    struct sigalg_ctx_switch_st *data = arg;
+
+    if (SSL_get_SSL_CTX(s) != data->newctx && !sigalg_switch_ctx(s, data)) {
+        data->err = 1;
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * Build the three contexts these tests need. An SSL_CTX takes its snapshot of
+ * the provider sigalgs when it is created, so |*sctx| is created while the test
+ * provider is not loaded and does not have its sigalgs, and |*newsctx| and
+ * |*cctx| are created after it is loaded and do have them. The client needs
+ * them too, so that it actually offers the codepoints which resolve to the
+ * slots the original context does not have.
+ */
+static int sigalg_ctx_switch_setup(OSSL_PROVIDER **tlsprov, int version,
+    SSL_CTX **sctx, SSL_CTX **newsctx, SSL_CTX **cctx)
+{
+    if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(), NULL,
+            version, version, sctx, NULL, cert, privkey)))
+        return 0;
+
+    if (!TEST_ptr(*tlsprov = OSSL_PROVIDER_load(libctx, "tls-provider")))
+        return 0;
+
+    if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(),
+            TLS_client_method(), version, version, newsctx, cctx, cert,
+            privkey)))
+        return 0;
+
+    /*
+     * The premise of the test is that the replacement context describes more
+     * signature algorithm slots than the original. Check that, rather than let
+     * the test quietly become vacuous if that ever stops being true.
+     */
+    if (!TEST_size_t_lt((*sctx)->cert->ssl_pkey_num,
+            (*newsctx)->cert->ssl_pkey_num))
+        return 0;
+
+    return 1;
+}
+
+/*
+ * |ssl_pkey_num| bounds the loops which index |cert->pkeys| and sizes
+ * |valid_flags|, so it must describe the CERT the connection is actually
+ * using, not the one it was created from.
+ */
+static int sigalg_ctx_switch_check(SSL *serverssl)
+{
+    SSL_CONNECTION *sc;
+
+    if (!TEST_ptr(sc = SSL_CONNECTION_FROM_SSL_ONLY(serverssl)))
+        return 0;
+
+    return TEST_size_t_eq(sc->ssl_pkey_num, sc->cert->ssl_pkey_num);
+}
+
+/*
+ * Switch SSL_CTX from a callback which runs *before* tls1_set_server_sigalgs()
+ * allocates |valid_flags|. This is the route CVE-2026-72897 describes: the
+ * stale |ssl_pkey_num| undersizes that allocation, and tls1_process_sigalgs()
+ * reads and writes past its end for each peer codepoint occupying one of the
+ * replacement context's excess slots. The peer chooses how many such accesses
+ * happen, and where, by choosing which codepoints to offer.
+ *
+ * Both callbacks tested here run before that allocation, but not at the same
+ * point: the client_hello callback runs before the ClientHello extensions have
+ * been parsed at all, whereas the servername callback runs from the "final"
+ * pass over them, after the sigalgs extension has been saved and after session
+ * resumption has been decided. They are therefore checked separately.
+ *
+ * The two slots the test provider adds are TLSv1.3 only, so only the TLSv1.3
+ * cases can index past the end of the buffer; the TLSv1.2 cases pin the
+ * invariant for a version which processes signature algorithms identically.
+ *
+ * Test 0: servername callback, TLSv1.3
+ * Test 1: client_hello callback, TLSv1.3
+ * Test 2: servername callback, TLSv1.2
+ * Test 3: client_hello callback, TLSv1.2
+ */
+static int test_sigalg_ctx_switch(int idx)
+{
+    OSSL_PROVIDER *tlsprov = NULL;
+    SSL_CTX *sctx = NULL, *newsctx = NULL, *cctx = NULL;
+    SSL *serverssl = NULL, *clientssl = NULL;
+    struct sigalg_ctx_switch_st cbdata;
+    int tls13 = idx < 2;
+    int ver, testresult = 0;
+
+#ifdef OSSL_NO_USABLE_TLS1_3
+    if (tls13)
+        return TEST_skip("TLSv1.3 is not available");
+#endif
+#ifdef OPENSSL_NO_TLS1_2
+    if (!tls13)
+        return TEST_skip("TLSv1.2 is not available");
+#endif
+    ver = tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
+
+    memset(&cbdata, 0, sizeof(cbdata));
+
+    if (!sigalg_ctx_switch_setup(&tlsprov, ver, &sctx, &newsctx, &cctx))
+        goto end;
+
+    cbdata.newctx = newsctx;
+
+    if ((idx & 1) == 0) {
+        if (!TEST_true(SSL_CTX_set_tlsext_servername_callback(sctx,
+                sigalg_switch_sni_cb))
+            || !TEST_true(SSL_CTX_set_tlsext_servername_arg(sctx, &cbdata)))
+            goto end;
+    } else {
+        SSL_CTX_set_client_hello_cb(sctx, sigalg_switch_clienthello_cb,
+            &cbdata);
+    }
+
+    if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl,
+            NULL, NULL)))
+        goto end;
+
+    if (!TEST_true(SSL_set_tlsext_host_name(clientssl, "server.example")))
+        goto end;
+
+    if (!TEST_true(create_ssl_connection(serverssl, clientssl, SSL_ERROR_NONE)))
+        goto end;
+
+    if (!TEST_int_eq(cbdata.err, 0)
+        || !TEST_int_eq(cbdata.switches, 1)
+        || !sigalg_ctx_switch_check(serverssl))
+        goto end;
+
+    testresult = 1;
+
+end:
+    SSL_free(serverssl);
+    SSL_free(clientssl);
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(newsctx);
+    SSL_CTX_free(cctx);
+    OSSL_PROVIDER_unload(tlsprov);
+
+    return testresult;
+}
+
+/*
+ * Switch SSL_CTX from the certificate callback. Nothing prevents an
+ * application doing this, so it has to keep working, and unlike the
+ * servername and client_hello callbacks it runs *after*
+ * tls1_set_server_sigalgs() has sized and filled in |valid_flags| for the
+ * original context. Nothing recomputes the shared signature algorithms later
+ * in the same handshake, so what this checks is that the switch leaves both
+ * the slot count and the flags already derived from the peer consistent with
+ * the context now installed.
+ *
+ * Test 0: TLSv1.3
+ * Test 1: TLSv1.2
+ */
+static int test_sigalg_ctx_switch_cert_cb(int idx)
+{
+    OSSL_PROVIDER *tlsprov = NULL;
+    SSL_CTX *sctx = NULL, *newsctx = NULL, *cctx = NULL;
+    SSL *serverssl = NULL, *clientssl = NULL;
+    struct sigalg_ctx_switch_st cbdata;
+    int tls13 = idx == 0;
+    int ver, testresult = 0;
+
+#ifdef OSSL_NO_USABLE_TLS1_3
+    if (tls13)
+        return TEST_skip("TLSv1.3 is not available");
+#endif
+#ifdef OPENSSL_NO_TLS1_2
+    if (!tls13)
+        return TEST_skip("TLSv1.2 is not available");
+#endif
+    ver = tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
+
+    memset(&cbdata, 0, sizeof(cbdata));
+
+    if (!sigalg_ctx_switch_setup(&tlsprov, ver, &sctx, &newsctx, &cctx))
+        goto end;
+
+    cbdata.newctx = newsctx;
+    SSL_CTX_set_cert_cb(sctx, sigalg_switch_cert_cb, &cbdata);
+
+    if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl,
+            NULL, NULL))
+        || !TEST_true(create_ssl_connection(serverssl, clientssl,
+            SSL_ERROR_NONE)))
+        goto end;
+
+    if (!TEST_int_eq(cbdata.err, 0)
+        || !TEST_int_eq(cbdata.switches, 1)
+        || !sigalg_ctx_switch_check(serverssl))
+        goto end;
+
+    /*
+     * The switch happened after |valid_flags| had been populated, so the
+     * built-in slots must have survived it. Nothing recomputes them after a
+     * context switch, and at TLSv1.2 and above ssl_set_masks() needs them to
+     * enable ECDSA, Ed25519 and Ed448.
+     */
+    if (!TEST_uint_ne(cbdata.preflags, 0)
+        || !TEST_uint_eq(cbdata.postflags, cbdata.preflags))
+        goto end;
+
+    testresult = 1;
+
+end:
+    SSL_free(serverssl);
+    SSL_free(clientssl);
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(newsctx);
+    SSL_CTX_free(cctx);
+    OSSL_PROVIDER_unload(tlsprov);
+
+    return testresult;
+}
+
 #ifndef OPENSSL_NO_TLS1_2
+#define SIGALG_SWITCH_SNI1 "first.example"
+#define SIGALG_SWITCH_SNI2 "second.example"
+
+static int sigalg_switch_reneg_sni_cb(SSL *s, int *al, void *arg)
+{
+    const char *name = SSL_get_servername(s, TLSEXT_NAMETYPE_host_name);
+
+    /* Model an application which picks its SSL_CTX from the name offered */
+    if (name == NULL || strcmp(name, SIGALG_SWITCH_SNI2) != 0)
+        return SSL_TLSEXT_ERR_OK;
+
+    return sigalg_switch_sni_cb(s, al, arg);
+}
+
+/*
+ * Switch SSL_CTX from the servername callback during a *renegotiation*
+ * handshake, the client having offered a different name the second time round.
+ * |valid_flags| is allocated during the initial handshake and is not freed in
+ * between, so this is the case where SSL_set_SSL_CTX() has to replace an
+ * existing buffer rather than merely correct the count a later allocation will
+ * use. Renegotiation is TLSv1.2 and below only.
+ *
+ * The slot count is the only signal here: the two slots the test provider adds
+ * are TLSv1.3 only, so nothing indexes past the end of the reused buffer.
+ * Under a sanitiser this also catches replacing that buffer wrongly -
+ * refreshing |ssl_pkey_num| while keeping the old allocation would make the
+ * memset() in tls1_set_server_sigalgs() overrun it on the renegotiation.
+ */
+static int test_sigalg_ctx_switch_reneg(void)
+{
+    OSSL_PROVIDER *tlsprov = NULL;
+    SSL_CTX *sctx = NULL, *newsctx = NULL, *cctx = NULL;
+    SSL *serverssl = NULL, *clientssl = NULL;
+    SSL_CONNECTION *sc;
+    struct sigalg_ctx_switch_st cbdata;
+    size_t readbytes;
+    char buf[80];
+    int i, testresult = 0;
+
+    memset(&cbdata, 0, sizeof(cbdata));
+
+    if (!sigalg_ctx_switch_setup(&tlsprov, TLS1_2_VERSION, &sctx, &newsctx,
+            &cctx))
+        goto end;
+
+    cbdata.newctx = newsctx;
+
+    if (!TEST_true(SSL_CTX_set_tlsext_servername_callback(sctx,
+            sigalg_switch_reneg_sni_cb))
+        || !TEST_true(SSL_CTX_set_tlsext_servername_arg(sctx, &cbdata)))
+        goto end;
+
+    if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl,
+            NULL, NULL)))
+        goto end;
+
+    /*
+     * The first handshake must not switch, so that |valid_flags| is allocated
+     * and populated for the original context.
+     */
+    if (!TEST_true(SSL_set_tlsext_host_name(clientssl, SIGALG_SWITCH_SNI1))
+        || !TEST_true(create_ssl_connection(serverssl, clientssl,
+            SSL_ERROR_NONE))
+        || !TEST_int_eq(cbdata.switches, 0))
+        goto end;
+
+    if (!TEST_ptr(sc = SSL_CONNECTION_FROM_SSL_ONLY(serverssl))
+        || !TEST_ptr(sc->s3.tmp.valid_flags))
+        goto end;
+
+    /* Now renegotiate, offering the name which does select the other context */
+    if (!TEST_true(SSL_set_tlsext_host_name(clientssl, SIGALG_SWITCH_SNI2))
+        || !TEST_true(SSL_renegotiate(clientssl))
+        || !TEST_true(SSL_renegotiate_pending(clientssl)))
+        goto end;
+
+    for (i = 0; i < 3; i++) {
+        if (SSL_read_ex(clientssl, buf, sizeof(buf), &readbytes) > 0) {
+            if (!TEST_size_t_eq(readbytes, 0))
+                goto end;
+        } else if (!TEST_int_eq(SSL_get_error(clientssl, 0),
+                       SSL_ERROR_WANT_READ)) {
+            goto end;
+        }
+        if (SSL_read_ex(serverssl, buf, sizeof(buf), &readbytes) > 0) {
+            if (!TEST_size_t_eq(readbytes, 0))
+                goto end;
+        } else if (!TEST_int_eq(SSL_get_error(serverssl, 0),
+                       SSL_ERROR_WANT_READ)) {
+            goto end;
+        }
+    }
+
+    /*
+     * A resumed renegotiation would skip tls1_set_server_sigalgs() altogether,
+     * so check the renegotiation really was a full handshake.
+     */
+    if (!TEST_false(SSL_renegotiate_pending(clientssl))
+        || !TEST_false(SSL_session_reused(serverssl))
+        || !TEST_int_eq(cbdata.err, 0)
+        || !TEST_int_eq(cbdata.switches, 1)
+        || !sigalg_ctx_switch_check(serverssl))
+        goto end;
+
+    /* The built-in slots must survive the buffer being replaced */
+    if (!TEST_uint_ne(cbdata.preflags, 0)
+        || !TEST_uint_eq(cbdata.postflags, cbdata.preflags))
+        goto end;
+
+    testresult = 1;
+
+end:
+    SSL_free(serverssl);
+    SSL_free(clientssl);
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(newsctx);
+    SSL_CTX_free(cctx);
+    OSSL_PROVIDER_unload(tlsprov);
+
+    return testresult;
+}
+#endif /* OPENSSL_NO_TLS1_2 */
+#endif
+
+#ifndef OPENSSL_NO_TLS1_2
+
+#define CERT_TYPE_C "\x0" /* TLSEXT_cert_type_x509 */
+#define CERT_TYPE_S "\x2" /* TLSEXT_cert_type_rpk */
+
+#ifndef OPENSSL_NO_CT
+#define CB_ARG "callback arg"
+
+/* ARGSUSED */
+static int validation_cbk(const CT_POLICY_EVAL_CTX *ctx,
+    const STACK_OF(SCT) *scts, void *arg)
+{
+    return 1;
+}
+#endif
+
 static int test_ssl_dup(void)
 {
     SSL_CTX *cctx = NULL, *sctx = NULL;
     SSL *clientssl = NULL, *serverssl = NULL, *client2ssl = NULL;
     int testresult = 0;
     BIO *rbio = NULL, *wbio = NULL;
+    unsigned char *ctype;
+    size_t ctype_len;
 
     if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(),
             TLS_client_method(),
@@ -10530,6 +11268,27 @@ static int test_ssl_dup(void)
     if (!TEST_true(SSL_set_min_proto_version(clientssl, TLS1_2_VERSION))
         || !TEST_true(SSL_set_max_proto_version(clientssl, TLS1_2_VERSION)))
         goto end;
+
+    if (!TEST_true(
+            SSL_set1_client_cert_type(clientssl,
+                (const unsigned char *)CERT_TYPE_C, sizeof(CERT_TYPE_C) - 1)))
+        goto end;
+
+    if (!TEST_true(
+            SSL_set1_server_cert_type(clientssl,
+                (const unsigned char *)CERT_TYPE_S, sizeof(CERT_TYPE_S) - 1)))
+        goto end;
+
+#ifndef OPENSSL_NO_CT
+    if (!TEST_true(SSL_set_ct_validation_callback(clientssl, validation_cbk, CB_ARG)))
+        goto end;
+#endif
+
+#ifndef OPENSSL_NO_OCSP
+    if (!TEST_true(
+            SSL_set_tlsext_status_type(clientssl, TLSEXT_STATUSTYPE_ocsp)))
+        goto end;
+#endif
 
     client2ssl = SSL_dup(clientssl);
     rbio = SSL_get_rbio(clientssl);
@@ -10556,6 +11315,28 @@ static int test_ssl_dup(void)
 
     if (!TEST_true(create_ssl_connection(serverssl, client2ssl, SSL_ERROR_NONE)))
         goto end;
+
+    if (!TEST_true(SSL_get0_client_cert_type(client2ssl, &ctype, &ctype_len)))
+        goto end;
+
+    if (!TEST_mem_eq(ctype, ctype_len, CERT_TYPE_C, sizeof(CERT_TYPE_C) - 1))
+        goto end;
+
+    if (!TEST_true(SSL_get0_server_cert_type(client2ssl, &ctype, &ctype_len)))
+        goto end;
+
+    if (!TEST_mem_eq(ctype, ctype_len, CERT_TYPE_S, sizeof(CERT_TYPE_S) - 1))
+        goto end;
+
+#ifndef OPENSSL_NO_CT
+    if (!TEST_true(SSL_ct_is_enabled(client2ssl)))
+        goto end;
+#endif
+
+#ifndef OPENSSL_NO_OCSP
+    if (!TEST_long_eq(SSL_get_tlsext_status_type(client2ssl), TLSEXT_STATUSTYPE_ocsp))
+        goto end;
+#endif
 
     SSL_free(clientssl);
     clientssl = SSL_dup(client2ssl);
@@ -10595,11 +11376,13 @@ static int secret_cb(SSL *s, void *secretin, int *secret_len,
 /*
  * Test the session_secret_cb which is designed for use with EAP-FAST
  */
-static int test_session_secret_cb(void)
+static int test_session_secret_cb(int idx)
 {
     SSL_CTX *cctx = NULL, *sctx = NULL;
     SSL *clientssl = NULL, *serverssl = NULL;
-    SSL_SESSION *secret_sess = NULL;
+    SSL_SESSION *secret_sess = NULL, *server_sess = NULL;
+    unsigned int sess_len;
+    const unsigned char *sessid;
     int testresult = 0;
 
     if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(),
@@ -10633,12 +11416,20 @@ static int test_session_secret_cb(void)
             NULL, NULL)))
         goto end;
 
-    /*
-     * No session ids for EAP-FAST - otherwise the state machine gets very
-     * confused.
-     */
-    if (!TEST_true(SSL_SESSION_set1_id(secret_sess, NULL, 0)))
-        goto end;
+    if (idx == 0) {
+        /*
+         * Normal case: no session id
+         */
+        if (!TEST_true(SSL_SESSION_set1_id(secret_sess, NULL, 0)))
+            goto end;
+    } else {
+        /*
+         * Set an explicit session id. Normally we don't support this, but we
+         * can get away with it if we reset the session id later
+         */
+        if (!TEST_true(SSL_SESSION_set1_id(secret_sess, (unsigned char *)"sessionid", 9)))
+            goto end;
+    }
 
     if (!TEST_true(SSL_set_min_proto_version(clientssl, TLS1_2_VERSION))
         || !TEST_true(SSL_set_max_proto_version(serverssl, TLS1_2_VERSION))
@@ -10649,13 +11440,39 @@ static int test_session_secret_cb(void)
         || !TEST_true(SSL_set_session(clientssl, secret_sess)))
         goto end;
 
+    if (idx == 1) {
+        /*
+         * We just send the ClientHello here. We expect this to fail with
+         * SSL_ERROR_WANT_READ
+         */
+        if (!TEST_int_le(SSL_connect(clientssl), 0))
+            goto end;
+        /* Reset the session id to avoid confusing the state machine */
+        if (!TEST_true(SSL_SESSION_set1_id(secret_sess, NULL, 0)))
+            goto end;
+    }
     if (!TEST_true(create_ssl_connection(serverssl, clientssl, SSL_ERROR_NONE)))
         goto end;
 
+    /* Check that session resumption was successful */
+    if (!TEST_true(SSL_session_reused(clientssl))
+        || !TEST_true(SSL_session_reused(serverssl)))
+        goto end;
+
+    if (idx == 1) {
+        server_sess = SSL_get1_session(serverssl);
+        if (!TEST_ptr(server_sess))
+            goto end;
+        sessid = SSL_SESSION_get_id(server_sess, &sess_len);
+
+        if (!TEST_mem_eq(sessid, sess_len, "sessionid", 9))
+            goto end;
+    }
     testresult = 1;
 
 end:
     SSL_SESSION_free(secret_sess);
+    SSL_SESSION_free(server_sess);
     SSL_free(serverssl);
     SSL_free(clientssl);
     SSL_CTX_free(sctx);
@@ -11617,6 +12434,51 @@ end:
     SSL_CTX_free(cctx);
     return testresult;
 }
+
+static int un_ext_add_cb(SSL *s, unsigned int ext_type,
+    unsigned int context, const unsigned char **out, size_t *outlen, X509 *x,
+    size_t chainidx, int *al, void *add_arg)
+{
+    static const unsigned char data[] = { 0xaa };
+    *out = data;
+    *outlen = sizeof(data);
+    return 1;
+}
+
+static int un_ext_parse_cb(SSL *s, unsigned int ext_type,
+    unsigned int context, const unsigned char *in, size_t inlen, X509 *x,
+    size_t chainidx, int *al, void *parse_arg)
+{
+    return 1;
+}
+
+/*
+ * Test that a handshake succeeds when the peer sends an extension type we do
+ * not recognise. The client registers a custom extension in its ClientHello
+ * that the server knows nothing about, so on the server tls_collect_extensions()
+ * takes the "unknown extension" branch.
+ */
+static int test_tls13_unknown_extension(void)
+{
+    SSL_CTX *s = NULL, *c = NULL;
+    SSL *s_ssl = NULL, *c_ssl = NULL;
+    int test;
+
+    test = TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(),
+               TLS_client_method(), TLS1_3_VERSION, TLS1_3_VERSION, &s, &c, cert, privkey))
+        && TEST_true(SSL_CTX_add_custom_ext(c, 0xfefe, SSL_EXT_CLIENT_HELLO,
+            un_ext_add_cb, NULL, NULL, un_ext_parse_cb, NULL))
+        && TEST_true(create_ssl_objects(s, c, &s_ssl, &c_ssl, NULL, NULL))
+        /* The server must tolerate the unknown extension and complete. */
+        && TEST_true(create_ssl_connection(s_ssl, c_ssl, SSL_ERROR_NONE));
+
+    SSL_free(s_ssl);
+    SSL_free(c_ssl);
+    SSL_CTX_free(s);
+    SSL_CTX_free(c);
+    return test;
+}
+
 #endif /* OSSL_NO_USABLE_TLS1_3 */
 
 #if !defined(OPENSSL_NO_TLS1_2) && !defined(OPENSSL_NO_DYNAMIC_ENGINE)
@@ -12225,6 +13087,70 @@ end:
     SSL_CTX_free(cctx);
     BIO_free_all(bretry);
     BIO_free(tmp);
+    return testresult;
+}
+
+/*
+ * Test that a BIO returning 0 without a retry flag for a write with a positive
+ * length is not treated as a successful write.
+ */
+static int test_data_write_zero_no_retry(int tst)
+{
+    SSL_CTX *cctx = NULL, *sctx = NULL;
+    SSL *clientssl = NULL, *serverssl = NULL;
+    BIO *bzero = BIO_new(bio_s_no_retry_zero());
+    const SSL_METHOD *smeth = TLS_server_method();
+    const SSL_METHOD *cmeth = TLS_client_method();
+    unsigned char inbuf[1] = { 0 };
+    size_t written;
+    unsigned long errcode;
+    int err, min_version = 0, max_version = 0, testresult = 0;
+
+    if (tst == 1) {
+#if !defined(OPENSSL_NO_DTLS) && !defined(OPENSSL_NO_DTLS1_2)
+        smeth = DTLS_server_method();
+        cmeth = DTLS_client_method();
+        min_version = max_version = DTLS1_2_VERSION;
+#else
+        BIO_free(bzero);
+        return TEST_skip("DTLS 1.2 not supported");
+#endif
+    }
+
+    if (!TEST_ptr(bzero))
+        goto end;
+
+    if (!TEST_true(create_ssl_ctx_pair(libctx, smeth, cmeth, min_version,
+            max_version, &sctx, &cctx, cert, privkey)))
+        goto end;
+
+    if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl, NULL,
+            NULL)))
+        goto end;
+
+    if (!TEST_true(create_ssl_connection(serverssl, clientssl, SSL_ERROR_NONE)))
+        goto end;
+
+    SSL_set0_wbio(clientssl, bzero);
+    bzero = NULL;
+
+    ERR_clear_error();
+    if (!TEST_false(SSL_write_ex(clientssl, inbuf, sizeof(inbuf), &written)))
+        goto end;
+
+    err = SSL_get_error(clientssl, 0);
+    errcode = ERR_get_error();
+    if (!TEST_int_eq(err, SSL_ERROR_SYSCALL)
+        || !TEST_ulong_eq(errcode, 0))
+        goto end;
+
+    testresult = 1;
+end:
+    SSL_free(serverssl);
+    SSL_free(clientssl);
+    SSL_CTX_free(sctx);
+    SSL_CTX_free(cctx);
+    BIO_free_all(bzero);
     return testresult;
 }
 
@@ -12996,6 +13922,42 @@ static int alert_cb(SSL *s, unsigned char alert_code, void *arg)
     return 1;
 }
 
+/* Extension id reserved for private use by IANA */
+#define TEST_TLS_EXTENSION_ID 65282
+
+static int add_ext_cb_called = 0;
+static int parse_ext_cb_called = 0;
+
+static int add_old_ext(SSL *s, unsigned int ext_type,
+    const unsigned char **out, size_t *outlen,
+    int *al, void *add_arg)
+{
+    static const unsigned char data = 0xff;
+
+    add_ext_cb_called++;
+    *out = &data;
+    *outlen = 1;
+    return 1;
+}
+
+static void free_old_ext(SSL *s, unsigned int ext_type,
+    const unsigned char *out, void *add_arg)
+{
+    /* Do nothing */
+}
+
+static int parse_old_ext(SSL *s, unsigned int ext_type,
+    const unsigned char *in, size_t inlen,
+    int *al, void *parse_arg)
+{
+    parse_ext_cb_called++;
+    if (inlen != 1 || *in != 0xff) {
+        *al = SSL_AD_DECODE_ERROR;
+        return 0;
+    }
+    return 1;
+}
+
 /*
  * Test the QUIC TLS API
  * Test 0: Normal run
@@ -13050,9 +14012,30 @@ static int test_quic_tls(int idx)
         goto end;
 
     if (idx == 5) {
+        static int dummy = 1;
+
         if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(), NULL,
                 TLS1_3_VERSION, 0,
                 &sctx2, NULL, cert, privkey)))
+            goto end;
+
+        /*
+         * We add an old style custom extension to ensure that it gets correctly
+         * handled when we copy QUIC's connection specific custom extensions.
+         */
+        add_ext_cb_called = 0;
+        parse_ext_cb_called = 0;
+        if (!TEST_true(SSL_CTX_add_client_custom_ext(cctx,
+                TEST_TLS_EXTENSION_ID,
+                add_old_ext, free_old_ext, &dummy, parse_old_ext, &dummy)))
+            goto end;
+        if (!TEST_true(SSL_CTX_add_server_custom_ext(sctx,
+                TEST_TLS_EXTENSION_ID,
+                add_old_ext, free_old_ext, &dummy, parse_old_ext, &dummy)))
+            goto end;
+        if (!TEST_true(SSL_CTX_add_server_custom_ext(sctx2,
+                TEST_TLS_EXTENSION_ID,
+                add_old_ext, free_old_ext, &dummy, parse_old_ext, &dummy)))
             goto end;
 
         /* Set up SNI */
@@ -13143,6 +14126,18 @@ static int test_quic_tls(int idx)
         || !TEST_true(cdata.renc_level == OSSL_RECORD_PROTECTION_LEVEL_APPLICATION)
         || !TEST_true(cdata.wenc_level == OSSL_RECORD_PROTECTION_LEVEL_APPLICATION))
         goto end;
+
+    /*
+     * We only expect the add cb to have actually been called because we are
+     * using the old style callbacks that only apply to TLSv1.2. Since we are
+     * using TLSv1.3 here, the add will be called for the ClientHello but
+     * nothing else.
+     */
+    if (idx == 5) {
+        if (!TEST_int_eq(add_ext_cb_called, 1)
+            || !TEST_int_eq(parse_ext_cb_called, 0))
+            goto end;
+    }
 
     testresult = 1;
 end:
@@ -13732,6 +14727,9 @@ int setup_tests(void)
     ADD_ALL_TESTS(test_ktls, NUM_KTLS_TEST_CIPHERS * 4);
     ADD_ALL_TESTS(test_ktls_sendfile, NUM_KTLS_TEST_CIPHERS * 2);
 #endif
+#ifndef OSSL_NO_USABLE_TLS1_3
+    ADD_TEST(test_ktls_moving_write_buffer);
+#endif
 #endif
     ADD_TEST(test_large_message_tls);
     ADD_TEST(test_large_message_tls_read_ahead);
@@ -13758,6 +14756,7 @@ int setup_tests(void)
     ADD_TEST(test_ssl_bio_pop_ssl_bio);
     ADD_TEST(test_ssl_bio_change_rbio);
     ADD_TEST(test_ssl_bio_change_wbio);
+    ADD_TEST(test_ssl_set_wbio_chain_no_leak);
 #if !defined(OPENSSL_NO_TLS1_2) || defined(OSSL_NO_USABLE_TLS1_3)
     ADD_ALL_TESTS(test_set_sigalgs, OSSL_NELEM(testsigalgs) * 2);
     ADD_TEST(test_keylog);
@@ -13844,6 +14843,7 @@ int setup_tests(void)
     ADD_ALL_TESTS(test_ssl_pending, 2);
     ADD_ALL_TESTS(test_ssl_get_shared_ciphers, OSSL_NELEM(shared_ciphers_data));
     ADD_ALL_TESTS(test_ticket_callbacks, 20);
+    ADD_TEST(test_ticket_abort_session_leak);
     ADD_ALL_TESTS(test_shutdown, 7);
     ADD_TEST(test_async_shutdown);
     ADD_ALL_TESTS(test_incorrect_shutdown, 2);
@@ -13866,9 +14866,16 @@ int setup_tests(void)
     ADD_ALL_TESTS(test_pluggable_group, 2);
     ADD_ALL_TESTS(test_pluggable_signature, 6);
 #endif
+#if !defined(OPENSSL_NO_TLS1_2) || !defined(OSSL_NO_USABLE_TLS1_3)
+    ADD_ALL_TESTS(test_sigalg_ctx_switch, 4);
+    ADD_ALL_TESTS(test_sigalg_ctx_switch_cert_cb, 2);
+#ifndef OPENSSL_NO_TLS1_2
+    ADD_TEST(test_sigalg_ctx_switch_reneg);
+#endif
+#endif
 #ifndef OPENSSL_NO_TLS1_2
     ADD_TEST(test_ssl_dup);
-    ADD_TEST(test_session_secret_cb);
+    ADD_ALL_TESTS(test_session_secret_cb, 2);
 #ifndef OPENSSL_NO_DH
     ADD_ALL_TESTS(test_set_tmp_dh, 11);
     ADD_ALL_TESTS(test_dh_auto, 7);
@@ -13890,6 +14897,7 @@ int setup_tests(void)
 #ifndef OSSL_NO_USABLE_TLS1_3
     ADD_TEST(test_read_ahead_key_change);
     ADD_ALL_TESTS(test_tls13_record_padding, 6);
+    ADD_TEST(test_tls13_unknown_extension);
 #endif
 #if !defined(OPENSSL_NO_TLS1_2) && !defined(OSSL_NO_USABLE_TLS1_3)
     ADD_ALL_TESTS(test_serverinfo_custom, 4);
@@ -13901,6 +14909,7 @@ int setup_tests(void)
     ADD_TEST(test_rstate_string);
     ADD_ALL_TESTS(test_handshake_retry, 16);
     ADD_TEST(test_data_retry);
+    ADD_ALL_TESTS(test_data_write_zero_no_retry, 2);
     ADD_ALL_TESTS(test_multi_resume, 5);
     ADD_ALL_TESTS(test_select_next_proto, OSSL_NELEM(next_proto_tests));
 #if !defined(OPENSSL_NO_TLS1_2) && !defined(OPENSSL_NO_NEXTPROTONEG)
@@ -13948,6 +14957,7 @@ void cleanup_tests(void)
     bio_s_mempacket_test_free();
     bio_s_always_retry_free();
     bio_s_maybe_retry_free();
+    bio_s_no_retry_zero_free();
     OSSL_PROVIDER_unload(defctxnull);
     OSSL_LIB_CTX_free(libctx);
 }

@@ -501,11 +501,21 @@ struct quic_channel_st {
 
     /* Title for qlog purposes. We own this copy. */
     char *qlog_title;
+
+    /*
+     * RX stream quality parameter.
+     */
+    QUIC_RSTREAM_QPARM *rsqp;
+
     /*
      * number of path responses waiting to be dispatched
      * from control frame queue (CFQ)
      */
     unsigned int path_response_limit;
+    /* number of path challenge frames received */
+    unsigned int path_challenge_rx;
+    /* number of path response frames sent */
+    unsigned int path_response_tx;
 };
 
 #endif

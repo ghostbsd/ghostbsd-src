@@ -58,7 +58,7 @@
 .\" ========================================================================
 .\"
 .IX Title "FIPS_MODULE 7ossl"
-.TH FIPS_MODULE 7ossl 2026-04-07 3.5.6 OpenSSL
+.TH FIPS_MODULE 7ossl 2026-09-29 3.5.9 OpenSSL
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -541,8 +541,19 @@ can be queried using an algorithm context getter to retrieve the indicator
 An example of an algorithm context setter is "key\-check"
 in "Supported parameters" in \fBEVP_KDF\-HKDF\fR\|(7).
 .PP
-The following algorithms use "fips\-indicator" to query if the algorithm
-is approved:
+Every algorithm implementation advertised with the property \f(CW\*(C`fips=yes\*(C'\fR by
+the OpenSSL FIPS provider exposes "fips\-indicator" as a gettable context
+parameter.  The getter returns 1 when the operation is approved.  An absent
+indicator must not be interpreted as approval.
+.PP
+Algorithms advertised with \f(CW\*(C`fips=no\*(C'\fR are unapproved.  When such an
+implementation exposes "fips\-indicator", its getter returns 0.  Providers
+other than the OpenSSL FIPS provider are not required to expose this parameter;
+an absent indicator, or an indicator value of 0, does not assert FIPS approval.
+.PP
+Some algorithms can change from approved to unapproved as a result of their
+parameters or the operation performed.  The following algorithms perform such
+additional checks:
 .IP "DSA Key generation" 4
 .IX Item "DSA Key generation"
 DSA Key generation is no longer approved.
@@ -557,6 +568,20 @@ See "ECDSA Signature Parameters" in \fBEVP_SIGNATURE\-ECDSA\fR\|(7)
 .IP "EC Key Generation" 4
 .IX Item "EC Key Generation"
 See "Common EC parameters" in \fBEVP_PKEY\-EC\fR\|(7)
+.IP "ML\-KEM Key Encapsulation" 4
+.IX Item "ML-KEM Key Encapsulation"
+Supplying the test\-only "ikme" parameter makes the operation unapproved.
+See "ML\-KEM KEM parameters" in \fBEVP_KEM\-ML\-KEM\fR\|(7).
+.IP "ML\-DSA and SLH\-DSA Signatures" 4
+.IX Item "ML-DSA and SLH-DSA Signatures"
+Supplying test entropy makes the operation unapproved.  ML\-DSA operations
+that disable the standard message encoding are also unapproved.
+See "FIPS indicator" in \fBEVP_SIGNATURE\-ML\-DSA\fR\|(7) and
+"FIPS indicator" in \fBEVP_SIGNATURE\-SLH\-DSA\fR\|(7).
+.IP "RSA Key Generation" 4
+.IX Item "RSA Key Generation"
+Supplying the parameters reserved for FIPS module testing makes the operation
+unapproved.  See "RSA key generation FIPS indicator" in \fBEVP_PKEY\-RSA\fR\|(7).
 .IP "RSA Encryption" 4
 .IX Item "RSA Encryption"
 "pkcs1" padding is no longer approved.
@@ -596,6 +621,12 @@ The indicator callback is NOT triggered for this algorithm since it is used
 internally for non security purposes.
 .IP "X25519 and X448 Key Generation and Key Exchange" 4
 .IX Item "X25519 and X448 Key Generation and Key Exchange"
+.PD 0
+.IP "X448MLKEM1024 Key Generation and Key Encapsulation" 4
+.IX Item "X448MLKEM1024 Key Generation and Key Encapsulation"
+.PD
+The other hybrid ML\-KEM algorithms supplied by the FIPS provider are approved,
+including X25519MLKEM768, SecP256r1MLKEM768 and SecP384r1MLKEM1024.
 .PP
 The unapproved (non FIPS validated) algorithms have a property query value of
 "fips=no".
@@ -605,22 +636,30 @@ indicator callback.
 .IP "AES\-GCM ciphers support the indicator ""iv\-generated""" 4
 .IX Item "AES-GCM ciphers support the indicator ""iv-generated"""
 See "PARAMETERS" in \fBEVP_EncryptInit\fR\|(3) for further information.
+The AES\-GCM "fips\-indicator" also accounts for the IV source and returns 0
+after encryption with an externally supplied IV.  It also returns 0 for GCM
+tag lengths other than 4, 8, or 12 through 16 bytes.
 .IP "ECDSA and RSA Signatures support the indicator ""verify\-message""." 4
 .IX Item "ECDSA and RSA Signatures support the indicator ""verify-message""."
 See "ECDSA Signature Parameters" in \fBEVP_SIGNATURE\-ECDSA\fR\|(7) and
-"Signature Parameters" in \fBEVP_SIGNATURE\-RSA\fR\|(7) /for further information.
+"Signature Parameters" in \fBEVP_SIGNATURE\-RSA\fR\|(7) for further information.
+The signature "fips\-indicator" also accounts for this value and returns 0
+when verification is performed directly on a caller\-supplied digest.
 .SH NOTES
 .IX Header "NOTES"
 Some released versions of OpenSSL do not include a validated
 FIPS provider.  To determine which versions have undergone
 the validation process, please refer to the
-OpenSSL Downloads page <https://www.openssl.org/source/>.  If you
+OpenSSL Downloads page <https://openssl-library.org/source/>.  If you
 require FIPS\-approved functionality, it is essential to build your FIPS
 provider using one of the validated versions listed there.  Normally,
 it is possible to utilize a FIPS provider constructed from one of the
 validated versions alongside \fIlibcrypto\fR and \fIlibssl\fR compiled from any
-release within the same major release series.  This flexibility enables
-you to address bug fixes and CVEs that fall outside the FIPS boundary.
+supported release from OpenSSL 3.0 onwards; provider compatibility is
+maintained backward and forward across these releases, including future
+major release series, for as long as the module remains supported.  This
+flexibility enables you to address bug fixes and CVEs that fall outside
+the FIPS boundary.
 .PP
 As the FIPS provider still supports non\-FIPS validated algorithms,
 The property query \f(CW\*(C`fips=yes\*(C'\fR is mandatory for applications that
@@ -636,7 +675,7 @@ in OpenSSL 3.0.
 FIPS indicators were added in OpenSSL 3.4.
 .SH COPYRIGHT
 .IX Header "COPYRIGHT"
-Copyright 2021\-2025 The OpenSSL Project Authors. All Rights Reserved.
+Copyright 2021\-2026 The OpenSSL Project Authors. All Rights Reserved.
 .PP
 Licensed under the Apache License 2.0 (the "License").  You may not use
 this file except in compliance with the License.  You can obtain a copy

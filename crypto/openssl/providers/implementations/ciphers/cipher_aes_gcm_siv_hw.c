@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2026 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -267,11 +267,17 @@ static int aes_gcm_siv_finish(PROV_AES_GCM_SIV_CTX *ctx)
 {
     int ret = 0;
 
-    if (ctx->enc)
+    if (ctx->enc) {
+        /* Generate the tag when Final is the first empty-message operation. */
+        if (ctx->generated_tag == 0
+            && aes_gcm_siv_encrypt(ctx, NULL, NULL, 0) == 0)
+            return 0;
         return ctx->generated_tag;
-    if (!ctx->generated_tag)
-        aes_gcm_siv_decrypt(ctx, NULL, NULL, 0);
-    ret = !CRYPTO_memcmp(ctx->tag, ctx->user_tag, sizeof(ctx->tag));
+    }
+    if (ctx->generated_tag == 0
+        && aes_gcm_siv_decrypt(ctx, NULL, NULL, 0) == 0)
+        return 0;
+    ret = CRYPTO_memcmp(ctx->tag, ctx->user_tag, sizeof(ctx->tag)) == 0;
     ret &= ctx->have_user_tag;
     return ret;
 }
