@@ -29,6 +29,7 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/queue.h>
+#include <sys/time.h>
 #include "namespace.h"
 #include <stdlib.h>
 #include "un-namespace.h"
@@ -49,6 +50,10 @@ static struct pshared_hash_head pshared_hash[HASH_SIZE];
 static struct urwlock pshared_lock = DEFAULT_URWLOCK;
 static int page_size;
 
+#define GC_INTERVAL_USEC 25000
+static struct timeval pshared_gc_time = {0, 0};
+bool __thr_pshared_destroy_imm_gc = false;
+
 void
 __thr_pshared_init(void)
 {
@@ -63,6 +68,16 @@ __thr_pshared_init(void)
 		LIST_INIT(&pshared_hash[i]);
 }
 
+/*
+ * The pshared locking bumps locklevel of the thread.  This prevents
+ * async cancellation from terminating a thread that owns
+ * pshared_lock.  Similarly, it prevents libthr suspension from
+ * stopping a thread that owns pshared_lock, which would cause a lock
+ * cascade.
+ *
+ * It also provides async signal safety, which is not needed, since
+ * locking primitives cannot be used in signal handlers safely.
+ */
 static void
 pshared_rlock(struct pthread *curthread)
 {
@@ -94,9 +109,8 @@ pshared_unlock(struct pthread *curthread)
  * mapped off-page.
  *
  * Mitigate the problem by checking the liveness of all hashed keys
- * periodically.  Right now this is executed on each
- * pthread_lock_destroy(), but may be done less often if found to be
- * too time-consuming.
+ * periodically.  Right now this is executed on pthread_lock_destroy()
+ * if previous gc happen later than 25msecs.
  */
 static void
 pshared_gc(struct pthread *curthread)
@@ -104,8 +118,18 @@ pshared_gc(struct pthread *curthread)
 	struct pshared_hash_head *hd;
 	struct psh *h, *h1;
 	int error, i;
+	struct timeval now, diff;
 
 	pshared_wlock(curthread);
+
+	if (!__thr_pshared_destroy_imm_gc && gettimeofday(&now, NULL) == 0) {
+		timersub(&now, &pshared_gc_time, &diff);
+		if (diff.tv_sec == 0 && diff.tv_usec < GC_INTERVAL_USEC) {
+			pshared_unlock(curthread);
+			return;
+		}
+	}
+
 	for (i = 0; i < HASH_SIZE; i++) {
 		hd = &pshared_hash[i];
 		LIST_FOREACH_SAFE(h, hd, link, h1) {
@@ -118,6 +142,11 @@ pshared_gc(struct pthread *curthread)
 			free(h);
 		}
 	}
+
+	if (!__thr_pshared_destroy_imm_gc && gettimeofday(&now, NULL) == 0) {
+		pshared_gc_time = now;
+	}
+
 	pshared_unlock(curthread);
 }
 
@@ -244,7 +273,7 @@ __thr_pshared_offpage(void *key, int doalloc)
 	if (fd == -1)
 		return (NULL);
 	res = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	close(fd);
+	__sys_close(fd);
 	if (res == MAP_FAILED)
 		return (NULL);
 	pshared_wlock(curthread);

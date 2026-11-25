@@ -112,6 +112,13 @@ SYSCTL_INT(_hw_usb_uaudio, OID_AUTO, default_channels, CTLFLAG_RWTUN,
 #define	UAUDIO_BUFFER_MS_MIN	1
 #define	UAUDIO_BUFFER_MS_MAX	8
 
+/*
+ * The default monitor level is high enough that headsets with a hardware
+ * sidetone may emit immediate feedback upon attach.  We'll lower the default
+ * just for snd_uaudio(4) to avoid breaking others.
+ */
+#define	UAUDIO_DEFAULT_MONITOR	10
+
 static int
 uaudio_buffer_ms_sysctl(SYSCTL_HANDLER_ARGS)
 {
@@ -1141,7 +1148,11 @@ uaudio_attach(device_t dev)
 
 	bus_attach_children(dev);
 
-	if (uaudio_handle_hid) {
+	/*
+	 * Gate on mixer_dev, otherwise a device with no audio interfaces, such
+	 * as a MIDI-only keyboard, will end up using an uninitialized mutex.
+	 */
+	if (uaudio_handle_hid && sc->sc_child[0].mixer_dev != NULL) {
 		if (uaudio_hid_attach(sc, uaa) == 0) {
 			device_printf(dev, "HID volume keys found.\n");
 		} else {
@@ -1150,7 +1161,8 @@ uaudio_attach(device_t dev)
 	}
 
 	/* reload all mixer settings */
-	uaudio_mixer_reload_all(sc);
+	if (sc->sc_child[0].mixer_dev != NULL)
+		uaudio_mixer_reload_all(sc);
 
 	/* enable S/PDIF output, if any */
 	if (sc->sc_set_spdif_fn(sc,
@@ -1197,11 +1209,6 @@ uaudio_attach_sub(device_t dev, kobj_class_t mixer_class, kobj_class_t chan_clas
 		DPRINTF("device needs bitperfect by default\n");
 		uaudio_pcm_setflags(dev, SD_F_BITPERFECT);
 	}
-	if (mixer_init(dev, mixer_class, sc))
-		goto detach;
-	sc->sc_child[i].mixer_init = 1;
-
-	mixer_hwvol_init(dev);
 
 	device_set_descf(dev, "%s %s",
 	    usb_get_manufacturer(sc->sc_udev),
@@ -1213,6 +1220,14 @@ uaudio_attach_sub(device_t dev, kobj_class_t mixer_class, kobj_class_t chan_clas
 	pcm_init(dev, sc);
 
 	uaudio_pcm_setflags(dev, SD_F_MPSAFE);
+
+	if (mixer_init(dev, mixer_class, sc))
+		goto detach;
+	mix_set(sc->sc_child[i].mixer_dev, SOUND_MIXER_MONITOR,
+	    UAUDIO_DEFAULT_MONITOR, UAUDIO_DEFAULT_MONITOR);
+	sc->sc_child[i].mixer_init = 1;
+
+	mixer_hwvol_init(dev);
 
 	if (sc->sc_play_chan[i].num_alt > 0) {
 		sc->sc_play_chan[i].priv_sc = sc;
@@ -2782,16 +2797,12 @@ uaudio_chan_free(struct uaudio_chan *ch)
 int
 uaudio_chan_set_param_blocksize(struct uaudio_chan *ch, uint32_t blocksize)
 {
-	uint32_t temp = 2 * uaudio_get_buffer_size(ch, ch->set_alt);
-	sndbuf_setup(ch->pcm_buf, ch->buf, temp);
-	return (temp / 2);
-}
+	uint32_t temp;
 
-int
-uaudio_chan_set_param_fragments(struct uaudio_chan *ch, uint32_t blocksize,
-    uint32_t blockcount)
-{
-	return (1);
+	temp = 2 * uaudio_get_buffer_size(ch, ch->set_alt);
+	if (sndbuf_setup(ch->pcm_buf, ch->buf, temp) != 0)
+		return (0);
+	return (temp / 2);
 }
 
 int
@@ -4688,7 +4699,16 @@ uaudio_mixer_determine_class(const struct uaudio_terminal_node *iot)
 
 	switch (match) {
 	case 0:	/* not connected to USB */
-		if (terminal_type_output != 0) {
+		/*
+		 * Some devices have a hardware sidetone that will show up here
+		 * as connecting the microphone to the speaker.  If we look at
+		 * the output first, then we are more likely to get a PCM type
+		 * and accidentally tie it to playback when we really should
+		 * treat it as a monitor control.
+		 */
+		if (terminal_type_input != 0 && terminal_type_output != 0) {
+			return (SOUND_MIXER_MONITOR);
+		} else if (terminal_type_output != 0) {
 			return (uaudio_mixer_get_feature_by_tt(
 			    terminal_type_output, SOUND_MIXER_MONITOR));
 		} else {
@@ -4747,7 +4767,16 @@ uaudio20_mixer_determine_class(const struct uaudio_terminal_node *iot)
 
 	switch (match) {
 	case 0:	/* not connected to USB */
-		if (terminal_type_output != 0) {
+		/*
+		 * Some devices have a hardware sidetone that will show up here
+		 * as connecting the microphone to the speaker.  If we look at
+		 * the output first, then we are more likely to get a PCM type
+		 * and accidentally tie it to playback when we really should
+		 * treat it as a monitor control.
+		 */
+		if (terminal_type_input != 0 && terminal_type_output != 0) {
+			return (SOUND_MIXER_MONITOR);
+		} else if (terminal_type_output != 0) {
 			return (uaudio_mixer_get_feature_by_tt(
 			    terminal_type_output, SOUND_MIXER_MONITOR));
 		} else {
@@ -5916,7 +5945,8 @@ tr_setup:
 				}
 			}
 
-			chan->curr_cable %= chan->max_emb_jack;
+			chan->curr_cable = (chan->curr_cable + 1) %
+			    chan->max_emb_jack;
 
 			if (chan->curr_cable == start_cable) {
 				if (tr_any == 0)
@@ -6217,8 +6247,12 @@ uaudio_hid_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct snd_mixer *m;
 	uint8_t id;
 	int actlen;
+	bool mute, volume_up, volume_down;
 
 	usbd_xfer_status(xfer, &actlen, NULL, NULL, NULL);
+
+	m = NULL;
+	mute = volume_up = volume_down = false;
 
 	switch (USB_GET_STATE(xfer)) {
 	case USB_ST_TRANSFERRED:
@@ -6241,7 +6275,7 @@ uaudio_hid_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 		    &sc->sc_hid.mute_loc)) {
 			DPRINTF("Mute toggle\n");
 
-			mixer_hwvol_mute_locked(m);
+			mute = true;
 		}
 
 		if ((sc->sc_hid.flags & UAUDIO_HID_HAS_VOLUME_UP) &&
@@ -6250,7 +6284,7 @@ uaudio_hid_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 		    &sc->sc_hid.volume_up_loc)) {
 			DPRINTF("Volume Up\n");
 
-			mixer_hwvol_step_locked(m, 1, 1);
+			volume_up = true;
 		}
 
 		if ((sc->sc_hid.flags & UAUDIO_HID_HAS_VOLUME_DOWN) &&
@@ -6259,7 +6293,7 @@ uaudio_hid_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 		    &sc->sc_hid.volume_down_loc)) {
 			DPRINTF("Volume Down\n");
 
-			mixer_hwvol_step_locked(m, -1, -1);
+			volume_down = true;
 		}
 
 	case USB_ST_SETUP:
@@ -6280,6 +6314,27 @@ tr_setup:
 		}
 		break;
 	}
+
+	if (!mute && !volume_up && !volume_down)
+		return;
+
+	/*
+	 * The mixer_hwvol_*() functions take the mixer lock, which is the PCM
+	 * lock, and end up in uaudio_mixer_ctl_set(), which takes the
+	 * mixer_lock this callback is entered with. Acquiring the two in that
+	 * order here would reverse the order taken by the mixer ioctl path
+	 * (PCM lock first, then mixer_lock), so drop mixer_lock for the
+	 * duration. The USB stack explicitly allows a callback to drop its
+	 * transfer mutex, and usbd_transfer_drain() accounts for it.
+	 */
+	mtx_unlock(&sc->sc_child[0].mixer_lock);
+	if (mute)
+		mixer_hwvol_mute(m->dev);
+	if (volume_up)
+		mixer_hwvol_step(m->dev, 1, 1);
+	if (volume_down)
+		mixer_hwvol_step(m->dev, -1, -1);
+	mtx_lock(&sc->sc_child[0].mixer_lock);
 }
 
 static int

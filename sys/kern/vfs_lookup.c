@@ -76,12 +76,15 @@ static void NDVALIDATE_impl(struct nameidata *, int);
 
 /*
  * Reset ndp to its original state.
+ * namei() supplies the starting directory again on restart, so unlike
+ * NDREINIT(), NAMEI_DBG_HADSTARTDIR can be set there.
  */
 #define	NDRESET(ndp) do {						\
-	NDREINIT_DBG(ndp);						\
+	NDRESET_DBG(ndp);						\
 	ndp->ni_resflags = 0;						\
 	ndp->ni_cnd.cn_flags &= ~NAMEI_INTERNAL_FLAGS;			\
 } while (0)
+
 /*
  * Prepare namei() to restart. Reset components to its original state and set
  * ISRESTARTED flag which signals the underlying lookup code to change the root
@@ -258,15 +261,20 @@ nameicap_cleanup(struct nameidata *ndp, int error)
 		vfs_rel(mp);
 		ndp->ni_nctrack_mnt = NULL;
 	}
+	if (ndp->ni_rbeneath_dpp != NULL) {
+		vdrop(ndp->ni_rbeneath_dpp);
+		ndp->ni_rbeneath_dpp = NULL;
+	}
 }
 
 /*
  * For dotdot lookups in capability mode, disallow walking over the
- * directory no_rbeneath_dpp that was used as the starting point of
- * the lookup.  Since we take the mnt_renamelocks of all mounts we
- * ever walked over during lookup, parallel renames are disabled.
- * This prevents the situation where we circumvent walk over
- * ni_rbeneath_dpp following dotdots.
+ * directory ni_rbeneath_dpp that was used as the starting point of
+ * the lookup, or over the directory it covers, see
+ * nameicap_union_fallthrough().  Since we take the mnt_renamelocks
+ * of all mounts we ever walked over during lookup, parallel renames
+ * are disabled.  This prevents the situation where we circumvent
+ * walk over ni_rbeneath_dpp following dotdots.
  *
  * Also allow to force failure of dotdot lookups for non-local
  * filesystems, where external agents might assist local lookups to
@@ -297,6 +305,29 @@ violation:
 	if (__predict_false((ndp->ni_lcf & NI_LCF_STRICTREL_KTR) != 0))
 		NI_CAP_VIOLATION(ndp, ndp->ni_cnd.cn_pnbuf);
 	return (ENOTCAPABLE);
+}
+
+/*
+ * A name not found in the root of a union mount is looked up in the
+ * covered directory, which is the same directory in the union view.
+ * If the union root is ni_rbeneath_dpp, move ni_rbeneath_dpp to the
+ * covered vnode.  A relative symlink found in the covered directory
+ * is resolved from the covered vnode without crossing back into the
+ * union root, so dotdot from it must be refused as from the starting
+ * directory.  Dotdot from the union root steps over mnt_vnodecovered
+ * in the vfs_lookup() dotdot loop and meets the moved ni_rbeneath_dpp
+ * there.  The mount holds a reference on the covered vnode until it
+ * is unmounted.
+ */
+static void
+nameicap_union_fallthrough(struct nameidata *ndp, struct vnode *rootvp,
+    struct vnode *coveredvp)
+{
+	if (ndp->ni_rbeneath_dpp != rootvp)
+		return;
+	vholdnz(coveredvp);
+	ndp->ni_rbeneath_dpp = coveredvp;
+	vdrop(rootvp);
 }
 
 static void
@@ -419,8 +450,10 @@ namei_setup(struct nameidata *ndp, struct vnode **dpp, struct pwd **pwdp)
 			    NI_LCF_CAP_DOTDOT;
 		}
 	}
-	if (error == 0 && (ndp->ni_lcf & NI_LCF_STRICTREL) != 0)
+	if (error == 0 && (ndp->ni_lcf & NI_LCF_STRICTREL) != 0) {
 		ndp->ni_rbeneath_dpp = *dpp;
+		vholdnz(*dpp);
+	}
 
 	/*
 	 * If we are auditing the kernel pathname, save the user pathname.
@@ -610,14 +643,30 @@ int
 namei(struct nameidata *ndp)
 {
 	struct vnode *dp;	/* the directory we are searching */
+	struct vnode *atvp;	/* NDINIT_ATVP() starting directory */
 	struct componentname *cnp;
 	struct thread *td;
 	struct pwd *pwd;
+	char *abi_symlink;	/* abs symlink expansion from the ABI pass */
+	size_t abi_symlink_len;
+	size_t abi_suffix_len;	/* leftover path past the saved target */
+	bool target_resolved;	/* walk has consumed that target */
+	enum {
+		NAMEI_ABI_PASS_ABI = 0,
+		NAMEI_ABI_PASS_SYMLINK,
+		NAMEI_ABI_PASS_NATIVE,
+	} abi_pass;
 	int error;
 	enum cache_fpl_status status;
 
 	cnp = &ndp->ni_cnd;
 	td = curthread;
+	abi_symlink = NULL;
+	abi_symlink_len = 0;
+	abi_suffix_len = 0;
+	target_resolved = false;
+	abi_pass = NAMEI_ABI_PASS_ABI;
+	atvp = ndp->ni_startdir;
 #ifdef INVARIANTS
 	KASSERT((ndp->ni_debugflags & NAMEI_DBG_CALLED) == 0,
 	    ("%s: repeated call to namei without NDREINIT", __func__));
@@ -655,10 +704,20 @@ restart:
 	ndp->ni_loopcnt = 0;
 	ndp->ni_vp = NULL;
 
-	error = namei_getpath(ndp);
+	if (__predict_false(abi_pass == NAMEI_ABI_PASS_SYMLINK)) {
+		/*
+		 * The expansion was installed when abi_pass became
+		 * SYMLINK.  It is not reloaded from userspace.
+		 */
+		MPASS(cnp->cn_pnbuf != NULL);
+		error = 0;
+	} else
+		error = namei_getpath(ndp);
 	if (__predict_false(error != 0)) {
 		namei_cleanup_cnp(cnp);
 		nameicap_cleanup(ndp, error);
+		if (ndp->ni_startdir != NULL)
+			vrele(ndp->ni_startdir);
 		SDT_PROBE4(vfs, namei, lookup, return, error, NULL,
 		    false, ndp);
 		return (error);
@@ -679,6 +738,8 @@ restart:
 	 * We may need to start from scratch or pick up where it left off.
 	 */
 	error = cache_fplookup(ndp, &status, &pwd);
+	/* cache_can_fplookup() rejects ni_startdir. */
+	MPASS(atvp == NULL || status == CACHE_FPL_STATUS_ABORTED);
 	switch (status) {
 	case CACHE_FPL_STATUS_UNSET:
 		__assert_unreachable();
@@ -717,12 +778,23 @@ restart:
 			}
 			namei_cleanup_cnp(cnp);
 			nameicap_cleanup(ndp, ENOENT);
+			if (ndp->ni_startdir != NULL)
+				vrele(ndp->ni_startdir);
 			SDT_PROBE4(vfs, namei, lookup, return, ENOENT, NULL,
 			    false, ndp);
 			return (ENOENT);
 		}
+		/*
+		 * namei_setup() and vfs_lookup() consume the reference
+		 * on ni_startdir.  Hold the NDINIT_ATVP() vnode so that
+		 * a restart can reference it again.
+		 */
+		if (atvp != NULL)
+			vhold(atvp);
 		error = namei_setup(ndp, &dp, &pwd);
 		if (error != 0) {
+			if (atvp != NULL)
+				vdrop(atvp);
 			namei_cleanup_cnp(cnp);
 			nameicap_cleanup(ndp, error);
 			return (error);
@@ -734,6 +806,8 @@ restart:
 	 * Locked lookup.
 	 */
 	for (;;) {
+		size_t prev_pathlen;
+
 		ndp->ni_startdir = dp;
 		error = vfs_lookup(ndp);
 		if (error != 0) {
@@ -746,13 +820,64 @@ restart:
 			    error == ENOENT && was_restarted == 0;
 			if (error != ERESTART && !abi_restart)
 				goto out;
+			/*
+			 * One restart from the native root is allowed.
+			 * abi_pass only moves ABI -> SYMLINK or ABI ->
+			 * NATIVE; never backwards.  If the target of an
+			 * absolute symlink had not yet resolved when the
+			 * ABI pass failed, restart walking the saved
+			 * expansion in place of the original path: the
+			 * target may name a file that exists only in the
+			 * native namespace (host-integration symlinks
+			 * under the ABI root, linprocfs' /proc/<pid>/exe).
+			 * An ENOENT after the target resolved, or with
+			 * nothing saved, restarts from the original path.
+			 *
+			 * The old path buffer is released before the
+			 * expansion is installed, so namei_cleanup_cnp()
+			 * does not free the saved symlink.
+			 *
+			 * vfs_lookup() subtracts a component from
+			 * ni_pathlen before looking it up, so a miss on
+			 * the target's own last component leaves exactly
+			 * the suffix; only less than that means the walk
+			 * had moved past the target.
+			 */
+			if (abi_symlink != NULL &&
+			    ndp->ni_pathlen < abi_suffix_len)
+				target_resolved = true;
 			nameicap_cleanup(ndp, error);
 			pwd_drop(pwd);
 			namei_cleanup_cnp(cnp);
 			NDRESET(ndp);
+			if (abi_restart && abi_symlink != NULL &&
+			    !target_resolved) {
+				KASSERT(abi_pass == NAMEI_ABI_PASS_ABI,
+				    ("%s: symlink restart from pass %d",
+				    __func__, abi_pass));
+				abi_pass = NAMEI_ABI_PASS_SYMLINK;
+				cnp->cn_pnbuf = abi_symlink;
+				ndp->ni_pathlen = abi_symlink_len;
+				abi_symlink = NULL;
+			} else {
+				if (abi_restart) {
+					KASSERT(abi_pass ==
+					    NAMEI_ABI_PASS_ABI,
+					    ("%s: native restart from pass %d",
+					    __func__, abi_pass));
+					abi_pass = NAMEI_ABI_PASS_NATIVE;
+				}
+				uma_zfree(namei_zone, abi_symlink);
+				abi_symlink = NULL;
+			}
 			if (abi_restart)
 				was_restarted = ISRESTARTED;
 			ndp->ni_cnd.cn_flags |= was_restarted;
+			if (atvp != NULL) {
+				vref(atvp);
+				ndp->ni_startdir = atvp;
+				vdrop(atvp);
+			}
 			goto restart;
 		}
 
@@ -764,31 +889,70 @@ restart:
 			    ndp->ni_vp, false, ndp);
 			nameicap_cleanup(ndp, 0);
 			pwd_drop(pwd);
+			uma_zfree(namei_zone, abi_symlink);
+			if (atvp != NULL)
+				vdrop(atvp);
 			NDVALIDATE(ndp);
 			return (0);
 		}
+		prev_pathlen = ndp->ni_pathlen;
 		error = namei_follow_link(ndp);
 		if (error != 0)
 			break;
 		vput(ndp->ni_vp);
 		dp = ndp->ni_dvp;
+		if (abi_symlink != NULL &&
+		    prev_pathlen <= abi_suffix_len)
+			target_resolved = true;
 		/*
 		 * Check if root directory should replace current directory.
 		 */
 		cnp->cn_nameptr = cnp->cn_pnbuf;
 		if (*(cnp->cn_nameptr) == '/') {
 			/*
-			 * Reset the lookup to start from the real root without
-			 * origin path name reloading.
+			 * For ABI-root lookups, preserve the ABI root while
+			 * following absolute symlinks during the first lookup.
+			 *
+			 * Only force the real root after the ABI lookup has
+			 * already failed and namei() has restarted in the
+			 * native namespace.  Otherwise absolute symlinks inside
+			 * /compat/linux, including the ELF interpreter symlink,
+			 * incorrectly escape to the native root (PR 289739).
 			 */
-			if (__predict_false(ndp->ni_rootdir != pwd->pwd_rdir)) {
-				cnp->cn_flags |= ISRESTARTED;
+			if ((cnp->cn_flags & ISRESTARTED) != 0)
 				ndp->ni_rootdir = pwd->pwd_rdir;
+			else if (pwd->pwd_adir != pwd->pwd_rdir) {
+				/*
+				 * Save the expansion, and the length of
+				 * the not-yet-walked suffix appended past
+				 * the target, so that should the target
+				 * fail to resolve under the ABI root the
+				 * ENOENT handling above can restart from
+				 * the expansion in place of the original
+				 * path.
+				 */
+				if (abi_symlink == NULL)
+					abi_symlink = uma_zalloc(namei_zone,
+					    M_WAITOK);
+				memcpy(abi_symlink, cnp->cn_pnbuf,
+				    ndp->ni_pathlen);
+				abi_symlink_len = ndp->ni_pathlen;
+				abi_suffix_len = prev_pathlen;
+				target_resolved = false;
 			}
 			vrele(dp);
 			error = namei_handle_root(ndp, &dp);
 			if (error != 0)
 				goto out;
+		} else if (target_resolved) {
+			/*
+			 * Target already consumed under the ABI root
+			 * (relative symlink at or past the end of the
+			 * saved expansion).  A later ENOENT is no
+			 * grounds to restart from that expansion.
+			 */
+			uma_zfree(namei_zone, abi_symlink);
+			abi_symlink = NULL;
 		}
 	}
 	vput(ndp->ni_vp);
@@ -800,6 +964,9 @@ out:
 	namei_cleanup_cnp(cnp);
 	nameicap_cleanup(ndp, error);
 	pwd_drop(pwd);
+	uma_zfree(namei_zone, abi_symlink);
+	if (atvp != NULL)
+		vdrop(atvp);
 	return (error);
 }
 
@@ -923,6 +1090,18 @@ vfs_lookup_isroot(struct nameidata *ndp, struct vnode *dvp)
 	}
 	return (dvp == ndp->ni_rootdir || dvp == ndp->ni_topdir ||
 	    dvp == rootvnode);
+}
+
+static bool
+vfs_lookup_invalid_boundary(struct nameidata *ndp, struct vnode *dvp)
+{
+	struct vnode *ndpp;
+
+	ndpp = ndp->ni_rbeneath_dpp;
+	/* The doomed check prevents escape through the startdir reclaim. */
+	if (dvp == ndpp || (ndpp != NULL && VN_IS_DOOMED(ndpp)))
+		return (true);
+	return (vfs_lookup_isroot(ndp, dvp));
 }
 
 /*
@@ -1274,7 +1453,7 @@ dirloop:
 		for (;;) {
 			bool isroot;
 
-			isroot = vfs_lookup_isroot(ndp, dp);
+			isroot = vfs_lookup_invalid_boundary(ndp, dp);
 			if (__predict_false(isroot && (ndp->ni_lcf &
 			    (NI_LCF_STRICTREL | NI_LCF_STRICTREL_KTR)) != 0)) {
 				if ((ndp->ni_lcf & NI_LCF_STRICTREL_KTR) != 0)
@@ -1347,7 +1526,8 @@ unionlookup:
 		    (dp->v_mount->mnt_flag & MNT_UNION)) {
 			tdp = dp;
 			dp = dp->v_mount->mnt_vnodecovered;
-			VREF(dp);
+			vref(dp);
+			nameicap_union_fallthrough(ndp, tdp, dp);
 			vput(tdp);
 			vn_lock(dp,
 			    enforce_lkflags(dp->v_mount, cnp->cn_lkflags |

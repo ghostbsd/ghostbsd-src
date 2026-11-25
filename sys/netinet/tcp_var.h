@@ -34,6 +34,7 @@
 
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
+#include <netinet/tcp_seq.h>
 
 #ifdef _KERNEL
 #include <net/vnet.h>
@@ -844,7 +845,7 @@ tcp_packets_this_ack(struct tcpcb *tp, tcp_seq ack)
 #define	TF2_HPTS_CPU_SET	0x00000200 /* t_hpts_cpu is not random */
 #define	TF2_FBYTES_COMPLETE	0x00000400 /* We have first bytes in and out */
 #define	TF2_ECN_USE_ECT1	0x00000800 /* Use ECT(1) marking on session */
-#define TF2_TCP_ACCOUNTING	0x00001000 /* Do TCP accounting */
+#define	TF2_TCP_ACCOUNTING	0x00001000 /* Do TCP accounting */
 #define	TF2_HPTS_CALLS		0x00002000 /* tcp_output() called via HPTS */
 #define	TF2_MBUF_L_ACKS		0x00004000 /* large mbufs for ack compression */
 #define	TF2_MBUF_ACKCMP		0x00008000 /* mbuf ack compression ok */
@@ -1231,7 +1232,10 @@ struct xtcpcb {
 	uint32_t	t_dsack_pack;		/* (n) */
 	uint16_t	xt_encaps_port;		/* (s) */
 	int16_t		spare16;
-	int32_t		spare32[22];
+	int32_t		t_lognum;		/* (s) */
+	int32_t		t_loglimit;		/* (s) */
+	uint32_t	t_logsn;		/* (s) */
+	int32_t		spare32[19];
 } __aligned(8);
 
 #ifdef _KERNEL
@@ -1255,7 +1259,7 @@ struct tcp_function_info {
  */
 #define	TCPCTL_DO_RFC1323	1	/* use RFC-1323 extensions */
 #define	TCPCTL_MSSDFLT		3	/* MSS default */
-#define TCPCTL_STATS		4	/* statistics */
+#define	TCPCTL_STATS		4	/* statistics */
 #define	TCPCTL_RTTDFLT		5	/* default RTT estimate */
 #define	TCPCTL_KEEPIDLE		6	/* keepalive idle timer */
 #define	TCPCTL_KEEPINTVL	7	/* interval to send keepalives */
@@ -1356,7 +1360,7 @@ VNET_DECLARE(struct inpcbinfo, tcbinfo);
 #define	V_tcp_do_ecn			VNET(tcp_do_ecn)
 #define	V_tcp_do_rfc1323		VNET(tcp_do_rfc1323)
 #define	V_tcp_tolerate_missing_ts	VNET(tcp_tolerate_missing_ts)
-#define V_tcp_ts_offset_per_conn	VNET(tcp_ts_offset_per_conn)
+#define	V_tcp_ts_offset_per_conn	VNET(tcp_ts_offset_per_conn)
 #define	V_tcp_do_rfc3042		VNET(tcp_do_rfc3042)
 #define	V_tcp_do_rfc3390		VNET(tcp_do_rfc3390)
 #define	V_tcp_do_rfc3465		VNET(tcp_do_rfc3465)
@@ -1410,8 +1414,6 @@ void	 tcp_reass_global_init(void);
 void	 tcp_reass_flush(struct tcpcb *);
 void	 tcp_dooptions(struct tcpopt *, u_char *, int, int);
 void	 tcp_dropwithreset(struct mbuf *, struct tcphdr *, struct tcpcb *, int);
-void	tcp_pulloutofband(struct socket *,
-		     struct tcphdr *, struct mbuf *, int);
 void	tcp_xmit_timer(struct tcpcb *, int);
 void	tcp_newreno_partial_ack(struct tcpcb *, struct tcphdr *);
 void	cc_ack_received(struct tcpcb *tp, struct tcphdr *th,
@@ -1617,6 +1619,15 @@ tcp_fields_to_net(struct tcphdr *th)
 	th->th_ack = htonl(th->th_ack);
 	th->th_win = htons(th->th_win);
 	th->th_urp = htons(th->th_urp);
+}
+
+static inline void
+tcp_adapt_iss_check(struct tcpcb *tp)
+{
+	if (SEQ_GT(tp->snd_una, tp->iss + (TCP_MAXWIN << tp->snd_scale))) {
+		/* Checking SEG.ACK against ISS is definitely redundant. */
+		tp->t_flags2 |= TF2_NO_ISS_CHECK;
+	}
 }
 #endif /* _KERNEL */
 

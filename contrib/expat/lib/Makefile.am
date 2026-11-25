@@ -12,6 +12,7 @@
 # Copyright (c) 2026      Gordon Messmer <gordon.messmer@gmail.com>
 # Copyright (c) 2026      Nick Begg <nick@stunttruck.net>
 # Copyright (c) 2026      Matthew Fernandez <matthew.fernandez@gmail.com>
+# Copyright (c) 2026      Funda Wang <fundawang@yeah.net>
 # Licensed under the MIT license:
 #
 # Permission is  hereby granted,  free of charge,  to any  person obtaining
@@ -45,14 +46,16 @@ endif
 
 libexpat_la_LDFLAGS = \
     @AM_LDFLAGS@ \
-    @LIBM@ \
     -no-undefined \
     -version-info @LIBCURRENT@:@LIBREVISION@:@LIBAGE@
 if HAVE_VSCRIPT
 libexpat_la_LDFLAGS += $(VSCRIPT_LDFLAGS),@builddir@/libexpat.map
 endif
 
+libexpat_la_LIBADD = @LIBM@
+
 libexpat_la_SOURCES = \
+    xcs.c \
     xmlparse.c \
     xmltok.c \
     xmlrole.c
@@ -112,6 +115,7 @@ uninstall-local:
 EXTRA_DIST = \
     ascii.h \
     asciitab.h \
+    entities.h \
     expat_external.h \
     expat.h \
     fallthrough.h \
@@ -125,7 +129,7 @@ EXTRA_DIST = \
     siphash.h \
     utf8tab.h \
     winconfig.h \
-    xcsinc.c \
+    xcs.h \
     xmlrole.h \
     xmltok.h \
     xmltok_impl.c \

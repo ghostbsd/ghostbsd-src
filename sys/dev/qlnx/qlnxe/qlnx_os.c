@@ -32,6 +32,7 @@
 
 #include <sys/cdefs.h>
 #include "qlnx_os.h"
+#include <net/rss_config.h>
 #include "bcm_osal.h"
 #include "reg_addr.h"
 #include "ecore_gtt_reg_addr.h"
@@ -57,6 +58,7 @@
 #include "ecore_dbg_fw_funcs.h"
 #include "ecore_iov_api.h"
 #include "ecore_vf_api.h"
+#include "ecore_vf.h"
 
 #include "qlnx_ioctl.h"
 #include "qlnx_def.h"
@@ -70,6 +72,7 @@
 #include <sys/nv.h>
 #include <sys/iov_schema.h>
 #include <dev/pci/pci_iov.h>
+#include <net/if_vf_status.h>
 #endif /* #ifdef CONFIG_ECORE_SRIOV */
 
 #include <sys/smp.h>
@@ -172,6 +175,7 @@ static int qlnx_pci_detach (device_t);
 static int qlnx_iov_init(device_t dev, uint16_t num_vfs, const nvlist_t *params);
 static void qlnx_iov_uninit(device_t dev);
 static int qlnx_iov_add_vf(device_t dev, uint16_t vfnum, const nvlist_t *params);
+static int qlnx_vf_status(if_t ifp, struct if_vf_status **statusp);
 static void qlnx_initialize_sriov(qlnx_host_t *ha);
 static void qlnx_pf_taskqueue(void *context, int pending);
 static int qlnx_create_pf_taskqueues(qlnx_host_t *ha);
@@ -649,6 +653,21 @@ qlnx_get_params(qlnx_host_t *ha)
 	return;
 }
 
+#if !defined(QLNX_VF) && defined(CONFIG_ECORE_SRIOV)
+static void
+qlnx_invalidate_vf_queue_status(qlnx_host_t *ha)
+{
+	int i;
+
+	QLNX_LOCK(ha);
+	if (ha->vf_attr != NULL) {
+		for (i = 0; i < ha->num_vfs; i++)
+			ha->vf_attr[i].queues_valid = false;
+	}
+	QLNX_UNLOCK(ha);
+}
+#endif
+
 static void
 qlnx_error_recovery_taskqueue(void *context, int pending)
 {
@@ -666,6 +685,9 @@ qlnx_error_recovery_taskqueue(void *context, int pending)
 	qlnx_rdma_dev_remove(ha);
 #endif /* #ifdef QLNX_ENABLE_IWARP */
 
+#if !defined(QLNX_VF) && defined(CONFIG_ECORE_SRIOV)
+	qlnx_invalidate_vf_queue_status(ha);
+#endif
         qlnx_slowpath_stop(ha);
         qlnx_slowpath_start(ha);
 
@@ -2311,6 +2333,11 @@ qlnx_init_ifnet(device_t dev, qlnx_host_t *ha)
         if_setsoftc(ifp, ha);
         if_setflags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
         if_setioctlfn(ifp, qlnx_ioctl);
+#ifndef QLNX_VF
+#ifdef CONFIG_ECORE_SRIOV
+	if_setvfstatusfn(ifp, qlnx_vf_status);
+#endif
+#endif
         if_settransmitfn(ifp, qlnx_transmit);
         if_setqflushfn(ifp, qlnx_qflush);
 
@@ -2527,6 +2554,77 @@ _qlnx_set_promisc_allmulti(qlnx_host_t *ha, bool promisc, bool allmulti)
 }
 
 static int
+qlnx_rss_query_status(qlnx_host_t *ha)
+{
+	int i;
+
+	sx_assert(&ha->hw_lock, SA_XLOCKED);
+	if (ha->state != QLNX_STATE_OPEN ||
+	    (if_getdrvflags(ha->ifp) & IFF_DRV_RUNNING) == 0)
+		return (ENXIO);
+	if (IS_VF(&ha->cdev) && ha->rss_params.rss_enable) {
+		for (i = 0; i < ha->cdev.num_hwfns; i++) {
+			struct ecore_vf_iov *iov = ha->cdev.hwfns[i].vf_iov_info;
+
+			if (iov == NULL || !iov->rss_configured)
+				return (ENXIO);
+		}
+	}
+	return (0);
+}
+
+static int
+qlnx_get_rss_key(qlnx_host_t *ha, struct ifrsskey *ifrk)
+{
+	const struct ecore_rss_params *rss = &ha->rss_params;
+	int error, i;
+
+	error = qlnx_rss_query_status(ha);
+	if (error != 0)
+		return (error);
+	ifrk->ifrk_func = rss->rss_enable ? RSS_FUNC_TOEPLITZ : RSS_FUNC_NONE;
+	ifrk->ifrk_keylen = rss->rss_enable ? sizeof(rss->rss_key) : 0;
+	_Static_assert(sizeof(ifrk->ifrk_key) >= sizeof(rss->rss_key),
+	    "RSS query buffer too small");
+	bzero(ifrk->ifrk_key, sizeof(ifrk->ifrk_key));
+	/* Undo the word conversion used when preparing the firmware request. */
+	if (rss->rss_enable) {
+		for (i = 0; i < ECORE_RSS_KEY_SIZE; i++)
+			be32enc(ifrk->ifrk_key + i * sizeof(uint32_t),
+			    rss->rss_key[i]);
+	}
+	return (0);
+}
+
+static int
+qlnx_get_rss_hash(qlnx_host_t *ha, struct ifrsshash *ifrh)
+{
+	const struct ecore_rss_params *rss = &ha->rss_params;
+	uint8_t caps;
+	int error;
+
+	error = qlnx_rss_query_status(ha);
+	if (error != 0)
+		return (error);
+	ifrh->ifrh_func = rss->rss_enable ? RSS_FUNC_TOEPLITZ : RSS_FUNC_NONE;
+	ifrh->ifrh_types = 0;
+	caps = rss->rss_enable ? rss->rss_caps : 0;
+	if (caps & ECORE_RSS_IPV4)
+		ifrh->ifrh_types |= RSS_TYPE_IPV4;
+	if (caps & ECORE_RSS_IPV4_TCP)
+		ifrh->ifrh_types |= RSS_TYPE_TCP_IPV4;
+	if (caps & ECORE_RSS_IPV4_UDP)
+		ifrh->ifrh_types |= RSS_TYPE_UDP_IPV4;
+	if (caps & ECORE_RSS_IPV6)
+		ifrh->ifrh_types |= RSS_TYPE_IPV6;
+	if (caps & ECORE_RSS_IPV6_TCP)
+		ifrh->ifrh_types |= RSS_TYPE_TCP_IPV6;
+	if (caps & ECORE_RSS_IPV6_UDP)
+		ifrh->ifrh_types |= RSS_TYPE_UDP_IPV6;
+	return (0);
+}
+
+static int
 qlnx_ioctl(if_t ifp, u_long cmd, caddr_t data)
 {
 	int		ret = 0, mask;
@@ -2537,6 +2635,18 @@ qlnx_ioctl(if_t ifp, u_long cmd, caddr_t data)
 	ha = (qlnx_host_t *)if_getsoftc(ifp);
 
 	switch (cmd) {
+	case SIOCGIFRSSKEY:
+		QLNX_LOCK(ha);
+		ret = qlnx_get_rss_key(ha, (struct ifrsskey *)data);
+		QLNX_UNLOCK(ha);
+		break;
+
+	case SIOCGIFRSSHASH:
+		QLNX_LOCK(ha);
+		ret = qlnx_get_rss_hash(ha, (struct ifrsshash *)data);
+		QLNX_UNLOCK(ha);
+		break;
+
 	case SIOCSIFMTU:
 		QL_DPRINT4(ha, "SIOCSIFMTU (0x%lx)\n", cmd);
 
@@ -6481,21 +6591,10 @@ qlnx_update_rx_prod(struct ecore_hwfn *p_hwfn, struct qlnx_rx_queue *rxq)
 	return;
 }
 
-static uint32_t qlnx_hash_key[] = {
-                ((0x6d << 24)|(0x5a << 16)|(0x56 << 8)|0xda),
-                ((0x25 << 24)|(0x5b << 16)|(0x0e << 8)|0xc2),
-                ((0x41 << 24)|(0x67 << 16)|(0x25 << 8)|0x3d),
-                ((0x43 << 24)|(0xa3 << 16)|(0x8f << 8)|0xb0),
-                ((0xd0 << 24)|(0xca << 16)|(0x2b << 8)|0xcb),
-                ((0xae << 24)|(0x7b << 16)|(0x30 << 8)|0xb4),
-                ((0x77 << 24)|(0xcb << 16)|(0x2d << 8)|0xa3),
-                ((0x80 << 24)|(0x30 << 16)|(0xf2 << 8)|0x0c),
-                ((0x6a << 24)|(0x42 << 16)|(0xb7 << 8)|0x3b),
-                ((0xbe << 24)|(0xac << 16)|(0x01 << 8)|0xfa)};
-
 static int
 qlnx_start_queues(qlnx_host_t *ha)
 {
+        uint8_t                         rss_key[RSS_KEYSIZE];
         int				rc, tc, i, vport_id = 0,
 					drop_ttl0_flg = 1, vlan_removal_en = 1,
 					tx_switching = 0, hw_lro_enable = 0;
@@ -6637,8 +6736,13 @@ qlnx_start_queues(qlnx_host_t *ha)
                         rss_params->rss_ind_table[i] = fp->rxq->handle;
 		}
 
+                _Static_assert(sizeof(rss_params->rss_key) == RSS_KEYSIZE,
+                    "RSS key size mismatch");
+                rss_getkey(rss_key);
+                /* The shared code converts these host-order words to LE. */
                 for (i = 0; i < ECORE_RSS_KEY_SIZE; i++)
-			rss_params->rss_key[i] = (__le32)qlnx_hash_key[i];
+                        rss_params->rss_key[i] =
+                            be32dec(rss_key + i * sizeof(uint32_t));
 
         } else {
                 memset(rss_params, 0, sizeof(*rss_params));
@@ -7835,10 +7939,13 @@ static int
 qlnx_iov_init(device_t dev, uint16_t num_vfs, const nvlist_t *nvlist_params)
 {
 	qlnx_host_t		*ha;
+	qlnx_vf_attr_t		*vf_attrs;
 	struct ecore_dev	*cdev;
 	struct ecore_iov_vf_init_params params;
 	int ret, j, i;
 	uint32_t max_vfs;
+
+	vf_attrs = NULL;
 
 	if ((ha = device_get_softc(dev)) == NULL) {
 		device_printf(dev, "%s: cannot get softc\n", __func__);
@@ -7861,10 +7968,10 @@ qlnx_iov_init(device_t dev, uint16_t num_vfs, const nvlist_t *nvlist_params)
 		goto qlnx_iov_init_err0;
         }
 
-	ha->vf_attr =  malloc(((sizeof (qlnx_vf_attr_t) * num_vfs)), M_QLNXBUF,
-				M_NOWAIT);
+	vf_attrs = mallocarray(num_vfs, sizeof(*vf_attrs), M_QLNXBUF,
+	    M_NOWAIT | M_ZERO);
 
-	if (ha->vf_attr == NULL)
+	if (vf_attrs == NULL)
 		goto qlnx_iov_init_err0;
 
         memset(&params, 0, sizeof(params));
@@ -7899,10 +8006,20 @@ qlnx_iov_init(device_t dev, uint16_t num_vfs, const nvlist_t *nvlist_params)
                         }
                 }
 
-                ecore_ptt_release(hwfn, ptt);
-        }
+		ecore_ptt_release(hwfn, ptt);
+	}
 
+	for (i = 0; i < num_vfs; i++) {
+		for_each_hwfn(cdev, j)
+			vf_attrs[i].num_rings += ecore_iov_get_vf_num_rxqs(
+			    &cdev->hwfns[j], i);
+		vf_attrs[i].queues_valid = true;
+	}
+
+	QLNX_LOCK(ha);
+	ha->vf_attr = vf_attrs;
 	ha->num_vfs = num_vfs;
+	QLNX_UNLOCK(ha);
 	qlnx_inform_vf_link_state(&cdev->hwfns[0], ha);
 
 	QL_DPRINT2(ha," dev = %p exit num_vfs = %d\n", dev, num_vfs);
@@ -7914,7 +8031,7 @@ qlnx_iov_init_err1:
 
 qlnx_iov_init_err0:
 	qlnx_destroy_pf_taskqueues(ha);
-	ha->num_vfs = 0;
+	free(vf_attrs, M_QLNXBUF);
 
 	return (-1);
 }
@@ -7923,6 +8040,7 @@ static void
 qlnx_iov_uninit(device_t dev)
 {
 	qlnx_host_t	*ha;
+	qlnx_vf_attr_t	*vf_attrs;
 
 	if ((ha = device_get_softc(dev)) == NULL) {
 		device_printf(dev, "%s: cannot get softc\n", __func__);
@@ -7931,13 +8049,15 @@ qlnx_iov_uninit(device_t dev)
 
 	QL_DPRINT2(ha," dev = %p enter\n", dev);
 
+	QLNX_LOCK(ha);
+	vf_attrs = ha->vf_attr;
+	ha->vf_attr = NULL;
+	ha->num_vfs = 0;
+	QLNX_UNLOCK(ha);
+
 	qlnx_sriov_disable(ha);
 	qlnx_destroy_pf_taskqueues(ha);
-
-	free(ha->vf_attr, M_QLNXBUF);
-	ha->vf_attr = NULL;
-
-	ha->num_vfs = 0;
+	free(vf_attrs, M_QLNXBUF);
 
 	QL_DPRINT2(ha," dev = %p exit\n", dev);
 	return;
@@ -7949,8 +8069,10 @@ qlnx_iov_add_vf(device_t dev, uint16_t vfnum, const nvlist_t *params)
 	qlnx_host_t	*ha;
 	qlnx_vf_attr_t	*vf_attr;
 	unsigned const char *mac;
+	uint8_t mac_addr[ETHER_ADDR_LEN];
 	size_t size;
 	struct ecore_hwfn *p_hwfn;
+	enum _ecore_status_t rc;
 
 	if ((ha = device_get_softc(dev)) == NULL) {
 		device_printf(dev, "%s: cannot get softc\n", __func__);
@@ -7959,28 +8081,105 @@ qlnx_iov_add_vf(device_t dev, uint16_t vfnum, const nvlist_t *params)
 
 	QL_DPRINT2(ha," dev = %p enter vfnum = %d\n", dev, vfnum);
 
-	if (vfnum > (ha->num_vfs - 1)) {
-		QL_DPRINT1(ha, " VF[%d] is greater than max allowed [%d]\n",
-			vfnum, (ha->num_vfs - 1));
+	QLNX_LOCK(ha);
+	if (ha->vf_attr == NULL || vfnum >= ha->num_vfs) {
+		QL_DPRINT1(ha, "VF[%u] is not configured\n", vfnum);
+		QLNX_UNLOCK(ha);
+		return (EINVAL);
 	}
-		
-	vf_attr = &ha->vf_attr[vfnum];
+	QLNX_UNLOCK(ha);
+	bzero(mac_addr, sizeof(mac_addr));
 
         if (nvlist_exists_binary(params, "mac-addr")) {
                 mac = nvlist_get_binary(params, "mac-addr", &size);
-                bcopy(mac, vf_attr->mac_addr, ETHER_ADDR_LEN);
+		if (size != ETHER_ADDR_LEN)
+			return (EINVAL);
+		memcpy(mac_addr, mac, ETHER_ADDR_LEN);
 		device_printf(dev,
 			"%s: mac_addr = %02x:%02x:%02x:%02x:%02x:%02x\n", 
-			__func__, vf_attr->mac_addr[0],
-			vf_attr->mac_addr[1], vf_attr->mac_addr[2],
-			vf_attr->mac_addr[3], vf_attr->mac_addr[4],
-			vf_attr->mac_addr[5]);
+			__func__, mac_addr[0], mac_addr[1], mac_addr[2],
+			mac_addr[3], mac_addr[4], mac_addr[5]);
 		p_hwfn = &ha->cdev.hwfns[0];
-		ecore_iov_bulletin_set_mac(p_hwfn, vf_attr->mac_addr,
-			vfnum);
+		rc = ecore_iov_bulletin_set_mac(p_hwfn, mac_addr, vfnum);
+		if (rc != ECORE_SUCCESS)
+			return (EIO);
 	}
 
+	QLNX_LOCK(ha);
+	if (ha->vf_attr == NULL || vfnum >= ha->num_vfs) {
+		QLNX_UNLOCK(ha);
+		return (ENXIO);
+	}
+	vf_attr = &ha->vf_attr[vfnum];
+	memcpy(vf_attr->mac_addr, mac_addr, ETHER_ADDR_LEN);
+	vf_attr->configured = true;
+	QLNX_UNLOCK(ha);
+
 	QL_DPRINT2(ha," dev = %p exit vfnum = %d\n", dev, vfnum);
+	return (0);
+}
+
+static int
+qlnx_vf_status(if_t ifp, struct if_vf_status **statusp)
+{
+	qlnx_vf_attr_t *snapshot;
+	struct if_vf_info *vf;
+	struct if_vf_status *status;
+	qlnx_host_t *ha;
+	uint16_t num_vfs;
+	int i;
+
+	ha = if_getsoftc(ifp);
+	QLNX_LOCK(ha);
+	if (!ha->sriov_initialized) {
+		QLNX_UNLOCK(ha);
+		return (EOPNOTSUPP);
+	}
+	num_vfs = ha->num_vfs;
+	if (num_vfs == 0) {
+		QLNX_UNLOCK(ha);
+		status = if_vf_status_alloc(0);
+		if (status == NULL)
+			return (ENOMEM);
+		*statusp = status;
+		return (0);
+	}
+	if (ha->vf_attr == NULL) {
+		QLNX_UNLOCK(ha);
+		return (EIO);
+	}
+	snapshot = mallocarray(num_vfs, sizeof(*snapshot), M_QLNXBUF,
+	    M_NOWAIT);
+	if (snapshot == NULL) {
+		QLNX_UNLOCK(ha);
+		return (ENOMEM);
+	}
+	memcpy(snapshot, ha->vf_attr, num_vfs * sizeof(*snapshot));
+	QLNX_UNLOCK(ha);
+
+	status = if_vf_status_alloc(num_vfs);
+	if (status == NULL) {
+		free(snapshot, M_QLNXBUF);
+		return (ENOMEM);
+	}
+	for (i = 0; i < num_vfs; i++) {
+		vf = &status->vfs[i];
+		vf->fields = IFVF_F_CONFIGURED;
+		vf->index = i;
+		vf->configured = snapshot[i].configured;
+		if (!ETHER_IS_ZERO(snapshot[i].mac_addr)) {
+			memcpy(vf->mac, snapshot[i].mac_addr, sizeof(vf->mac));
+			vf->fields |= IFVF_F_MAC;
+		}
+		if (snapshot[i].queues_valid) {
+			vf->tx_queue_count = snapshot[i].num_rings;
+			vf->rx_queue_count = snapshot[i].num_rings;
+			vf->fields |= IFVF_F_NUM_TX_QUEUES |
+			    IFVF_F_NUM_RX_QUEUES;
+		}
+	}
+	free(snapshot, M_QLNXBUF);
+	*statusp = status;
 	return (0);
 }
 

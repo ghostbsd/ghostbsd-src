@@ -587,19 +587,7 @@ after_sack_rexmit:
 	if (len) {
 		if (len >= tp->t_maxseg)
 			goto send;
-		/*
-		 * As the TCP header options are now
-		 * considered when setting up the initial
-		 * window, we would not send the last segment
-		 * if we skip considering the option length here.
-		 * Note: this may not work when tcp headers change
-		 * very dynamically in the future.
-		 */
-		if ((((tp->t_flags & TF_SIGNATURE) ?
-			PADTCPOLEN(TCPOLEN_SIGNATURE) : 0) +
-		    ((tp->t_flags & TF_RCVD_TSTMP) ?
-			PADTCPOLEN(TCPOLEN_TIMESTAMP) : 0) +
-		    len) >= tp->t_maxseg)
+		if (len >= tcp_maxseg(tp))
 			goto send;
 		/*
 		 * NOTE! on localhost connections an 'ack' from the remote
@@ -1192,6 +1180,7 @@ send:
 	if (flags & TH_FIN && tp->t_flags & TF_SENTFIN &&
 	    tp->snd_nxt == tp->snd_max)
 		tp->snd_nxt--;
+	KASSERT(SEQ_LEQ(tp->snd_nxt, tp->snd_max), ("SEG_GT(snd_nxt, snd_max)"));
 	/*
 	 * If we are starting a connection, send ECN setup
 	 * SYN packet. If we are on a retransmit, we may
@@ -1543,8 +1532,16 @@ out:
 				tp->t_flags |= TF_SENTFIN;
 			}
 		}
-		if (sack_rxmit)
+		if (sack_rxmit) {
+			/*
+			 * Retransmitted bytes are already in snd_max.
+			 * A FIN on this segment is not. snd_nxt was
+			 * advanced for it above.
+			 */
+			if (SEQ_GT(tp->snd_nxt, tp->snd_max))
+				tp->snd_max = tp->snd_nxt;
 			goto timer;
+		}
 		tp->snd_nxt += len;
 		if (SEQ_GT(tp->snd_nxt, tp->snd_max)) {
 			/*

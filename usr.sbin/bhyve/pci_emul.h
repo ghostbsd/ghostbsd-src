@@ -39,6 +39,7 @@
 #include <dev/pci/pcireg.h>
 
 #include <assert.h>
+#include <stdbool.h>
 
 #include "pci_irq.h"
 
@@ -99,6 +100,7 @@ struct pcibar {
 	uint64_t		size;
 	uint64_t		addr;
 	uint8_t			lobits;
+	bool			registered;	/* io region is registered */
 };
 
 #define PI_NAMESZ	40
@@ -233,7 +235,7 @@ int	init_pci(struct vmctx *ctx);
 void	pci_callback(void);
 uint32_t pci_config_read_reg(const struct pci_conf *host_conf, nvlist_t *nvl,
 	    uint32_t reg, uint8_t size, uint32_t def);
-int	pci_emul_alloc_bar(struct pci_devinst *pdi, int idx,
+void	pci_emul_alloc_bar(struct pci_devinst *pdi, int idx,
 	    enum pcibar_type type, uint64_t size);
 int 	pci_emul_alloc_rom(struct pci_devinst *const pdi, const uint64_t size,
     	    void **const addr);

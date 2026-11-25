@@ -295,7 +295,7 @@ __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_${__llt:${__LLVM_TARGET_FILT}:tu}/LLVM
 .endif
 .endfor
 
-__DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF LLVM_TARGET_MIPS
+__DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF LLVM_TARGET_LOONGARCH
 
 .include <bsd.compiler.mk>
 
@@ -435,6 +435,7 @@ MK_MITKRB5:=	no
 # if it is off.
 .if ${MK_DTRACE} == "no"
 MK_CTF:=	no
+MK_DTRACE_TESTS:= no
 .endif
 
 .if ${MK_MAIL} == "no"

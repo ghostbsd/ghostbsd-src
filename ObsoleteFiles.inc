@@ -51,9 +51,24 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20261103: Removed <sys/kpilite.h>
+OLD_FILES+=usr/include/sys/kpilite.h
+
+# 20261020: Regenerate trust store
+OLD_FILES+=usr/share/certs/trusted/Atos_TrustedRoot_2011.pem
+OLD_FILES+=usr/share/certs/trusted/SecureSign_Root_CA12.pem
+OLD_FILES+=usr/share/certs/trusted/ePKI_Root_Certification_Authority.pem
+OLD_FILES+=usr/share/certs/trusted/emSign_ECC_Root_CA_-_C3.pem
+OLD_FILES+=usr/share/certs/trusted/emSign_ECC_Root_CA_-_G3.pem
+OLD_FILES+=usr/share/certs/trusted/emSign_Root_CA_-_C1.pem
+OLD_FILES+=usr/share/certs/untrusted/Entrust_Root_Certification_Authority.pem
+
 # 20260925: lesskey(1) removed, lesskey(5) man page added
 OLD_FILES+=usr/bin/lesskey
 OLD_FILES+=usr/share/man/man1/lesskey.1.gz
+
+# 20260921: atf-0.26 release
+OLD_FILES+=usr/share/doc/atf/README
 
 # 20260602: Removed by 0a36787e4c1f on 20210723
 OLD_FILES+=usr/share/locale/hr_HR.ISO8859-2/LC_MESSAGES

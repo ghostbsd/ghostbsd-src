@@ -48,6 +48,8 @@
 #endif
 #include "virtio.h"
 
+#define WPRINTF(params) PRINTLN params
+
 /*
  * Functions for dealing with generalized "virtual devices" as
  * defined by <https://www.google.com/#output=search&q=virtio+spec>
@@ -182,10 +184,15 @@ vi_vq_init(struct virtio_softc *vs, uint32_t pfn)
 	char *base;
 
 	vq = &vs->vs_queues[vs->vs_curq];
-	vq->vq_pfn = pfn;
 	phys = (uint64_t)pfn << VRING_PFN;
 	size = vring_size_aligned(vq->vq_qsize);
 	base = paddr_guest2host(vs->vs_pi->pi_vmctx, phys, size);
+	if (base == NULL) {
+		EPRINTLN("%s: queue %u has invalid GPA %#jx/%#zx",
+		    vs->vs_vc->vc_name, vq->vq_num, (uintmax_t)phys, size);
+		return;
+	}
+	vq->vq_pfn = pfn;
 
 	/* First page(s) are descriptors... */
 	vq->vq_desc = (struct vring_desc *)base;
@@ -225,6 +232,11 @@ _vq_record(int i, struct vring_desc *vd, struct vmctx *ctx, struct iovec *iov,
 	addr = atomic_load_64(&vd->addr);
 	iov[i].iov_len = len;
 	iov[i].iov_base = paddr_guest2host(ctx, addr, len);
+	if (iov[i].iov_base == NULL) {
+		WPRINTF(("%s: invalid guest address 0x%lx len %u\n",
+		    __func__, addr, len));
+		return;
+	}
 	if ((vd->flags & VRING_DESC_F_WRITE) == 0)
 		reqp->readable++;
 	else
@@ -349,6 +361,13 @@ vq_getchain(struct vqueue_info *vq, struct iovec *iov, int niov,
 			}
 			vindir = paddr_guest2host(ctx,
 			    vdir->addr, vdir->len);
+			if (vindir == NULL) {
+				EPRINTLN(
+				    "%s: indirect table GPA %#jx/%#x is "
+				    "unmappable", name, (uintmax_t)vdir->addr,
+				    (u_int)vdir->len);
+				return (-1);
+			}
 			/*
 			 * Indirects start at the 0th, then follow
 			 * their own embedded "next"s until those run
@@ -780,6 +799,8 @@ bad:
 			goto done;
 		}
 		vq = &vs->vs_queues[value];
+		if (!vq_ring_ready(vq))
+			goto done;
 		if (vq->vq_notify)
 			(*vq->vq_notify)(DEV_SOFTC(vs), vq);
 		else if (vc->vc_qnotify)

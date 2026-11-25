@@ -530,6 +530,15 @@ GIT_CMD=   ${_P}/git
 .export GIT_CMD
 .endif
 
+.if !defined(GOT_CMD) || empty(GOT_CMD)
+. for _P in /usr/bin /usr/local/bin
+.  if exists(${_P}/got)
+GOT_CMD=   ${_P}/got
+.  endif
+. endfor
+.export GOT_CMD
+.endif
+
 .if !defined(OSRELDATE)
 .if exists(/usr/include/osreldate.h)
 OSRELDATE!=	awk '/^\#define[[:space:]]*__FreeBSD_version/ { print $$3 }' \
@@ -597,6 +606,8 @@ PKG_WORKERS_COUNT?=	1
 .if !defined(PKG_TIMESTAMP)
 .if !empty(GIT_CMD) && exists(${GIT_CMD}) && exists(${SRCDIR}/.git)
 SOURCE_DATE_EPOCH!=	${GIT_CMD} -C ${SRCDIR} show -s --format=%ct HEAD
+.elif !empty(GOT_CMD) && exists(${GOT_CMD}) && exists(${SRCDIR}/.got)
+SOURCE_DATE_EPOCH!=	( cd ${SRCDIR} && ${GOT_CMD} cat HEAD | awk '$$1 == "committer" { print $$(NF-1); exit }' )
 .else
 TIMEEPOCHNOW=		%s
 SOURCE_DATE_EPOCH=	${TIMEEPOCHNOW:gmtime}
@@ -2207,11 +2218,21 @@ create-packages: .PHONY create-packages-world create-packages-kernel create-pack
 
 create-source-src-package: _pkgbootstrap .PHONY
 	rm -f ${SSTAGEDIR}/src.plist 2>/dev/null || :
+.if ( !empty(GIT_CMD) && exists(${GIT_CMD}) && exists(${SRCDIR}/.git) ) || \
+    ( !empty(GOT_CMD) && exists(${GOT_CMD}) && exists(${SRCDIR}/.got) )
 .if !empty(GIT_CMD) && exists(${GIT_CMD}) && exists(${SRCDIR}/.git)
 	@cd ${SRCDIR}; \
 		( echo "@override_prefix /usr/src" ;  \
 		${GIT_CMD} ls-files --recurse-submodules ":!:sys/" ) \
 		> ${SSTAGEDIR}/src.plist
+.else
+	@cd ${SRCDIR}; \
+		( echo "@override_prefix /usr/src" ;  \
+		${GOT_CMD} tree -R | \
+		    awk '/^sys\// { next } { sub(/ -> .*/, "") } /\/$$/ { next } { sub(/[*@$$]$$/, "") } { print }' | \
+		    sort ) \
+		> ${SSTAGEDIR}/src.plist
+.endif
 	flua ${SRCDIR}/release/packages/generate-ucl.lua \
 		PKGNAME "src" \
 		PKGGENNAME "src" \
@@ -2233,11 +2254,21 @@ create-source-src-package: _pkgbootstrap .PHONY
 
 create-source-src-sys-package: _pkgbootstrap .PHONY
 	rm -f ${SSTAGEDIR}/src-sys.plist 2>/dev/null || :
+.if ( !empty(GIT_CMD) && exists(${GIT_CMD}) && exists(${SRCDIR}/.git) ) || \
+    ( !empty(GOT_CMD) && exists(${GOT_CMD}) && exists(${SRCDIR}/.got) )
 .if !empty(GIT_CMD) && exists(${GIT_CMD}) && exists(${SRCDIR}/.git)
 	@cd ${SRCDIR}; \
 		( echo "@override_prefix /usr/src" ; \
 		${GIT_CMD} ls-files --recurse-submodules "sys/" ) \
 		> ${SSTAGEDIR}/src-sys.plist
+.else
+	@cd ${SRCDIR}; \
+		( echo "@override_prefix /usr/src" ;  \
+		${GOT_CMD} tree -R | \
+		    awk '!/^sys\// { next } { sub(/ -> .*/, "") } /\/$$/ { next } { sub(/[*@$$]$$/, "") } { print }' | \
+		    sort ) \
+		> ${SSTAGEDIR}/src-sys.plist
+.endif
 	flua ${SRCDIR}/release/packages/generate-ucl.lua \
 		PKGNAME "src-sys" \
 		PKGGENNAME "src-sys" \
@@ -2652,11 +2683,13 @@ ${_bt}-usr.sbin/makefs: ${_bt}-lib/libsbuf
 .endif
 .endif
 
-# 1300102: VHDX support
-.if ${BOOTSTRAPPING} < 1201520 || \
-	(${BOOTSTRAPPING} > 1300000 && ${BOOTSTRAPPING} < 1300102) || \
+# 1501505, 1600029: %align support
+.if ${BOOTSTRAPPING} < 1501505 || \
+    (${BOOTSTRAPPING} >= 1600000 && ${BOOTSTRAPPING} < 1600029) || \
 	${MK_DISK_IMAGE_TOOLS_BOOTSTRAP} != "no"
 _mkimg=	usr.bin/mkimg
+${_bt}-usr.bin/mkimg: ${_bt}-lib/libz
+_other_bootstrap_tools+=lib/libz
 .else
 _bootstrap_tools_links+=mkimg
 .endif
@@ -2933,6 +2966,11 @@ bootstrap-tools: ${_bt}-${_tool}
 ${_bt}-usr.bin/sort: ${_bt}-lib/libmd
 ${_bt}-usr.bin/xinstall: ${_bt}-lib/libmd
 ${_bt}-sbin/md5: ${_bt}-lib/libmd
+.endif
+.if target(${_bt}-lib/libz)
+# If we are bootstrapping libz (e.g. when building on macOS/Linux) add the
+# necessary dependency:
+${_bt}-usr.bin/mandoc: ${_bt}-lib/libz
 .endif
 
 
@@ -3304,13 +3342,14 @@ _startup_libs+=	lib/libc_nonshared
 _startup_libs+=	lib/libcxxrt
 _startup_libs+=	lib/libsys
 
-_prereq_libs+=	lib/libgcc_eh lib/libgcc_s
-_startup_libs+=	lib/libgcc_eh lib/libgcc_s
+_prereq_libs+=	lib/libgcc_eh lib/libgcc_s lib/libgcc_s_asneeded
+_startup_libs+=	lib/libgcc_eh lib/libgcc_s lib/libgcc_s_asneeded
 
 lib/libc__L: lib/libsys__L
 lib/libgcc_s__L: lib/libc__L
 lib/libgcc_s__L: lib/libc_nonshared__L
-lib/libcxxrt__L: lib/libgcc_s__L
+lib/libgcc_s_asneeded__L: lib/libgcc_s__L
+lib/libcxxrt__L: lib/libgcc_s_asneeded__L
 lib/libcrypt__L: lib/libmd__L
 
 _prebuild_libs=	${_kerberos5_lib_libasn1} \

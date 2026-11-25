@@ -74,6 +74,8 @@
 #include "utils/process/executor_fwd.hpp"
 #include "utils/process/status_fwd.hpp"
 
+using utils::none;
+
 namespace engine {
 namespace scheduler {
 
@@ -96,9 +98,9 @@ public:
     ///
     /// \param test_program The test program to execute.
     /// \param vars User-provided variables to pass to the test program.
-    virtual void exec_list(const model::test_program& test_program,
-                           const utils::config::properties_map& vars)
-        const UTILS_NORETURN = 0;
+    virtual void exec_list [[noreturn]] (
+        const model::test_program& test_program,
+        const utils::config::properties_map& vars) const = 0;
 
     /// Computes the test cases list of a test program.
     ///
@@ -124,11 +126,11 @@ public:
     /// \param vars User-provided variables to pass to the test program.
     /// \param control_directory Directory where the interface may place control
     ///     files.
-    virtual void exec_test(const model::test_program& test_program,
-                           const std::string& test_case_name,
-                           const utils::config::properties_map& vars,
-                           const utils::fs::path& control_directory)
-        const UTILS_NORETURN = 0;
+    virtual void exec_test [[noreturn]] (
+        const model::test_program& test_program,
+        const std::string& test_case_name,
+        const utils::config::properties_map& vars,
+        const utils::fs::path& control_directory) const = 0;
 
     /// Executes a test cleanup routine of the test program.
     ///
@@ -141,11 +143,11 @@ public:
     /// \param vars User-provided variables to pass to the test program.
     /// \param control_directory Directory where the interface may place control
     ///     files.
-    virtual void exec_cleanup(const model::test_program& test_program,
-                              const std::string& test_case_name,
-                              const utils::config::properties_map& vars,
-                              const utils::fs::path& control_directory)
-        const UTILS_NORETURN;
+    virtual void exec_cleanup [[noreturn]](
+        const model::test_program& test_program,
+        const std::string& test_case_name,
+        const utils::config::properties_map& vars,
+        const utils::fs::path& control_directory) const;
 
     /// Computes the result of a test case based on its termination status.
     ///
@@ -248,7 +250,9 @@ public:
                                      const utils::config::tree&);
     exec_handle spawn_test(const model::test_program_ptr,
                            const std::string&,
-                           const utils::config::tree&);
+                           const utils::config::tree&,
+                           const utils::optional<utils::fs::path>& = none,
+                           const utils::optional<utils::fs::path>& = none);
     result_handle_ptr wait_any(void);
 
     result_handle_ptr debug_test(const model::test_program_ptr,

@@ -102,6 +102,7 @@ enum {
 static struct termios term, oldterm;
 static int disk_fd[NDISKS];
 static int ndisks;
+static int bootfd = -1;
 static int consin_fd, consout_fd;
 static int hostbase_fd = -1;
 
@@ -134,8 +135,12 @@ static int
 cb_getc(void *arg __unused)
 {
 	char c;
+	ssize_t nread;
 
-	if (read(consin_fd, &c, 1) == 1)
+	nread = read(consin_fd, &c, 1);
+	if (nread == 0)
+		cb_exit(NULL, USERBOOT_EXIT_QUIT);
+	if (nread == 1)
 		return (c);
 	return (-1);
 }
@@ -360,7 +365,14 @@ cb_diskioctl(void *arg __unused, int unit, u_long cmd, void *data)
 
 	switch (cmd) {
 	case DIOCGSECTORSIZE:
-		*(u_int *)data = 512;
+		if (fstat(disk_fd[unit], &sb) != 0)
+			return (ENOTTY);
+		if (S_ISCHR(sb.st_mode)) {
+			if (ioctl(disk_fd[unit], DIOCGSECTORSIZE, data) != 0)
+				return (ENOTTY);
+		} else {
+			*(u_int *)data = 512;
+		}
 		break;
 	case DIOCGMEDIASIZE:
 		if (fstat(disk_fd[unit], &sb) != 0)
@@ -641,6 +653,16 @@ cb_swap_interpreter(void *arg __unused, const char *interp_req)
 	longjmp(jb, JMP_SWAPLOADER);
 }
 
+static void
+cb_accept_interpreter(void *arg __unused)
+{
+	if (bootfd == -1)
+		return;
+
+	close(bootfd);
+	bootfd = -1;
+}
+
 static struct loader_callbacks cb = {
 	.getc = cb_getc,
 	.putc = cb_putc,
@@ -678,6 +700,9 @@ static struct loader_callbacks cb = {
 
 	/* Version 5 additions */
 	.swap_interpreter = cb_swap_interpreter,
+
+	/* Version 6 additions */
+	.accept_interpreter = cb_accept_interpreter,
 };
 
 static int
@@ -714,7 +739,9 @@ altcons_open(char *path)
 static int
 disk_open(char *path)
 {
-	int fd;
+	struct stat sbuf;
+	off_t size;
+	int fd, ret, sectsz;
 
 	if (ndisks >= NDISKS)
 		return (ERANGE);
@@ -722,11 +749,30 @@ disk_open(char *path)
 	fd = open(path, O_RDWR);
 	if (fd < 0)
 		return (errno);
+	if (fstat(fd, &sbuf) < 0) {
+		ret = errno;
+		goto err;
+	}
+
+	size = sbuf.st_size;
+	sectsz = DEV_BSIZE;
+	if (S_ISCHR(sbuf.st_mode)) {
+		if (ioctl(fd, DIOCGMEDIASIZE, &size) < 0 ||
+		    ioctl(fd, DIOCGSECTORSIZE, &sectsz) < 0) {
+			ret = errno;
+			goto err;
+		}
+		assert(size != 0);
+		assert(sectsz != 0);
+	}
 
 	disk_fd[ndisks] = fd;
 	ndisks++;
 
 	return (0);
+err:
+	close(fd);
+	return (ret);
 }
 
 static void
@@ -758,7 +804,7 @@ hostbase_open(const char *base)
 }
 
 static void
-loader_open(int bootfd)
+loader_open(void)
 {
 	int fd;
 
@@ -788,9 +834,8 @@ main(int argc, char** argv)
 {
 	void (*func)(struct loader_callbacks *, void *, int, int);
 	uint64_t mem_size;
-	int bootfd, opt, error, memflags, need_reinit;
+	int opt, error, memflags, need_reinit;
 
-	bootfd = -1;
 	progname = basename(argv[0]);
 
 	memflags = 0;
@@ -810,7 +855,7 @@ main(int argc, char** argv)
 		case 'd':
 			error = disk_open(optarg);
 			if (error != 0)
-				errx(EX_USAGE, "Could not open '%s'", optarg);
+				errc(EX_USAGE, error, "Could not open '%s'", optarg);
 			break;
 
 		case 'e':
@@ -918,7 +963,7 @@ main(int argc, char** argv)
 	if (error)
 		err(1, "vm_setup_memory");
 
-	loader_open(bootfd);
+	loader_open();
 	func = dlsym(loader_hdl, "loader_main");
 	if (!func)
 		errx(1, "dlsym: %s", dlerror());
@@ -933,7 +978,7 @@ main(int argc, char** argv)
 	addenv("smbios.bios.vendor=BHYVE");
 	addenv("boot_serial=1");
 
-	func(&cb, NULL, USERBOOT_VERSION_5, ndisks);
+	func(&cb, NULL, USERBOOT_VERSION_6, ndisks);
 
 	free(loader);
 	return (0);

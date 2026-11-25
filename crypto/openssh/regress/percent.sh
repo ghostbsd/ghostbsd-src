@@ -1,4 +1,4 @@
-#	$OpenBSD: percent.sh,v 1.21 2025/04/08 23:10:46 djm Exp $
+#	$OpenBSD: percent.sh,v 1.24 2026/10/03 05:08:49 dtucker Exp $
 #	Placed in the Public Domain.
 
 tid="percent expansions"
@@ -29,18 +29,34 @@ trial()
 		    somehost true
 		got=`cat $OBJ/actual`
 		;;
+	proxycommand)
+		case "$arg" in
+		*%C*|*%i*|*%L*|*%l*|*%u*|*%d*)
+			# Not supported, skip
+			got="$expect"
+			;;
+		*)
+			# extract original proxycommand
+			pc=`${SSH} -F $OBJ/ssh_proxy -G somehost | \
+			    awk '$1=="proxycommand"' | sed 's/proxycommand //'`
+			${SSH} -o"proxycommand sh -c 'echo $arg >$OBJ/actual;$pc'" \
+			    -F $OBJ/ssh_proxy somehost true
+			got=`cat $OBJ/actual`
+			;;
+		esac
+		;;
 	user|user-l|user-at)
 		if [ "$arg" = '%r' ] || [ "$arg" = '%C' ]; then
 			# User does not support %r, ie itself or %C.  Skip test.
 			got="$expect"
-		elif [ "$i" = "user" ]; then
+		elif [ "$opt" = "user" ]; then
 			got=`${SSH} -F $OBJ/ssh_proxy -o $opt="$arg" -G \
 			    remuser@somehost | awk '$1=="'$opt'"{print $2}'`
-		elif [ "$i" = "user-l" ]; then
+		elif [ "$opt" = "user-l" ]; then
 			# Also test ssh -l
 			got=`${SSH} -F $OBJ/ssh_proxy -l "$arg" -G \
 			    somehost | awk '$1=="'user'"{print $2}'`
-		elif [ "$i" = "user-at" ]; then
+		elif [ "$opt" = "user-at" ]; then
 			# Also test user@host
 			got=`${SSH} -F $OBJ/ssh_proxy -G "$arg@somehost" | \
 			    awk '$1=="'user'"{print $2}'`
@@ -89,12 +105,12 @@ trial()
 	fi
 }
 
-for i in matchexec localcommand remotecommand controlpath identityagent \
-    forwardagent localforward remoteforward revokedhostkeys \
-    user user-l user-at setenv userknownhostsfile; do
+for i in matchexec localcommand proxycommand remotecommand controlpath \
+    identityagent forwardagent localforward remoteforward revokedhostkeys \
+    user setenv userknownhostsfile; do
 	verbose $tid $i percent
 	case "$i" in
-	localcommand|userknownhostsfile)
+	localcommand|proxycommand|userknownhostsfile)
 		# Any test that's going to actually make a connection needs
 		# to use the real username.
 		REMUSER=$USER ;;
@@ -137,11 +153,11 @@ done
 
 # Subset of above since we don't expand shell-style variables on anything that
 # runs a command because the shell will expand those.
+FOO=bar
+export FOO
 for i in controlpath identityagent forwardagent localforward remoteforward \
-    user user-l user-at setenv userknownhostsfile; do
+    setenv userknownhostsfile; do
 	verbose $tid $i dollar
-	FOO=bar
-	export FOO
 	trial $i '${FOO}' $FOO
 done
 
@@ -152,3 +168,32 @@ for i in controlpath identityagent forwardagent; do
 	trial $i '~' $HOME/
 	trial $i '~/.ssh' $HOME/.ssh
 done
+
+for i in user-l user-at; do
+	verbose $tid $i noexpand
+	trial $i '%u' '%u'
+done
+
+# These should be not be expanded but rejected for containing shell characters.
+verbose $tid user-l noenv
+${SSH} -F $OBJ/ssh_proxy -l '${FOO}' -G somehost && fail "user-l expanded env"
+verbose $tid user-at noenv
+${SSH} -F $OBJ/ssh_proxy -G '${FOO}@somehost' && fail "user-at expanded env"
+
+FOO=`printf 'x\ay'`
+export FOO
+
+# These should be rejected as containing control characters.
+verbose $tid user-l badchar
+${SSH} -F $OBJ/ssh_proxy -l "${FOO}" -G somehost && fail "user-l expanded env"
+verbose $tid user-at badchar
+${SSH} -F $OBJ/ssh_proxy -G "${FOO}@somehost" && fail "user-at expanded env"
+
+# Literal control characters in config is acceptable
+verbose $tid user control-literal
+#trial user "$FOO" "$FOO"
+
+# Control characters expanded from config aren't.
+${SSH} -F $OBJ/ssh_proxy -G '-oUser=${FOO}' somehost && \
+    fail "user expanded ctrl"
+

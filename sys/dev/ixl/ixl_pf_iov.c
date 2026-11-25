@@ -123,8 +123,10 @@ ixl_initialize_sriov(struct ixl_pf *pf)
 		device_printf(dev,
 		    "Failed to initialize SR-IOV (error=%d)\n",
 		    iov_error);
-	} else
+	} else {
+		pf->iov_attached = true;
 		device_printf(dev, "SR-IOV ready\n");
+	}
 
 	pf->vc_debug_lvl = 1;
 }
@@ -179,7 +181,7 @@ ixl_vf_alloc_vsi(struct ixl_pf *pf, struct ixl_vf *vf)
 
 	/* XXX: Only scattered allocation is supported for VFs right now */
 	for (i = 0; i < vf->qtag.num_active; i++)
-		vsi_ctx.info.queue_mapping[i] = vf->qtag.qidx[i];
+		vsi_ctx.info.queue_mapping[i] = htole16(vf->qtag.qidx[i]);
 	for (; i < nitems(vsi_ctx.info.queue_mapping); i++)
 		vsi_ctx.info.queue_mapping[i] = htole16(I40E_AQ_VSI_QUEUE_MASK);
 
@@ -210,6 +212,8 @@ ixl_vf_alloc_vsi(struct ixl_pf *pf, struct ixl_vf *vf)
 	}
 
 	memcpy(&vf->vsi.info, &vsi_ctx.info, sizeof(vf->vsi.info));
+	/* A newly allocated hardware VSI starts a new statistics epoch. */
+	ixl_vsi_reset_stats(&vf->vsi);
 	return (0);
 
 fail:
@@ -445,6 +449,7 @@ ixl_reinit_vf(struct ixl_pf *pf, struct ixl_vf *vf)
 	int i, error;
 
 	hw = &pf->hw;
+	vf->vf_flags &= ~VF_FLAG_INITIALIZED;
 
 	for (i = 0; i < IXL_VF_RESET_TIMEOUT; i++) {
 		DELAY(10);
@@ -625,6 +630,7 @@ ixl_vf_get_resources_msg(struct ixl_pf *pf, struct ixl_vf *vf, void *msg,
 
 	ixl_send_vf_msg(pf, vf, VIRTCHNL_OP_GET_VF_RESOURCES,
 	    I40E_SUCCESS, &reply, sizeof(reply));
+	vf->vf_flags |= VF_FLAG_INITIALIZED;
 }
 
 static int
@@ -654,7 +660,7 @@ ixl_vf_config_tx_queue(struct ixl_pf *pf, struct ixl_vf *vf,
 	txq.head_wb_ena = info->headwb_enabled;
 	txq.head_wb_addr = info->dma_headwb_addr;
 	txq.qlen = info->ring_len;
-	txq.rdylist = le16_to_cpu(vf->vsi.info.qs_handle[0]);
+	txq.rdylist = le16toh(vf->vsi.info.qs_handle[0]);
 	txq.rdylist_act = 0;
 
 	status = i40e_set_lan_tx_queue_context(hw, global_queue_num, &txq);
@@ -870,11 +876,11 @@ ixl_vf_set_qctl(struct ixl_pf *pf,
 		itr_indx = vector->txitr_idx;
 	}
 
-	qctl = htole32((vector->vector_id << I40E_QINT_RQCTL_MSIX_INDX_SHIFT) |
+	qctl = (vector->vector_id << I40E_QINT_RQCTL_MSIX_INDX_SHIFT) |
 	    (*last_type << I40E_QINT_RQCTL_NEXTQ_TYPE_SHIFT) |
 	    (*last_queue << I40E_QINT_RQCTL_NEXTQ_INDX_SHIFT) |
 	    I40E_QINT_RQCTL_CAUSE_ENA_MASK |
-	    (itr_indx << I40E_QINT_RQCTL_ITR_INDX_SHIFT));
+	    (itr_indx << I40E_QINT_RQCTL_ITR_INDX_SHIFT);
 
 	wr32(&pf->hw, offset, qctl);
 
@@ -2083,6 +2089,7 @@ ixl_hold_vfs_in_reset(struct ixl_pf *pf)
 		vf = &pf->vfs[i];
 		if (!(vf->vf_flags & VF_FLAG_ENABLED))
 			continue;
+		vf->vf_flags &= ~VF_FLAG_INITIALIZED;
 		vfrtrig = rd32(hw, I40E_VPGEN_VFRTRIG(vf->vf_num));
 		vfrtrig |= I40E_VPGEN_VFRTRIG_VFSWR_MASK;
 		wr32(hw, I40E_VPGEN_VFRTRIG(vf->vf_num), vfrtrig);
@@ -2189,6 +2196,7 @@ ixl_rebuild_vfs_after_reset(struct ixl_pf *pf)
 		vf = &pf->vfs[i];
 		if (!(vf->vf_flags & VF_FLAG_ENABLED))
 			continue;
+		vf->vf_flags &= ~VF_FLAG_INITIALIZED;
 
 		vf->vsi.seid = 0;
 		vf->vsi.vsi_num = 0;

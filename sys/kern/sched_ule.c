@@ -52,6 +52,7 @@
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
 #include <sys/runq.h>
+#define SCHED_IMPLEMENTATION	ule
 #include <sys/sched.h>
 #include <sys/sdt.h>
 #include <sys/smp.h>
@@ -75,7 +76,11 @@
 #include <machine/cpu.h>
 #include <machine/smp.h>
 
-#define	KTR_ULE	0
+/*
+ * Namespacing for implementation functions to have same name as interface
+ * functions in the code while retaining namespaced symbols in the kernel ELF.
+ */
+#include "sched_ule_ns.h"
 
 #define	TS_NAME_LEN (MAXCOMLEN + sizeof(" td ") + sizeof(__XSTRING(UINT_MAX)))
 #define	TDQ_NAME_LEN	(sizeof("sched lock ") + sizeof(__XSTRING(MAXCPU)))
@@ -89,7 +94,7 @@ struct td_sched {
 	short		ts_flags;	/* TSF_* flags. */
 	int		ts_cpu;		/* CPU we are on, or were last on. */
 	u_int		ts_rltick;	/* Real last tick, for affinity. */
-	u_int		ts_slice;	/* Ticks of slice remaining. */
+	u_int		ts_slice;	/* Ticks of slice passed. */
 	u_int		ts_ftick;	/* %CPU window's first tick */
 	u_int		ts_ltick;	/* %CPU window's last tick */
 	/* All ticks count below are stored shifted by SCHED_TICK_SHIFT. */
@@ -234,6 +239,14 @@ static int __read_mostly tickincr = 8 << SCHED_TICK_SHIFT;
 static int __read_mostly realstathz = 127;	/* reset during boot. */
 static int __read_mostly sched_slice = 10;	/* reset during boot. */
 static int __read_mostly sched_slice_min = 1;	/* reset during boot. */
+
+static inline void
+sched_update_hogticks(void)
+{
+	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
+	    realstathz);
+}
+
 #ifdef PREEMPTION
 #ifdef FULL_PREEMPTION
 static int __read_mostly preempt_thresh = PRI_MAX_IDLE + 1;
@@ -503,19 +516,21 @@ normalize_ts_off(int offset)
 static inline void
 tdq_runq_add(struct tdq *tdq, struct thread *td, int flags)
 {
-	struct td_sched *ts;
 	u_char pri, idx;
 
 	TDQ_LOCK_ASSERT(tdq, MA_OWNED);
 	THREAD_LOCK_BLOCKED_ASSERT(td, MA_OWNED);
 
-	pri = td->td_priority;
-	ts = td_get_sched(td);
 	TD_SET_RUNQ(td);
+
 	if (THREAD_CAN_MIGRATE(td)) {
+		struct td_sched *const ts = td_get_sched(td);
+
 		tdq->tdq_transferable++;
 		ts->ts_flags |= TSF_XFERABLE;
 	}
+
+	pri = td->td_priority;
 	if (PRI_MIN_BATCH <= pri && pri <= PRI_MAX_BATCH) {
 		/*
 		 * The queues allocated to the batch range are not used as
@@ -677,11 +692,9 @@ tdq_slice(struct tdq *tdq)
 	 * cannot be higher priority load in the system.
 	 */
 	load = tdq->tdq_sysload - 1;
-	if (load >= SCHED_SLICE_MIN_DIVISOR)
-		return (sched_slice_min);
 	if (load <= 1)
 		return (sched_slice);
-	return (sched_slice / load);
+	return (imax(sched_slice_min, sched_slice / load));
 }
 
 /*
@@ -880,7 +893,7 @@ cpu_search_highest(const struct cpu_group *cg, const struct cpu_search *s,
 
 /*
  * Find the cpu with the least load via the least loaded path that has a
- * lowpri greater than pri  pri.  A pri of -1 indicates any priority is
+ * lowpri greater than pri.  A pri of -1 indicates any priority is
  * acceptable.
  */
 static inline int
@@ -1083,7 +1096,6 @@ tdq_move(struct tdq *from, struct tdq *to)
 	 */
 	thread_lock_block_wait(td);
 	sched_rem(td);
-	THREAD_LOCKPTR_ASSERT(td, TDQ_LOCKPTR(from));
 	td->td_lock = TDQ_LOCKPTR(to);
 	td_get_sched(td)->ts_cpu = cpu;
 	return (tdq_add(to, td, SRQ_YIELDING));
@@ -1099,7 +1111,7 @@ tdq_idled(struct tdq *tdq)
 	struct cpu_group *cg, *parent;
 	struct tdq *steal;
 	cpuset_t mask;
-	int cpu, switchcnt, goup;
+	int cpu, switchcnt, group;
 
 	if (smp_started == 0 || steal_idle == 0 || tdq->tdq_cg == NULL)
 		return (1);
@@ -1107,7 +1119,7 @@ tdq_idled(struct tdq *tdq)
 	CPU_CLR(PCPU_GET(cpuid), &mask);
 restart:
 	switchcnt = TDQ_SWITCHCNT(tdq);
-	for (cg = tdq->tdq_cg, goup = 0; ; ) {
+	for (cg = tdq->tdq_cg, group = 0; ; ) {
 		cpu = sched_highest(cg, &mask, steal_thresh, 1);
 		/*
 		 * We were assigned a thread but not preempted.  Returning
@@ -1123,9 +1135,9 @@ restart:
 		 * the other one specifically and then escalating two levels.
 		 */
 		if (cpu == -1) {
-			if (goup) {
+			if (group) {
 				cg = cg->cg_parent;
-				goup = 0;
+				group = 0;
 			}
 			parent = cg->cg_parent;
 			if (parent == NULL)
@@ -1135,7 +1147,7 @@ restart:
 					cg = &parent->cg_child[1];
 				else
 					cg = &parent->cg_child[0];
-				goup = 1;
+				group = 1;
 			} else
 				cg = parent;
 			continue;
@@ -1236,7 +1248,7 @@ tdq_notify(struct tdq *tdq, int lowpri)
 
 	/*
 	 * Try to figure out if we can signal the idle thread instead of sending
-	 * an IPI.  This check is racy; at worst, we will deliever an IPI
+	 * an IPI.  This check is racy; at worst, we will deliver an IPI
 	 * unnecessarily.
 	 */
 	cpu = TDQ_ID(tdq);
@@ -1253,8 +1265,8 @@ tdq_notify(struct tdq *tdq, int lowpri)
 }
 
 struct runq_steal_pred_data {
-	struct thread	*td;
-	int		cpu;
+	int		cpu;	/* Destination CPU. */
+	struct thread	*td;	/* Found thread. */
 };
 
 static bool
@@ -1281,8 +1293,8 @@ runq_steal_range(struct runq *const rq, const int lvl_min, const int lvl_max,
     int cpu)
 {
 	struct runq_steal_pred_data data = {
-		.td = NULL,
 		.cpu = cpu,
+		.td = NULL,
 	};
 	int idx;
 
@@ -1614,7 +1626,7 @@ sched_setup_smp(void)
 	int i;
 
 	CPU_FOREACH(i) {
-		tdq = DPCPU_ID_PTR(i, tdq);
+		tdq = TDQ_CPU(i);
 		tdq_setup(tdq, i);
 		tdq->tdq_cg = smp_topo_find(cpu_top, i);
 		if (tdq->tdq_cg == NULL)
@@ -1631,7 +1643,7 @@ sched_setup_smp(void)
  * information.
  */
 static void
-sched_ule_setup(void)
+sched_setup(void)
 {
 	struct tdq *tdq;
 
@@ -1656,15 +1668,14 @@ sched_ule_setup(void)
  */
 /* ARGSUSED */
 static void
-sched_ule_initticks(void)
+sched_initticks(void)
 {
 	int incr;
 
 	realstathz = stathz ? stathz : hz;
 	sched_slice = realstathz / SCHED_SLICE_DEFAULT_DIVISOR;
 	sched_slice_min = sched_slice / SCHED_SLICE_MIN_DIVISOR;
-	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
-	    realstathz);
+	sched_update_hogticks();
 
 	/*
 	 * tickincr is shifted out by 10 to avoid rounding errors due to
@@ -1881,7 +1892,7 @@ sched_interact_fork(struct thread *td)
  * Called from proc0_init() to setup the scheduler fields.
  */
 static void
-sched_ule_init(void)
+sched_init(void)
 {
 	struct td_sched *ts0;
 
@@ -1896,17 +1907,17 @@ sched_ule_init(void)
 }
 
 /*
- * schedinit_ap() is needed prior to calling sched_throw(NULL) to ensure that
+ * sched_init_ap() is needed prior to calling sched_throw(NULL) to ensure that
  * the pcpu requirements are met for any calls in the period between curthread
  * initialization and sched_throw().  One can safely add threads to the queue
  * before sched_throw(), for instance, as long as the thread lock is setup
  * correctly.
  *
  * TDQ_SELF() relies on the below sched pcpu setting; it may be used only
- * after schedinit_ap().
+ * after sched_init_ap().
  */
 static void
-sched_ule_init_ap(void)
+sched_init_ap(void)
 {
 
 #ifdef SMP
@@ -1921,7 +1932,7 @@ sched_ule_init_ap(void)
  * at most sched_slice stathz ticks.
  */
 static int
-sched_ule_rr_interval(void)
+sched_rr_interval(void)
 {
 
 	/* Convert sched_slice from stathz to hz. */
@@ -2041,7 +2052,7 @@ sched_thread_priority(struct thread *td, u_char prio)
  * priority.
  */
 static void
-sched_ule_lend_prio(struct thread *td, u_char prio)
+sched_lend_prio(struct thread *td, u_char prio)
 {
 
 	td->td_flags |= TDF_BORROWING;
@@ -2057,7 +2068,7 @@ sched_ule_lend_prio(struct thread *td, u_char prio)
  * of prio.
  */
 static void
-sched_ule_unlend_prio(struct thread *td, u_char prio)
+sched_unlend_prio(struct thread *td, u_char prio)
 {
 	u_char base_pri;
 
@@ -2077,7 +2088,7 @@ sched_ule_unlend_prio(struct thread *td, u_char prio)
  * Standard entry for setting the priority to an absolute value.
  */
 static void
-sched_ule_prio(struct thread *td, u_char prio)
+sched_prio(struct thread *td, u_char prio)
 {
 	u_char oldprio;
 
@@ -2107,7 +2118,7 @@ sched_ule_prio(struct thread *td, u_char prio)
  * Set the base interrupt thread priority.
  */
 static void
-sched_ule_ithread_prio(struct thread *td, u_char prio)
+sched_ithread_prio(struct thread *td, u_char prio)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	MPASS(td->td_pri_class == PRI_ITHD);
@@ -2119,7 +2130,7 @@ sched_ule_ithread_prio(struct thread *td, u_char prio)
  * Set the base user priority, does not effect current running priority.
  */
 static void
-sched_ule_user_prio(struct thread *td, u_char prio)
+sched_user_prio(struct thread *td, u_char prio)
 {
 
 	td->td_base_user_pri = prio;
@@ -2129,7 +2140,7 @@ sched_ule_user_prio(struct thread *td, u_char prio)
 }
 
 static void
-sched_ule_lend_user_prio(struct thread *td, u_char prio)
+sched_lend_user_prio(struct thread *td, u_char prio)
 {
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
@@ -2145,7 +2156,7 @@ sched_ule_lend_user_prio(struct thread *td, u_char prio)
  * Like the above but first check if there is anything to do.
  */
 static void
-sched_ule_lend_user_prio_cond(struct thread *td, u_char prio)
+sched_lend_user_prio_cond(struct thread *td, u_char prio)
 {
 
 	if (td->td_lend_user_pri == prio)
@@ -2167,7 +2178,7 @@ tdq_trysteal(struct tdq *tdq)
 	struct cpu_group *cg, *parent;
 	struct tdq *steal;
 	cpuset_t mask;
-	int cpu, i, goup;
+	int cpu, i, group;
 
 	if (smp_started == 0 || steal_idle == 0 || trysteal_limit == 0 ||
 	    tdq->tdq_cg == NULL)
@@ -2177,7 +2188,7 @@ tdq_trysteal(struct tdq *tdq)
 	/* We don't want to be preempted while we're iterating. */
 	spinlock_enter();
 	TDQ_UNLOCK(tdq);
-	for (i = 1, cg = tdq->tdq_cg, goup = 0; ; ) {
+	for (i = 1, cg = tdq->tdq_cg, group = 0; ; ) {
 		cpu = sched_highest(cg, &mask, steal_thresh, 1);
 		/*
 		 * If a thread was added while interrupts were disabled don't
@@ -2195,9 +2206,9 @@ tdq_trysteal(struct tdq *tdq)
 		 * the other one specifically and then escalating two levels.
 		 */
 		if (cpu == -1) {
-			if (goup) {
+			if (group) {
 				cg = cg->cg_parent;
-				goup = 0;
+				group = 0;
 			}
 			if (++i > trysteal_limit) {
 				TDQ_LOCK(tdq);
@@ -2213,7 +2224,7 @@ tdq_trysteal(struct tdq *tdq)
 					cg = &parent->cg_child[1];
 				else
 					cg = &parent->cg_child[0];
-				goup = 1;
+				group = 1;
 			} else
 				cg = parent;
 			continue;
@@ -2317,7 +2328,7 @@ thread_unblock_switch(struct thread *td, struct mtx *mtx)
  * be assigned elsewhere via binding.
  */
 static void
-sched_ule_sswitch(struct thread *td, int flags)
+sched_switch(struct thread *td, int flags)
 {
 	struct thread *newtd;
 	struct tdq *tdq;
@@ -2456,7 +2467,7 @@ sched_ule_sswitch(struct thread *td, int flags)
  * Adjust thread priorities as a result of a nice request.
  */
 static void
-sched_ule_nice(struct proc *p, int nice)
+sched_nice(struct proc *p, int nice)
 {
 	struct thread *td;
 
@@ -2475,7 +2486,7 @@ sched_ule_nice(struct proc *p, int nice)
  * Record the sleep time for the interactivity scorer.
  */
 static void
-sched_ule_sleep(struct thread *td, int prio)
+sched_sleep(struct thread *td, int prio)
 {
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
@@ -2496,7 +2507,7 @@ sched_ule_sleep(struct thread *td, int prio)
  * Requires the thread lock on entry, drops on exit.
  */
 static void
-sched_ule_wakeup(struct thread *td, int srqflags)
+sched_wakeup(struct thread *td, int srqflags)
 {
 	struct td_sched *ts;
 	int slptick;
@@ -2536,7 +2547,7 @@ sched_ule_wakeup(struct thread *td, int srqflags)
  * priority.
  */
 static void
-sched_ule_fork(struct thread *td, struct thread *child)
+sched_fork(struct thread *td, struct thread *child)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	sched_pctcpu_update(td_get_sched(td), 1);
@@ -2555,7 +2566,7 @@ sched_ule_fork(struct thread *td, struct thread *child)
  * Fork a new thread, may be within the same process.
  */
 static void
-sched_ule_fork_thread(struct thread *td, struct thread *child)
+sched_fork_thread(struct thread *td, struct thread *child)
 {
 	struct td_sched *ts;
 	struct td_sched *ts2;
@@ -2601,7 +2612,7 @@ sched_ule_fork_thread(struct thread *td, struct thread *child)
  * Adjust the priority class of a thread.
  */
 static void
-sched_ule_class(struct thread *td, int class)
+sched_class(struct thread *td, int class)
 {
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
@@ -2614,7 +2625,7 @@ sched_ule_class(struct thread *td, int class)
  * Return some of the child's priority and interactivity to the parent.
  */
 static void
-sched_ule_exit(struct proc *p, struct thread *child)
+sched_exit(struct proc *p, struct thread *child)
 {
 	struct thread *td;
 
@@ -2632,7 +2643,7 @@ sched_ule_exit(struct proc *p, struct thread *child)
  * causes new processes spawned by it to receive worse scores immediately.
  */
 static void
-sched_ule_exit_thread(struct thread *td, struct thread *child)
+sched_exit_thread(struct thread *td, struct thread *child)
 {
 
 	KTR_STATE1(KTR_SCHED, "thread", sched_tdname(child), "thread exit",
@@ -2650,11 +2661,12 @@ sched_ule_exit_thread(struct thread *td, struct thread *child)
 }
 
 static void
-sched_ule_preempt(struct thread *td)
+sched_preempt(struct thread *td)
 {
 	struct tdq *tdq;
 	int flags;
 
+	MPASS(td == curthread);
 	SDT_PROBE2(sched, , , surrender, td, td->td_proc);
 
 	thread_lock(td);
@@ -2681,7 +2693,7 @@ sched_ule_preempt(struct thread *td)
  * to static priorities in msleep() or similar.
  */
 static void
-sched_ule_userret_slowpath(struct thread *td)
+sched_userret_slowpath(struct thread *td)
 {
 
 	thread_lock(td);
@@ -2708,7 +2720,7 @@ td_slice(struct thread *td, struct tdq *tdq)
  * and interrupt threads.
  */
 static void
-sched_ule_clock(struct thread *td, int cnt)
+sched_clock(struct thread *td, int cnt)
 {
 	struct tdq *tdq;
 	struct td_sched *ts;
@@ -2794,7 +2806,7 @@ sched_ule_clock(struct thread *td, int cnt)
 }
 
 static u_int
-sched_ule_estcpu(struct thread *td __unused)
+sched_estcpu(struct thread *td __unused)
 {
 
 	return (0);
@@ -2805,7 +2817,7 @@ sched_ule_estcpu(struct thread *td __unused)
  * cooperative idle threads.
  */
 static bool
-sched_ule_runnable(void)
+sched_runnable(void)
 {
 	struct tdq *tdq;
 
@@ -2818,7 +2830,7 @@ sched_ule_runnable(void)
  * the run-queue while running however the load remains.
  */
 static struct thread *
-sched_ule_choose(void)
+sched_choose(void)
 {
 	struct thread *td;
 	struct tdq *tdq;
@@ -2872,13 +2884,13 @@ tdq_add(struct tdq *tdq, struct thread *td, int flags)
 	int lowpri;
 
 	TDQ_LOCK_ASSERT(tdq, MA_OWNED);
-	THREAD_LOCK_BLOCKED_ASSERT(td, MA_OWNED);
+	THREAD_LOCKPTR_BLOCKED_ASSERT(td, TDQ_LOCKPTR(tdq));
 	KASSERT((td->td_inhibitors == 0),
-	    ("sched_add: trying to run inhibited thread"));
+	    ("%s: trying to run inhibited thread", __func__));
 	KASSERT((TD_CAN_RUN(td) || TD_IS_RUNNING(td)),
-	    ("sched_add: bad thread state"));
+	    ("%s: bad thread state", __func__));
 	KASSERT(td->td_flags & TDF_INMEM,
-	    ("sched_add: thread swapped out"));
+	    ("%s: thread swapped out", __func__));
 
 	lowpri = tdq->tdq_lowpri;
 	if (td->td_priority < lowpri)
@@ -2895,7 +2907,7 @@ tdq_add(struct tdq *tdq, struct thread *td, int flags)
  * Requires the thread lock on entry, drops on exit.
  */
 static void
-sched_ule_add(struct thread *td, int flags)
+sched_add(struct thread *td, int flags)
 {
 	struct tdq *tdq;
 #ifdef SMP
@@ -2955,18 +2967,21 @@ sched_ule_add(struct thread *td, int flags)
  * exit by calling sched_exit_thread() and sched_throw() themselves.
  */
 static void
-sched_ule_rem(struct thread *td)
+sched_rem(struct thread *td)
 {
 	struct tdq *tdq;
 
 	KTR_STATE1(KTR_SCHED, "thread", sched_tdname(td), "runq rem",
 	    "prio:%d", td->td_priority);
 	SDT_PROBE3(sched, , , dequeue, td, td->td_proc, NULL);
+
 	tdq = TDQ_CPU(td_get_sched(td)->ts_cpu);
+
 	TDQ_LOCK_ASSERT(tdq, MA_OWNED);
-	MPASS(td->td_lock == TDQ_LOCKPTR(tdq));
+	THREAD_LOCKPTR_ASSERT(td, TDQ_LOCKPTR(tdq));
 	KASSERT(TD_ON_RUNQ(td),
 	    ("sched_rem: thread not on run queue"));
+
 	tdq_runq_rem(tdq, td);
 	tdq_load_rem(tdq, td);
 	TD_SET_CAN_RUN(td);
@@ -2978,7 +2993,7 @@ sched_ule_rem(struct thread *td)
  * Fetch cpu utilization information.  Updates on demand.
  */
 static fixpt_t
-sched_ule_pctcpu(struct thread *td)
+sched_pctcpu(struct thread *td)
 {
 	struct td_sched *ts;
 	u_int len;
@@ -3000,20 +3015,22 @@ sched_ule_pctcpu(struct thread *td)
  * cpumask.
  */
 static void
-sched_ule_affinity(struct thread *td)
+sched_affinity(struct thread *td)
 {
 #ifdef SMP
-	struct td_sched *ts;
+	struct td_sched *const ts = td_get_sched(td);
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
-	ts = td_get_sched(td);
+
 	if (THREAD_CAN_SCHED(td, ts->ts_cpu))
 		return;
+
 	if (TD_ON_RUNQ(td)) {
 		sched_rem(td);
 		sched_add(td, SRQ_BORING | SRQ_HOLDTD);
 		return;
 	}
+
 	if (!TD_IS_RUNNING(td))
 		return;
 	/*
@@ -3031,7 +3048,7 @@ sched_ule_affinity(struct thread *td)
  * Bind a thread to a target cpu.
  */
 static void
-sched_ule_bind(struct thread *td, int cpu)
+sched_bind(struct thread *td, int cpu)
 {
 	struct td_sched *ts;
 
@@ -3055,7 +3072,7 @@ sched_ule_bind(struct thread *td, int cpu)
  * Release a bound thread.
  */
 static void
-sched_ule_unbind(struct thread *td)
+sched_unbind(struct thread *td)
 {
 	struct td_sched *ts;
 
@@ -3069,7 +3086,7 @@ sched_ule_unbind(struct thread *td)
 }
 
 static int
-sched_ule_is_bound(struct thread *td)
+sched_is_bound(struct thread *td)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	return (td_get_sched(td)->ts_flags & TSF_BOUND);
@@ -3079,7 +3096,7 @@ sched_ule_is_bound(struct thread *td)
  * Basic yield call.
  */
 static void
-sched_ule_relinquish(struct thread *td)
+sched_relinquish(struct thread *td)
 {
 	thread_lock(td);
 	mi_switch(SW_VOL | SWT_RELINQUISH);
@@ -3089,7 +3106,7 @@ sched_ule_relinquish(struct thread *td)
  * Return the total system load.
  */
 static int
-sched_ule_load(void)
+sched_load(void)
 {
 #ifdef SMP
 	int total;
@@ -3105,13 +3122,13 @@ sched_ule_load(void)
 }
 
 static int
-sched_ule_sizeof_proc(void)
+sched_sizeof_proc(void)
 {
 	return (sizeof(struct proc));
 }
 
 static int
-sched_ule_sizeof_thread(void)
+sched_sizeof_thread(void)
 {
 	return (sizeof(struct thread) + sizeof(struct td_sched));
 }
@@ -3127,7 +3144,7 @@ sched_ule_sizeof_thread(void)
  * The actual idle process.
  */
 static void
-sched_ule_idletd(void *dummy)
+sched_idletd(void *dummy)
 {
 	struct thread *td;
 	struct tdq *tdq;
@@ -3230,14 +3247,14 @@ sched_throw_grab(struct tdq *tdq)
  * A CPU is entering for the first time.
  */
 static void
-sched_ule_ap_entry(void)
+sched_ap_entry(void)
 {
 	struct thread *newtd;
 	struct tdq *tdq;
 
 	tdq = TDQ_SELF();
 
-	/* This should have been setup in schedinit_ap(). */
+	/* This should have been setup in sched_init_ap(). */
 	THREAD_LOCKPTR_ASSERT(curthread, TDQ_LOCKPTR(tdq));
 
 	TDQ_LOCK(tdq);
@@ -3260,7 +3277,7 @@ sched_ule_ap_entry(void)
  * A thread is exiting.
  */
 static void
-sched_ule_throw(struct thread *td)
+sched_throw(struct thread *td)
 {
 	struct thread *newtd;
 	struct tdq *tdq;
@@ -3291,7 +3308,7 @@ sched_ule_throw(struct thread *td)
  * let fork do the rest of the work.
  */
 static void
-sched_ule_fork_exit(struct thread *td)
+sched_fork_exit(struct thread *td)
 {
 	struct tdq *tdq;
 	int cpuid;
@@ -3317,7 +3334,7 @@ sched_ule_fork_exit(struct thread *td)
  * Create on first use to catch odd startup conditions.
  */
 static char *
-sched_ule_tdname(struct thread *td)
+sched_tdname(struct thread *td)
 {
 #ifdef KTR
 	struct td_sched *ts;
@@ -3333,7 +3350,7 @@ sched_ule_tdname(struct thread *td)
 }
 
 static void
-sched_ule_clear_tdname(struct thread *td)
+sched_clear_tdname(struct thread *td)
 {
 #ifdef KTR
 	struct td_sched *ts;
@@ -3344,13 +3361,13 @@ sched_ule_clear_tdname(struct thread *td)
 }
 
 static void
-sched_ule_schedcpu(void)
+sched_sysinit(void)
 {
 }
 
 #ifdef SMP
 static int
-sched_ule_find_child_with_core(int cpu, struct cpu_group *grp)
+sched_find_child_with_core(int cpu, struct cpu_group *grp)
 {
 	int i;
 
@@ -3367,7 +3384,7 @@ sched_ule_find_child_with_core(int cpu, struct cpu_group *grp)
 }
 
 static int
-sched_ule_find_l2_neighbor(int cpu)
+sched_find_l2_neighbor(int cpu)
 {
 	struct cpu_group *grp;
 	int i;
@@ -3380,7 +3397,7 @@ sched_ule_find_l2_neighbor(int cpu)
 	 * Find the smallest CPU group that contains the given core.
 	 */
 	i = 0;
-	while ((i = sched_ule_find_child_with_core(cpu, grp)) != -1) {
+	while ((i = sched_find_child_with_core(cpu, grp)) != -1) {
 		/*
 		 * If the smallest group containing the given CPU has less
 		 * than two members, we conclude the given CPU has no
@@ -3409,63 +3426,11 @@ sched_ule_find_l2_neighbor(int cpu)
 }
 #else
 static int
-sched_ule_find_l2_neighbor(int cpu)
+sched_find_l2_neighbor(int cpu)
 {
 	return (-1);
 }
 #endif
-
-struct sched_instance sched_ule_instance = {
-#define	SLOT(name) .name = sched_ule_##name
-	SLOT(load),
-	SLOT(rr_interval),
-	SLOT(runnable),
-	SLOT(exit),
-	SLOT(fork),
-	SLOT(fork_exit),
-	SLOT(class),
-	SLOT(nice),
-	SLOT(ap_entry),
-	SLOT(exit_thread),
-	SLOT(estcpu),
-	SLOT(fork_thread),
-	SLOT(ithread_prio),
-	SLOT(lend_prio),
-	SLOT(lend_user_prio),
-	SLOT(lend_user_prio_cond),
-	SLOT(pctcpu),
-	SLOT(prio),
-	SLOT(sleep),
-	SLOT(sswitch),
-	SLOT(throw),
-	SLOT(unlend_prio),
-	SLOT(user_prio),
-	SLOT(userret_slowpath),
-	SLOT(add),
-	SLOT(choose),
-	SLOT(clock),
-	SLOT(idletd),
-	SLOT(preempt),
-	SLOT(relinquish),
-	SLOT(rem),
-	SLOT(wakeup),
-	SLOT(bind),
-	SLOT(unbind),
-	SLOT(is_bound),
-	SLOT(affinity),
-	SLOT(sizeof_proc),
-	SLOT(sizeof_thread),
-	SLOT(tdname),
-	SLOT(clear_tdname),
-	SLOT(find_l2_neighbor),
-	SLOT(init),
-	SLOT(init_ap),
-	SLOT(setup),
-	SLOT(initticks),
-	SLOT(schedcpu),
-#undef SLOT
-};
-DECLARE_SCHEDULER(ule_sched_selector, "ULE", &sched_ule_instance);
 
 static int
 sysctl_kern_quantum(SYSCTL_HANDLER_ARGS)
@@ -3480,9 +3445,25 @@ sysctl_kern_quantum(SYSCTL_HANDLER_ARGS)
 	if (new_val <= 0)
 		return (EINVAL);
 	sched_slice = imax(1, (new_val + period / 2) / period);
-	sched_slice_min = sched_slice / SCHED_SLICE_MIN_DIVISOR;
-	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
-	    realstathz);
+	sched_slice_min = imax(1, sched_slice / SCHED_SLICE_MIN_DIVISOR);
+	sched_update_hogticks();
+	return (0);
+}
+
+static int
+sysctl_kern_slice(SYSCTL_HANDLER_ARGS)
+{
+	int error, new_val;
+
+	new_val = sched_slice;
+	error = sysctl_handle_int(oidp, &new_val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (new_val <= 0)
+		return (EINVAL);
+	sched_slice = new_val;
+	sched_slice_min = imax(1, sched_slice / SCHED_SLICE_MIN_DIVISOR);
+	sched_update_hogticks();
 	return (0);
 }
 
@@ -3493,7 +3474,9 @@ SYSCTL_PROC(_kern_sched_ule, OID_AUTO, quantum,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
     sysctl_kern_quantum, "I",
     "Quantum for timeshare threads in microseconds");
-SYSCTL_INT(_kern_sched_ule, OID_AUTO, slice, CTLFLAG_RW, &sched_slice, 0,
+SYSCTL_PROC(_kern_sched_ule, OID_AUTO, slice,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_slice, "I",
     "Quantum for timeshare threads in stathz ticks");
 SYSCTL_UINT(_kern_sched_ule, OID_AUTO, interact, CTLFLAG_RWTUN, &sched_interact, 0,
     "Interactivity score threshold");
@@ -3530,3 +3513,5 @@ SYSCTL_INT(_kern_sched_ule, OID_AUTO, always_steal, CTLFLAG_RWTUN,
     &always_steal, 0,
     "Always run the stealer from the idle thread");
 #endif
+
+DECLARE_SCHEDULER("ULE");

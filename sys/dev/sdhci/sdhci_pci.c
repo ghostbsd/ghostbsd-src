@@ -142,6 +142,7 @@ static const struct sdhci_device {
 	{ 0x5aca8086,	0xffff,	"Intel Apollo Lake SDXC Controller",
 	    SDHCI_QUIRK_BROKEN_DMA |	/* APL18 erratum */
 	    SDHCI_QUIRK_WAIT_WHILE_BUSY |
+	    SDHCI_QUIRK_SLOTTYPE_BROKEN |
 	    SDHCI_QUIRK_PRESET_VALUE_BROKEN },
 	{ 0x5acc8086,	0xffff,	"Intel Apollo Lake eMMC 5.0 Controller",
 	    SDHCI_QUIRK_BROKEN_DMA |	/* APL18 erratum */
@@ -150,6 +151,8 @@ static const struct sdhci_device {
 	    SDHCI_QUIRK_MMC_DDR52 |
 	    SDHCI_QUIRK_CAPS_BIT63_FOR_MMC_HS400 |
 	    SDHCI_QUIRK_PRESET_VALUE_BROKEN },
+	{ 0x9d2d8086,   0xffff, "Intel Sunrise Point-LP SDXC Controller",
+	    SDHCI_QUIRK_BROKEN_TIMEOUT_VAL },
 	{ 0,		0xffff,	NULL,
 	    0 }
 };

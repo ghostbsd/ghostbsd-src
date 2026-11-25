@@ -48,6 +48,7 @@
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/runq.h>
+#define SCHED_IMPLEMENTATION	4bsd
 #include <sys/sched.h>
 #include <sys/sdt.h>
 #include <sys/smp.h>
@@ -67,11 +68,21 @@
 #endif
 
 /*
+ * Namespacing for implementation functions to have same name as interface
+ * functions in the code while retaining namespaced symbols in the kernel ELF.
+ */
+#include "sched_4bsd_ns.h"
+
+/*
  * INVERSE_ESTCPU_WEIGHT is only suitable for statclock() frequencies in
  * the range 100-256 Hz (approximately).
  */
 #define	INVERSE_ESTCPU_WEIGHT	8	/* 1 / (priorities per estcpu level). */
 #define	NICE_WEIGHT		1	/* Priorities per nice level. */
+_Static_assert(NICE_WEIGHT * (PRIO_MAX - PRIO_MIN)
+    <= PRI_MAX_TIMESHARE - PRI_MIN_TIMESHARE,
+    "Priority range accounting for nice values cannot exceed the including "
+    "timeshare span.");
 #define	ESTCPULIM(e)							\
 	min((e), INVERSE_ESTCPU_WEIGHT *				\
 	    (PRI_MAX_TIMESHARE - PRI_MIN_TIMESHARE -			\
@@ -129,6 +140,13 @@ static int	realstathz = 127; /* stathz is sometimes 0 and run off of hz. */
 static int	sched_tdcnt;	/* Total runnable threads in the system. */
 static int	sched_slice = 12; /* Thread run time before rescheduling. */
 
+static inline void
+sched_update_hogticks(void)
+{
+	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
+	    realstathz);
+}
+
 static void	setup_runqs(void);
 static void	schedcpu(void);
 static void	schedcpu_thread(void);
@@ -150,7 +168,7 @@ static struct kproc_desc sched_kp = {
 };
 
 static void
-sched_4bsd_schedcpu(void)
+sched_sysinit(void)
 {
 	kproc_start(&sched_kp);
 }
@@ -202,8 +220,23 @@ sysctl_kern_4bsd_quantum(SYSCTL_HANDLER_ARGS)
 	if (new_val <= 0)
 		return (EINVAL);
 	sched_slice = imax(1, (new_val + period / 2) / period);
-	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
-	    realstathz);
+	sched_update_hogticks();
+	return (0);
+}
+
+static int
+sysctl_kern_slice(SYSCTL_HANDLER_ARGS)
+{
+	int error, new_val;
+
+	new_val = sched_slice;
+	error = sysctl_handle_int(oidp, &new_val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (new_val <= 0)
+		return (EINVAL);
+	sched_slice = new_val;
+	sched_update_hogticks();
 	return (0);
 }
 
@@ -214,7 +247,9 @@ SYSCTL_PROC(_kern_sched_4bsd, OID_AUTO, quantum,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
     sysctl_kern_4bsd_quantum, "I",
     "Quantum for timeshare threads in microseconds");
-SYSCTL_INT(_kern_sched_4bsd, OID_AUTO, slice, CTLFLAG_RW, &sched_slice, 0,
+SYSCTL_PROC(_kern_sched_4bsd, OID_AUTO, slice,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_slice, "I",
     "Quantum for timeshare threads in stathz ticks");
 #ifdef SMP
 /* Enable forwarding of wakeups to all other cpus */
@@ -251,12 +286,6 @@ SYSCTL_INT(_kern_sched_4bsd_ipiwakeup, OID_AUTO, useloop, CTLFLAG_RW,
 	   &forward_wakeup_use_loop, 0,
 	   "Use a loop to find idle cpus");
 
-#endif
-#if 0
-static int sched_followon = 0;
-SYSCTL_INT(_kern_sched_4bsd, OID_AUTO, followon, CTLFLAG_RW,
-	   &sched_followon, 0,
-	   "allow threads to share a quantum");
 #endif
 
 static __inline void
@@ -328,7 +357,7 @@ maybe_preempt(struct thread *td)
 	 *    out anyways, so there's no point in preempting.  If we did,
 	 *    the current thread would not be properly resumed as well, so
 	 *    just avoid that whole landmine.
-	 *  - If the new thread's priority is not a realtime priority and
+	 *  - If the new thread's priority is not an interrupt priority and
 	 *    the current thread's priority is not an idle priority and
 	 *    FULL_PREEMPTION is disabled.
 	 *
@@ -343,8 +372,7 @@ maybe_preempt(struct thread *td)
 			("maybe_preempt: trying to run inhibited thread"));
 	pri = td->td_priority;
 	cpri = ctd->td_priority;
-	if (KERNEL_PANICKED() || pri >= cpri /* || dumping */ ||
-	    TD_IS_INHIBITED(ctd))
+	if (KERNEL_PANICKED() || pri >= cpri || TD_IS_INHIBITED(ctd))
 		return (0);
 #ifndef FULL_PREEMPTION
 	if (pri > PRI_MAX_ITHD && cpri < PRI_MIN_IDLE)
@@ -366,7 +394,7 @@ maybe_preempt(struct thread *td)
  *          Note that, as ps(1) mentions, this can let percentages
  *          total over 100% (I've seen 137.9% for 3 processes).
  *
- * Note that schedclock() updates ts_estcpu and p_cpticks asynchronously.
+ * Note that sched_clock() updates ts_estcpu and p_cpticks asynchronously.
  *
  * We wish to decay away 90% of ts_estcpu in (5 * loadavg) seconds.
  * That is, the system wants to compute a value of decay such
@@ -472,11 +500,6 @@ schedcpu(void)
 			 * Increment sleep time (if sleeping).  We
 			 * ignore overflow, as above.
 			 */
-			/*
-			 * The td_sched slptimes are not touched in wakeup
-			 * because the thread may not HAVE everything in
-			 * memory? XXX I think this is out of date.
-			 */
 			if (TD_ON_RUNQ(td)) {
 				awake = 1;
 				td->td_flags &= ~TDF_DIDRUN;
@@ -492,11 +515,6 @@ schedcpu(void)
 			 * ts_pctcpu is only for ps and ttyinfo().
 			 */
 			ts->ts_pctcpu = (ts->ts_pctcpu * ccpu) >> FSHIFT;
-			/*
-			 * If the td_sched has been idle the entire second,
-			 * stop recalculating its priority until
-			 * it wakes up.
-			 */
 			if (ts->ts_cpticks != 0) {
 #if	(FSHIFT >= CCPU_SHIFT)
 				ts->ts_pctcpu += (realstathz == 100)
@@ -511,11 +529,7 @@ schedcpu(void)
 #endif
 				ts->ts_cpticks = 0;
 			}
-			/*
-			 * If there are ANY running threads in this process,
-			 * then don't count it as sleeping.
-			 * XXX: this is broken.
-			 */
+
 			if (awake) {
 				if (ts->ts_slptime > 1) {
 					/*
@@ -532,6 +546,12 @@ schedcpu(void)
 				ts->ts_slptime = 0;
 			} else
 				ts->ts_slptime++;
+
+			/*
+			 * If the td_sched has been idle the entire second,
+			 * stop recalculating its priority until
+			 * it wakes up.
+			 */
 			if (ts->ts_slptime > 1) {
 				thread_unlock(td);
 				continue;
@@ -577,7 +597,8 @@ updatepri(struct thread *td)
 		ts->ts_estcpu = 0;
 	else {
 		newcpu = ts->ts_estcpu;
-		ts->ts_slptime--;	/* was incremented in schedcpu() */
+		/* schedcpu() performs one decay_cpu() on its own. */
+		ts->ts_slptime--;
 		while (newcpu && --ts->ts_slptime)
 			newcpu = decay_cpu(loadfac, newcpu);
 		ts->ts_estcpu = newcpu;
@@ -626,7 +647,7 @@ resetpriority_thread(struct thread *td)
 }
 
 static void
-sched_4bsd_setup(void)
+sched_setup(void)
 {
 	/*
 	 * Decay 95% of `ts_pctcpu' in 60 seconds; see CCPU_SHIFT
@@ -646,13 +667,12 @@ sched_4bsd_setup(void)
  * This routine determines time constants after stathz and hz are setup.
  */
 static void
-sched_4bsd_initticks(void)
+sched_initticks(void)
 {
 
 	realstathz = stathz ? stathz : hz;
 	sched_slice = realstathz / 10;	/* ~100ms */
-	hogticks = imax(1, (2 * hz * sched_slice + realstathz / 2) /
-	    realstathz);
+	sched_update_hogticks();
 }
 
 /* External interfaces start here */
@@ -664,7 +684,7 @@ sched_4bsd_initticks(void)
  *  proc0_init()
  */
 static void
-sched_4bsd_init(void)
+sched_init(void)
 {
 
 	/*
@@ -676,14 +696,14 @@ sched_4bsd_init(void)
 }
 
 static void
-sched_4bsd_init_ap(void)
+sched_init_ap(void)
 {
 
 	/* Nothing needed. */
 }
 
 static bool
-sched_4bsd_runnable(void)
+sched_runnable(void)
 {
 #ifdef SMP
 	return (runq_not_empty(&runq_global) ||
@@ -694,7 +714,7 @@ sched_4bsd_runnable(void)
 }
 
 static int
-sched_4bsd_rr_interval(void)
+sched_rr_interval(void)
 {
 
 	/* Convert sched_slice from stathz to hz. */
@@ -761,7 +781,7 @@ sched_clock_tick(struct thread *td)
 }
 
 static void
-sched_4bsd_clock(struct thread *td, int cnt)
+sched_clock(struct thread *td, int cnt)
 {
 
 	for ( ; cnt > 0; cnt--)
@@ -772,7 +792,7 @@ sched_4bsd_clock(struct thread *td, int cnt)
  * Charge child's scheduling CPU usage to parent.
  */
 static void
-sched_4bsd_exit(struct proc *p, struct thread *td)
+sched_exit(struct proc *p, struct thread *td)
 {
 
 	KTR_STATE1(KTR_SCHED, "thread", sched_tdname(td), "proc exit",
@@ -783,7 +803,7 @@ sched_4bsd_exit(struct proc *p, struct thread *td)
 }
 
 static void
-sched_4bsd_exit_thread(struct thread *td, struct thread *child)
+sched_exit_thread(struct thread *td, struct thread *child)
 {
 
 	KTR_STATE1(KTR_SCHED, "thread", sched_tdname(child), "exit",
@@ -799,13 +819,13 @@ sched_4bsd_exit_thread(struct thread *td, struct thread *child)
 }
 
 static void
-sched_4bsd_fork(struct thread *td, struct thread *childtd)
+sched_fork(struct thread *td, struct thread *childtd)
 {
 	sched_fork_thread(td, childtd);
 }
 
 static void
-sched_4bsd_fork_thread(struct thread *td, struct thread *childtd)
+sched_fork_thread(struct thread *td, struct thread *childtd)
 {
 	struct td_sched *ts, *tsc;
 
@@ -824,7 +844,7 @@ sched_4bsd_fork_thread(struct thread *td, struct thread *childtd)
 }
 
 static void
-sched_4bsd_nice(struct proc *p, int nice)
+sched_nice(struct proc *p, int nice)
 {
 	struct thread *td;
 
@@ -839,7 +859,7 @@ sched_4bsd_nice(struct proc *p, int nice)
 }
 
 static void
-sched_4bsd_class(struct thread *td, int class)
+sched_class(struct thread *td, int class)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	td->td_pri_class = class;
@@ -878,7 +898,7 @@ sched_priority(struct thread *td, u_char prio)
  * priority.
  */
 static void
-sched_4bsd_lend_prio(struct thread *td, u_char prio)
+sched_lend_prio(struct thread *td, u_char prio)
 {
 
 	td->td_flags |= TDF_BORROWING;
@@ -894,7 +914,7 @@ sched_4bsd_lend_prio(struct thread *td, u_char prio)
  * of prio.
  */
 static void
-sched_4bsd_unlend_prio(struct thread *td, u_char prio)
+sched_unlend_prio(struct thread *td, u_char prio)
 {
 	u_char base_pri;
 
@@ -911,7 +931,7 @@ sched_4bsd_unlend_prio(struct thread *td, u_char prio)
 }
 
 static void
-sched_4bsd_prio(struct thread *td, u_char prio)
+sched_prio(struct thread *td, u_char prio)
 {
 	u_char oldprio;
 
@@ -938,7 +958,7 @@ sched_4bsd_prio(struct thread *td, u_char prio)
 }
 
 static void
-sched_4bsd_ithread_prio(struct thread *td, u_char prio)
+sched_ithread_prio(struct thread *td, u_char prio)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	MPASS(td->td_pri_class == PRI_ITHD);
@@ -947,7 +967,7 @@ sched_4bsd_ithread_prio(struct thread *td, u_char prio)
 }
 
 static void
-sched_4bsd_user_prio(struct thread *td, u_char prio)
+sched_user_prio(struct thread *td, u_char prio)
 {
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
@@ -958,7 +978,7 @@ sched_4bsd_user_prio(struct thread *td, u_char prio)
 }
 
 static void
-sched_4bsd_lend_user_prio(struct thread *td, u_char prio)
+sched_lend_user_prio(struct thread *td, u_char prio)
 {
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
@@ -974,7 +994,7 @@ sched_4bsd_lend_user_prio(struct thread *td, u_char prio)
  * Like the above but first check if there is anything to do.
  */
 static void
-sched_4bsd_lend_user_prio_cond(struct thread *td, u_char prio)
+sched_lend_user_prio_cond(struct thread *td, u_char prio)
 {
 
 	if (td->td_lend_user_pri == prio)
@@ -986,7 +1006,7 @@ sched_4bsd_lend_user_prio_cond(struct thread *td, u_char prio)
 }
 
 static void
-sched_4bsd_sleep(struct thread *td, int pri)
+sched_sleep(struct thread *td, int pri)
 {
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
@@ -997,7 +1017,7 @@ sched_4bsd_sleep(struct thread *td, int pri)
 }
 
 static void
-sched_4bsd_sswitch(struct thread *td, int flags)
+sched_switch(struct thread *td, int flags)
 {
 	struct thread *newtd;
 	struct mtx *tmtx;
@@ -1130,7 +1150,7 @@ sched_4bsd_sswitch(struct thread *td, int flags)
 }
 
 static void
-sched_4bsd_wakeup(struct thread *td, int srqflags)
+sched_wakeup(struct thread *td, int srqflags)
 {
 	struct td_sched *ts;
 
@@ -1305,7 +1325,7 @@ sched_pickcpu(struct thread *td)
 #endif
 
 static void
-sched_4bsd_add(struct thread *td, int flags)
+sched_add(struct thread *td, int flags)
 #ifdef SMP
 {
 	cpuset_t tidlemsk;
@@ -1452,7 +1472,7 @@ sched_4bsd_add(struct thread *td, int flags)
 #endif /* SMP */
 
 static void
-sched_4bsd_rem(struct thread *td)
+sched_rem(struct thread *td)
 {
 	struct td_sched *ts;
 
@@ -1482,7 +1502,7 @@ sched_4bsd_rem(struct thread *td)
  * slot.
  */
 static struct thread *
-sched_4bsd_choose(void)
+sched_choose(void)
 {
 	struct thread *td;
 	struct runq *runq;
@@ -1527,10 +1547,11 @@ sched_4bsd_choose(void)
 }
 
 static void
-sched_4bsd_preempt(struct thread *td)
+sched_preempt(struct thread *td)
 {
 	int flags;
 
+	MPASS(td == curthread);
 	SDT_PROBE2(sched, , , surrender, td, td->td_proc);
 	if (td->td_critnest > 1) {
 		td->td_owepreempt = 1;
@@ -1544,7 +1565,7 @@ sched_4bsd_preempt(struct thread *td)
 }
 
 static void
-sched_4bsd_userret_slowpath(struct thread *td)
+sched_userret_slowpath(struct thread *td)
 {
 
 	thread_lock(td);
@@ -1554,7 +1575,7 @@ sched_4bsd_userret_slowpath(struct thread *td)
 }
 
 static void
-sched_4bsd_bind(struct thread *td, int cpu)
+sched_bind(struct thread *td, int cpu)
 {
 #ifdef SMP
 	struct td_sched *ts = td_get_sched(td);
@@ -1575,7 +1596,7 @@ sched_4bsd_bind(struct thread *td, int cpu)
 }
 
 static void
-sched_4bsd_unbind(struct thread* td)
+sched_unbind(struct thread* td)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	KASSERT(td == curthread, ("sched_unbind: can only bind curthread"));
@@ -1583,39 +1604,39 @@ sched_4bsd_unbind(struct thread* td)
 }
 
 static int
-sched_4bsd_is_bound(struct thread *td)
+sched_is_bound(struct thread *td)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	return (td->td_flags & TDF_BOUND);
 }
 
 static void
-sched_4bsd_relinquish(struct thread *td)
+sched_relinquish(struct thread *td)
 {
 	thread_lock(td);
 	mi_switch(SW_VOL | SWT_RELINQUISH);
 }
 
 static int
-sched_4bsd_load(void)
+sched_load(void)
 {
 	return (sched_tdcnt);
 }
 
 static int
-sched_4bsd_sizeof_proc(void)
+sched_sizeof_proc(void)
 {
 	return (sizeof(struct proc));
 }
 
 static int
-sched_4bsd_sizeof_thread(void)
+sched_sizeof_thread(void)
 {
 	return (sizeof(struct thread) + sizeof(struct td_sched));
 }
 
 static fixpt_t
-sched_4bsd_pctcpu(struct thread *td)
+sched_pctcpu(struct thread *td)
 {
 	struct td_sched *ts;
 
@@ -1625,7 +1646,7 @@ sched_4bsd_pctcpu(struct thread *td)
 }
 
 static u_int
-sched_4bsd_estcpu(struct thread *td)
+sched_estcpu(struct thread *td)
 {
 
 	return (td_get_sched(td)->ts_estcpu);
@@ -1635,7 +1656,7 @@ sched_4bsd_estcpu(struct thread *td)
  * The actual idle process.
  */
 static void
-sched_4bsd_idletd(void *dummy)
+sched_idletd(void *dummy)
 {
 	struct pcpuidlestat *stat;
 
@@ -1677,7 +1698,7 @@ sched_throw_tail(struct thread *td)
  * A CPU is entering for the first time.
  */
 static void
-sched_4bsd_ap_entry(void)
+sched_ap_entry(void)
 {
 
 	/*
@@ -1701,7 +1722,7 @@ sched_4bsd_ap_entry(void)
  * A thread is exiting.
  */
 static void
-sched_4bsd_throw(struct thread *td)
+sched_throw(struct thread *td)
 {
 
 	MPASS(td != NULL);
@@ -1715,7 +1736,7 @@ sched_4bsd_throw(struct thread *td)
 }
 
 static void
-sched_4bsd_fork_exit(struct thread *td)
+sched_fork_exit(struct thread *td)
 {
 
 	/*
@@ -1734,7 +1755,7 @@ sched_4bsd_fork_exit(struct thread *td)
 }
 
 static char *
-sched_4bsd_tdname(struct thread *td)
+sched_tdname(struct thread *td)
 {
 #ifdef KTR
 	struct td_sched *ts;
@@ -1750,7 +1771,7 @@ sched_4bsd_tdname(struct thread *td)
 }
 
 static void
-sched_4bsd_clear_tdname(struct thread *td)
+sched_clear_tdname(struct thread *td)
 {
 #ifdef KTR
 	struct td_sched *ts;
@@ -1761,7 +1782,7 @@ sched_4bsd_clear_tdname(struct thread *td)
 }
 
 static void
-sched_4bsd_affinity(struct thread *td)
+sched_affinity(struct thread *td)
 {
 #ifdef SMP
 	struct td_sched *ts;
@@ -1824,59 +1845,9 @@ sched_4bsd_affinity(struct thread *td)
 }
 
 static int
-sched_4bsd_find_l2_neighbor(int cpu)
+sched_find_l2_neighbor(int cpu)
 {
 	return (-1);
 }
 
-struct sched_instance sched_4bsd_instance = {
-#define	SLOT(name) .name = sched_4bsd_##name
-	SLOT(load),
-	SLOT(rr_interval),
-	SLOT(runnable),
-	SLOT(exit),
-	SLOT(fork),
-	SLOT(fork_exit),
-	SLOT(class),
-	SLOT(nice),
-	SLOT(ap_entry),
-	SLOT(exit_thread),
-	SLOT(estcpu),
-	SLOT(fork_thread),
-	SLOT(ithread_prio),
-	SLOT(lend_prio),
-	SLOT(lend_user_prio),
-	SLOT(lend_user_prio_cond),
-	SLOT(pctcpu),
-	SLOT(prio),
-	SLOT(sleep),
-	SLOT(sswitch),
-	SLOT(throw),
-	SLOT(unlend_prio),
-	SLOT(user_prio),
-	SLOT(userret_slowpath),
-	SLOT(add),
-	SLOT(choose),
-	SLOT(clock),
-	SLOT(idletd),
-	SLOT(preempt),
-	SLOT(relinquish),
-	SLOT(rem),
-	SLOT(wakeup),
-	SLOT(bind),
-	SLOT(unbind),
-	SLOT(is_bound),
-	SLOT(affinity),
-	SLOT(sizeof_proc),
-	SLOT(sizeof_thread),
-	SLOT(tdname),
-	SLOT(clear_tdname),
-	SLOT(find_l2_neighbor),
-	SLOT(init),
-	SLOT(init_ap),
-	SLOT(setup),
-	SLOT(initticks),
-	SLOT(schedcpu),
-#undef SLOT
-};
-DECLARE_SCHEDULER(fourbsd_sched_selector, "4BSD", &sched_4bsd_instance);
+DECLARE_SCHEDULER("4BSD");

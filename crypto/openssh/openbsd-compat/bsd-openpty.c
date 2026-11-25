@@ -38,10 +38,9 @@
 #include <sys/types.h>
 
 #include <stdlib.h>
+#include <stdio.h>
 
-#ifdef HAVE_SYS_STAT_H
-# include <sys/stat.h>
-#endif
+#include <sys/stat.h>
 #ifdef HAVE_SYS_IOCTL_H
 # include <sys/ioctl.h>
 #endif
@@ -50,9 +49,7 @@
 # include <fcntl.h>
 #endif
 
-#ifdef HAVE_UTIL_H
-# include <util.h>
-#endif /* HAVE_UTIL_H */
+#include <util.h>
 
 #ifdef HAVE_PTY_H
 # include <pty.h>
@@ -129,8 +126,8 @@ openpty_streams(int *amaster, int *aslave)
 #endif
 
 int
-openpty(int *amaster, int *aslave, char *name, struct termios *termp,
-   struct winsize *winp)
+openpty(int *amaster, int *aslave, char *name, const struct termios *termp,
+   const struct winsize *winp)
 {
 #if defined(HAVE__GETPTY)
 	/*
@@ -164,15 +161,17 @@ openpty(int *amaster, int *aslave, char *name, struct termios *termp,
 	 */
 	int r, fd;
 	static int junk_ptyfd = -1, junk_ttyfd;
+	char *junk_name;
 
 	r = openpty_streams(amaster, aslave);
 	if (junk_ptyfd == -1 && (fd = open(_PATH_TTY, O_RDWR|O_NOCTTY)) >= 0) {
 		close(fd);
 		junk_ptyfd = *amaster;
 		junk_ttyfd = *aslave;
+		junk_name = ttyname(junk_ttyfd);
 		debug("STREAMS bug workaround pty %d tty %d name %s",
-		    junk_ptyfd, junk_ttyfd, ttyname(junk_ttyfd));
-        } else
+		    junk_ptyfd, junk_ttyfd, junk_name ? junk_name : "<none>");
+	} else
 		return r;
 #endif
 

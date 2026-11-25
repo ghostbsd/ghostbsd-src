@@ -23,15 +23,15 @@ CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${SRCTOP}/sys/contrib/zstd/lib
 
 .if ${MK_LLVM_TARGET_AARCH64} == "no" && ${MK_LLVM_TARGET_ARM} == "no" && \
-    ${MK_LLVM_TARGET_BPF} == "no" && ${MK_LLVM_TARGET_MIPS} == "no" && \
+    ${MK_LLVM_TARGET_BPF} == "no" && ${MK_LLVM_TARGET_LOONGARCH} == "no" && \
     ${MK_LLVM_TARGET_POWERPC} == "no" && ${MK_LLVM_TARGET_RISCV} == "no" && \
     ${MK_LLVM_TARGET_X86} == "no"
 .error Please enable at least one of: MK_LLVM_TARGET_AARCH64,\
- MK_LLVM_TARGET_ARM, MK_LLVM_TARGET_BPF, MK_LLVM_TARGET_MIPS, \
+ MK_LLVM_TARGET_ARM, MK_LLVM_TARGET_BPF, MK_LLVM_TARGET_LOONGARCH, \
  MK_LLVM_TARGET_POWERPC, MK_LLVM_TARGET_RISCV, or MK_LLVM_TARGET_X86
 .endif
 
-.for arch in AArch64 ARM BPF Mips PowerPC RISCV X86
+.for arch in AArch64 ARM BPF LoongArch PowerPC RISCV X86
 . if ${MK_LLVM_TARGET_${arch:tu}} != "no"
 CFLAGS+=	-I${LLVM_SRCS}/lib/Target/${arch}
 . endif
@@ -1540,65 +1540,6 @@ SRCS_MIN+=	Target/BPF/MCTargetDesc/BPFMCCodeEmitter.cpp
 SRCS_MIN+=	Target/BPF/MCTargetDesc/BPFMCTargetDesc.cpp
 SRCS_MIN+=	Target/BPF/TargetInfo/BPFTargetInfo.cpp
 .endif # MK_LLVM_TARGET_BPF
-.if ${MK_LLVM_TARGET_MIPS} != "no"
-SRCS_MIN+=	Target/Mips/AsmParser/MipsAsmParser.cpp
-SRCS_XDW+=	Target/Mips/Disassembler/MipsDisassembler.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsABIFlagsSection.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsABIInfo.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsAsmBackend.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsELFObjectWriter.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsELFStreamer.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsInstPrinter.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsMCAsmInfo.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsMCCodeEmitter.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsMCTargetDesc.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsNaClELFStreamer.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsOptionRecord.cpp
-SRCS_MIN+=	Target/Mips/MCTargetDesc/MipsTargetStreamer.cpp
-SRCS_MIN+=	Target/Mips/MicroMipsSizeReduction.cpp
-SRCS_MIN+=	Target/Mips/Mips16FrameLowering.cpp
-SRCS_MIN+=	Target/Mips/Mips16HardFloat.cpp
-SRCS_MIN+=	Target/Mips/Mips16HardFloatInfo.cpp
-SRCS_MIN+=	Target/Mips/Mips16ISelDAGToDAG.cpp
-SRCS_MIN+=	Target/Mips/Mips16ISelLowering.cpp
-SRCS_MIN+=	Target/Mips/Mips16InstrInfo.cpp
-SRCS_MIN+=	Target/Mips/Mips16RegisterInfo.cpp
-SRCS_MIN+=	Target/Mips/MipsAnalyzeImmediate.cpp
-SRCS_MIN+=	Target/Mips/MipsAsmPrinter.cpp
-SRCS_MIN+=	Target/Mips/MipsBranchExpansion.cpp
-SRCS_MIN+=	Target/Mips/MipsCCState.cpp
-SRCS_MIN+=	Target/Mips/MipsCallLowering.cpp
-SRCS_MIN+=	Target/Mips/MipsConstantIslandPass.cpp
-SRCS_MIN+=	Target/Mips/MipsDelaySlotFiller.cpp
-SRCS_MIN+=	Target/Mips/MipsExpandPseudo.cpp
-SRCS_MIN+=	Target/Mips/MipsFastISel.cpp
-SRCS_MIN+=	Target/Mips/MipsFrameLowering.cpp
-SRCS_MIN+=	Target/Mips/MipsISelDAGToDAG.cpp
-SRCS_MIN+=	Target/Mips/MipsISelLowering.cpp
-SRCS_MIN+=	Target/Mips/MipsInstrInfo.cpp
-SRCS_MIN+=	Target/Mips/MipsInstructionSelector.cpp
-SRCS_MIN+=	Target/Mips/MipsLegalizerInfo.cpp
-SRCS_MIN+=	Target/Mips/MipsMCInstLower.cpp
-SRCS_MIN+=	Target/Mips/MipsMachineFunction.cpp
-SRCS_MIN+=	Target/Mips/MipsModuleISelDAGToDAG.cpp
-SRCS_MIN+=	Target/Mips/MipsMulMulBugPass.cpp
-SRCS_MIN+=	Target/Mips/MipsOptimizePICCall.cpp
-SRCS_MIN+=	Target/Mips/MipsOs16.cpp
-SRCS_MIN+=	Target/Mips/MipsPostLegalizerCombiner.cpp
-SRCS_MIN+=	Target/Mips/MipsPreLegalizerCombiner.cpp
-SRCS_MIN+=	Target/Mips/MipsRegisterBankInfo.cpp
-SRCS_MIN+=	Target/Mips/MipsRegisterInfo.cpp
-SRCS_MIN+=	Target/Mips/MipsSEFrameLowering.cpp
-SRCS_MIN+=	Target/Mips/MipsSEISelDAGToDAG.cpp
-SRCS_MIN+=	Target/Mips/MipsSEISelLowering.cpp
-SRCS_MIN+=	Target/Mips/MipsSEInstrInfo.cpp
-SRCS_MIN+=	Target/Mips/MipsSERegisterInfo.cpp
-SRCS_MIN+=	Target/Mips/MipsSubtarget.cpp
-SRCS_MIN+=	Target/Mips/MipsTargetMachine.cpp
-SRCS_MIN+=	Target/Mips/MipsTargetObjectFile.cpp
-SRCS_MIN+=	Target/Mips/MipsTargetTransformInfo.cpp
-SRCS_MIN+=	Target/Mips/TargetInfo/MipsTargetInfo.cpp
-.endif # MK_LLVM_TARGET_MIPS
 .if ${MK_LLVM_TARGET_POWERPC} != "no"
 SRCS_MIN+=	Target/PowerPC/AsmParser/PPCAsmParser.cpp
 SRCS_MIN+=	Target/PowerPC/Disassembler/PPCDisassembler.cpp
@@ -1814,6 +1755,36 @@ SRCS_MIN+=	Target/X86/X86VZeroUpper.cpp
 SRCS_MIN+=	Target/X86/X86WinEHState.cpp
 SRCS_MIN+=	Target/X86/X86WinEHUnwindV2.cpp
 .endif # MK_LLVM_TARGET_X86
+.if ${MK_LLVM_TARGET_LOONGARCH} != "no"
+SRCS_MIN+=	Target/LoongArch/AsmParser/LoongArchAsmParser.cpp
+SRCS_MIN+=	Target/LoongArch/Disassembler/LoongArchDisassembler.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchAsmPrinter.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchDeadRegisterDefinitions.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchExpandAtomicPseudoInsts.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchExpandPseudoInsts.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchFrameLowering.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchISelDAGToDAG.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchISelLowering.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchInstrInfo.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchMCInstLower.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchMergeBaseOffset.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchOptWInstrs.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchRegisterInfo.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchSubtarget.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchTargetMachine.cpp
+SRCS_MIN+=	Target/LoongArch/LoongArchTargetTransformInfo.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchAsmBackend.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchBaseInfo.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchELFObjectWriter.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchELFStreamer.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchInstPrinter.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchMCAsmInfo.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchMCCodeEmitter.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchMCTargetDesc.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchMatInt.cpp
+SRCS_MIN+=	Target/LoongArch/MCTargetDesc/LoongArchTargetStreamer.cpp
+SRCS_MIN+=	Target/LoongArch/TargetInfo/LoongArchTargetInfo.cpp
+.endif # MK_LLVM_TARGET_LOONGARCH
 SRCS_MIN+=	TargetParser/AArch64TargetParser.cpp
 SRCS_MIN+=	TargetParser/ARMTargetParser.cpp
 SRCS_MIN+=	TargetParser/ARMTargetParserCommon.cpp
@@ -2328,8 +2299,8 @@ beforebuild:
 
 # Note: some rules are superfluous, not every combination is valid.
 .for arch in \
-	AArch64/AArch64 ARM/ARM BPF/BPF Mips/Mips PowerPC/PPC RISCV/RISCV \
-	X86/X86
+	AArch64/AArch64 ARM/ARM BPF/BPF LoongArch/LoongArch PowerPC/PPC \
+	RISCV/RISCV X86/X86
 . for hdr in \
 	AsmMatcher/-gen-asm-matcher \
 	AsmWriter/-gen-asm-writer \
@@ -2422,22 +2393,6 @@ TGHDRS+=	BPFGenRegisterBank.inc
 TGHDRS+=	BPFGenRegisterInfo.inc
 TGHDRS+=	BPFGenSubtargetInfo.inc
 .endif # MK_LLVM_TARGET_BPF
-.if ${MK_LLVM_TARGET_MIPS} != "no"
-TGHDRS+=	MipsGenAsmMatcher.inc
-TGHDRS+=	MipsGenAsmWriter.inc
-TGHDRS+=	MipsGenCallingConv.inc
-TGHDRS+=	MipsGenDAGISel.inc
-TGHDRS+=	MipsGenDisassemblerTables.inc
-TGHDRS+=	MipsGenFastISel.inc
-TGHDRS+=	MipsGenGlobalISel.inc
-TGHDRS+=	MipsGenInstrInfo.inc
-TGHDRS+=	MipsGenMCCodeEmitter.inc
-TGHDRS+=	MipsGenMCPseudoLowering.inc
-TGHDRS+=	MipsGenPostLegalizeGICombiner.inc
-TGHDRS+=	MipsGenRegisterBank.inc
-TGHDRS+=	MipsGenRegisterInfo.inc
-TGHDRS+=	MipsGenSubtargetInfo.inc
-.endif # MK_LLVM_TARGET_MIPS
 .if ${MK_LLVM_TARGET_POWERPC} != "no"
 TGHDRS+=	PPCGenAsmMatcher.inc
 TGHDRS+=	PPCGenAsmWriter.inc
@@ -2492,6 +2447,17 @@ TGHDRS+=	X86GenRegisterBank.inc
 TGHDRS+=	X86GenRegisterInfo.inc
 TGHDRS+=	X86GenSubtargetInfo.inc
 .endif # MK_LLVM_TARGET_X86
+.if ${MK_LLVM_TARGET_LOONGARCH} != "no"
+TGHDRS+=	LoongArchGenAsmMatcher.inc
+TGHDRS+=	LoongArchGenAsmWriter.inc
+TGHDRS+=	LoongArchGenDAGISel.inc
+TGHDRS+=	LoongArchGenDisassemblerTables.inc
+TGHDRS+=	LoongArchGenInstrInfo.inc
+TGHDRS+=	LoongArchGenMCCodeEmitter.inc
+TGHDRS+=	LoongArchGenMCPseudoLowering.inc
+TGHDRS+=	LoongArchGenRegisterInfo.inc
+TGHDRS+=	LoongArchGenSubtargetInfo.inc
+.endif # MK_LLVM_TARGET_LOONGARCH
 
 DEPENDFILES+=	${TGHDRS:C/$/.d/}
 DPSRCS+=	${TGHDRS}

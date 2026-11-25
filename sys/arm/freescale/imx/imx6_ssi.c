@@ -394,7 +394,8 @@ ssichan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 	struct sc_pcminfo *scp = ch->parent;
 	struct sc_info *sc = scp->sc;
 
-	sndbuf_resize(ch->buffer, sc->dma_size / blocksize, blocksize);
+	if (sndbuf_resize(ch->buffer, sc->dma_size / blocksize, blocksize) != 0)
+		return (0);
 
 	setup_dma(scp);
 
@@ -808,6 +809,8 @@ ssi_attach(device_t dev)
 
 	pcm_init(dev, scp);
 
+	mixer_init(dev, &ssimixer_class, scp);
+
 	scp->chnum = 0;
 	pcm_addchan(dev, PCMDIR_PLAY, &ssichan_class, scp);
 	scp->chnum++;
@@ -819,7 +822,6 @@ ssi_attach(device_t dev)
 		return (ENXIO);
 	}
 
-	mixer_init(dev, &ssimixer_class, scp);
 	setup_ssi(sc);
 
 	imx_ccm_ssi_configure(dev);

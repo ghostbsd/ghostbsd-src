@@ -486,6 +486,7 @@ MAN=	aac.4 \
 	procfs.4 \
 	proto.4 \
 	ps4dshock.4 \
+	ps5dsense.4 \
 	psm.4 \
 	pst.4 \
 	pt.4 \
@@ -505,6 +506,7 @@ MAN=	aac.4 \
 	random.4 \
 	rctl.4 \
 	re.4 \
+	rge.4 \
 	rgephy.4 \
 	rights.4 \
 	rl.4 \
@@ -715,8 +717,11 @@ MLINKS+=edsc.4 if_edsc.4
 MLINKS+=em.4 if_em.4 \
 	em.4 igb.4 \
 	em.4 if_igb.4 \
+	em.4 igbv.4 \
+	em.4 if_igbv.4 \
 	em.4 lem.4 \
 	em.4 if_lem.4
+MLINKS+=ena.4 if_ena.4
 MLINKS+=enc.4 if_enc.4
 MLINKS+=enic.4 if_enic.4
 MLINKS+=epair.4 if_epair.4
@@ -1060,14 +1065,6 @@ MAN+=		mlx5ib.4
 
 .if ${MK_MLX5TOOL} != "no"
 MAN+=		mlx5io.4
-.endif
-
-.if ${MK_TESTS} != "no"
-MANGROUPS+=	ATF
-ATFTOP=		${SRCTOP}/contrib/atf
-.PATH:          ${ATFTOP}/doc
-ATF=		atf-test-case.4
-ATFPACKAGE=	atf
 .endif
 
 .if ${MK_PF} != "no"

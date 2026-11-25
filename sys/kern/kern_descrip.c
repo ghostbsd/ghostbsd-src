@@ -2418,6 +2418,7 @@ pdinit(struct pwddesc *pdp, bool keeplock)
 
 	PWDDESC_LOCK_INIT(newpdp);
 	refcount_init(&newpdp->pd_refcount, 1);
+	refcount_init(&newpdp->pd_sharecount, 1);
 	newpdp->pd_cmask = CMASK;
 
 	if (pdp == NULL) {
@@ -2499,6 +2500,7 @@ pddrop(struct pwddesc *pdp)
 		PWDDESC_XUNLOCK(pdp);
 		return;
 	}
+	MPASS(refcount_load(&pdp->pd_sharecount) == 0);
 	pwd = PWDDESC_XLOCKED_LOAD_PWD(pdp);
 	pwd_set(pdp, NULL);
 	PWDDESC_XUNLOCK(pdp);
@@ -2525,7 +2527,11 @@ fdshare(struct filedesc *fdp)
 struct pwddesc *
 pdshare(struct pwddesc *pdp)
 {
+	u_int old __diagused;
+
 	refcount_acquire(&pdp->pd_refcount);
+	old = refcount_acquire(&pdp->pd_sharecount);
+	MPASS(old > 0);
 	return (pdp);
 }
 
@@ -2557,7 +2563,7 @@ pdunshare(struct thread *td)
 
 	p = td->td_proc;
 	/* Not shared. */
-	if (refcount_load(&p->p_pd->pd_refcount) == 1)
+	if (refcount_load(&p->p_pd->pd_sharecount) == 1)
 		return;
 
 	pdp = pdcopy(p->p_pd);
@@ -2616,13 +2622,16 @@ fdcopy(struct filedesc *fdp, struct proc *p1)
 		if ((ops->fo_flags & DFLAG_FORK) != 0 &&
 		    (ofde->fde_flags & UF_FOCLOSE) == 0) {
 			if (ops->fo_fork(newfdp, ofde->fde_file, &fp, p1,
-			    curthread) != 0)
+			    curthread) != 0) {
+				if (newfdp->fd_freefile > i)
+					newfdp->fd_freefile = i;
 				continue;
+			}
 			fork_pass = true;
 		} else if ((ops->fo_flags & DFLAG_PASSABLE) == 0 ||
 		    (ofde->fde_flags & UF_FOCLOSE) != 0 ||
 		    !fhold(ofde->fde_file)) {
-			if (newfdp->fd_freefile == fdp->fd_freefile)
+			if (newfdp->fd_freefile > i)
 				newfdp->fd_freefile = i;
 			continue;
 		}
@@ -2840,6 +2849,7 @@ pdescfree(struct thread *td)
 	atomic_thread_fence_seq_cst();
 	PROC_WAIT_UNLOCKED(p);
 
+	(void)refcount_release(&pdp->pd_sharecount);
 	pddrop(pdp);
 }
 
@@ -3194,6 +3204,7 @@ fget_remote(struct thread *td, struct proc *p, int fd, struct filecaps *fcaps,
 	struct file *fp;
 	int error;
 	bool copied __diagused;
+	bool drop_fp;
 
 	/*
 	 * Both fcaps and fd_flags must be either requested together,
@@ -3209,10 +3220,21 @@ fget_remote(struct thread *td, struct proc *p, int fd, struct filecaps *fcaps,
 	PROC_UNLOCK(p);
 	if (fdp == NULL)
 		return (ENOENT);
+	drop_fp = false;
 	FILEDESC_SLOCK(fdp);
 	if (refcount_load(&fdp->fd_refcnt) != 0) {
 		fp = fget_noref(fdp, fd);
-		if (fp != NULL && fhold(fp)) {
+		error = fp != NULL && fhold(fp) ? 0 : EBADF;
+	} else {
+		error = ENOENT;
+	}
+	if (error == 0) {
+		PROC_LOCK(p);
+		/* Guard against a race with rfork(RFCFDG). */
+		if (fdp != atomic_load_ptr(&p->p_fd))
+			error = EBADF;
+		PROC_UNLOCK(p);
+		if (error == 0) {
 			*fpp = fp;
 			if (fd_flags != NULL) {
 				*fd_flags = fde_to_fd_flags(fdp->fd_ofiles[fd].
@@ -3223,14 +3245,13 @@ fget_remote(struct thread *td, struct proc *p, int fd, struct filecaps *fcaps,
 				    &fdp->fd_ofiles[fd].fde_caps, fcaps, true);
 				MPASS(copied);
 			}
-			error = 0;
 		} else {
-			error = EBADF;
+			drop_fp = true;
 		}
-	} else {
-		error = ENOENT;
 	}
 	FILEDESC_SUNLOCK(fdp);
+	if (drop_fp)
+		fdrop(fp, td);
 	fddrop(fdp);
 	return (error);
 }

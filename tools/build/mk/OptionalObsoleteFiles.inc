@@ -1441,6 +1441,22 @@ OLD_FILES+=usr/share/man/man1/llvm-pdbutil.1.gz
 OLD_FILES+=usr/share/man/man1/opt.1.gz
 .endif
 
+.if ${MK_CDDL} == no
+CDDL_TEST_DIRS=	cddl
+. for d in ${CDDL_TEST_DIRS}
+.  if exists(${DESTDIR}${TESTSBASE}/${d}/)
+# Bug 299650: do not prune empty directories created by
+# `etc/mtree/BSD.tests.dist`.
+#
+# Read https://reviews.freebsd.org/D60928 for more details.
+#TESTS_DIRS!=find ${DESTDIR}${TESTSBASE}/${d}/ -type d | sed -e 's,^${DESTDIR}/,,'; echo
+#OLD_DIRS+=${TESTS_DIRS}
+TESTS_FILES!=find ${DESTDIR}${TESTSBASE}/${d}/ -type f | sed -e 's,^${DESTDIR}/,,'; echo
+OLD_FILES+=${TESTS_FILES}
+.  endif
+. endfor
+.endif
+
 .if ${MK_CLANG_EXTRAS} == no && ${MK_CLANG_FORMAT} == no
 OLD_FILES+=usr/bin/clang-format
 .endif
@@ -1713,6 +1729,32 @@ OLD_DIRS+=usr/lib${libcompat}/dtrace
 OLD_DIRS+=usr/libexec/dwatch
 OLD_DIRS+=usr/share/dtrace/toolkit
 OLD_DIRS+=usr/share/dtrace
+
+CTFCONVERT_TEST_DIRS=	cddl/usr.bin/ctfconvert
+. for d in ${CTFCONVERT_TEST_DIRS}
+.  if exists(${DESTDIR}${TESTSBASE}/${d}/)
+TESTS_DIRS!=find ${DESTDIR}${TESTSBASE}/${d}/ -type d | sed -e 's,^${DESTDIR}/,,'; echo
+OLD_DIRS+=${TESTS_DIRS}
+TESTS_FILES!=find ${DESTDIR}${TESTSBASE}/${d}/ -type f | sed -e 's,^${DESTDIR}/,,'; echo
+OLD_FILES+=${TESTS_FILES}
+.  endif
+. endfor
+.endif
+
+.if ${MK_DTRACE_TESTS} == no
+DTRACE_TEST_DIRS=	cddl/usr.sbin/dtrace
+. for d in ${DTRACE_TEST_DIRS}
+.  if exists(${DESTDIR}${TESTSBASE}/${d}/)
+# Bug 299650: do not prune empty directories created by
+# `etc/mtree/BSD.tests.dist`.
+#
+# Read https://reviews.freebsd.org/D60928 for more details.
+#TESTS_DIRS!=find ${DESTDIR}${TESTSBASE}/${d}/ -type d | sed -e 's,^${DESTDIR}/,,'; echo
+#OLD_DIRS+=${TESTS_DIRS}
+TESTS_FILES!=find ${DESTDIR}${TESTSBASE}/${d}/ -type f | sed -e 's,^${DESTDIR}/,,'; echo
+OLD_FILES+=${TESTS_FILES}
+.  endif
+. endfor
 .endif
 
 .if ${MK_EE} == no
@@ -8882,6 +8924,7 @@ OLD_LIBS+=usr/lib/libusbhid.so.4
 OLD_FILES+=usr/libdata/pkgconfig/libusb-0.1.pc
 OLD_FILES+=usr/libdata/pkgconfig/libusb-1.0.pc
 OLD_FILES+=usr/libdata/pkgconfig/libusb-2.0.pc
+OLD_FILES+=usr/libexec/ssh-sk-helper
 OLD_FILES+=usr/sbin/uathload
 OLD_FILES+=usr/sbin/uhsoctl
 OLD_FILES+=usr/sbin/usbconfig
@@ -9156,6 +9199,7 @@ OLD_FILES+=usr/share/man/man4/uslcom.4.gz
 OLD_FILES+=usr/share/man/man4/uvisor.4.gz
 OLD_FILES+=usr/share/man/man4/uvscom.4.gz
 OLD_FILES+=usr/share/man/man4/zyd.4.gz
+OLD_FILES+=usr/share/man/man8/ssh-sk-helper.8.gz
 OLD_FILES+=usr/share/man/man8/uathload.8.gz
 OLD_FILES+=usr/share/man/man8/usbconfig.8.gz
 OLD_FILES+=usr/share/man/man8/usbdump.8.gz
@@ -9459,6 +9503,23 @@ OLD_FILES+=usr/share/zfs/compatibility.d/zol-0.7
 OLD_FILES+=usr/share/zfs/compatibility.d/zol-0.8
 OLD_DIRS+=usr/share/zfs/compatibility.d
 OLD_DIRS+=usr/share/zfs
+.endif
+
+.if ${MK_ZFS_TESTS} == no
+ZFS_TEST_DIRS=	cddl/usr.bin/ztest
+ZFS_TEST_DIRS+=	cddl/usr.sbin/zfsd
+. for d in ${ZFS_TEST_DIRS}
+.  if exists(${DESTDIR}${TESTSBASE}/${d}/)
+# Bug 299650: do not prune empty directories created by
+# `etc/mtree/BSD.tests.dist`.
+#
+# Read https://reviews.freebsd.org/D60928 for more details.
+#TESTS_DIRS!=find ${DESTDIR}${TESTSBASE}/${d}/ -type d | sed -e 's,^${DESTDIR}/,,'; echo
+#OLD_DIRS+=${TESTS_DIRS}
+TESTS_FILES!=find ${DESTDIR}${TESTSBASE}/${d}/ -type f | sed -e 's,^${DESTDIR}/,,'; echo
+OLD_FILES+=${TESTS_FILES}
+.  endif
+. endfor
 .endif
 
 .if ${MK_ZONEINFO} == no

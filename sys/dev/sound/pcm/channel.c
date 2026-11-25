@@ -477,7 +477,7 @@ chn_write(struct pcm_channel *c, struct uio *buf)
 			 *
 			 * 	 The idea is that, while set with CHN_F_NOTRIGGER,
 			 * 	 a channel isn't playing, *but* without this we
-			 * 	 end up with "interrupt timeout / channel dead".
+			 * 	 end up with interrupt timeout.
 			 */
 			ret = EAGAIN;
 		} else {
@@ -1831,19 +1831,25 @@ chn_calclatency(int dir, int latency, int bps, uint32_t datarate,
 	return blksz << blkcnt;
 }
 
+static bool
+chn_may_resizebuf(struct pcm_channel *c)
+{
+	return ((c->flags & (CHN_F_MMAP | CHN_F_TRIGGERED)) == 0 &&
+	    c->inprog == 0);
+}
+
 static int
-chn_resizebuf(struct pcm_channel *c, int latency,
-					int blkcnt, int blksz)
+chn_resizebuf(struct pcm_channel *c, int latency, int blkcnt, int blksz)
 {
 	struct snd_dbuf *b, *bs, *pb;
 	int sblksz, sblkcnt, hblksz, hblkcnt, limit = 0, nsblksz, nsblkcnt;
-	int ret;
 	u_int32_t maxsize;
 
 	CHN_LOCKASSERT(c);
 
-	if ((c->flags & (CHN_F_MMAP | CHN_F_TRIGGERED)) ||
-	    !(c->direction == PCMDIR_PLAY || c->direction == PCMDIR_REC))
+	if (!(c->direction == PCMDIR_PLAY || c->direction == PCMDIR_REC))
+		return EINVAL;
+	if (!chn_may_resizebuf(c))
 		return EINVAL;
 
 	if (latency == -1) {
@@ -1901,6 +1907,9 @@ chn_resizebuf(struct pcm_channel *c, int latency,
 		chn_notify(c->parentchannel, CHN_N_BLOCKSIZE);
 		CHN_UNLOCK(c->parentchannel);
 		CHN_LOCK(c);
+		/* Revalidate. */
+		if (!chn_may_resizebuf(c))
+			return EINVAL;
 		if (c->direction == PCMDIR_PLAY) {
 			limit = (pb != NULL) ?
 			    sndbuf_xbytes(pb->bufsize, pb, bs) : 0;
@@ -1909,6 +1918,8 @@ chn_resizebuf(struct pcm_channel *c, int latency,
 			    sndbuf_xbytes(pb->blksz, pb, bs) * 2 : 0;
 		}
 	} else {
+		int error;
+
 		/*
 		 * The byte-rate-scaled cap applies to the secondary buffer
 		 * only.  It exists to absorb userland scheduling latency,
@@ -1942,12 +1953,31 @@ chn_resizebuf(struct pcm_channel *c, int latency,
 		hblksz -= hblksz % b->align;
 
 		CHN_UNLOCK(c);
-		if (chn_usefrags == 0 ||
-		    CHANNEL_SETFRAGMENTS(c->methods, c->devinfo,
-		    hblksz, hblkcnt) != 0)
-			b->blksz = CHANNEL_SETBLOCKSIZE(c->methods,
-			    c->devinfo, hblksz);
+		error = ENOTSUP;
+		if (chn_usefrags) {
+			error = CHANNEL_SETFRAGMENTS(c->methods, c->devinfo,
+			    hblksz, hblkcnt);
+			/* The default implementation returns ENOTSUP. */
+			if (error != 0 && error != ENOTSUP) {
+				CHN_LOCK(c);
+				return error;
+			}
+		}
+		if (error == ENOTSUP) {
+			uint32_t nblksz;
+
+			nblksz = CHANNEL_SETBLOCKSIZE(c->methods, c->devinfo,
+			    hblksz);
+			if (nblksz == 0) {
+				CHN_LOCK(c);
+				return EINVAL;
+			}
+			b->blksz = nblksz;
+		}
 		CHN_LOCK(c);
+		/* Revalidate. */
+		if (!chn_may_resizebuf(c))
+			return EINVAL;
 
 		if (!CHN_EMPTY(c, children)) {
 			nsblksz = round_blksz(
@@ -1985,11 +2015,13 @@ chn_resizebuf(struct pcm_channel *c, int latency,
 
 	if (bs->blkcnt != sblkcnt || bs->blksz != sblksz ||
 	    bs->bufsize != (sblkcnt * sblksz)) {
-		ret = sndbuf_remalloc(bs, sblkcnt, sblksz);
-		if (ret != 0) {
+		int error;
+
+		error = sndbuf_remalloc(bs, sblkcnt, sblksz);
+		if (error != 0) {
 			device_printf(c->dev, "%s(): Failed: %d %d\n",
 			    __func__, sblkcnt, sblksz);
-			return ret;
+			return error;
 		}
 	}
 
@@ -2157,8 +2189,7 @@ chn_syncstate(struct pcm_channel *c)
 	struct snd_mixer *m;
 
 	d = (c != NULL) ? c->parentsnddev : NULL;
-	m = (d != NULL && d->mixer_dev != NULL) ? d->mixer_dev->si_drv1 :
-	    NULL;
+	m = (d != NULL) ? d->mixer : NULL;
 
 	if (d == NULL || m == NULL)
 		return;
@@ -2171,14 +2202,14 @@ chn_syncstate(struct pcm_channel *c)
 
 		if (c->direction == PCMDIR_PLAY &&
 		    (d->flags & SD_F_SOFTPCMVOL)) {
-			/* CHN_UNLOCK(c); */
+			CHN_UNLOCK(c);
 			vol = mix_get(m, SOUND_MIXER_PCM);
 			parent = mix_getparent(m, SOUND_MIXER_PCM);
 			if (parent != SOUND_MIXER_NONE)
 				pvol = mix_get(m, parent);
 			else
 				pvol = 100 | (100 << 8);
-			/* CHN_LOCK(c); */
+			CHN_LOCK(c);
 		} else {
 			vol = 100 | (100 << 8);
 			pvol = vol;
@@ -2209,10 +2240,10 @@ chn_syncstate(struct pcm_channel *c)
 		struct pcm_feeder *f;
 		int treble, bass;
 
-		/* CHN_UNLOCK(c); */
+		CHN_UNLOCK(c);
 		treble = mix_get(m, SOUND_MIXER_TREBLE);
 		bass = mix_get(m, SOUND_MIXER_BASS);
-		/* CHN_LOCK(c); */
+		CHN_LOCK(c);
 
 		if (treble == -1)
 			treble = 50;

@@ -427,10 +427,13 @@ iso_mountfs(struct vnode *devvp, struct mount *mp)
 
 		rootp = (struct iso_directory_record *)bp->b_data;
 
-		if ((isomp->rr_skip = cd9660_rrip_offset(rootp,isomp)) < 0) {
-		    isomp->im_flags |= ISOFSMNT_NORRIP;
+		if ((isomp->rr_skip = cd9660_rrip_offset(rootp, isomp,
+		    &error)) < 0) {
+			if (error != 0)
+				goto out;
+			isomp->im_flags |= ISOFSMNT_NORRIP;
 		} else {
-		    isomp->im_flags &= ~ISOFSMNT_GENS;
+			isomp->im_flags &= ~ISOFSMNT_GENS;
 		}
 
 		/*
@@ -506,11 +509,8 @@ out:
 		brelse(pribp);
 	if (supbp != NULL)
 		brelse(supbp);
-	if (cp != NULL) {
-		g_topology_lock();
-		g_vfs_close(cp);
-		g_topology_unlock();
-	}
+	if (cp != NULL)
+		g_vfs_close_unlocked(cp);
 	if (isomp) {
 		free(isomp, M_ISOFSMNT);
 		mp->mnt_data = NULL;
@@ -541,9 +541,7 @@ cd9660_unmount(struct mount *mp, int mntflags)
 		if (isomp->im_l2d)
 			cd9660_iconv->close(isomp->im_l2d);
 	}
-	g_topology_lock();
-	g_vfs_close(isomp->im_cp);
-	g_topology_unlock();
+	g_vfs_close_unlocked(isomp->im_cp);
 	vrele(isomp->im_devvp);
 	dev_rel(isomp->im_dev);
 	free(isomp, M_ISOFSMNT);

@@ -80,10 +80,11 @@ static struct pcisel getsel(const char *str);
 static void list_bridge(int fd, struct pci_conf *p);
 static void list_bars(int fd, struct pci_conf *p);
 static void list_devs(const char *name, int verbose, int bars, int bridge,
-    int caps, int errors, int vpd, int compact);
+    int caps, int errors, int vpd, int compact, const char *class);
 static void show_tree(int verbose);
 static void list_verbose(struct pci_conf *p);
 static void list_vpd(int fd, struct pci_conf *p);
+static bool validate_class(const char *class);
 static const char *guess_class(struct pci_conf *p);
 static const char *guess_subclass(struct pci_conf *p);
 static int load_vendors(void);
@@ -92,6 +93,10 @@ static void writeit(const char *, const char *, const char *, int);
 static void chkattached(const char *);
 static void dump_bar(const char *name, const char *reg, const char *bar_start,
     const char *bar_count, int width, int verbose);
+static void read_bar(const char *name, const char *bar, const char *start_end,
+    int width);
+static void write_bar(const char *name, const char *bar, const char *offset_str,
+    const char *value_str, int width);
 
 static int exitstatus = 0;
 
@@ -100,12 +105,14 @@ usage(void)
 {
 
 	fprintf(stderr, "%s",
-		"usage: pciconf -l [-BbcevV] [device]\n"
+		"usage: pciconf -l [-BbcevV] [-C class] [device]\n"
 		"       pciconf -t [-v]\n"
 		"       pciconf -a device\n"
 		"       pciconf -r [-b | -h] device addr[:addr2]\n"
 		"       pciconf -w [-b | -h] device addr value\n"
-		"       pciconf -D [-b | -h | -x] device bar [start [count]]"
+		"       pciconf -D [-b | -h | -x] device bar [start [count]]\n"
+		"       pciconf -R [-b | -h | -x] device bar start[:end]\n"
+		"       pciconf -W [-b | -h | -x] device bar offset value"
 		"\n");
 	exit(1);
 }
@@ -114,14 +121,17 @@ int
 main(int argc, char **argv)
 {
 	int c, width;
-	enum { NONE, LIST, TREE, READ, WRITE, ATTACHED, DUMPBAR } mode;
+	enum { NONE, LIST, TREE, READ, WRITE, ATTACHED, DUMPBAR, READBAR,
+	    WRITEBAR } mode;
 	int compact, bars, bridge, caps, errors, verbose, vpd;
+	const char *class;
 
 	mode = NONE;
 	compact = bars = bridge = caps = errors = verbose = vpd = 0;
 	width = 4;
+	class = NULL;
 
-	while ((c = getopt(argc, argv, "aBbcDehlrtwVvx")) != -1) {
+	while ((c = getopt(argc, argv, "aBbcC:DehlRrtWwVvx")) != -1) {
 		switch(c) {
 		case 'a':
 			mode = ATTACHED;
@@ -138,6 +148,10 @@ main(int argc, char **argv)
 
 		case 'c':
 			caps++;
+			break;
+
+		case 'C':
+			class = optarg;
 			break;
 
 		case 'D':
@@ -158,6 +172,10 @@ main(int argc, char **argv)
 			mode = LIST;
 			break;
 
+		case 'R':
+			mode = READBAR;
+			break;
+
 		case 'r':
 			mode = READ;
 			break;
@@ -165,6 +183,11 @@ main(int argc, char **argv)
 		case 't':
 			mode = TREE;
 			break;
+
+		case 'W':
+			mode = WRITEBAR;
+			break;
+
 		case 'w':
 			mode = WRITE;
 			break;
@@ -191,7 +214,7 @@ main(int argc, char **argv)
 		if (optind >= argc + 1)
 			usage();
 		list_devs(optind + 1 == argc ? argv[optind] : NULL, verbose,
-		    bars, bridge, caps, errors, vpd, compact);
+		    bars, bridge, caps, errors, vpd, compact, class);
 		break;
 	case TREE:
 		if (optind != argc)
@@ -221,6 +244,18 @@ main(int argc, char **argv)
 		    optind + 2 < argc ? argv[optind + 2] : NULL, 
 		    optind + 3 < argc ? argv[optind + 3] : NULL, 
 		    width, verbose);
+		break;
+	case READBAR:
+		if (optind + 3 != argc)
+			usage();
+		read_bar(argv[optind], argv[optind + 1], argv[optind + 2],
+		    width);
+		break;
+	case WRITEBAR:
+		if (optind + 4 != argc)
+			usage();
+		write_bar(argv[optind], argv[optind + 1], argv[optind + 2],
+		    argv[optind + 3], width);
 		break;
 	default:
 		usage();
@@ -287,15 +322,19 @@ fetch_devs(int fd, const char *name, struct pci_conf **confp, size_t *countp)
 
 static void
 list_devs(const char *name, int verbose, int bars, int bridge, int caps,
-    int errors, int vpd, int compact)
+    int errors, int vpd, int compact, const char *class)
 {
 	int fd;
 	struct pci_conf *conf, *p;
 	size_t count;
+	const char *pclass;
 	int none_count = 0;
 
 	if (verbose)
 		load_vendors();
+
+	if (class != NULL && !validate_class(class))
+		errx(1, "Invalid class name");
 
 	fd = open(_PATH_DEVPCI, (bridge || caps || errors) ? O_RDWR : O_RDONLY,
 	    0);
@@ -312,6 +351,12 @@ list_devs(const char *name, int verbose, int bars, int bridge, int caps,
 		printf("drv\tselector\tclass    rev  hdr  "
 		    "vendor device subven subdev\n");
 	for (p = conf; p < conf + count; p++) {
+		if (class != NULL) {
+			pclass = guess_class(p);
+			if (pclass == NULL || strcasecmp(pclass, class) != 0)
+				continue;
+		}
+
 		if (compact)
 			printf("%s%d@pci%d:%d:%d:%d:"
 			    "\t%06x   %02x   %02x   "
@@ -1047,6 +1092,19 @@ static struct
 	{0, 0,		NULL}
 };
 
+static bool
+validate_class(const char *class)
+{
+	int i;
+
+	for (i = 0; pci_nomatch_tab[i].desc != NULL; i++) {
+		if ((strcasecmp(class, pci_nomatch_tab[i].desc) == 0) &&
+		    (pci_nomatch_tab[i].subclass == -1))
+			return (true);
+	}
+	return (false);
+}
+
 static const char *
 guess_class(struct pci_conf *p)
 {
@@ -1291,20 +1349,13 @@ getsel(const char *str)
 }
 
 static void
-readone(int fd, struct pcisel *sel, long reg, int width)
-{
-
-	printf("%0*x", width*2, read_config(fd, sel, reg, width));
-}
-
-static void
 readit(const char *name, const char *reg, int width)
 {
 	long rstart;
 	long rend;
 	long r;
 	char *end;
-	int i;
+	int i, items_per_line;
 	int fd;
 	struct pcisel sel;
 
@@ -1313,18 +1364,22 @@ readit(const char *name, const char *reg, int width)
 		err(1, "%s", _PATH_DEVPCI);
 
 	rend = rstart = strtol(reg, &end, 0);
-	if (end && *end == ':') {
+	if (*end == ':') {
 		end++;
-		rend = strtol(end, (char **) 0, 0);
+		rend = strtol(end, NULL, 0);
 	}
 	sel = getsel(name);
+	items_per_line = 16 / width;
 	for (i = 1, r = rstart; r <= rend; i++, r += width) {
-		readone(fd, &sel, r, width);
-		if (i && !(i % 8))
+		printf("%0*x", width * 2, read_config(fd, &sel, r, width));
+
+		/* Use a double space in the middle when outputting bytes. */
+		if (width == 1 && i % 16 == 8)
 			putchar(' ');
-		putchar(i % (16/width) ? ' ' : '\n');
+
+		putchar(i % items_per_line == 0 ? '\n' : ' ');
 	}
-	if (i % (16/width) != 1)
+	if (i % items_per_line != 1)
 		putchar('\n');
 	close(fd);
 }
@@ -1336,9 +1391,9 @@ writeit(const char *name, const char *reg, const char *data, int width)
 	struct pci_io pi;
 
 	pi.pi_sel = getsel(name);
-	pi.pi_reg = strtoul(reg, (char **)0, 0); /* XXX error check */
+	pi.pi_reg = strtoul(reg, NULL, 0); /* XXX error check */
 	pi.pi_width = width;
-	pi.pi_data = strtoul(data, (char **)0, 0); /* XXX error check */
+	pi.pi_data = strtoul(data, NULL, 0); /* XXX error check */
 
 	fd = open(_PATH_DEVPCI, O_RDWR, 0);
 	if (fd < 0)
@@ -1370,6 +1425,36 @@ chkattached(const char *name)
 }
 
 static void
+map_bar(const char *name, const char *reg, int flags, struct pci_bar_mmap *pbm)
+{
+	int fd;
+	char *el;
+
+	memset(pbm, 0, sizeof(struct pci_bar_mmap));
+	pbm->pbm_sel = getsel(name);
+	pbm->pbm_reg = strtoul(reg, &el, 0);
+	if (*reg == '\0' || *el != '\0')
+		errx(1, "Invalid bar specification %s", reg);
+	pbm->pbm_memattr = VM_MEMATTR_DEVICE;
+	pbm->pbm_flags = flags;
+
+	fd = open(_PATH_DEVPCI, O_RDWR, 0);
+	if (fd < 0)
+		err(1, "%s", _PATH_DEVPCI);
+
+	if (ioctl(fd, PCIOCBARMMAP, pbm) < 0)
+		err(1, "ioctl(PCIOCBARMMAP)");
+
+	close(fd);
+}
+
+static void
+unmap_bar(struct pci_bar_mmap *pbm)
+{
+	munmap(pbm->pbm_map_base, pbm->pbm_map_length);
+}
+
+static void
 dump_bar(const char *name, const char *reg, const char *bar_start,
     const char *bar_count, int width, int verbose)
 {
@@ -1380,7 +1465,6 @@ dump_bar(const char *name, const char *reg, const char *bar_start,
 	uint64_t *dx, a, start, count;
 	char *el;
 	size_t res;
-	int fd;
 
 	start = 0;
 	if (bar_start != NULL) {
@@ -1397,19 +1481,7 @@ dump_bar(const char *name, const char *reg, const char *bar_start,
 			    bar_count);
 	}
 
-	pbm.pbm_sel = getsel(name);
-	pbm.pbm_reg = strtoul(reg, &el, 0);
-	if (*reg == '\0' || *el != '\0')
-		errx(1, "Invalid bar specification %s", reg);
-	pbm.pbm_flags = 0;
-	pbm.pbm_memattr = VM_MEMATTR_DEVICE;
-
-	fd = open(_PATH_DEVPCI, O_RDWR, 0);
-	if (fd < 0)
-		err(1, "%s", _PATH_DEVPCI);
-
-	if (ioctl(fd, PCIOCBARMMAP, &pbm) < 0)
-		err(1, "ioctl(PCIOCBARMMAP)");
+	map_bar(name, reg, 0, &pbm);
 
 	if (count == 0)
 		count = pbm.pbm_bar_length / width;
@@ -1479,6 +1551,103 @@ dump_bar(const char *name, const char *reg, const char *bar_start,
 		errx(1, "invalid access width");
 	}
 
-	munmap((void *)pbm.pbm_map_base, pbm.pbm_map_length);
-	close(fd);
+	unmap_bar(&pbm);
+}
+
+union tunion {
+	uint8_t one;
+	uint16_t two;
+	uint32_t four;
+	uint64_t eight;
+	uint8_t bytes[8];
+};
+
+static void
+read_bar(const char *name, const char *bar, const char *start_end, int width)
+{
+	struct pci_bar_mmap pbm;
+	long rstart, rend, r;
+	char *end;
+	int items_per_line, i;
+
+	rend = rstart = strtol(start_end, &end, 0);
+	if (*end == ':') {
+		end++;
+		rend = strtol(end, NULL, 0);
+	}
+
+	map_bar(name, bar, 0, &pbm);
+
+	items_per_line = 16 / width;
+	for (i = 1, r = rstart; r <= rend; i++, r += width) {
+		uintptr_t addr;
+		union tunion t;
+		int j;
+
+		addr = (uintptr_t)pbm.pbm_map_base + pbm.pbm_bar_off + r;
+		switch (width) {
+		case 1:
+			t.one = *((uint8_t *)addr);
+			break;
+		case 2:
+			t.two = *((uint16_t *)addr);
+			break;
+		case 4:
+			t.four = *((uint32_t *)addr);
+			break;
+		case 8:
+			t.eight = *((uint64_t *)addr);
+			break;
+		default:
+			errx(1, "invalid read width");
+		}
+		for (j = 0; j < width; j++) {
+			printf("%02x", t.bytes[j]);
+		}
+		/* Use a double space in the middle when outputting bytes. */
+		if (width == 1 && (i % 16) == 8)
+			putchar(' ');
+		putchar(i % items_per_line == 0 ? '\n' : ' ');
+	}
+	if (i % items_per_line != 1)
+		putchar('\n');
+
+	unmap_bar(&pbm);
+}
+
+static void
+write_bar(const char *name, const char *bar, const char *offset_str,
+    const char *value_str, int width)
+{
+	struct pci_bar_mmap pbm;
+	uint64_t offset, value;
+	uintptr_t addr;
+	char *el;
+
+	offset = strtoul(offset_str, &el, 0);
+	if (*el != '\0')
+		errx(1, "Invalid bar offset specification %s", offset_str);
+	value = strtoul(value_str, (char **)0, 0); /* XXX error check */
+
+	map_bar(name, bar, PCIIO_BAR_MMAP_RW, &pbm);
+
+	addr = (uintptr_t)pbm.pbm_map_base + pbm.pbm_bar_off + offset;
+	switch (width) {
+	case 1:
+		*((uint8_t *)addr) = value;
+		break;
+	case 2:
+		*((uint16_t *)addr) = value;
+		break;
+	case 4:
+		*((uint32_t *)addr) = value;
+		break;
+	case 8:
+		*((uint64_t *)addr) = value;
+		break;
+	default:
+		errx(1, "invalid write width");
+	}
+
+	unmap_bar(&pbm);
 }

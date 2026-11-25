@@ -780,6 +780,7 @@ extern struct pthread	*_single_thread __hidden;
 extern bool		_thr_after_fork __hidden;
 
 extern int	__thr_new_flags;
+extern bool	__thr_pshared_destroy_imm_gc __hidden;
 
 /*
  * Function prototype definitions.
@@ -965,6 +966,34 @@ static inline struct pthread *
 _sleepq_first(struct sleepqueue *sq)
 {
 	return TAILQ_FIRST(&sq->sq_blocked);
+}
+
+/*
+ * Must accept the same clocks as umtx_check_clockid() in
+ * sys/kern/kern_umtx.c.
+ */
+static inline int
+_thr_check_clockid(clockid_t clockid)
+{
+	switch (clockid) {
+	case CLOCK_REALTIME:
+	case CLOCK_REALTIME_PRECISE:
+	case CLOCK_REALTIME_FAST:
+	case CLOCK_MONOTONIC:
+	case CLOCK_MONOTONIC_PRECISE:
+	case CLOCK_MONOTONIC_FAST:
+	case CLOCK_UPTIME:
+	case CLOCK_UPTIME_PRECISE:
+	case CLOCK_UPTIME_FAST:
+	case CLOCK_SECOND:
+	case CLOCK_VIRTUAL:
+	case CLOCK_PROF:
+	case CLOCK_PROCESS_CPUTIME_ID:
+	case CLOCK_TAI:
+		return (0);
+	default:
+		return (EINVAL);
+	}
 }
 
 void	_sleepq_init(void) __hidden;

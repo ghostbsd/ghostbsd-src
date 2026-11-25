@@ -36,6 +36,7 @@
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_vf_status.h>
 #include <net/if_media.h>
 #include <net/iflib.h>
 #include <net/if_private.h>
@@ -56,6 +57,13 @@ CODE {
 
 	static int
 	null_int_op(if_ctx_t _ctx __unused)
+	{
+		return (0);
+	}
+
+	static int
+	null_power_prepare(if_ctx_t _ctx __unused,
+	    enum iflib_power_event _event __unused)
 	{
 		return (0);
 	}
@@ -118,10 +126,35 @@ CODE {
 		return (ENOTSUP);
 	}
 
+	static int
+	null_get_rss_key(if_ctx_t _ctx __unused, struct ifrsskey *_key __unused)
+	{
+		return (EOPNOTSUPP);
+	}
+
+	static int
+	null_get_rss_hash(if_ctx_t _ctx __unused, struct ifrsshash *_hash __unused)
+	{
+		return (EOPNOTSUPP);
+	}
+
+	static int
+	null_vf_status(if_ctx_t _ctx __unused,
+	    struct if_vf_status **_status __unused)
+	{
+		return (ENOTSUP);
+	}
+
 	static bool
 	null_needs_restart(if_ctx_t _ctx __unused, enum iflib_restart_event _event __unused)
 	{
 		return (false);
+	}
+
+	static int
+	null_get_downreason(if_ctx_t _ctx __unused, struct ifdownreason *_ifdr __unused)
+	{
+		return (ENOTSUP);
 	}
 };
 
@@ -148,6 +181,16 @@ METHOD int reinit_post {
 METHOD int detach {
 	if_ctx_t _ctx;
 };
+
+#
+# Prepare driver policy which must be established before a terminal stop used
+# for detach, suspend, or shutdown.  This method must not start, stop, or alter
+# queue DMA.  The ordinary lifecycle callback runs after the stop.
+#
+METHOD int power_prepare {
+	if_ctx_t _ctx;
+	enum iflib_power_event _event;
+} DEFAULT null_power_prepare;
 
 METHOD int suspend {
 	if_ctx_t _ctx;
@@ -318,6 +361,20 @@ METHOD int priv_ioctl {
 # optional methods
 #
 
+#
+# Report the programmed RSS key and hash selections under the context lock.
+# Unsupported queries return EOPNOTSUPP; unavailable state returns an error.
+#
+METHOD int get_rss_key {
+	if_ctx_t _ctx;
+	struct ifrsskey *_key;
+} DEFAULT null_get_rss_key;
+
+METHOD int get_rss_hash {
+	if_ctx_t _ctx;
+	struct ifrsshash *_hash;
+} DEFAULT null_get_rss_hash;
+
 METHOD int i2c_req {
 	if_ctx_t _ctx;
 	struct ifi2creq *_req;
@@ -374,3 +431,13 @@ METHOD bool needs_restart {
 	if_ctx_t _ctx;
 	enum iflib_restart_event _event;
 } DEFAULT null_needs_restart;
+
+METHOD int get_downreason {
+	if_ctx_t _ctx;
+	struct ifdownreason *_ifdr;
+} DEFAULT null_get_downreason;
+
+METHOD int vf_status {
+	if_ctx_t _ctx;
+	struct if_vf_status **_status;
+} DEFAULT null_vf_status;

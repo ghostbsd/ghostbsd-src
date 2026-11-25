@@ -45,6 +45,7 @@
 #define	VF_FLAG_VLAN_CAP		0x04
 #define	VF_FLAG_PROMISC_CAP		0x08
 #define	VF_FLAG_MAC_ANTI_SPOOF		0x10
+#define	VF_FLAG_INITIALIZED		0x20
 
 #define	IXL_VF_MAX_MAC_FILTERS		18
 #define	IXL_VF_MAX_VLAN_FILTERS		16
@@ -92,6 +93,7 @@ enum ixl_state {
 	IXL_STATE_EEE_ENABLED	= 10,
 	IXL_STATE_LINK_ACTIVE_ON_DOWN = 11,
 	IXL_STATE_LINK_POLLING = 12,
+	IXL_STATE_NVMUPD_API_WARNED = 13,
 };
 
 #define IXL_PF_IN_RECOVERY_MODE(pf)	\
@@ -187,6 +189,7 @@ struct ixl_pf {
 	struct ixl_vf		*vfs;
 	int			num_vfs;
 	uint16_t		veb_seid;
+	bool			iov_attached;
 	int			vc_debug_lvl;
 
 	sbintime_t		link_poll_start;
@@ -198,6 +201,12 @@ struct ixl_pf {
  */
 #define I40E_NVM_ACCESS \
      (((((((('E' << 4) + '1') << 4) + 'K') << 4) + 'G') << 4) | 5)
+/*
+ * New version of tools API. Omitting '6' to not conflict
+ * with debug dump supported by other drivers.
+ */
+#define I40E_NVM_ACCESS2 \
+     (((((((('E' << 4) + '1') << 4) + 'K') << 4) + 'G') << 4) | 7)
 
 #define IXL_DEFAULT_PHY_INT_MASK \
      ((~(I40E_AQ_EVENT_LINK_UPDOWN | I40E_AQ_EVENT_MODULE_QUAL_FAIL \
@@ -308,7 +317,6 @@ void	ixl_clear_state(volatile u32 *s, enum ixl_state bit);
 bool	ixl_test_state(volatile u32 *s, enum ixl_state bit);
 u32	ixl_testandset_state(volatile u32 *s, enum ixl_state bit);
 int	ixl_setup_interface(device_t, struct ixl_pf *);
-void	ixl_print_nvm_cmd(device_t, struct i40e_nvm_access *);
 
 void	ixl_handle_que(void *context, int pending);
 

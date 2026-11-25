@@ -593,7 +593,7 @@ tcp6_input(struct mbuf **mp, int *offp, int proto)
 int
 tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 {
-	struct mbuf *m = *mp;
+	struct mbuf *m;
 	struct tcphdr *th = NULL;
 	struct ip *ip = NULL;
 	struct inpcb *inp = NULL;
@@ -614,7 +614,7 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 	struct m_tag *fwd_tag = NULL;
 #ifdef INET6
 	struct ip6_hdr *ip6 = NULL;
-	int isipv6;
+	bool isipv6;
 #else
 	const void *ip6 = NULL;
 #endif /* INET6 */
@@ -624,10 +624,6 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 
 	NET_EPOCH_ASSERT();
 
-#ifdef INET6
-	isipv6 = (mtod(m, struct ip *)->ip_v == 6) ? 1 : 0;
-#endif
-
 	off0 = *offp;
 	m = *mp;
 	*mp = NULL;
@@ -636,6 +632,7 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 
 	m->m_pkthdr.tcp_tun_port = port;
 #ifdef INET6
+	isipv6 = mtod(m, struct ip *)->ip_v == 6;
 	if (isipv6) {
 		ip6 = mtod(m, struct ip6_hdr *);
 		th = (struct tcphdr *)((caddr_t)ip6 + off0);
@@ -774,9 +771,9 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 					TCPSTAT_INC(tcps_rcvshort);
 					return (IPPROTO_DONE);
 				}
+				ip6 = mtod(m, struct ip6_hdr *);
+				th = (struct tcphdr *)((caddr_t)ip6 + off0);
 			}
-			ip6 = mtod(m, struct ip6_hdr *);
-			th = (struct tcphdr *)((caddr_t)ip6 + off0);
 		}
 #endif
 #if defined(INET) && defined(INET6)
@@ -924,37 +921,6 @@ findpcb:
 	}
 	INP_LOCK_ASSERT(inp);
 
-	if ((inp->inp_flowtype == M_HASHTYPE_NONE) &&
-	    !SOLISTENING(inp->inp_socket)) {
-		if (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE) {
-			inp->inp_flowid = m->m_pkthdr.flowid;
-			inp->inp_flowtype = M_HASHTYPE_GET(m);
-#ifdef	RSS
-		} else {
-			  /* assign flowid by software RSS hash */
-#ifdef INET6
-			  if (isipv6) {
-				rss_proto_software_hash_v6(&inp->in6p_faddr,
-							   &inp->in6p_laddr,
-							   inp->inp_fport,
-							   inp->inp_lport,
-							   IPPROTO_TCP,
-							   &inp->inp_flowid,
-							   &inp->inp_flowtype);
-			  } else
-#endif	/* INET6 */
-			  {
-				rss_proto_software_hash_v4(inp->inp_faddr,
-							   inp->inp_laddr,
-							   inp->inp_fport,
-							   inp->inp_lport,
-							   IPPROTO_TCP,
-							   &inp->inp_flowid,
-							   &inp->inp_flowtype);
-			  }
-#endif	/* RSS */
-		}
-	}
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 #ifdef INET6
 	if (isipv6 && IPSEC_ENABLED(ipv6) &&
@@ -1172,7 +1138,7 @@ tfo_socket_result:
 		 * causes.
 		 */
 		if (thflags & TH_RST) {
-			syncache_chkrst(&inc, th, m, port);
+			syncache_chkrst(&inc, th, port);
 			goto dropunlock;
 		}
 		/*
@@ -1486,6 +1452,62 @@ tcp_autorcvbuf(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	return (newsize);
 }
 
+/*
+ * Pull out of band byte out of a segment so
+ * it doesn't appear in the user's data queue.
+ * It is still reflected in the segment length for
+ * sequencing purposes.
+ */
+static int
+tcp_pulloutofband(struct socket *so, struct tcphdr *th, struct mbuf *m,
+    int off)
+{
+	int cnt = off + th->th_urp - 1;
+
+	while (cnt >= 0) {
+		if (m->m_len > cnt) {
+			struct tcpcb *tp = sototcpcb(so);
+			char ub;
+
+			INP_WLOCK_ASSERT(tptoinpcb(tp));
+
+			m_copydata(m, cnt, 1, &ub);
+			if (cnt == 0) {
+				m->m_data++;
+				m->m_len--;
+			} else if (m->m_len - 1 == cnt) {
+				m->m_len--;
+			} else if (M_WRITABLE(m)) {
+				char *cp;
+
+				cp = mtodo(m, cnt);
+				memmove(cp, cp + 1, m->m_len - cnt - 1);
+				m->m_len--;
+			} else {
+				struct mbuf *n;
+
+				n = m_copym(m, cnt + 1, m->m_len - cnt - 1,
+				    M_NOWAIT);
+				if (n == NULL)
+					return (ENOBUFS);
+				n->m_next = m->m_next;
+				m->m_next = n;
+				m->m_len = cnt;
+			}
+			tp->t_iobc = ub;
+			tp->t_oobflags |= TCPOOB_HAVEDATA;
+			if ((m->m_flags & M_PKTHDR) != 0)
+				m->m_pkthdr.len--;
+			return (0);
+		}
+		cnt -= m->m_len;
+		m = m->m_next;
+		if (m == NULL)
+			break;
+	}
+	panic("tcp_pulloutofband");
+}
+
 int
 tcp_input(struct mbuf **mp, int *offp, int proto)
 {
@@ -1609,11 +1631,9 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 		to.to_flags &= ~TOF_SACK;
 	}
 #if defined(IPSEC_SUPPORT) || defined(TCP_SIGNATURE)
-	if ((tp->t_flags & TF_SIGNATURE) != 0 &&
-	    (to.to_flags & TOF_SIGNATURE) == 0) {
+	if ((tp->t_flags & TF_SIGNATURE) == 0 &&
+	    (to.to_flags & TOF_SIGNATURE) != 0)
 		TCPSTAT_INC(tcps_sig_err_sigopt);
-		/* XXX: should drop? */
-	}
 #endif
 	/*
 	 * If echoed timestamp is later than the current time,
@@ -2419,10 +2439,7 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 	/*
 	 * Ack processing.
 	 */
-	if (SEQ_GEQ(tp->snd_una, tp->iss + (TCP_MAXWIN << tp->snd_scale))) {
-		/* Checking SEG.ACK against ISS is definitely redundant. */
-		tp->t_flags2 |= TF2_NO_ISS_CHECK;
-	}
+	tcp_adapt_iss_check(tp);
 	if (!V_tcp_insecure_ack) {
 		tcp_seq seq_min;
 		bool ghost_ack_check;
@@ -3157,7 +3174,8 @@ step6:
 		if (th->th_urp <= (uint32_t)tlen &&
 		    !(so->so_options & SO_OOBINLINE)) {
 			/* hdr drop is delayed */
-			tcp_pulloutofband(so, th, m, drop_hdrlen);
+			if (tcp_pulloutofband(so, th, m, drop_hdrlen) != 0)
+				goto drop;
 		}
 	} else {
 		/*
@@ -3603,41 +3621,6 @@ tcp_dooptions(struct tcpopt *to, u_char *cp, int cnt, int flags)
 			continue;
 		}
 	}
-}
-
-/*
- * Pull out of band byte out of a segment so
- * it doesn't appear in the user's data queue.
- * It is still reflected in the segment length for
- * sequencing purposes.
- */
-void
-tcp_pulloutofband(struct socket *so, struct tcphdr *th, struct mbuf *m,
-    int off)
-{
-	int cnt = off + th->th_urp - 1;
-
-	while (cnt >= 0) {
-		if (m->m_len > cnt) {
-			char *cp = mtod(m, caddr_t) + cnt;
-			struct tcpcb *tp = sototcpcb(so);
-
-			INP_WLOCK_ASSERT(tptoinpcb(tp));
-
-			tp->t_iobc = *cp;
-			tp->t_oobflags |= TCPOOB_HAVEDATA;
-			bcopy(cp+1, cp, (unsigned)(m->m_len - cnt - 1));
-			m->m_len--;
-			if (m->m_flags & M_PKTHDR)
-				m->m_pkthdr.len--;
-			return;
-		}
-		cnt -= m->m_len;
-		m = m->m_next;
-		if (m == NULL)
-			break;
-	}
-	panic("tcp_pulloutofband");
 }
 
 /*

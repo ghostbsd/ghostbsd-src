@@ -367,7 +367,8 @@ saichan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 	struct sc_pcminfo *scp = ch->parent;
 	struct sc_info *sc = scp->sc;
 
-	sndbuf_resize(ch->buffer, sc->dma_size / blocksize, blocksize);
+	if (sndbuf_resize(ch->buffer, sc->dma_size / blocksize, blocksize) != 0)
+		return (0);
 
 	sc->period = ch->buffer->blksz;
 	return (sc->period);
@@ -760,6 +761,8 @@ sai_attach(device_t dev)
 
 	pcm_init(dev, scp);
 
+	mixer_init(dev, &saimixer_class, scp);
+
 	scp->chnum = 0;
 	pcm_addchan(dev, PCMDIR_PLAY, &saichan_class, scp);
 	scp->chnum++;
@@ -770,8 +773,6 @@ sai_attach(device_t dev)
 		device_printf(dev, "Can't register pcm.\n");
 		return (ENXIO);
 	}
-
-	mixer_init(dev, &saimixer_class, scp);
 
 	setup_dma(scp);
 	setup_sai(sc);

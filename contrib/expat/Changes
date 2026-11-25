@@ -5,21 +5,189 @@
                        \___/_/\_\ .__/ \__,_|\__|
                                 |_| XML parser
 
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!! <blink>Expat has UNFIXED SECURITY ISSUES!</blink>                         !!
-!! Please see https://github.com/libexpat/libexpat/issues/1160 for details.  !!
-!!                                                                           !!
-!! Starting 2026-08-01, for up to six months my work maintaining libexpat    !!
-!! will be funded by the City of Munich as part of their                     !!
-!! Open Source Sabbatical (https://opensource.muenchen.de/sabbatical.html)   !!
-!! — thank you!                                                              !!
-!!                                                                           !!
-!! If your business relies on Expat beyond January 2027, please consider     !!
-!! funding the maintenance of Expat to ensure its health and security for    !!
-!! you and others. Thank you!                                                !!
-!!                                                                           !!
-!!                                   Sebastian Pipping -- Berlin, 2026-09-22 !!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+///////////////////////////////////////////////////////////////////////////////
+// <blink>Expat has UNFIXED SECURITY ISSUES!</blink>                         //
+// Please see https://github.com/libexpat/libexpat/issues/1160 for details.  //
+//                                                                           //
+// Starting 2026-08-01, for up to six months my work maintaining libexpat    //
+// will be funded by the City of Munich as part of their                     //
+// Open Source Sabbatical (https://opensource.muenchen.de/sabbatical.html)   //
+// — thank you!                                                              //
+//                                                                           //
+// If your business relies on Expat beyond January 2027, please consider     //
+// funding the maintenance of Expat to ensure its health and security for    //
+// you and others. Thank you!                                                //
+//                                                                           //
+//                                   Sebastian Pipping -- Berlin, 2026-09-22 //
+///////////////////////////////////////////////////////////////////////////////
+
+Release 2.10.0 Mon November 2 2026
+        Security fixes:
+           #1431  CVE-2026-113351 -- Fix denial of service with use of
+                    `XML_ParserReset`
+  #1433 #1436 ..
+  #1438 #1439 ..
+           #1442  CVE-2026-115506 -- Detect billion laughs attacks quicker
+                    and more of its variations. Related payload fuzzer at:
+                      https://github.com/hannob/lololol
+                    Please note that a layer of compression around XML can
+                    significantly reduce the minimum attack payload size.
+                    In case of backporting, please note pull request #1439
+                    in particular.
+           #1444  CVE-2026-117610 -- Fix initial non-final empty subparser
+                    parse calls. Was segfaulting previously.
+           #1450  CVE-2026-118370 -- Protect `attIndex` and `nPrefixes` in
+                    function `storeAtts` from signed integer overflow
+
+        Bug fixes:
+           #1452  lib: Initialize `m_parsingStatus.finalBuffer` in `parserInit`
+                    to fix calling `XML_GetParsingStatus` right after
+                    parser creation
+     #1457 #1459  lib: Improve `XML_Parse` for `XML_CONTEXT_BYTES == 0`
+                    including NULL pointer arithmetic undefined behavior
+                    and uninitialized variable access
+           #1458  lib: Use C99 length modifiers for `ptrdiff_t` and `size_t`
+                    to fix support for CHERI-RISC-V
+           #1461  lib: Check `isCalledFromInsideHandler` first in `XML_Parse`
+           #1467  lib: Add missing check for a character handler reset
+
+        Other changes:
+           #1441  Autotools: Move `-lm` from LDFLAGS to LIBADD/LDADD
+                    to better support compilation with `-Wl,--as-needed`
+           #1412  CMake: Support repeated `find_package` calls
+           #1413  lib: Address warning `XML_GE is not defined [-Werror=undef]`
+           #1415  lib: Stop delaying `callStoreEntityValue` error handling
+           #1415  lib: Add missing call to `poolDiscard`
+           #1437  lib: Add missing `NULL` check for `m_startDoctypeDeclHandler`
+           #1417  lib: Migrate `ENTITY.textLen` and `ENTITY.processed` from
+                         `int` to `size_t`
+           #1463  lib: Fix integer truncation in `XmlGetAttributes`/`getAtts`
+           #1420  lib: Some more `XML_Bool` to `bool` migration
+     #1449 #1460  lib: Document the memory reuse black magic that function
+                    `storeAtts` is doing
+           #1453  lib: Document failure to reject bad redefinitions of
+                    predefined entities
+           #1432  tests: Replace `XML_SetHashSalt` with
+                    `XML_SetHashSalt16Bytes`
+     #1416 #1435  Version info bumped from 14:0:13 (libexpat*.so.1.13.0)
+                    to 14:1:13 (libexpat*.so.1.13.1); see https://verbump.de/
+                    for what these numbers do
+
+        Infrastructure:
+           #1414  CI: Stop using about-to-be-removed image "macos-14"
+     #1418 #1434  CI: Bump MinGW Clang from 23.1.2 to 23.1.4
+           #1443  CI: Bump Fil-C from 0.686 to 0.687
+           #1456  Drop a `lib/xcsinc.c` leftover
+
+        Special thanks to:
+            Alexander Bluhm
+            Bartłomiej Dmitruk
+            Berkay Eren Ürün
+            Brooks Davis
+            brspoon
+            Funda Wang
+            Hanno Böck
+            Matthew Fernandez
+            Minkyung Park
+            Mirko Swillus
+            Pu Cheng
+            Scott Moore
+            Shani Yosef
+            Xisco Fauli
+                 and
+            City of Munich Open Source Sabbatical
+            echo.ai
+            Siemens
+            Striga
+            VulnCheck
+
+Release 2.9.0 Mon October 5 2026
+        Security fixes:
+           #1392  CVE-2026-102633 -- Integer overflow in function
+                    expat_realloc on 32bit platforms
+           #1393  CVE-2026-77214 -- Validate parameter `len` against available
+                    buffer capacity in XML_ParseBuffer
+
+        Bug fixes:
+           #1387  lib: Handle OOM when copying encodingName in XML_ParserReset
+
+        New features:
+           #1327  lib: Introduce new "Properties API" to get and set
+                    scalar properties for a single parser instance.
+                    There are six new functions:
+                    - XML_GetPropertyBool
+                    - XML_GetPropertyDouble
+                    - XML_GetPropertyUInt64
+                    - XML_SetPropertyBool
+                    - XML_SetPropertyDouble
+                    - XML_SetPropertyUInt64
+                    And two new enums:
+                    - XML_Prop_Error
+                    - XML_Parser_Property
+           #1323  lib: Introduce five new 64bit location API functions:
+                    - XML_GetCurrentByteCount64
+                    - XML_GetCurrentByteIndex64
+                    - XML_GetCurrentColumnNumber64
+                    - XML_GetCurrentLineNumber64
+                    - XML_GetInputContext64
+                    These five functions closely mirror their predecessors
+                    but are not prone to 32bit integer wrap-around.
+
+        Other changes:
+           #1391  docs: Document the scope of function XML_GetErrorCode
+           #1395  docs: Document length expectations for XML_ParseBuffer
+           #1394  lib: Call unknown encoding release before parser teardown
+     #1370 #1373  lib: Drop (disabled-by-default) attribute info feature
+                    These things are now gone:
+                    - Public function XML_GetAttributeInfo
+                    - Public struct XML_AttrInfo
+                    - Macro XML_ATTR_INFO
+                    These things are now causing build errors:
+                    - Configure option --enable-xml-attr-info
+                    - CMake option -DEXPAT_ATTR_INFO=ON
+     #1379 #1382  lib: Drop (disabled-by-default) minimum size feature
+                    These things are now gone:
+                    - Macro XML_MIN_SIZE
+                    These things are now causing build errors:
+                    - Configuring with -DXML_MIN_SIZE for CPPFLAGS/CFLAGS
+                    - CMake option -DEXPAT_MIN_SIZE=ON
+     #1323 #1411  lib: Deprecate macro XML_LARGE_SIZE (use the new 64bit
+                    location API functions instead please)
+           #1323  lib: Deprecate five location API functions that are cursed
+                    with integer wrap-around:
+                    - XML_GetCurrentByteCount
+                    - XML_GetCurrentByteIndex
+                    - XML_GetCurrentColumnNumber
+                    - XML_GetCurrentLineNumber
+                    - XML_GetInputContext
+           #1399  lib: Guard against out-of-handler use of XML_DefaultCurrent
+           #1400  lib: Use size_t for bytesAllocated and peakBytesAllocated
+  #1401 #1402 ..
+     #1404 #1405  lib|xmlwf|tests: Unify use of xcslen, xcscmp and xcsncmp
+           #1406  xmlwf: Add missing `#include "expat.h"`
+     #1389 #1396  Version info bumped from 13:5:12 (libexpat*.so.1.12.5)
+                    to 14:0:13 (libexpat*.so.1.13.0); see https://verbump.de/
+                    for what these numbers do
+
+        Infrastructure:
+           #1386  CI: Bump MinGW Clang from 23.1.1 to 23.1.2
+           #1410  CI: Bump Fil-C from 0.685 to 0.686
+           #1388  CI: Adapt to breaking changes regarding windows-11-arm image
+           #1403  CI: Limit package cache download runtime
+
+        Special thanks to:
+            Bénédikt Tran
+            Berkay Eren Ürün
+            Fabian Wahle (Hap Security)
+            Filippo Tedeschi
+            Junki Lee
+            Matthew Fernandez
+            Scott Moore
+            Wade Sparks III
+                 and
+            City of Munich Open Source Sabbatical
+            Siemens
+            VulnCheck
 
 Release 2.8.5 Tue September 22 2026
         Security fixes:
@@ -32,17 +200,6 @@ Release 2.8.5 Tue September 22 2026
                     to past vulnerability CVE-2022-25235.
                     Upstream CVSS 3.1 vector:
                     AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H (CVSS score: 9.8)
-
-///////////////////////////////////////////////////////////////////////////////
-// The next release will drop two (disabled-by-default) features:            //
-//                                                                           //
-// - ATTR_INFO (-DXML_ATTR_INFO, -DEXPAT_ATTR_INFO, --enable-xml-attr-info,  //
-//              function XML_GetAttributeInfo, struct XML_AttrInfo)          //
-// - MIN_SIZE (-DXML_MIN_SIZE, -DEXPAT_MIN_SIZE)                             //
-//                                                                           //
-// If you need them in 2026 and beyond, please share your scenario at        //
-// GitHub issues #1370 (for ATTR_INFO) and/or #1379 (for MIN_SIZE). Thanks!  //
-///////////////////////////////////////////////////////////////////////////////
 
         Bug fixes:
            #1346  lib: Fix OOM-related memory leak on a failed overflow check
@@ -163,6 +320,7 @@ Release 2.8.4 Mon August 31 2026
                  and
             City of Munich Open Source Sabbatical
             Moonshot AI
+            Siemens
             VulnCheck
             Z.ai
 
@@ -349,6 +507,8 @@ Release 2.8.1 Sun May 10 2026
             Matthew Fernandez
             Nick Wellnhofer
             Tania Somanna
+                 and
+            Siemens
 
 Release 2.8.0 Fri April 24 2026
         Security fixes:
@@ -461,6 +621,7 @@ Release 2.7.5 Tue March 17 2026
             AddressSanitizer
             Buttercup
             OSS-Fuzz / ClusterFuzz
+            Siemens
             Trail of Bits
 
 Release 2.7.4 Sat January 31 2026
@@ -602,6 +763,7 @@ Release 2.7.3 Wed September 24 2025
                  and
             Clang/GCC UndefinedBehaviorSanitizer
             OSS-Fuzz / ClusterFuzz
+            Siemens
             Z3 Theorem Prover
 
 Release 2.7.2 Tue September 16 2025
@@ -715,6 +877,7 @@ Release 2.7.1 Thu March 27 2025
             Matthew Fernandez
                  and
             Perl XML::Parser
+            Siemens
 
 Release 2.7.0 Thu March 13 2025
         Security fixes:
@@ -874,6 +1037,8 @@ Release 2.6.3 Wed September 4 2024
             Dag-Erling Smørgrav
             Ferenc Géczi
             TaiYou
+                 and
+            Siemens
 
 Release 2.6.2 Wed March 13 2024
         Security fixes:

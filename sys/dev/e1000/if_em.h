@@ -48,6 +48,7 @@
 #endif
 #include <sys/buf_ring.h>
 #include <sys/bus.h>
+#include <sys/callout.h>
 #include <sys/endian.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
@@ -72,10 +73,8 @@
 #include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/iflib.h>
-#ifdef	RSS
 #include <net/rss_config.h>
 #include <netinet/in_rss.h>
-#endif
 
 #include <net/if_types.h>
 #include <net/if_vlan_var.h>
@@ -96,6 +95,9 @@
 #include "e1000_api.h"
 #include "e1000_82571.h"
 #include "ifdi_if.h"
+
+struct igb_vf;
+struct igb_vf_mac_filter;
 
 /* Tunables */
 
@@ -135,6 +137,7 @@
 #define EM_DEFAULT_RXD		1024
 #define EM_DEFAULT_MULTI_RXD	4096
 #define IGB_MAX_RXD		4096
+#define IGB_MAX_FRAME_SIZE	9234
 
 /*
  * EM_TIDV - Transmit Interrupt Delay Value
@@ -227,6 +230,11 @@
  */
 #define EM_VENDOR_ID			0x8086
 #define EM_FLASH			0x0014
+#define EM_SUBVENDOR_DELL		0x1028
+#define EM_SUBVENDOR_HP			0x103c
+#define EM_I350_SUBDEVICE_WOL_1		0x1f52
+#define EM_I350_SUBDEVICE_WOL_2		0x5001
+#define EM_I350_SUBDEVICE_WOL_3		0x5002
 
 #define EM_JUMBO_PBA			0x00000028
 #define EM_DEFAULT_PBA			0x00000030
@@ -238,8 +246,8 @@
 #define PCI_ANY_ID			(~0U)
 #define ETHER_ALIGN			2
 #define EM_FC_PAUSE_TIME		0x0680
-#define EM_EEPROM_APME			0x400;
-#define EM_82544_APME			0x0004;
+#define EM_EEPROM_APME_HIGH		0x0400
+#define EM_EEPROM_APME_LOW		0x0004
 
 /* Support AutoMediaDetect for Marvell M88 PHY in i354 */
 #define IGB_MEDIA_RESET		(1 << 0)
@@ -409,11 +417,8 @@
 #define UPDATE_VF_REG(reg, last, cur)		\
 do {						\
 	u32 new = E1000_READ_REG(&sc->hw, reg);	\
-	if (new < last)				\
-		cur += 0x100000000LL;		\
+	cur += (u32)(new - last);		\
 	last = new;				\
-	cur &= 0xFFFFFFFF00000000LL;		\
-	cur |= new;				\
 } while (0)
 
 struct e1000_softc;
@@ -593,7 +598,9 @@ struct e1000_softc {
 
 	int			enable_aim;
 	/* Management and WOL features */
-	u32			wol;
+	bool			wol_phy_wakeup;
+	bool			wol_phy_armed;
+	bool			suspend_link_powered_down;
 	bool			has_manage;
 	bool			has_amt;
 
@@ -607,6 +614,10 @@ struct e1000_softc {
 	** to repopulate it.
 	*/
 	u32			shadow_vfta[EM_VFTA_SIZE];
+	u32			vf_vfta_stale[EM_VFTA_SIZE];
+	u32			vf_vfta_retry[EM_VFTA_SIZE];
+	sbintime_t		vf_vlan_retry_deadline;
+	u16			vf_vlan_retry_cursor;
 
 	/* Info about the interface */
 	enum em_link_state	link_state;
@@ -619,7 +630,9 @@ struct e1000_softc {
 	int			link_mask;
 	int			tso_automasked;
 	u32			phy_hang_count;
+	u32			promisc_pending;
 	u32			stats_pending;
+	u32			device_reset_state;
 	u32			fatal_error_state;
 	u32			fatal_error_icr;
 	u32			fatal_error_pbeccsts;
@@ -646,6 +659,29 @@ struct e1000_softc {
 	u64			uncorrected_error_dma_count;
 	u64			uncorrected_error_pcie_count;
 
+#ifdef PCI_IOV
+	struct igb_vf		*vfs;
+	struct igb_vf_mac_filter *vf_mac_filters;
+	struct callout		iov_mbx_retry;
+	u32			iov_vfta[EM_VFTA_SIZE];
+	u32			iov_mdd_cause;
+	u32			iov_pending;
+	u32			iov_spoof_pending;
+	u32			iov_blocked_pending;
+	u32			iov_intr_drain_pending;
+	u32			iov_teardown;
+	struct timeval		iov_last_mdd_log;
+	u16			num_vfs;
+	u16			num_vf_mac_filters;
+	u16			pool;
+	bool			iov_hw_active;
+	bool			iov_mta_valid;
+	bool			iov_mbx_retry_initialized;
+	bool			iov_pf_mdd_blocked;
+	bool			iov_pf_vlan_promisc;
+	bool			iov_vfta_valid;
+#endif
+
 	u64			que_mask;
 
 	/* We need to store this at attach due to e1000 hw/sw locking model */
@@ -661,15 +697,82 @@ struct e1000_softc {
 	unsigned long		dropped_pkts;
 	unsigned long		link_irq;
 	unsigned long		rx_overruns;
-	unsigned long		watchdog_events;
+	u64			rx_csum_good;
+	u64			rx_csum_errors;
 
 	union {
 		struct e1000_hw_stats	stats;		/* !sc->vf_ifp */
 		struct e1000_vf_stats	vf_stats;	/* sc->vf_ifp */
 	} ustats;
 
+	struct callout		vf_queue_retry;
+	struct callout		vf_mbx_retry;
+	struct timeval		vf_last_queue_log;
+	struct timeval		vf_last_mbx_log;
+	u32			vf_queue_retry_new_epoch;
+	u32			vf_queue_retry_pending;
+	u32			vf_mbx_ready;
+	u32			vf_mbx_retry_pending;
 	u16			vf_ifp;
+	u8			vf_queue_failures;
+	u8			vf_mbx_retry_stage;
+	bool			vf_queue_gave_up;
+	bool			vf_queue_retry_initialized;
+	bool			vf_mbx_retry_initialized;
+	bool			vf_queues_sanitized;
+	bool			vf_reset_pending;
+	bool			vf_stats_valid;
+	/* A PF can retain auxiliary filters across a VF reset. */
+	bool			vf_uc_filters_set;
 };
+
+static inline bool
+igbv_is_hyperv(const struct e1000_softc *sc)
+{
+
+	return (sc->vf_ifp &&
+	    (sc->hw.device_id == E1000_DEV_ID_82576_VF_HV ||
+	    sc->hw.device_id == E1000_DEV_ID_I350_VF_HV));
+}
+
+/*
+ * Shared PF/VF mechanisms and VF policy entry points.  The latter live in
+ * if_igbv.c so the VF method table cannot accidentally select PF policy.
+ */
+int	em_if_attach_pre(if_ctx_t);
+int	em_if_attach_post(if_ctx_t);
+void	em_add_device_sysctls(struct e1000_softc *);
+int	em_if_set_promisc_impl(if_ctx_t, int);
+bool	em_is_valid_ether_addr(const u8 *);
+void	em_initialize_transmit_rings(if_ctx_t);
+void	em_update_stats_counters(struct e1000_softc *);
+void	igb_initialize_receive_rings(if_ctx_t, bool);
+
+int	igbv_get_regs(SYSCTL_HANDLER_ARGS);
+int	igbv_if_attach_pre(if_ctx_t);
+int	igbv_if_attach_post(if_ctx_t);
+int	igbv_if_media_change(if_ctx_t);
+void	igbv_init_hv_ops(struct e1000_hw *);
+void	igbv_if_intr_enable(if_ctx_t);
+void	igbv_if_intr_disable(if_ctx_t);
+void	igbv_if_update_admin_status(if_ctx_t);
+void	igbv_initialize_receive_unit(if_ctx_t);
+void	igbv_initialize_transmit_unit(if_ctx_t);
+void	igbv_mbx_retry_detach(struct e1000_softc *);
+void	igbv_mbx_retry_failed(if_ctx_t);
+void	igbv_mbx_retry_prepare(struct e1000_softc *);
+void	igbv_mbx_retry_stop(struct e1000_softc *);
+void	igbv_queue_retry_detach(struct e1000_softc *);
+void	igbv_queue_retry_failed(if_ctx_t);
+void	igbv_queue_retry_prepare(struct e1000_softc *);
+void	igbv_queue_retry_stop(struct e1000_softc *);
+void	igbv_reconcile_mac(struct e1000_softc *, if_t);
+bool	igbv_reset(if_ctx_t);
+bool	igbv_sanitize_queues(struct e1000_softc *);
+void	igbv_log_reset_failure(struct e1000_softc *, s32, bool);
+void	igbv_update_uc_addr_list(struct e1000_softc *, if_t);
+void	igbv_vlan_retry_add(struct e1000_softc *, u16);
+void	igbv_vlan_retry_clear(struct e1000_softc *, u16);
 
 /********************************************************************************
  * vendor_info_array
@@ -688,9 +791,4 @@ typedef struct _em_vendor_info_t {
 
 void em_dump_rs(struct e1000_softc *);
 
-#define EM_RSSRK_SIZE	4
-#define EM_RSSRK_VAL(key, i)	(key[(i) * EM_RSSRK_SIZE] | \
-				    key[(i) * EM_RSSRK_SIZE + 1] << 8 | \
-				    key[(i) * EM_RSSRK_SIZE + 2] << 16 | \
-				    key[(i) * EM_RSSRK_SIZE + 3] << 24)
 #endif /* _EM_H_DEFINED_ */
